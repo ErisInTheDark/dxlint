@@ -33,7 +33,7 @@ Logic is macros; there is no `fn` keyword. To the author a macro behaves exactly
 - In template strings `{value?}` is sugar for `{value ?? ""}`: the explicit way to let absence print as nothing.
 - Paths: `a?.b` reads through a maybe-null `a` (null stays null); plain `a.b` on a maybe-null `a` is a config error. Today every `.` silently passes null through; the migration rewrites those reads to `?.` where the compiler can't prove presence.
 
-## `when` blocks (value form implemented; subject and item forms pending)
+## `when` blocks (value and kind-subject forms implemented; boolean subject and item forms pending)
 
 ````zlint
 when {
@@ -52,7 +52,7 @@ when n is {           # subject form for kind dispatch
 - Arm conditions are sinks: a maybe-unknown condition is a config error until handled (`is true`, `is false`, `x unknown y`).
 - Replaces paired `when c {...} when !c {...}` blocks and long `if ... else if` ladders; `if a then b else c` stays for one-liners.
 
-## Pipelines only (decided)
+## Pipelines only (`|>` implemented; lambda call forms still accepted)
 
 - Existing block pipelines stay as they are (`{ value xs; filter (x) ...; map (x) ... }`).
 - `|>` writes the same pipeline inline and is equivalent to a newline: `sites |> any (site) site is ts_await`. `(site)` is the step's item parameter; `label:` after a newline or `|>` names the value that step produces (`xs |> kept: filter (x) ... |> count`).

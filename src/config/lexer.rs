@@ -39,6 +39,8 @@ pub enum Tk {
     OrOr,
     Bang,
     Pipe,
+    /// `|>`: the next step of an inline pipeline.
+    PipeGt,
     /// `&`: an intersection in `unwraps a & b`.
     Amp,
     /// `\`: a difference in `unwraps a \ nullish`.
@@ -248,6 +250,7 @@ pub fn lex(file: FileId, text: &str, base: usize, errors: &mut Vec<ConfigError>)
                     (b'>', Some(b'=')) => (Tk::Ge, 2),
                     (b'&', Some(b'&')) => (Tk::AndAnd, 2),
                     (b'|', Some(b'|')) => (Tk::OrOr, 2),
+                    (b'|', Some(b'>')) => (Tk::PipeGt, 2),
                     (b'(', _) => (Tk::LParen, 1),
                     (b')', _) => (Tk::RParen, 1),
                     (b'{', _) => (Tk::LBrace, 1),

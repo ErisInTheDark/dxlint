@@ -500,6 +500,8 @@ let selected {
 
 Pipelines are expressions: use them in functions, attributes, rule lets, `when`, conditional arms, lambda bodies, messages and template holes. `{ value: expression }` is still a record; the `value` marker without a following `:` identifies a pipeline.
 
+`|>` writes the same pipeline inline: `sites |> any (site) site is ts_await` is `{ value sites; any (site) site is ts_await }`. Each `|>` (also at the start of a line) begins the next step and ends the previous one, so a step's lambda body never swallows a later `|>`; `label:` after `|>` names that step's result (`xs |> kept: filter (x) x > 1 |> count`). Inside brackets a new inline pipeline may start.
+
 | stage | result |
 |---|---|
 | `map (item, i) expr`, `flat_map (item, i) expr` | transformed items; `flat_map` flattens one level |
@@ -564,6 +566,7 @@ Item stages may omit the second parameter. `i` is the original input index, incl
 | `/regex/` elsewhere | the regex source as text, for the `re_*` functions |
 | `if c then a else b` | conditional |
 | `when { c then a; d then b; else then e }` | the first true arm's value (arms on their own lines or split by `;`); null when none holds and there is no `else` |
+| `when x is { ts_a then a; (ts_b, ts_c) then b; else then e }` | kind dispatch: the first arm whose layers or groups `x` is (as `x is ...`) |
 
 **Spacing.** Binary operators stand apart from both operands: `a - 1`,
 `x == 2`, `text ~ /re/`; `a -1` is an error. Unary `-` and `!` stay tight
@@ -595,6 +598,16 @@ tests the layer and `is .rust` the file's language. `not` is the inverse:
 `next_token not (ts_closer, ts_comma)`. A value that is not a node is never
 any kind. Unknown names are config errors. `kind_name(n)` gives a node's
 kind as text, for messages.
+
+**Tokens** come from the front end that parsed the file (comments left
+out; strings, templates and regexes are one token each), for any node,
+text and pattern nodes included. `token(n, "first" | "last" | "before" |
+"after")` is `{text, start, end, node}` (`node`: the node spanning exactly
+that token, if any) or null; `token_list(n)` the texts of the tokens
+inside `n`; `token_pair(n, [["(", ")"], ["[", "]"]])` the token matching
+`n`'s opening (or closing) bracket token, skipping unmatched closers.
+Gaps, comments and line breaks between tokens are plain source text:
+languages define their policy in `.zlint`.
 
 **Multi-line strings** start with `"""` at the end of a line and end with
 `"""` on a line of its own. That closing line's indentation is removed from
@@ -907,6 +920,10 @@ fields from their tag owner rather than the enclosing element.
 | `declaration_kind` | on a binding's canonical first declaring identifier: its syntax kind (`const`, `let`, `var`, `parameter`, `type_parameter`, `function`, `function_name`, `class`, `class_name`, `import`, `type`, `interface`, `enum`, `namespace`, `catch`, `using`) |
 | `declaration_kinds` | on any declaring identifier: the syntax kinds of every declaration merged into its binding, in source order; null on references |
 | `reference_kind` | on a referencing identifier: the syntax kind of its binding's canonical first declaration; null when unresolved |
+| `uses`, `value_uses` | on a declaring identifier: how often its name is used, and how many of those uses need the runtime value (type positions, and `typeof x` or `[x]` keys inside types, do not) |
+| `self_uses`, `writes` | uses inside its own function, and assignments to it |
+| `ambient` | on a canonical declaring identifier: every merged declaration is inside `declare` |
+| `resolved` | on a referencing identifier: `local`, `import` or `global` (declared nowhere in the file) |
 
 **Facts.** Native layers add builtins (null elsewhere): properties of the
 code any rule may ask about. What a rule makes of them (its options, what
@@ -914,11 +931,8 @@ is wrong, messages) is written in the rule. A fact taking arguments is called (`
 
 | name | value |
 |---|---|
-| `uses`, `value_uses` | on a declaring identifier: how often its name is used, and how many of those uses need the runtime value (type positions, and `typeof x` or `[x]` keys inside types, do not) |
-| `self_uses`, `writes` | uses inside its own function, and assignments to it |
-| `exported`, `ambient` | declared by an `export`ed statement; inside `declare` |
+| `exported` | declared by an `export`ed statement |
 | `symbol_metadata` | `{name, own_doc, declarations, aliases, selected_signature}`; raw declaration and alias docs, overload `signature_docs`, declaration kinds and file/lib/package provenance gates. Alias rows retain lookup order, path and module; `selected_signature` is null or `{doc, kind}` (`call`/`construct`). Ambient package gates retain ordinary file provenance. Rust exposes docs and origins; `.zlint` decides deprecation |
-| `resolved` | on a referencing identifier: `local`, `import` or `global` (declared nowhere in the file) |
 | `type` | the expression's type as text (`Promise<void>`, `never`, `NodeJS.Timeout`), null when unknown |
 | `type_flags` | what the type is made of: `any`, `never`, `string`, `number`, `boolean`, `bigint`, `symbol`, `literal`, `enum`, `array`, `tuple`, `promise`, `function`, `object`, `null`, `undefined`, `nullable`, `union`, and `unknown` for parts zlint cannot read |
 | `type_domains(constrained?)` | truthy, falsy, nullish and non-nullish possibilities, flags, opacity and scalar literal; constraints apply by default (`true`); `type_domains(false)` retains open types. Default `kind` matches `type_structure`; `parts` retains union/intersection constituent domains; `primitive` names the primitive backing of a primitive, literal or enum member |
@@ -957,13 +971,14 @@ is wrong, messages) is written in the rule. A fact taking arguments is called (`
 | `value_has_expected(node)` | true when contextual type exists, false when known absent, null when unknown; does not expand the value |
 | `value_widened(node)` | the widened value (`widens` recipe), in the `value_constituents` shape |
 | `value_accepts(node, other, allowing, given)` | whether every value `other` may be is one `node` allows (assignability), each side read as its `"value"`, `"expected"` or `"widened"` value; null when either side is unknown or absent |
-| `value_parts(node)` | the node's value as union arms `{handle, parts}`: `handle` stands for the whole arm (its intersection constituents together), `parts` are its constituents in the `value_constituents` shape, each with its own `handle`, except that carrier `arguments` are handles (left unread); null when unknown. A handle is an opaque `{value_handle}` record: pass it where these queries take `node` (`value_parts`, `value_children`, `value_constituents`, `value_at`, `value_lookup` with a text or ordinal key) or compare it for equality (same value, same handle, with frames that bind nothing folded so recursive types revisit the same handle). Handles are valid only while linting the file that made them; any other value reads as null |
+| `value_parts(node)` | the node's value as union arms `{handle, parts}`: `handle` stands for the whole arm (its intersection constituents together), `parts` are its constituents in the `value_constituents` shape, each with its own `handle`, except that carrier `arguments` are handles (left unread); null when unknown. A handle is an opaque `{value_handle}` record: pass it where these queries take `node` (`value_parts`, `value_children`, `value_constituents`, `value_at`, and with a text or ordinal key `value_lookup`, `value_has_member` and `member_call_parameters`; `value_accepts(allowing, given, _, _)` with two handles) or compare it for equality (same value, same handle, with frames that bind nothing folded so recursive types revisit the same handle). Handles are valid only while linting the file that made them; any other value reads as null |
 | `value_children(node, members, arguments)` | the edges out of one arm (a node whose value has one arm, or an arm handle): with `members` true, every member of the arm as `{handle, member: {key, optional, sources}}` (sources as in `value_lookup`, plus their `flags`), only when the arm's members are all known (closed; constituents declaring no members of their own, such as trait-only parts (open ones too: check a part's `uncertain_traits`) and function types, add none and don't open it; tuple products list their elements (a rest element's handle is its items, marked `repeated`), never inherited methods); with `arguments` a list of indexes, those carrier arguments of each constituent as `{handle, argument, part}` (`part` indexes the arm's constituents). `arguments` null (an unknown selection), a value with several arms or anything unknown gives null. Rules own recursion, pruning and cycles; recursive generics never repeat a handle (each level binds anew), so past a fixed instantiation depth the answer is null |
 | `value_signatures(node)` | the call signatures of each union arm of a node's value or a handle, as `{parameters, receiver, has_receiver, result}` per header: `parameters` a list of handles (null when unreadable), `receiver` and `result` handles (null when absent or unreadable), `has_receiver` false when there is none, null when unknown; null when the callables are unknown. Unlike `call_signatures`, nothing is read until a handle is asked. Each header also has `site`, the declaring `{file, node}` (null when not a node) |
 | `value_bases(node)` | for one constituent (a part handle, or a value with a single leaf): the values it inherits members from, as handles in declaration order (declared bases of its view, a tuple's array base, a primitive's apparent wrapper); `[]` when none, null when unknown or not one constituent. Walk them flatly to find ancestry (`walk([h], h => value_bases(h))`) |
 | `value_constructors(node)` | `value_signatures` for `new`: the construct signatures |
 | `declaration_origin(node, site)` | where a `{file, node}` site's file comes from, by path under the program's resolution profile: `{path, kind, package}` with `kind` `"library"` (fits the profile's `libraries` template), `"package"` (inside a package directory; `package` names it, scope included) or `"project"`; null when unknown. Builtin identity = a global declaration site whose origin is `library` |
 | `declaration_value(node, site)` | the value a `{file, node}` declaration site unwraps to (any program file, root frame) as a value handle; null when unknown or not a site. E.g. a library global's value side, to compare constructor identities |
+| `value_sources(node)`, `site_sources(node, site)` | one step of where a value comes from, read off the language's value recipe (the site form reads any program file at the root frame): `{combine, sites}`; a reference's site is the declaration it resolves to, union and intersection recipes list their parts (`combine` `union` / `intersection`, else `one`). Sites are `{file, node, kind, name}` (`name`: the declared name, if any). `sites` is empty for a node holding its own value; null when the recipe can't be followed (computed values, products, calls). E.g. walk an annotation's alias route per union arm |
 | `site_text(node, site)` | the source of a `{file, node}` site in any program file, as `{text, leading}` (`leading`: the text between the previous sibling, or the parent's start, and the site — its comments); null when unavailable. `node` is any node of the linted file |
 | `call_selection(node)` | on a call or `new`: the headers it selects, `{selected: [{file, node}], uncertain}` (several when overloads stay open); null when not an invocation or unknown |
 | `value_origin(node)` | the nearest instantiating reference `{file, node, kind}`; null when absent or unknown |
@@ -1266,11 +1281,13 @@ and `final-newline`.
 | `.ts/typed/redundant-constituents` | redundant union/intersection top, bottom and primitive/literal constituents, imported by `.ts/typed` |
 | `.ts/typed/string-boundaries` | string prefix/suffix tests (`startsWith`/`endsWith`) and source-preserving fixes, imported by `.ts/typed` |
 | `.ts/typed/return-await` | returned-await policy and source-preserving fixes, imported by `.ts/typed` |
+| `.ts/typed/return-this` | class return annotations over declared returns, unwritten this aliases and generic class identity; imported by `.ts/typed` |
 | `.ts/typed/nullish-coalescing` | stable nullish replacements, primitive exclusions and context selection, imported by `.ts/typed`; diagnostic-only |
 | `.ts/typed/template-expressions` | unnecessary template interpolation checks and raw-escape-preserving, precedence-safe fixes, imported by `.ts/typed` |
 | `.ts/typed/floating-promises` | floating promises, including discarded arrays and tuples with immediate promise elements, imported by `.ts/typed` |
 | `.ts/comments` | JS/TS comment layers (`ts_line_comment`, `ts_block_comment`, group `ts_comment`) under the code layer; imported by `.ts` and by modules that read comments |
-| `.ts/names` | JS/TS scopes, declarations and references (`scope`, `declares`, `resolves`, `targets` items); native name facts answer from them; imported by `.ts` |
+| `.ts/names` | JS/TS scopes, declarations, references and binding attributes over generic name queries; imported by `.ts` |
+| `.ts/literals` | shared `literal_value` and `static_name` attributes over literal syntax and generic JavaScript coercion; imported by `.ts` |
 | `.ts/effects` | JS/TS evaluation order, separate bodies and control, write and suspension effects; imported by `.ts` |
 | `.ts/values` | JS/TS value and type declarations (`unwraps`, `fits`) and traits for `could` / `always`; imported by `.ts` |
 | `.ts/values/arguments` | implicit `arguments` values; explicit shadows and module-top names unchanged; imported by `.ts/values` |

@@ -1,0 +1,17 @@
+import .ts
+# `when x is { ... }` picks the first arm whose kinds `x` is; a `when {}`
+# nested in a record keeps its arms on their own lines; `|>` is an inline
+# pipeline whose lambda bodies end at the next `|>`.
+in ts_call rule callee-kind {
+  let shape when callee is {
+    ts_identifier then "name"
+    (ts_member, ts_index) then "member"
+    else then "other"
+  }
+  let detail { kind: shape, long: when {
+    count(argument.nodes) > 1 then "many"
+    else then "few"
+  } }
+  let named argument.nodes |> filter (a) a is ts_identifier |> count
+  warn "{detail.kind} {detail.long} {named}"
+}

@@ -27,25 +27,112 @@ impl Parser<'_> {
             self.ts.next_raw();
             return self.when_arms(t.span);
         }
+        if t.is_ident("when") && self.ts.peek_raw(1).is_some_and(|next| next.kind != Tk::LBrace) {
+            self.ts.next_raw();
+            return self.when_subject(t.span);
+        }
         let lhs = self.e_or()?;
-        if self.op_peek() == Some(Tk::Nullish) {
+        let lhs = if self.op_peek() == Some(Tk::Nullish) {
             self.spaced_op();
             let rhs = self.expr()?;
             let span = lhs.span.to(rhs.span);
-            return Some(Expr { kind: ExprKind::Nullish(Box::new(lhs), Box::new(rhs)), span });
+            Expr { kind: ExprKind::Nullish(Box::new(lhs), Box::new(rhs)), span }
+        } else {
+            lhs
+        };
+        if self.pipe_step != Some(self.expr_depth) && self.op_peek() == Some(Tk::PipeGt) {
+            return self.inline_pipeline(lhs);
         }
         Some(lhs)
+    }
+
+    /// `xs |> filter (x) x > 1 |> kept: count`: a block pipeline written
+    /// inline, `xs` its `value` step; each `|>` (also starting a line)
+    /// begins the next step, `label:` naming that step's result.
+    fn inline_pipeline(&mut self, first: Expr) -> Option<Expr> {
+        let start = first.span;
+        let mut steps = vec![PipelineStep { label: None, stage: PipelineStage::Value(first), span: start }];
+        let outer = self.pipe_step.replace(self.expr_depth);
+        let parsed = self.inline_steps(&mut steps);
+        self.pipe_step = outer;
+        parsed?;
+        let span = start.to(self.ts.last_span.unwrap_or(start));
+        Some(Expr { kind: ExprKind::Pipeline(steps), span })
+    }
+
+    fn inline_steps(&mut self, steps: &mut Vec<PipelineStep>) -> Option<()> {
+        let mut labels = std::collections::HashSet::new();
+        while self.op_peek() == Some(Tk::PipeGt) {
+            let pipe = self.spaced_op();
+            self.skip(true, false);
+            let mut label = self.pipeline_label();
+            let name = self.ts.next_raw()?;
+            let stage = self.pipeline_stage(&name, &mut label)?;
+            if let Some(label) = &label {
+                if !labels.insert(label.text.clone()) {
+                    self.errors.push(ConfigError::new(label.span, format!("duplicate pipeline label `{}`", label.text)));
+                    return None;
+                }
+            }
+            let span = pipe.span.to(self.ts.last_span.unwrap_or(name.span));
+            steps.push(PipelineStep { label, stage, span });
+        }
+        Some(())
     }
 
     /// `when { a then x; b then y; else then z }` after its `{`: the first
     /// true arm's value; null when none is true and there is no `else`.
     fn when_arms(&mut self, start: Span) -> Option<Expr> {
+        self.arms(start, "when { ... }", |p, _| p.expr())
+    }
+
+    /// `when x is { ts_a then v; (ts_b, ts_c) then w; else then z }` after
+    /// its `when`: the first arm whose kinds `x` is.
+    fn when_subject(&mut self, start: Span) -> Option<Expr> {
+        let subject = self.e_join()?;
+        self.skip(false, true);
+        let is = self.ts.next_raw();
+        if !is.as_ref().is_some_and(|t| t.is_ident("is")) {
+            self.errors.push(ConfigError::new(is.map(|t| t.span).or(Some(subject.span)), "expected `is {` after `when x`")
+                .note("usage: when n is { ts_identifier then a; (ts_member, ts_index) then b; else then c }"));
+            return None;
+        }
+        self.skip(false, true);
+        let open = self.ts.next_raw();
+        if !open.as_ref().is_some_and(|t| t.kind == Tk::LBrace) {
+            self.errors.push(ConfigError::new(open.map(|t| t.span).or(Some(subject.span)), "expected `{` after `when x is`"));
+            return None;
+        }
+        self.arms(start, "when x is { ... }", |p, t| {
+            let names = p.is_names(t)?;
+            let span = t.span.to(p.ts.last_span.unwrap_or(t.span));
+            Some(Expr { kind: ExprKind::Is(Box::new(subject.clone()), names), span })
+        })
+    }
+
+    /// `cond then value` arms up to `}` (one per line or split by `;`, an
+    /// optional last `else then value`) as nested `if`s: the first holding
+    /// arm's value, else null. `condition` reads an arm's condition from its
+    /// first token. Arms end at line ends even inside brackets, as
+    /// pipeline steps do.
+    fn arms(&mut self, start: Span, form: &str, condition: impl Fn(&mut Self, &Token) -> Option<Expr>) -> Option<Expr> {
+        let depth = std::mem::replace(&mut self.expr_depth, 0);
+        let step = self.pipe_step.take();
+        let in_arms = std::mem::replace(&mut self.in_arms, true);
+        let parsed = self.arm_list(start, form, condition);
+        self.expr_depth = depth;
+        self.pipe_step = step;
+        self.in_arms = in_arms;
+        parsed
+    }
+
+    fn arm_list(&mut self, start: Span, form: &str, condition: impl Fn(&mut Self, &Token) -> Option<Expr>) -> Option<Expr> {
         let mut arms = Vec::new();
         let mut otherwise = None;
         loop {
             self.skip(true, true);
             let Some(t) = self.ts.peek_raw(0).cloned() else {
-                self.errors.push(ConfigError::new(start, "unclosed `when { ... }`"));
+                self.errors.push(ConfigError::new(start, format!("unclosed `{form}`")));
                 return None;
             };
             if t.kind == Tk::RBrace {
@@ -53,7 +140,7 @@ impl Parser<'_> {
                 break;
             }
             if otherwise.is_some() {
-                self.errors.push(ConfigError::new(t.span, "`else then` is the last arm of a `when { ... }`"));
+                self.errors.push(ConfigError::new(t.span, format!("`else then` is the last arm of a `{form}`")));
                 return None;
             }
             if t.is_ident("else") {
@@ -62,9 +149,9 @@ impl Parser<'_> {
                 otherwise = Some(self.expr()?);
                 continue;
             }
-            let condition = self.expr()?;
+            let test = condition(self, &t)?;
             self.expect_kw("then")?;
-            arms.push((condition, self.expr()?));
+            arms.push((test, self.expr()?));
         }
         let end = self.ts.last_span.unwrap_or(start);
         let mut value = otherwise.unwrap_or(Expr { kind: ExprKind::Null, span: end });
@@ -112,12 +199,13 @@ impl Parser<'_> {
                 Tk::Newline => crossed = true,
                 Tk::InvOpen | Tk::InvClose => {}
                 kind => {
+                    // In `when` arms a line may start a new arm with `is`
+                    // or `not` (about the node itself): keywords don't continue.
+                    let keyword = !self.in_arms
+                        && (t.is_ident("is") || t.is_ident("could") || t.is_ident("always") || t.is_ident("not"));
                     return crossed
-                        && (matches!(kind, Tk::AndAnd | Tk::OrOr | Tk::Nullish | Tk::EqEq | Tk::Ne | Tk::Lt | Tk::Le | Tk::Gt | Tk::Ge | Tk::Tilde)
-                            || t.is_ident("is")
-                            || t.is_ident("could")
-                            || t.is_ident("always")
-                            || t.is_ident("not"))
+                        && (matches!(kind, Tk::AndAnd | Tk::OrOr | Tk::Nullish | Tk::PipeGt | Tk::EqEq | Tk::Ne | Tk::Lt | Tk::Le | Tk::Gt | Tk::Ge | Tk::Tilde)
+                            || keyword)
                 }
             }
             i += 1;
@@ -246,6 +334,15 @@ impl Parser<'_> {
     /// place.
     fn is_test(&mut self, lhs: Expr) -> Option<Expr> {
         let kw = self.ts.next_raw().expect("peeked");
+        let names = self.is_names(&kw)?;
+        let span = lhs.span.to(self.ts.last_span.unwrap_or(kw.span));
+        let test = Expr { kind: ExprKind::Is(Box::new(lhs), names), span };
+        Some(if kw.is_ident("not") { Expr { kind: ExprKind::Unary(UnOp::Not, Box::new(test)), span } } else { test })
+    }
+
+    /// The layer or group names after `is` / `not` (`kw`): one, or several
+    /// in parentheses.
+    fn is_names(&mut self, kw: &Token) -> Option<Vec<IsName>> {
         self.skip(false, true);
         let mut names = Vec::new();
         match self.ts.peek_raw(0).map(|t| t.kind) {
@@ -286,9 +383,7 @@ impl Parser<'_> {
             self.errors.push(ConfigError::new(kw.span, format!("`{} ()` names no layers", kw.text)));
             return None;
         }
-        let span = lhs.span.to(self.ts.last_span.unwrap_or(kw.span));
-        let test = Expr { kind: ExprKind::Is(Box::new(lhs), names), span };
-        Some(if kw.is_ident("not") { Expr { kind: ExprKind::Unary(UnOp::Not, Box::new(test)), span } } else { test })
+        Some(names)
     }
 
     /// Values side by side are joined: `text "="`, `[a] [b]`.
@@ -454,8 +549,12 @@ impl Parser<'_> {
     fn pipeline(&mut self, open: Token) -> Option<Expr> {
         // A pipeline has its own line boundaries even inside call brackets.
         let depth = std::mem::replace(&mut self.expr_depth, 0);
+        let step = self.pipe_step.take();
+        let in_arms = std::mem::replace(&mut self.in_arms, false);
         let parsed = self.pipeline_steps(&open);
         self.expr_depth = depth;
+        self.pipe_step = step;
+        self.in_arms = in_arms;
         parsed.map(|steps| Expr {
             kind: ExprKind::Pipeline(steps),
             span: open.span.to(self.ts.last_span.unwrap_or(open.span)),
@@ -495,6 +594,51 @@ impl Parser<'_> {
         }
     }
 
+    /// One pipeline step after its stage name `name` (and any label).
+    fn pipeline_stage(&mut self, name: &Token, label: &mut Option<Name>) -> Option<PipelineStage> {
+        if name.kind != Tk::Ident {
+            self.errors.push(ConfigError::new(name.span, "expected `value` or a stage name in a pipeline"));
+            return None;
+        }
+        Some(if name.is_ident("value") {
+            if label.is_none() { *label = self.pipeline_label(); }
+            PipelineStage::Value(self.expr()?)
+        } else if name.is_ident("then") {
+            let params = self.stage_params()?;
+            if params.len() != 1 {
+                self.errors.push(ConfigError::new(name.span, "`then` takes one parameter: `then (value) expression`"));
+                return None;
+            }
+            PipelineStage::Then(params.into_iter().next().expect("one"), self.expr()?)
+        } else {
+            let function = Name { text: name.text.to_string(), span: name.span };
+            let mut args = Vec::new();
+            if crate::expr::Each::named(&name.text).is_some() || name.is_ident("walk") {
+                if crate::expr::Each::named(&name.text).is_some_and(|(_, kind)| matches!(kind, crate::expr::Each::Fold | crate::expr::Each::Zip)) {
+                    args.push(self.operand()?);
+                }
+                let paired_only = name.is_ident("zip") && self.step_ends();
+                if !paired_only {
+                    let params = self.stage_params()?;
+                    let body = self.expr()?;
+                    let span = name.span.to(body.span);
+                    args.push(Expr { kind: ExprKind::Lambda(params, Box::new(body)), span });
+                }
+            } else {
+                while !self.step_ends() {
+                    args.push(self.operand()?);
+                }
+            }
+            PipelineStage::Call(function, args)
+        })
+    }
+
+    /// A step's arguments end at its line, block, `|>` or enclosing bracket.
+    fn step_ends(&mut self) -> bool {
+        self.ts.peek_raw(0).is_none_or(|token| matches!(token.kind,
+            Tk::Newline | Tk::RBrace | Tk::PipeGt | Tk::RParen | Tk::RBrack | Tk::Comma | Tk::InvClose))
+    }
+
     fn pipeline_steps(&mut self, open: &Token) -> Option<Vec<PipelineStep>> {
         let mut steps = Vec::new();
         let mut labels = std::collections::HashSet::new();
@@ -510,42 +654,7 @@ impl Parser<'_> {
             }
             let mut label = self.pipeline_label();
             let name = self.ts.next_raw()?;
-            if name.kind != Tk::Ident {
-                self.errors.push(ConfigError::new(name.span, "expected `value` or a stage name in a pipeline"));
-                return None;
-            }
-            let stage = if name.is_ident("value") {
-                if label.is_none() { label = self.pipeline_label(); }
-                PipelineStage::Value(self.expr()?)
-            } else if name.is_ident("then") {
-                let params = self.stage_params()?;
-                if params.len() != 1 {
-                    self.errors.push(ConfigError::new(name.span, "`then` takes one parameter: `then (value) expression`"));
-                    return None;
-                }
-                PipelineStage::Then(params.into_iter().next().expect("one"), self.expr()?)
-            } else {
-                let function = Name { text: name.text.to_string(), span: name.span };
-                let mut args = Vec::new();
-                if crate::expr::Each::named(&name.text).is_some() || name.is_ident("walk") {
-                    if crate::expr::Each::named(&name.text).is_some_and(|(_, kind)| matches!(kind, crate::expr::Each::Fold | crate::expr::Each::Zip)) {
-                        args.push(self.operand()?);
-                    }
-                    let paired_only = name.is_ident("zip")
-                        && self.ts.peek_raw(0).is_none_or(|token| matches!(token.kind, Tk::Newline | Tk::RBrace));
-                    if !paired_only {
-                        let params = self.stage_params()?;
-                        let body = self.expr()?;
-                        let span = name.span.to(body.span);
-                        args.push(Expr { kind: ExprKind::Lambda(params, Box::new(body)), span });
-                    }
-                } else {
-                    while self.ts.peek_raw(0).is_some_and(|token| !matches!(token.kind, Tk::Newline | Tk::RBrace)) {
-                        args.push(self.operand()?);
-                    }
-                }
-                PipelineStage::Call(function, args)
-            };
+            let stage = self.pipeline_stage(&name, &mut label)?;
             if steps.is_empty() && !matches!(stage, PipelineStage::Value(_)) {
                 self.errors.push(ConfigError::new(open.span, "a pipeline starts with `value expression`"));
                 return None;

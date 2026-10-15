@@ -76,6 +76,11 @@ pub struct Parser<'a> {
     /// Bracket depth inside expressions; operators may only continue onto
     /// the next line while it is above zero.
     expr_depth: usize,
+    /// The bracket depth of the inline pipeline step being read: there a
+    /// `|>` ends the step instead of starting a pipeline.
+    pipe_step: Option<usize>,
+    /// Reading `when { }` arms: a line starting with `is`/`not` starts an arm.
+    in_arms: bool,
     /// Set by `override`: the next definition replaces an existing one.
     overriding: Option<Span>,
     /// Inside a rule's `each ... { }` block: `let`s and `when`s are per item.
@@ -98,6 +103,8 @@ impl<'a> Parser<'a> {
             imported: HashSet::new(),
             config: Config::default(),
             expr_depth: 0,
+            pipe_step: None,
+            in_arms: false,
             overriding: None,
             item_block: false,
             local_macros: Vec::new(),
