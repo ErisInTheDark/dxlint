@@ -24,6 +24,12 @@ impl Values<'_> {
         self.classify(leaf, self.tables.dynamic)
     }
 
+    /// An alternative of only top values (`any`, `unknown`): narrowing can
+    /// never prove it is wholly inside or outside a set, so it stays.
+    pub fn wholly_top(&self, alternative: &[Leaf]) -> bool {
+        !alternative.is_empty() && alternative.iter().all(|&leaf| self.top(leaf) == Known::Yes(true))
+    }
+
     fn classify(&self, leaf: Leaf, mask: u64) -> Known<bool> {
         let mut unknown = false;
         for trait_id in 0..64 {

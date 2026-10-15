@@ -213,6 +213,13 @@ impl Narrowing<'_> {
         value
     }
 
+    /// `value` is only top values (`any`, `unknown`), which no comparison
+    /// proves inside or outside a set.
+    fn wholly_top(&self, value: &NodeValue) -> bool {
+        let values = self.semantic.values();
+        matches!(value, NodeValue::Alternatives(rows) if !rows.is_empty() && rows.iter().all(|row| values.wholly_top(row)))
+    }
+
     fn excludes(&self, at: Leaf, from: Option<&Value>, context: &ProofContext<'_>, base: NodeValue, traits: u64, negative: bool) -> NodeValue {
         let Known::Yes(path) = self.projection(at, from, context, None) else { return base };
         let values = self.semantic.values();
@@ -220,6 +227,10 @@ impl Narrowing<'_> {
         let mut kept = Vec::new();
         for alternative in alternatives {
             let projected = self.projected(NodeValue::Alternatives(vec![alternative.clone()]), &path);
+            if !negative && self.wholly_top(&projected) {
+                kept.push(alternative);
+                continue;
+            }
             let mut keep = !negative;
             for trait_id in 0..64 {
                 if traits & (1 << trait_id) == 0 { continue }
@@ -252,7 +263,7 @@ impl Narrowing<'_> {
             let included = self.included(&expected, &actual);
             if self.semantic.question.budget.exhausted() { return NodeValue::Unknown }
             if negative {
-                if !included { kept.push(alternative) }
+                if !included || self.wholly_top(&actual) { kept.push(alternative) }
             } else if included {
                 kept.push(alternative);
             } else if !self.proven_disjoint(&expected, &actual) {
