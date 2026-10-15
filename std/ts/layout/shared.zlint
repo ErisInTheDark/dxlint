@@ -106,8 +106,30 @@ fn layout_trailing_comma(n, list) = {
   }
 }
 fn layout_trailing_commas(n) = {
-  value lists: filter(n.layout_syntax_lists, list => list.kind != null)
-  value filter(map(lists, list => layout_trailing_comma(n, list)), site => site != null)
+  value ordinary: when {
+    n is (ts_array, ts_array_pattern, ts_tuple_type) then n.element.nodes
+    n is ts_object then n.property.nodes
+    n is ts_object_pattern then { value n.property.nodes n.rest.nodes; sort_by (item) item.offset }
+    n is (ts_function, ts_method, ts_arrow, ts_function_type) then n.parameter.nodes
+    n is (ts_call, ts_new, ts_import_call) then n.argument.nodes
+    n is ts_import then { value n.specifier.nodes n.default_import.nodes n.namespace.nodes; sort_by (item) item.offset }
+    n is ts_export then n.specifier.nodes
+    n is ts_enum then n.member.nodes
+    else then []
+  }
+  value parameters: if n is (ts_function, ts_arrow, ts_class, ts_method, ts_interface, ts_type_alias,
+    ts_function_type, ts_method_signature, ts_call_signature, ts_infer) then n.type_parameter.nodes else []
+  value arguments: if n is (ts_class, ts_tagged_template, ts_call, ts_new, ts_instantiation,
+    ts_jsx_opening, ts_type_reference, ts_type_query, ts_import_type) then n.type_argument.nodes else []
+  value lists: [
+    {items: ordinary, kind: layout_list_kind(n, "")},
+    {items: parameters, kind: "generics"},
+    {items: arguments, kind: "type-arguments"}
+  ]
+  value lists
+  filter (list) list.kind != null && count(list.items) > 0
+  map (list) layout_trailing_comma(n, list)
+  filter (site) site != null
 }
 fn layout_terminal_arrow_block(n, end) = {
   value chain: walk([n], current => if current is ts_block then null
@@ -115,10 +137,12 @@ fn layout_terminal_arrow_block(n, end) = {
   value terminal: last(chain)
   value terminal is ts_block && terminal.parent is ts_arrow
 }
-fn layout_statement_semicolon(source, n) = {
+fn layout_statement_semicolon(source, n, mode, omit_block, omit_class) = {
   value header: n is ts_variable_declaration
     && (n.parent is ts_for && n.parent.init.node == n
       || n.parent is (ts_for_in, ts_for_of) && n.parent.left.node == n)
+  value if header || n is (ts_function, ts_method) && n.body.node != null
+    || n is ts_export && n.declaration.node != null then null else {
   value last: n.last_token
   value token: node_at(last.start)
   value present: token is ts_semicolon
@@ -126,31 +150,33 @@ fn layout_statement_semicolon(source, n) = {
   value next: token.token_neighbours.after
   value field: n is ts_class_property
   value closing: next.text == "}}"
-  value body_open: first(filter(n.parent.token.nodes, token => token.text == "{{"))
-  value if header || n is (ts_function, ts_method) && n.body.node != null
-    || n is ts_export && n.declaration.node != null then null else {
+  value body_open: if closing && (omit_block && n.parent is ts_static_block
+    || omit_class && field && n.parent is ts_class)
+    then first(filter(n.parent.token.nodes, token => token.text == "{{")) else null
+  value {
     present: present,
     offset: if present then last.start else last.end,
     end: last.end,
     redundant: next == null || contains(["}}", ";"], next.text),
-    same_line: before != null && next != null && layout_same_line(byte_slice(source, before.end, next.start)),
-    hazard_before: next != null && !contains(["++", "--"], next.text)
+    same_line: mode == "never" && before != null && next != null && layout_same_line(byte_slice(source, before.end, next.start)),
+    hazard_before: mode == "never" && next != null && !contains(["++", "--"], next.text)
       && re_test(next.text, /^[-\[(\/+`]/),
-    hazard_after: when {
+    hazard_after: mode == "never" && (when {
       n is (ts_do_while, ts_break, ts_continue, ts_debugger, ts_import) then false
       n is ts_export && n.kind != "default" then false
       n is ts_return then n.argument.node != null
       else then !(before.text == "}}" && layout_terminal_arrow_block(n, before.end))
-    },
+    }),
     class_field: field,
-    class_hazard: field && (n.init.node == null && n.key is ts_identifier
+    class_hazard: mode == "never" && field && (n.init.node == null && n.key is ts_identifier
       && contains(["get", "set", "static"], n.key.text)
       && !(n.key.text == "static" && any(n.modifier.nodes, modifier => modifier.text == "static"))
       || contains(["*", "in", "instanceof"], next.text)),
-    one_line_block: closing && (n.parent is ts_block && layout_same_line(n.parent.text)
+    one_line_block: omit_block && closing && (n.parent is ts_block && layout_same_line(n.parent.text)
       || n.parent is ts_static_block && layout_same_line(byte_slice(source, n.parent.offset, body_open.offset))),
-    one_line_class: field && closing && n.parent is ts_class && body_open != null
+    one_line_class: omit_class && field && closing && n.parent is ts_class && body_open != null
       && layout_same_line(byte_slice(source, body_open.offset, n.parent.end_offset))
+  }
   }
 }
 
