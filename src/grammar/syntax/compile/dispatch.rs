@@ -7,21 +7,26 @@ struct Bucket {
     text: FxHashMap<String, Vec<usize>>,
 }
 
+/// Candidate arms per head token. Each distinct candidate list has an id, so
+/// a dispatch that failed one arm resumes in the same list without reading
+/// the head again.
 pub(crate) struct Dispatch {
-    buckets: Vec<Bucket>,
-    fallback: Vec<usize>,
+    buckets: Vec<(u32, FxHashMap<String, u32>)>,
+    fallback: u32,
+    lists: Vec<Box<[usize]>>,
 }
 
 impl Dispatch {
     pub fn backtracks(&self) -> bool {
-        !self.fallback.is_empty() || self.buckets.iter().any(|bucket|
-            bucket.any.len() > 1 || bucket.text.values().any(|items| items.len() > 1))
+        !self.lists[self.fallback as usize].is_empty() || self.lists.iter().any(|list| list.len() > 1)
     }
 
-    pub fn candidates(&self, token: Option<u16>, text: &str) -> &[usize] {
-        let Some(bucket) = token.and_then(|token| self.buckets.get(token as usize)) else { return &self.fallback };
-        bucket.text.get(text).map_or(&bucket.any, Vec::as_slice)
+    pub fn candidates(&self, token: Option<u16>, text: &str) -> u32 {
+        let Some((any, texts)) = token.and_then(|token| self.buckets.get(token as usize)) else { return self.fallback };
+        texts.get(text).copied().unwrap_or(*any)
     }
+
+    pub fn list(&self, id: u32) -> &[usize] { &self.lists[id as usize] }
 }
 
 pub(super) fn compile(program: &Program, items: &[usize]) -> Dispatch {
@@ -46,15 +51,19 @@ pub(super) fn compile(program: &Program, items: &[usize]) -> Dispatch {
             }
         }
     }
-    for bucket in &mut buckets {
+    let mut lists = vec![fallback.clone().into_boxed_slice()];
+    let mut add = |list: Vec<usize>| { lists.push(list.into_boxed_slice()); (lists.len() - 1) as u32 };
+    let buckets = buckets.into_iter().map(|mut bucket| {
         bucket.any.extend(&fallback);
         bucket.any.sort_unstable();
         bucket.any.dedup();
-        for candidates in bucket.text.values_mut() {
+        let texts = bucket.text.into_iter().map(|(text, mut candidates)| {
             candidates.extend(&bucket.any);
             candidates.sort_unstable();
             candidates.dedup();
-        }
-    }
-    Dispatch { buckets, fallback }
+            (text, add(candidates))
+        }).collect();
+        (add(bucket.any), texts)
+    }).collect();
+    Dispatch { buckets, fallback: 0, lists }
 }
