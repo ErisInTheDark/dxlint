@@ -49,7 +49,9 @@ pub(super) fn sites(values: &Values<'_>, at: Leaf, mut expression: &Value) -> Kn
     loop {
         if !values.question.budget.step() { return Known::Unknown }
         match expression {
-            Value::Current => {
+            // Filtering a value narrows what it may hold, never where it lives.
+            Value::Excludes { from: Some(inner), .. } => expression = inner,
+            Value::Current | Value::Excludes { from: None, .. } => {
                 return match values.semantic.leaf(at) {
                     Known::Yes(at) => Known::Yes(vec![at]),
                     Known::Unknown => Known::Unknown,
