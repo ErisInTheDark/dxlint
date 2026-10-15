@@ -1,4 +1,4 @@
-use super::{error, merge_error, memo, pratt, Answer, Context, Fields, Input, Matched, Run};
+use super::{merge_error, memo, pratt, Answer, Context, Fields, Input, Matched, Run};
 use super::failure::{resource, ChoiceFailures};
 use crate::grammar::syntax::compile::{Action, Op, ScopeRule};
 use crate::grammar::syntax::compile::instructions::{Instruction, Span};
@@ -50,6 +50,7 @@ pub(super) fn evaluate(run: &mut Run<'_>, input: Input) -> Answer {
         })); }
         match next {
             Next::Enter(mut input, production) => {
+                run.scratch.counts.instructions += 1;
                 if production {
                     match memo::enter(run, input.expression, input.pos, input.context, input.power) {
                         memo::Enter::Return(answer) => { next = Next::Return(answer); continue; }
@@ -102,12 +103,12 @@ pub(super) fn evaluate(run: &mut Run<'_>, input: Input) -> Answer {
                         let context = Context { goal: goal.unwrap_or(input.context.goal), ..input.context };
                         let matches = run.probe_matches(super::super::compile::Probe { expression, goal }, input.pos, input.context);
                         Next::Return(if matches != negative { Ok(Matched::empty(input.pos)) }
-                            else if negative { Err(error(input.pos, "negative lookahead")) }
+                            else if negative { Err(run.fail(input.pos, "negative lookahead")) }
                             else {
                                 let at = run.lex(context.goal, input.pos).start;
                                 Err(match &program.expressions[expression] {
-                                    Op::Token(terminal) => error(at, terminal.expected.clone()),
-                                    _ => error(at, "matching token pattern"),
+                                    Op::Token(terminal) => run.fail(at, &terminal.expected),
+                                    _ => run.fail(at, "matching token pattern"),
                                 })
                             })
                     }
@@ -120,22 +121,23 @@ pub(super) fn evaluate(run: &mut Run<'_>, input: Input) -> Answer {
                         Next::Enter(Input { expression: header, ..input }, false)
                     }
                     Instruction::Reuse(capture) => {
-                        match run.scratch.fields.reversed(input.scope).find(|(field, _)| *field == capture) {
+                        let found = run.scratch.fields.reversed(input.scope).find(|(field, _)| *field == capture);
+                        match found {
                             Some((_, values)) => Next::Return(Ok(Matched { start: values.first()
                                 .map(|value| run.scratch.drafts[*value as usize].start), values, ..Matched::empty(input.pos) })),
-                            None => Next::Return(Err(error(input.pos, "private capture"))),
+                            None => Next::Return(Err(run.fail(input.pos, "private capture"))),
                         }
                     }
                     Instruction::Cut => Next::Return(Ok(Matched { cut: true, ..Matched::empty(input.pos) })),
                     Instruction::SameLine => {
                         let token = run.lex(input.context.goal, input.pos);
-                        Next::Return(if token.trivia.is_some_and(|gap| gap.line_break) { Err(error(token.start, "same line")) }
+                        Next::Return(if token.trivia.is_some_and(|gap| gap.line_break) { Err(run.fail(token.start, "same line")) }
                             else { Ok(Matched::empty(input.pos)) })
                     }
                     Instruction::End => {
                         let token = run.lex(input.context.goal, input.pos);
                         Next::Return(if token.start as usize == run.text.len() { Ok(Matched::empty(input.pos)) }
-                            else { Err(error(token.start, "end of file")) })
+                            else { Err(run.fail(token.start, "end of file")) })
                     }
                     Instruction::SameText { source } => {
                         let Op::SameText(left, right, ignore) = &program.expressions[source] else { unreachable!() };
@@ -145,7 +147,7 @@ pub(super) fn evaluate(run: &mut Run<'_>, input: Input) -> Answer {
                             Some(predicate) => run.without_pattern(left, *predicate) == run.without_pattern(right, *predicate),
                             None => run.text[left.0 as usize..left.1 as usize] == run.text[right.0 as usize..right.1 as usize],
                         });
-                        Next::Return(if equal { Ok(Matched::empty(input.pos)) } else { Err(error(input.pos, "equal field text")) })
+                        Next::Return(if equal { Ok(Matched::empty(input.pos)) } else { Err(run.fail(input.pos, "equal field text")) })
                     }
                     Instruction::Terminator { source } => {
                         let Op::Terminator { explicit, before, newline, eof } = &program.expressions[source] else { unreachable!() };
@@ -160,7 +162,7 @@ pub(super) fn evaluate(run: &mut Run<'_>, input: Input) -> Answer {
                                 if before || (*eof && token.start as usize == run.text.len())
                                     || (*newline && token.trivia.is_some_and(|gap| gap.line_break)) {
                                     Ok(Matched::empty(input.pos))
-                                } else { Err(error(token.start, "statement terminator")) }
+                                } else { Err(run.fail(token.start, "statement terminator")) }
                             }
                         };
                         Next::Return(answer)
@@ -180,7 +182,7 @@ pub(super) fn evaluate(run: &mut Run<'_>, input: Input) -> Answer {
                                 Err(mut failure) => {
                                     match action {
                                         Action::Try if !failure.fatal => failure.committed = false,
-                                        Action::Choice if !failure.committed && !failure.fatal => failure = merge_error(error(input.pos, "alternative"), failure),
+                                        Action::Choice if !failure.committed && !failure.fatal => failure = merge_error(run.fail(input.pos, "alternative"), failure),
                                         _ => {}
                                     }
                                     Err(failure)
@@ -207,7 +209,7 @@ pub(super) fn evaluate(run: &mut Run<'_>, input: Input) -> Answer {
                         Ok(mut matched) => { failures.clear(run); matched.cut = false; Next::Return(Ok(matched)) }
                         Err(failure) if failure.committed || failure.fatal => { failures.clear(run); Next::Return(Err(failure)) }
                         Err(failure) => {
-                            failures.push(run, selected, failure);
+                            if run.diagnose { failures.push(run, selected, failure); }
                             choice(run, input, items, table, selected + 1, failures, &mut frames)
                         }
                     },
@@ -230,7 +232,7 @@ pub(super) fn evaluate(run: &mut Run<'_>, input: Input) -> Answer {
                                 Next::Enter(child, false)
                             }
                         }
-                        Ok(_) => Next::Return(Err(error(matched.end, "consuming repetition"))),
+                        Ok(_) => Next::Return(Err(run.fail(matched.end, "consuming repetition"))),
                         Err(failure) if failure.committed || failure.fatal || count < min => Next::Return(Err(failure)),
                         Err(_) => Next::Return(Ok(matched)),
                     },
@@ -239,7 +241,7 @@ pub(super) fn evaluate(run: &mut Run<'_>, input: Input) -> Answer {
                         Ok(_) if !negative => Ok(Matched::empty(input.pos)),
                         Err(failure) if !negative => Err(failure),
                         Err(_) => Ok(Matched::empty(input.pos)),
-                        Ok(_) => Err(error(input.pos, "negative lookahead")),
+                        Ok(_) => Err(run.fail(input.pos, "negative lookahead")),
                     }),
                     State::ScopeHeader { capture, body } => match answer {
                         Ok(mut header) => {
@@ -326,7 +328,11 @@ fn choice(run: &mut Run<'_>, input: Input, items: Span, table: usize, from: usiz
             frames.push(Frame { input, state: State::Choice { items, table, selected, failures } });
             Next::Enter(Input { expression: program.instructions.operands[items.start + selected], ..input }, false)
         }
-        None => replay(run, input, items, 0, failures.first, failures, error(input.pos, "alternative"), frames),
+        None => {
+            let failure = run.fail(input.pos, "alternative");
+            if !run.diagnose { return Next::Return(Err(failure)); }
+            replay(run, input, items, 0, failures.first, failures, failure, frames)
+        }
     }
 }
 

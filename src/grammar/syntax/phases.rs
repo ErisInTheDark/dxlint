@@ -52,6 +52,18 @@ impl Drop for Open {
     }
 }
 
+/// Adds `amount` to a counter reported as a phase with calls but no time.
+pub(super) fn count(name: &'static str, amount: u64) {
+    STATE.with(|state| {
+        let mut state = state.borrow_mut();
+        let Some(state) = state.as_mut() else { return };
+        match state.totals.iter_mut().find(|total| total.name == name) {
+            Some(total) => total.calls += amount,
+            None => state.totals.push(PhaseTotal { name, inclusive_ns: 0, self_ns: 0, calls: amount }),
+        }
+    });
+}
+
 pub(super) fn phase<T>(name: &'static str, run: impl FnOnce() -> T) -> T {
     let _open = STATE.with(|state| {
         let mut state = state.borrow_mut();

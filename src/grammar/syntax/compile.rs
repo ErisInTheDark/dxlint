@@ -32,6 +32,7 @@ pub(super) struct Program {
     pub public_fields: usize,
     pub node_fields: Vec<Vec<u16>>,
     pub first: Vec<Option<first::First>>,
+    pub starts: Vec<Option<first::Start>>,
     pub lowered: Vec<lower::Lowered>,
     pub instructions: instructions::Instructions,
     pub token_first: Vec<crate::pattern::prefilter::ByteSet>,
@@ -165,7 +166,7 @@ impl Program {
                 Ok((goal.tokens.iter().map(|name| index(definition.tokens.iter().map(|token| token.name.as_str()), name, "goal token"))
                     .collect::<Result<_, String>>()?, goal.trivia))
             }).collect::<Result<_, String>>()?,
-            lexers: Vec::new(), fields, public_fields, node_fields: Vec::new(), first: Vec::new(), lowered: Vec::new(),
+            lexers: Vec::new(), fields, public_fields, node_fields: Vec::new(), first: Vec::new(), starts: Vec::new(), lowered: Vec::new(),
             instructions: instructions::Instructions::default(),
             token_first: definition.tokens.iter().map(|token| first_bytes(&token.pattern)).collect(), trivia_first,
             goal_changes: Vec::new(), goal_tokens: Vec::new(),
@@ -193,6 +194,7 @@ impl Program {
         }
         let nullable = program.validate()?;
         program.first = first::compile(&program);
+        program.starts = first::starts(&program, &program.first);
         program.lowered = lower::compile(&program, &nullable);
         program.instructions = instructions::compile(&program);
         Ok(program)

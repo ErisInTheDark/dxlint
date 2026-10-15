@@ -30,61 +30,89 @@ impl From<String> for Expected {
     fn from(text: String) -> Self { Self::Label(text.into()) }
 }
 
-impl From<Arc<str>> for Expected {
-    fn from(text: Arc<str>) -> Self { Self::Label(text) }
+impl From<&Arc<str>> for Expected {
+    fn from(text: &Arc<str>) -> Self { Self::Label(text.clone()) }
 }
 
-#[derive(Clone)]
-pub(super) enum Labels {
-    One(Expected),
-    Many(Arc<Vec<Expected>>),
-}
-
-impl Labels {
-    fn values(&self) -> &[Expected] {
-        match self {
-            Self::One(label) => std::slice::from_ref(label),
-            Self::Many(labels) => labels,
-        }
-    }
-
-    fn merge(&mut self, other: &Self) {
-        if other.values().iter().all(|label| self.values().contains(label)) { return; }
-        if let Self::One(label) = self {
-            *self = Self::Many(Arc::new(vec![label.clone()]));
-        }
-        let Self::Many(labels) = self else { unreachable!() };
-        let labels = Arc::make_mut(labels);
-        for label in other.values() {
-            if !labels.contains(label) { labels.push(label.clone()); }
-        }
-    }
-}
-
+/// A failed match: where it failed and how it binds enclosing choices.
+/// Match failures leave what was expected in the run's [`Farthest`], so
+/// failing (constant while parsing valid input) allocates nothing; only
+/// failures outside matching carry their own label.
 #[derive(Clone)]
 pub(super) struct Failure {
     pub(super) offset: u32,
-    pub(super) expected: Labels,
     pub(super) committed: bool,
     pub(super) fatal: bool,
+    own: Option<Expected>,
 }
 
-impl Failure {
-    pub fn public(self) -> ParseError {
-        ParseError { offset: self.offset, expected: self.expected.values().iter().map(|label| label.text().to_owned()).collect(), committed: self.committed }
+/// The farthest offset any match failed at and every label expected there:
+/// what a failed parse reports.
+#[derive(Default)]
+pub(super) struct Farthest {
+    offset: u32,
+    labels: Vec<Expected>,
+}
+
+impl Farthest {
+    fn record<L: Into<Expected>>(&mut self, offset: u32, label: L) {
+        if !self.labels.is_empty() && offset < self.offset { return; }
+        let label = label.into();
+        if self.labels.is_empty() || offset > self.offset {
+            self.offset = offset;
+            self.labels.clear();
+            self.labels.push(label);
+        } else if !self.labels.contains(&label) {
+            self.labels.push(label);
+        }
+    }
+
+    pub(super) fn clear(&mut self) {
+        self.offset = 0;
+        self.labels.clear();
     }
 }
 
-pub(super) fn error(pos: u32, expected: impl Into<Expected>) -> Failure {
-    Failure { offset: pos, expected: Labels::One(expected.into()), committed: false, fatal: false }
+impl Failure {
+    /// Whether this failure reports the farthest match failure, which only a
+    /// diagnosing run records.
+    pub(super) fn from_matching(&self) -> bool { self.own.is_none() }
 }
 
-pub(super) fn merge_error(left: Failure, mut right: Failure) -> Failure {
+impl Run<'_> {
+    /// A match failure at `pos`, expecting `label` there.
+    pub(super) fn fail<L: Into<Expected>>(&mut self, pos: u32, label: L) -> Failure {
+        if self.diagnose { self.scratch.farthest.record(pos, label); }
+        Failure { offset: pos, committed: false, fatal: false, own: None }
+    }
+
+    /// The public error for the failure a parse ended with.
+    pub(super) fn public(&self, failure: Failure) -> ParseError {
+        let farthest = &self.scratch.farthest;
+        let (offset, expected) = match &failure.own {
+            Some(label) => (failure.offset, vec![label.text().to_owned()]),
+            None => {
+                let mut expected: Vec<String> = farthest.labels.iter().map(|label| label.text().to_owned()).collect();
+                expected.sort_unstable();
+                (farthest.offset.max(failure.offset), expected)
+            }
+        };
+        ParseError { offset, expected, committed: failure.committed }
+    }
+}
+
+/// A failure outside matching (setup, registration, tree building, the
+/// nesting limit), reporting its own label rather than the farthest match.
+pub(super) fn error(pos: u32, expected: impl Into<Expected>) -> Failure {
+    Failure { offset: pos, committed: false, fatal: false, own: Some(expected.into()) }
+}
+
+/// Which of two failures an enclosing choice reports: fatal first, then
+/// the farther one (the right one on ties).
+pub(super) fn merge_error(left: Failure, right: Failure) -> Failure {
     if left.fatal { return left; }
     if right.fatal { return right; }
     if left.offset > right.offset { return left; }
-    if right.offset > left.offset { return right; }
-    right.expected.merge(&left.expected);
     right
 }
 

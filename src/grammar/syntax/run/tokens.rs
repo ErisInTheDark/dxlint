@@ -20,6 +20,8 @@ impl Tape {
         self.positions.clear();
         self.predicates.clear();
     }
+
+    pub(super) fn len(&self) -> usize { self.records.len() }
 }
 
 pub(super) fn prepare(run: &mut Run<'_>, goal: u16) {
@@ -34,6 +36,7 @@ pub(super) fn prepare(run: &mut Run<'_>, goal: u16) {
 }
 
 pub(super) fn read(run: &mut Run<'_>, goal: u16, pos: u32) -> Lexed {
+    run.scratch.counts.lex_reads += 1;
     let tape = &run.scratch.tokens;
     let id = tape.positions[pos as usize] as usize;
     if let Some(record) = tape.records.get(id).filter(|record| record.pos == pos) {

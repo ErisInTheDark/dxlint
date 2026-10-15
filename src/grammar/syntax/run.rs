@@ -80,6 +80,9 @@ pub(super) struct Run<'a> {
     text: &'a str,
     caches: caches::Lease<'a>,
     scratch: Scratch,
+    /// Collects what each failing match expected. Valid files never need
+    /// it, so a parse runs without it and reruns with it only to report.
+    diagnose: bool,
 }
 
 #[derive(Default)]
@@ -93,10 +96,45 @@ struct Scratch {
     flattened: Vec<u32>,
     execute: execute::Storage,
     alternatives: Vec<failure::Alternative>,
+    farthest: failure::Farthest,
     materialize: materialize::Storage,
+    counts: Counts,
+}
+
+/// Work counters a parse reports to phase profiling once it ends.
+#[derive(Default)]
+struct Counts {
+    instructions: u64,
+    lex_reads: u64,
+    enters: u64,
+    memo_hits: u64,
+    memo_stores: u64,
+    impossible_starts: u64,
+    copied: u64,
 }
 
 impl Scratch {
+    fn report(&mut self) {
+        let counts = std::mem::take(&mut self.counts);
+        for (name, amount) in [
+            ("count.instructions", counts.instructions),
+            ("count.lex_reads", counts.lex_reads),
+            ("count.enters", counts.enters),
+            ("count.memo_hits", counts.memo_hits),
+            ("count.memo_stores", counts.memo_stores),
+            ("count.impossible_starts", counts.impossible_starts),
+            ("count.copied_entries", counts.copied),
+            ("size.memo", self.memo.len() as u64),
+            ("size.drafts", self.drafts.len() as u64),
+            ("size.receipts", self.receipts.len() as u64),
+            ("size.values", self.values.len() as u64),
+            ("size.fields", self.fields.len() as u64),
+            ("size.token_records", self.tokens.len() as u64),
+        ] {
+            super::phases::count(name, amount);
+        }
+    }
+
     fn clear(&mut self) {
         self.tokens.clear();
         self.memo.clear();
@@ -107,6 +145,7 @@ impl Scratch {
         self.flattened.clear();
         self.execute.clear();
         self.alternatives.clear();
+        self.farthest.clear();
         self.materialize.clear();
     }
 }
@@ -123,14 +162,25 @@ impl<'a> Run<'a> {
         let program = &parser.program;
         let mut caches = parser.caches.lease(program);
         let scratch = std::mem::take(&mut caches.scratch);
-        Self { parser, program, text, caches, scratch }
+        Self { parser, program, text, caches, scratch, diagnose: false }
     }
 
-    pub fn parse(self, context: Context, registration: &Registration) -> Result<Parsed, ParseError> {
-        self.parse_inner(context, registration).map_err(Failure::public)
+    pub fn parse(mut self, context: Context, registration: &Registration) -> Result<Parsed, ParseError> {
+        let result = self.parse_inner(context, registration);
+        self.scratch.report();
+        match result {
+            Err(failure) if failure.from_matching() => {
+                self.scratch.clear();
+                self.diagnose = true;
+                let result = self.parse_inner(context, registration);
+                self.scratch.report();
+                result.map_err(|failure| self.public(failure))
+            }
+            result => result.map_err(|failure| self.public(failure)),
+        }
     }
 
-    fn parse_inner(mut self, context: Context, registration: &Registration) -> Result<Parsed, Failure> {
+    fn parse_inner(&mut self, context: Context, registration: &Registration) -> Result<Parsed, Failure> {
         if context.goal as usize >= self.program.goals.len() || self.text.len() > u32::MAX as usize {
             return Err(error(0, "valid parser context and file size"));
         }
@@ -140,12 +190,12 @@ impl<'a> Run<'a> {
         {
             return Err(error(0, "complete node registration"));
         }
-        super::phases::phase("prepare", || tokens::prepare(&mut self, context.goal));
+        super::phases::phase("prepare", || tokens::prepare(self, context.goal));
         let root_expression = self.program.productions[self.program.root];
         let mut matched = super::phases::phase("match", || self.memoized(root_expression, 0, context, 0))?;
         let tail = self.lex(context.goal, matched.end);
         if tail.start as usize != self.text.len() {
-            return Err(error(tail.start, "end of file"));
+            return Err(self.fail(tail.start, "end of file"));
         }
         if let Some(trivia) = tail.trivia {
             let receipt = self.receipt(Receipt::Trivia(trivia));
@@ -160,7 +210,7 @@ impl<'a> Run<'a> {
         }
         self.scratch.drafts[root as usize].start = 0;
         self.scratch.drafts[root as usize].end = self.text.len() as u32;
-        let (nodes, root) = super::phases::phase("materialize", || materialize::build(&mut self, root, registration))?;
+        let (nodes, root) = super::phases::phase("materialize", || materialize::build(self, root, registration))?;
         let (tokens, trivia) = super::phases::phase("receipts", || {
             let mut tokens = Vec::new();
             let mut trivia = Vec::new();
@@ -198,6 +248,8 @@ impl<'a> Run<'a> {
     }
 
     fn append(&mut self, target: &mut Matched, next: Matched) {
+        if !target.values.is_empty() { self.scratch.counts.copied += next.values.len() as u64; }
+        if !target.fields.is_empty() { self.scratch.counts.copied += next.fields.len() as u64; }
         target.start = target.start.or(next.start);
         target.end = next.end;
         self.scratch.values.append(&mut target.values, next.values);
@@ -263,9 +315,9 @@ impl<'a> Run<'a> {
 
     fn terminal(&mut self, terminal: &Terminal, pos: u32, context: Context, values: bool) -> Answer {
         let lexed = self.lex(context.goal, pos);
-        let token = lexed.token.filter(|token| terminal.tokens.contains(&token.token)
+        let Some(token) = lexed.token.filter(|token| terminal.tokens.contains(&token.token)
             && terminal.text.as_deref().is_none_or(|text| text == &self.text[token.start as usize..token.end as usize]))
-            .ok_or_else(|| error(lexed.start, terminal.expected.clone()))?;
+        else { return Err(self.fail(lexed.start, &terminal.expected)) };
         let values = if values {
             let value = self.draft(terminal.emit, token.start, token.end, Fields::default());
             self.scratch.values.single(value)
@@ -276,9 +328,9 @@ impl<'a> Run<'a> {
 
     fn token_pattern(&mut self, predicate: usize, emit: Option<u16>, pos: u32, context: Context, values: bool) -> Answer {
         let lexed = self.lex(context.goal, pos);
-        let token = lexed.token.ok_or_else(|| error(lexed.start, "matching token pattern"))?;
+        let Some(token) = lexed.token else { return Err(self.fail(lexed.start, "matching token pattern")) };
         if !tokens::predicate(self, predicate, token.start, token.end) {
-            return Err(error(token.start, "matching token pattern"));
+            return Err(self.fail(token.start, "matching token pattern"));
         }
         let values = if values {
             let value = self.draft(emit, token.start, token.end, Fields::default());
@@ -339,9 +391,9 @@ impl<'a> Run<'a> {
 
     fn possible_start(&mut self, expression: usize, pos: u32, context: Context) -> bool {
         let program = self.program;
-        let Some(first) = &program.first[expression] else { return true; };
-        if first.nullable || !first.skip_safe { return true; }
-        first.probes.iter().any(|probe| self.probe_matches(*probe, pos, context))
+        let Some(start) = &program.starts[expression] else { return true; };
+        if self.lex(context.goal, pos).token.is_some_and(|token| start.has(token.token)) { return true; }
+        start.probes.iter().any(|probe| self.probe_matches(*probe, pos, context))
     }
 
     fn field_path(&self, fields: Fields, path: &[u16]) -> Option<&Draft> {

@@ -35,6 +35,8 @@ impl<T: Copy> Chain<T> {
         self.pending.clear();
     }
 
+    pub fn len(&self) -> usize { self.entries.len() }
+
     pub fn push(&mut self, list: &mut List<T>, value: T) {
         let last = self.entries.len();
         self.entries.push(Entry { previous: list.last, value });

@@ -32,6 +32,36 @@ impl First {
     }
 }
 
+/// How a run rules out an expression before entering it: the token ids the
+/// current goal's token may have, then probes needing their own goal, text
+/// or pattern. Absent when the expression may start anywhere.
+pub(crate) struct Start {
+    tokens: Box<[u64]>,
+    pub probes: Vec<Probe>,
+}
+
+impl Start {
+    pub fn has(&self, token: u16) -> bool {
+        self.tokens[token as usize / 64] & (1 << (token % 64)) != 0
+    }
+}
+
+pub(super) fn starts(program: &Program, first: &[Option<First>]) -> Vec<Option<Start>> {
+    first.iter().map(|first| {
+        let first = first.as_ref().filter(|first| !first.nullable && first.skip_safe)?;
+        let mut start = Start { tokens: vec![0; program.tokens.len().div_ceil(64)].into(), probes: Vec::new() };
+        for probe in &first.probes {
+            match &program.expressions[probe.expression] {
+                Op::Token(terminal) if probe.goal.is_none() && terminal.text.is_none() => {
+                    for token in &terminal.tokens { start.tokens[*token as usize / 64] |= 1 << (token % 64); }
+                }
+                _ => start.probes.push(*probe),
+            }
+        }
+        Some(start)
+    }).collect()
+}
+
 pub(super) fn compile(program: &Program) -> Vec<Option<First>> {
     let mut first = vec![None; program.expressions.len()];
     loop {
