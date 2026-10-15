@@ -1,0 +1,3 @@
+input.ts:6:17-6:56 prefer-readonly-parameter-types#0
+input.ts:7:18-7:59 prefer-readonly-parameter-types#0
+input.ts:8:17-8:67 prefer-readonly-parameter-types#0

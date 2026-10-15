@@ -833,7 +833,7 @@ fn ts_value_bare_type(n) = last(walk(n, item => if item is ts_parenthesized_type
 in ts_mapped_type {
   let ts_value_mapped_constraint ts_value_bare_type(type_parameter.constraint.node)
   let ts_value_mapped_template ts_value_bare_type(type.node)
-  let ts_value_mapped_source if name == null && optional == null && ts_value_mapped_constraint is ts_type_operator
+  let ts_value_mapped_source if name == null && ts_value_mapped_constraint is ts_type_operator
     && ts_value_mapped_constraint.operator == "keyof" && ts_value_mapped_template is ts_indexed_access then {
     value source: ts_value_bare_type(ts_value_mapped_constraint.type.node)
     value object: ts_value_bare_type(ts_value_mapped_template.object.node)
@@ -844,7 +844,23 @@ in ts_mapped_type {
       && any(name_binding(key.name.node).declarations, declaration => declaration.parent.node == type_parameter.node)
       then source else null
   } else null
-  when ts_value_mapped_source != null { unwraps ts_value_mapped_source }
+  let ts_value_mapped_optional if optional == null then "keep" else if optional == "-?" then "remove" else "add"
+  let ts_value_mapped_readonly if modifier == null then "keep" else if modifier == "-readonly" then "remove" else "add"
+  when ts_value_mapped_source != null && ts_value_mapped_optional == "keep" {
+    when ts_value_mapped_readonly == "keep" { unwraps ts_value_mapped_source }
+    when ts_value_mapped_readonly == "add" { unwraps modified ts_value_mapped_source flag readonly add }
+    when ts_value_mapped_readonly == "remove" { unwraps modified ts_value_mapped_source flag readonly remove }
+  }
+  when ts_value_mapped_source != null && ts_value_mapped_optional == "add" {
+    when ts_value_mapped_readonly == "keep" { unwraps modified ts_value_mapped_source optional add }
+    when ts_value_mapped_readonly == "add" { unwraps modified ts_value_mapped_source optional add flag readonly add }
+    when ts_value_mapped_readonly == "remove" { unwraps modified ts_value_mapped_source optional add flag readonly remove }
+  }
+  when ts_value_mapped_source != null && ts_value_mapped_optional == "remove" {
+    when ts_value_mapped_readonly == "keep" { unwraps modified ts_value_mapped_source optional remove }
+    when ts_value_mapped_readonly == "add" { unwraps modified ts_value_mapped_source optional remove flag readonly add }
+    when ts_value_mapped_readonly == "remove" { unwraps modified ts_value_mapped_source optional remove flag readonly remove }
+  }
   when ts_value_mapped_source == null { unwraps unknown }
 }
 in ts_import_type { unwraps unknown }
