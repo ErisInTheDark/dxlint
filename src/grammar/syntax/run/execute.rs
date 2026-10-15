@@ -109,6 +109,10 @@ pub(super) fn evaluate(run: &mut Run<'_>, input: Input) -> Answer {
         })); }
         match next {
             Next::Enter(mut input, production) => {
+                if !production && !run.diagnose && run.program.instructions.inline[input.expression] {
+                    next = Next::Return(inline(run, input));
+                    continue;
+                }
                 run.scratch.counts.instructions += 1;
                 if production {
                     match memo::enter(run, input.expression, input.pos, input.context, input.power) {
@@ -368,18 +372,91 @@ fn apply_actions(run: &mut Run<'_>, input: Input, actions: Span, mut answer: Ans
 /// or action frames. `None` when the arm needs the general path, and always
 /// while diagnosing (failure replay records each arm on its frame).
 fn leaf_arm(run: &mut Run<'_>, input: Input) -> Option<Answer> {
-    if run.diagnose { return None; }
+    (!run.diagnose && run.program.instructions.inline[input.expression]).then(|| inline(run, input))
+}
+
+/// An [`Instructions::inline`] graph answered in place: the answer entering
+/// it would give, with no frames (its depth is bounded). Never while
+/// diagnosing: failure replay records each arm on its frame.
+fn inline(run: &mut Run<'_>, outer: Input) -> Answer {
     let program = run.program;
-    let code = &program.instructions.code[input.expression];
-    if code.power.is_some() || !matches!(code.scope, ScopeRule::Keep) { return None; }
-    let context = Context { goal: code.goal.unwrap_or(input.context.goal), flags: (input.context.flags | code.set) & !code.clear };
-    let answer = match code.instruction {
-        Instruction::Match { terminal, values } => run.terminal(&program.instructions.terminals[terminal], input.pos, context, values),
-        Instruction::Pattern { predicate, emit, values } => run.token_pattern(predicate, emit, input.pos, context, values),
-        _ => return None,
-    };
+    let code = &program.instructions.code[outer.expression];
     run.scratch.counts.fused_leaves += 1;
-    Some(apply_actions(run, input, code.actions, answer))
+    let mut input = outer;
+    input.scope = match code.scope {
+        ScopeRule::Keep => input.scope,
+        ScopeRule::Empty => Fields::default(),
+        ScopeRule::Private => run.private_scope(input.scope),
+    };
+    input.context = Context { goal: code.goal.unwrap_or(input.context.goal), flags: (input.context.flags | code.set) & !code.clear };
+    let answer = match code.instruction {
+        Instruction::Match { terminal, values } => run.terminal(&program.instructions.terminals[terminal], input.pos, input.context, values),
+        Instruction::Pattern { predicate, emit, values } => run.token_pattern(predicate, emit, input.pos, input.context, values),
+        Instruction::SameLine => {
+            let token = run.lex(input.context.goal, input.pos);
+            if token.trivia.is_some_and(|gap| gap.line_break) { Err(run.fail(token.start, "same line")) } else { Ok(Matched::empty(input.pos)) }
+        }
+        Instruction::End => {
+            let token = run.lex(input.context.goal, input.pos);
+            if token.start as usize == run.text.len() { Ok(Matched::empty(input.pos)) } else { Err(run.fail(token.start, "end of file")) }
+        }
+        Instruction::Probe { expression, goal, negative } => {
+            let context = Context { goal: goal.unwrap_or(input.context.goal), ..input.context };
+            let matches = run.probe_matches(super::super::compile::Probe { expression, goal }, input.pos, input.context);
+            if matches != negative { Ok(Matched::empty(input.pos)) }
+            else if negative { Err(run.fail(input.pos, "negative lookahead")) }
+            else {
+                let at = run.lex(context.goal, input.pos).start;
+                Err(match &program.expressions[expression] {
+                    Op::Token(terminal) => run.fail(at, &terminal.expected),
+                    _ => run.fail(at, "matching token pattern"),
+                })
+            }
+        }
+        Instruction::Flag { flag, yes, no } => inline(run, Input { expression: if input.context.flags & flag != 0 { yes } else { no }, ..input }),
+        Instruction::Look { inner, negative } => match inline(run, Input { expression: inner, ..input }) {
+            Err(failure) if failure.fatal => Err(failure),
+            Ok(_) if !negative => Ok(Matched::empty(input.pos)),
+            Err(failure) if !negative => Err(failure),
+            Err(_) => Ok(Matched::empty(input.pos)),
+            Ok(_) => Err(run.fail(input.pos, "negative lookahead")),
+        },
+        Instruction::Sequence(items) => {
+            let mut matched = Matched::empty(input.pos);
+            let mut scope = input.scope;
+            let mut failed = None;
+            for &item in &program.instructions.operands[items.start..items.end()] {
+                match inline(run, input.child(item, matched.end, input.power, scope)) {
+                    Ok(child) => {
+                        run.scratch.fields.append(&mut scope, child.fields);
+                        run.append(&mut matched, child);
+                    }
+                    Err(mut failure) => {
+                        failure.committed |= matched.cut;
+                        failed = Some(failure);
+                        break;
+                    }
+                }
+            }
+            failed.map_or(Ok(matched), Err)
+        }
+        Instruction::Choice { items, table } => {
+            let dispatch = program.lowered[table].choice.as_ref().expect("choice dispatch");
+            let mut cursor = Cursor::open(run, dispatch, input.context.goal, input.pos);
+            loop {
+                let Some(selected) = cursor.find(run, dispatch, input.pos, input.context, |index| Some(program.instructions.operands[items.start + index])) else {
+                    break Err(run.fail(input.pos, "alternative"));
+                };
+                match inline(run, Input { expression: program.instructions.operands[items.start + selected], ..input }) {
+                    Ok(mut matched) => { matched.cut = false; break Ok(matched) }
+                    Err(failure) if failure.committed || failure.fatal => break Err(failure),
+                    Err(_) => {}
+                }
+            }
+        }
+        _ => unreachable!("only in-place instructions are marked inline"),
+    };
+    apply_actions(run, outer, code.actions, answer)
 }
 
 fn choice(run: &mut Run<'_>, input: Input, items: Span, table: usize, cursor: Option<Cursor>, failures: ChoiceFailures, frames: &mut Vec<Frame>) -> Next {

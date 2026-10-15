@@ -597,9 +597,15 @@ in ts_method_signature {
   declares member key keyed ts_value_key(it) in nearest members hoisted
   optional when optional != null
 }
+fn ts_value_optional_member(n, key) = {
+  value lookup: value_lookup(n.object.node, key)
+  value lookup != null && any(lookup.alternatives, row => row.matched && row.required == false
+    && any(row.sources, source => source.kind == "named"))
+}
 in ts_member {
   let ts_value_member_key ts_value_key(property.node)
   let ts_value_member_nullish in_optional_chain == true && object could nullable
+    || ts_value_optional_member(node, ts_value_member_key)
   when object always any { unwraps object }
   when !(object always any) {
     when !ts_value_member_nullish { unwraps (object \ nullable, undefined).[ts_value_member_key] }
@@ -617,6 +623,7 @@ fn ts_value_unchecked_index(n) = {
 }
 in ts_index {
   let ts_value_index_nullish in_optional_chain == true && object could nullable
+    || ts_value_optional_member(node, index.node)
     || (if ts_compiler_option(node, "noUncheckedIndexedAccess") == true then ts_value_unchecked_index(node) else false)
   when object always any { unwraps object }
   when !(object always any) {
@@ -796,7 +803,7 @@ in ts_conditional_type {
   let ts_value_conditional_formal {
     value bare: ts_value_bare_type(check.node)
     value if bare is ts_type_reference && count(bare.type_argument.nodes) == 0 && bare.name is ts_identifier
-      then find(bare.name.definition.nodes, item => item is ts_type_parameter) else null
+      then find(map(name_binding(bare.name.node).declarations, declaration => declaration.parent.node), item => item is ts_type_parameter) else null
   }
   let ts_value_conditional_dynamic check always any
   when ts_value_conditional_formal != null {
@@ -834,7 +841,7 @@ in ts_mapped_type {
     value if source != null && token_list(source) == token_list(object)
       && key is ts_type_reference && count(key.type_argument.nodes) == 0
       && key.name is ts_identifier
-      && contains(key.name.definition.nodes, type_parameter.node)
+      && any(name_binding(key.name.node).declarations, declaration => declaration.parent.node == type_parameter.node)
       then source else null
   } else null
   when ts_value_mapped_source != null { unwraps ts_value_mapped_source }

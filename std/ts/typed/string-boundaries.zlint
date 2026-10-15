@@ -123,12 +123,14 @@ fn string_boundary_replacement(n, info, negative) = {
 }
 
 in ts_binary rule prefer-string-starts-ends-with {
+  option allowSingleElementEquality enum(never, always) = never
   when re_test(operator, /^[!=]==?$/)
   let comparison string_boundary_comparison(left.node, right.node)
   let match if right.literal_value.type == "null" then string_boundary_regex_call(left.node, "match") else null
   let info comparison ?? match
   let access string_boundary_access(left.node)
   when info != null
+  when allowSingleElementEquality != "always" || !contains(["index", "charAt"], access.method)
   report at if match != null then unparenthesised_node(left.node) else node
   warn if info.kind == "end" then "Use the 'String#endsWith' method instead." else "Use 'String#startsWith' method instead."
   let safe info.safe && (match != null || len(operator) == 3 || ts_value_string_like(info.needle) || ts_runtime_string(info.needle) != null || comparison != null && contains(["indexOf", "lastIndexOf"], access.method))

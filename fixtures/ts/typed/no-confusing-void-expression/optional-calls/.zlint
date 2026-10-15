@@ -4,3 +4,7 @@ in ts_call rule optional-number-contract {
   when node could number && node could undefined
   warn "Optional call preserves its number and undefined results."
 }
+in ts_call rule known-number-contract {
+  when callee.text == "numberCall" && (!(node always number) || node could undefined)
+  warn "A known number-returning function keeps its result without undefined."
+}

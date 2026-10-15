@@ -173,8 +173,10 @@ fn problem_self_assignments(a, b) = {
   map (item) unparenthesised_node(item.right)
 }
 in ts_assignment rule no-self-assign {
+  option props boolean = true
   when contains(["=", "&&=", "||=", "??="], operator)
   each self in map(problem_self_assignments(left.node, right.node), assigned => { node: assigned, name: re_replace(assigned.text, /\s+/, "") }) {
+    when props || self.node is ts_identifier
     report at self.node
     warn "'{self.name}' is assigned to itself."
   }
@@ -760,11 +762,19 @@ fn problem_optional_short_circuits(n) = {
     && !(bare is (ts_member.object, ts_index.object, ts_call.callee, ts_non_null.expression))
   sort_by (bare) bare.offset
 }
-group optional_chain_user ts_assignment, ts_assignment_pattern, ts_declarator, ts_parameter, ts_class, ts_call, ts_new, ts_member, ts_index, ts_tagged_template, ts_for_of, ts_spread, ts_binary, ts_with, ts_yield
+group optional_chain_user ts_assignment, ts_assignment_pattern, ts_declarator, ts_parameter, ts_class, ts_call, ts_new, ts_member, ts_index, ts_tagged_template, ts_for_of, ts_spread, ts_binary, ts_unary, ts_with, ts_yield
 in optional_chain_user rule no-unsafe-optional-chaining {
-  each chain in problem_optional_short_circuits(problem_optional_operand(node)) {
-    report at chain
-    warn "Unsafe usage of optional chaining. If it short-circuits with 'undefined' the evaluation will throw TypeError."
+  option disallowArithmeticOperators boolean = false
+  let arithmetic_operands if !disallowArithmeticOperators then []
+    else if node is ts_binary && contains(["+", "-", "/", "*", "%", "**"], node.operator) then [node.left.node, node.right.node]
+    else if node is ts_unary && contains(["+", "-"], node.operator) then [node.argument.node]
+    else if node is ts_assignment && contains(["+=", "-=", "/=", "*=", "%=", "**="], node.operator) then [node.right.node]
+    else []
+  let operands [{ node: problem_optional_operand(node), arithmetic: false }] (map(arithmetic_operands, operand => { node: operand, arithmetic: true }))
+  each chain in flat_map(operands, operand => map(problem_optional_short_circuits(operand.node), chain => { node: chain, arithmetic: operand.arithmetic })) {
+    report at chain.node
+    warn if !chain.arithmetic then "Unsafe usage of optional chaining. If it short-circuits with 'undefined' the evaluation will throw TypeError."
+      else "Unsafe arithmetic operation on optional chaining. It can result in NaN."
   }
 }
 

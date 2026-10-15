@@ -17,8 +17,8 @@ rule value-origin-contract warn "value origin or constraint lost" {
 rule merged-carrier-contract warn "generic argument safety lost across merged declarations" {
   let sender value_constituents(init.node)
   let receiver value_constituents(type.node)
-  when name == "mergedUnsafe" && !assignment_unsafe(sender, receiver)
-    || name == "mergedSafe" && assignment_unsafe(sender, receiver)
-    || name == "dynamicSafe" && assignment_unsafe(sender, receiver)
+  when name == "mergedUnsafe" && !assignment_unsafe(sender, receiver, node)
+    || name == "mergedSafe" && assignment_unsafe(sender, receiver, node)
+    || name == "dynamicSafe" && assignment_unsafe(sender, receiver, node)
 }
 }

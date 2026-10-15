@@ -101,7 +101,8 @@ fn assertion_context_safe(n) = !(assertion_receiver(n) is (ts_as, ts_type_assert
 fn assertion_tuple(n) = {
   value arms: value_parts(n)
   value parts: if arms != null && count(arms) == 1 then first(arms).parts else []
-  value count(parts) == 1 && first(parts).product_known && first(parts).product != null
+  value count(parts) == 1 && first(parts).carrier.description.kind == "tuple"
+    && first(parts).product_known && first(parts).product != null
 }
 fn assertion_fresh_literal(n, r, written) = unparenthesised_node(n.expression.node) is ts_object && r.annotation.property_literals == true || unparenthesised_node(n.expression.node) is ts_array && assertion_tuple(n) || (r.annotation.literal || written == "const") && unparenthesised_node(n.expression.node) is ts_template && { value unparenthesised_node(n.expression.node).expression.nodes; count } > 0
 

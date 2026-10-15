@@ -59,7 +59,7 @@ fn structure_list_open(n, group, items) = {
   value open: byte_slice(group.brackets, 0, 1)
   value close: byte_slice(group.brackets, 1)
   value first: first(items)
-  value prefix_end: if first != null then unparenthesised_node(first).offset else n.body.offset ?? n.end_offset
+  value prefix_end: if count(items) > 0 then unparenthesised_node(first).offset else n.body.offset ?? n.end_offset
   value candidates: {
     value overlapping(structure_list_open_token, n.offset, prefix_end)
     filter (item) item.offset >= n.offset && item.end_offset <= prefix_end && item.text == open
@@ -68,7 +68,7 @@ fn structure_list_open(n, group, items) = {
   value selected: if group.brackets == "()" && n is (ts_call, ts_new) then {
     value after: last(n.type_argument.nodes).end_offset ?? n.callee.end_offset ?? n.offset
     value find(candidates, item => item.offset >= after)
-  } else if first != null then {
+  } else if count(items) > 0 then {
     value edge: token(unparenthesised_node(first), "before")
     value if edge.text == open then ts_token_node(edge) else null
   } else find(candidates, item => token(item, "after").text == close)

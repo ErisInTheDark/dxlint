@@ -47,6 +47,9 @@ pub(crate) struct Instructions {
     pub operands: Vec<usize>,
     pub actions: Vec<Action>,
     pub terminals: Vec<Terminal>,
+    /// Bounded, call-free graphs (tokens, checks, choices and sequences of
+    /// them) the runtime answers in place, without frames.
+    pub inline: Vec<bool>,
 }
 
 pub(super) fn compile(program: &Program) -> Instructions {
@@ -99,5 +102,32 @@ pub(super) fn compile(program: &Program) -> Instructions {
         };
         out.code.push(Code { instruction, goal, set, clear, power, scope, actions: action_span });
     }
+    out.inline = inline(program, &out);
     out
+}
+
+/// Which expressions [`Instructions::inline`] marks: bounded scan depth (so
+/// acyclic), no production call, no Pratt power, built only from in-place
+/// instructions.
+fn inline(program: &Program, out: &Instructions) -> Vec<bool> {
+    let mut flags = vec![false; out.code.len()];
+    loop {
+        let mut changed = false;
+        for (id, code) in out.code.iter().enumerate() {
+            if flags[id] || code.power.is_some() || program.lowered[id].scan_depth.is_none() { continue }
+            let ok = match code.instruction {
+                Instruction::Match { .. } | Instruction::Pattern { .. } | Instruction::SameLine | Instruction::End | Instruction::Probe { .. } => true,
+                Instruction::Sequence(items) | Instruction::Choice { items, .. } => out.operands[items.start..items.end()].iter().all(|&item| flags[item]),
+                Instruction::Flag { yes, no, .. } => flags[yes] && flags[no],
+                Instruction::Look { inner, .. } => flags[inner],
+                _ => false,
+            };
+            if ok {
+                flags[id] = true;
+                changed = true;
+            }
+        }
+        if !changed { break }
+    }
+    flags
 }

@@ -291,6 +291,8 @@ impl<'s> Value<'s> {
         match (self, other) {
             // The same node; otherwise nodes compare as their text.
             (Value::Node(a, _), Value::Node(b, _)) => a == b,
+            // A node is present even when its text is empty (an array hole).
+            (Value::Node(..), Value::Null) | (Value::Null, Value::Node(..)) => false,
             (Value::Node(_, s), v) | (v, Value::Node(_, s)) => Value::Str(Text::Borrowed(s)).loose_eq(v),
             (Value::Num(a), Value::Str(s)) | (Value::Str(s), Value::Num(a)) => s.trim().parse::<f64>().is_ok_and(|b| b == *a),
             (Value::Null, Value::Str(s)) | (Value::Str(s), Value::Null) => s.is_empty(),

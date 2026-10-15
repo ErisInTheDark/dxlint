@@ -46,6 +46,11 @@ in ts_parenthesized let structure_parens_inner expression.node
 in ts_parenthesized_type let structure_parens_inner type.node
 in ts_node let structure_unwrapped if is structure_parens then structure_parens_inner.structure_unwrapped else node
 in structure_parens let structure_parens_outer if parent is structure_parens then parent.structure_parens_outer else node
+in structure_parens let no_extra_parens_owner {
+  value outer: structure_parens_outer
+  value owner: outer.parent.node
+  value if owner is ts_computed_key || outer is (ts_property.value, ts_pattern_property.value) && owner.parent is (ts_object, ts_object_pattern) then owner.parent.node else owner
+}
 in structure_parens let structure_parens_count if parent is structure_parens then 1 + parent.structure_parens_count else 1
 in ts_node let structure_parens_optional node.optional != null || is (structure_member, ts_call)
   && (if is ts_call then callee.structure_parens_optional else object.structure_parens_optional) == true

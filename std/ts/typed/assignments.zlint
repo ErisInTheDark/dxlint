@@ -37,7 +37,12 @@ fn assignment_carrier_arguments(source, target, n) = {
   value tuples: a.description.kind == "tuple" && b.description.kind == "tuple"
     && source.product_known && target.product_known && source.product != null
     && source.product == target.product
+  value source_readonly: if a.description.kind == "array" then source.product.readonly == true
+    else a.description.name == "ReadonlyArray"
+  value target_readonly: if b.description.kind == "array" then target.product.readonly == true
+    else b.description.name == "ReadonlyArray"
   value arrays: ts_value_array_part(source, n).array && ts_value_array_part(target, n).array
+    && source_readonly == target_readonly
   value same: arrays || tuples || a.description.kind == "named" && b.description.kind == "named"
     && a.file == b.file && a.node == b.node
   value arguments: zip(a.arguments ?? [], b.arguments ?? [])

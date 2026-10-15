@@ -15,3 +15,5 @@ const number = numberCall?.();
 const plainNumber = numberCall();
 const union = mixed?.();
 const unknown = unknownCall?.();
+declare const maybeNumber: (() => number) | undefined;
+const nullableNumber = maybeNumber?.();
