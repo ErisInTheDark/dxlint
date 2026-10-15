@@ -1,5 +1,5 @@
 import .ts
 in ts_expression_statement.expression rule typed {
-when { value (type_flags.nonempty ?? []); contains "string" }
+when ts_value_has_trait(node, "string") == true
 info "typed"
 }

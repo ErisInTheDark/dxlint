@@ -1,0 +1,102 @@
+import .ts/comments
+
+define {
+
+fn ts_token_breaks(text) = re_count(text, /\r\n|[\r\n\u{2028}\u{2029}]/)
+
+fn ts_token_kind(text) = {
+  value punctuation: {
+    ",": "ts_comma", ";": "ts_semicolon", ":": "ts_colon", ".": "ts_dot",
+    "?": "ts_question", "...": "ts_ellipsis", "=": "ts_equals",
+    "(": "ts_open_paren", ")": "ts_close_paren",
+    "[": "ts_open_bracket", "]": "ts_close_bracket",
+    "{{": "ts_open_brace", "}}": "ts_close_brace",
+    "<": "ts_open_angle", ">": "ts_close_angle",
+  }
+  value get(punctuation, text) ?? if re_test(text, /^[A-Za-z]/) then "ts_keyword"
+    else if contains(["?.", "??=", "??", "===", "==", "=>", "!==", "!=", "!",
+      "**=", "**", "*=", "*", "&&=", "&&", "&=", "&", "||=", "||", "|=", "|",
+      "<<=", "<<", "<=", "++", "+=", "+", "--", "-=", "-", "%=", "%", "^=", "^",
+      "/=", "/", "~", "@", "#"], text) then "ts_punctuator" else null
+}
+
+fn ts_token_record(entry) = if entry == null then null else {
+  text: entry.text,
+  kind: if entry.node != null then kind_name(entry.node) else ts_token_kind(entry.text),
+  start: entry.start,
+  end: entry.end,
+}
+
+fn ts_token_adjacent(n, before) = if before then token(n, "before") else token(n, "after")
+
+fn ts_token_gap(source, start, end) = {
+  value text: byte_slice(source, start, end)
+  value gaps: if !contains(text, "/") then [text] else {
+    value comments: {
+      value overlapping(ts_comment, start, end)
+      filter (comment) comment.offset >= start && comment.end_offset <= end
+      sort_by (comment) comment.offset
+    }
+    value starts: [start] map(comments, comment => comment.end_offset)
+    value starts
+    map (from, index) byte_slice(source, from, first(slice(comments, index, index + 1)).offset ?? end)
+  }
+  value lines: split(re_replace(text, /\r\n|[\r\u{2028}\u{2029}]/, "\n"), "\n")
+  value {
+    text: text,
+    start: start,
+    end: end,
+    spaced: any(gaps, gap => re_test(gap, /\s/)),
+    line_break: re_test(text, /[\r\n\u{2028}\u{2029}]/),
+    blank_lines: count(filter(slice(lines, 1, -1), line => trim(line) == "")),
+    blank_gaps: sum(map(gaps, gap => max(ts_token_breaks(gap) - 1, 0))),
+    comments: trim(text) != "",
+  }
+}
+
+fn ts_token_space(source, n, before) = {
+  value adjacent: ts_token_adjacent(n, before)
+  value if adjacent == null then null
+    else ts_token_gap(source, if before then adjacent.end else n.end_offset,
+      if before then n.offset else adjacent.start)
+}
+
+fn ts_token_neighbour(source, n, before) = {
+  value adjacent: ts_token_adjacent(n, before)
+  value if adjacent == null then null else {
+    value gap: ts_token_gap(source, if before then adjacent.end else n.end_offset,
+      if before then n.offset else adjacent.start)
+    value {
+      text: adjacent.text,
+      start: adjacent.start,
+      end: adjacent.end,
+      gap: gap.text,
+      spaced: gap.spaced,
+      same_line: !gap.line_break,
+      line_break: gap.line_break,
+    }
+  }
+}
+
+fn ts_token_neighbours(source, n) = {
+  before: ts_token_neighbour(source, n, true),
+  after: ts_token_neighbour(source, n, false),
+  parent_start: n.parent.offset,
+}
+
+@macro ts_token_context {
+  let first_token ts_token_record(token(node, "first"))
+  let last_token ts_token_record(token(node, "last"))
+  let previous_token ts_token_record(token(node, "before")).kind
+  let next_token ts_token_record(token(node, "after")).kind
+  let token_texts token_list(node)
+  let paired_token ts_token_record(token_pair(node, [["(", ")"], ["[", "]"], ["{{", "}}"]]))
+  let space_before ts_token_space(source, node, true)
+  let space_after ts_token_space(source, node, false)
+  let token_neighbours ts_token_neighbours(source, node)
+}
+
+group ts_token_query_node ts_node, ts_token, ts_comment
+in ts_token_query_node { @ts_token_context }
+
+}

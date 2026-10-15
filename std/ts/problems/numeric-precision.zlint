@@ -1,8 +1,9 @@
 define {
 
 fn problem_number_significand(text, as_float) = {
-  value trimmed: trim_start(text, "0")
-  value digits: if trimmed == "" then text else trimmed
+  value source: if !as_float && ends_with(text, ".") then slice(text, 0, -1) else text
+  value trimmed: trim_start(source, "0")
+  value digits: if trimmed == "" then source else trimmed
   value parts: split(digits, ".")
   value if as_float || count(parts) > 1 then
     if first(parts) == "" then {
@@ -30,17 +31,28 @@ fn problem_number_precision(text) = {
   value raw: lower(replace(text, "_", ""))
   value legacy_octal: re_test(raw, /^0[0-7]+$/)
   value number: js_number(if legacy_octal then "0o" slice(raw, 1) else raw)
-  value if number == null || number == 0 then false
-  else if re_test(raw, /^0[xbo]/) || legacy_octal then {
-    value radix: if starts_with(raw, "0x") then 16 else if starts_with(raw, "0b") then 2 else 8
-    value stored: integer_radix(number, radix)
-    value stored == null || !ends_with(raw, stored)
-  } else {
-    value intended: problem_number_scientific(raw, false)
-    value precision: len(intended.coefficient)
-    value precision > 100 || {
-      value stored: problem_number_scientific(js_number_to_precision(number, precision), true)
-      value intended.coefficient != stored.coefficient || intended.magnitude != stored.magnitude
+  value when {
+    number == null then false
+    re_test(raw, /^0[xbo]/) || legacy_octal then {
+      value radix: when {
+        starts_with(raw, "0x") then 16
+        starts_with(raw, "0b") then 2
+        else then 8
+      }
+      value stored: integer_radix(number, radix)
+      value stored == null || !ends_with(raw, stored)
+    }
+    else then {
+      value intended: problem_number_scientific(raw, false)
+      value precision: len(intended.coefficient)
+      value when {
+        number == 0 then re_test(intended.coefficient, /[1-9]/)
+        precision > 100 then true
+        else then {
+          value stored: problem_number_scientific(js_number_to_precision(number, precision), true)
+          value intended.coefficient != stored.coefficient || intended.magnitude != stored.magnitude
+        }
+      }
     }
   }
 }

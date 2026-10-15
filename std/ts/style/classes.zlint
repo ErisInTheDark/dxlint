@@ -10,7 +10,7 @@ in ts_method, ts_class_property, ts_parameter let style_public_modifier {
 }
 in ts_method, ts_class_property, ts_parameter let style_public_range {
   value keyword: style_public_modifier
-  value next: keyword.token_neighbours.after.start
+  value next: token(keyword, "after").start
   value comments: overlapping(ts_comment, keyword.end_offset, next)
   value end: first(comments).offset ?? next
   value if keyword != null then { start: keyword.offset, end: end } else null

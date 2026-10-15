@@ -23,11 +23,13 @@ fn unsafe_call_signature_state(part, construct) = {
   value results: if construct then map(headers, header => unsafe_call_void_result(header.result)) else []
   value safe: any(constructor_states, state => state == true)
     || (if construct then any(results, result => result == false) else count(headers) > 0)
-  value if safe then true
-    else if !ancestry.complete || any(calls, arms => arms == null)
+  value when {
+    safe then true
+    !ancestry.complete || any(calls, arms => arms == null)
       || any(constructors, arms => arms == null) || any(results, result => result == null)
       || any(constructor_states, state => state == null) then null
-    else false
+    else then false
+  }
 }
 fn unsafe_call_value_kind(n, construct) = {
   value category: unsafe_call_kind(n)
@@ -35,8 +37,7 @@ fn unsafe_call_value_kind(n, construct) = {
     value arms: value_parts(n)
     value arm_parts: if count(arms ?? []) == 1 then first(arms).parts else []
     value parts: filter(arm_parts, part => !contains(part.traits, "intersection") && !contains(part.traits, "parameter"))
-    value functions: map(parts, part => ts_value_builtin_ancestor(part, n, ["Function"]))
-    value if !any(functions, state => state == true) then null else {
+    value if !any(parts, part => contains(part.traits, "builtin_function")) then null else {
       value signatures: map(parts, part => unsafe_call_signature_state(part, construct))
       value if any(signatures, state => state == true) || any(signatures, state => state == null) then null
         else "function"
@@ -44,10 +45,11 @@ fn unsafe_call_value_kind(n, construct) = {
   }
 }
 fn unsafe_call_this_kind(n) = {
-  value roots: walk([unparenthesised_node(n)], current =>
-    if current is (ts_member, ts_index) then unparenthesised_node(current.object.node)
-    else if current is (ts_as, ts_type_assertion) then unparenthesised_node(current.expression.node)
-    else null)
+  value roots: walk([unparenthesised_node(n)], current => when {
+    current is (ts_member, ts_index) then unparenthesised_node(current.object.node)
+    current is (ts_as, ts_type_assertion) then unparenthesised_node(current.expression.node)
+    else then null
+  })
   value subject: find(roots, current => current is ts_this)
   value if subject == null then null else unsafe_call_kind(subject)
 }

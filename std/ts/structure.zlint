@@ -89,6 +89,22 @@ in ts_declarator, ts_assignment rule prefer-destructuring {
 }
 
 fn structure_dot_keyword(name) = contains(["abstract", "boolean", "break", "byte", "case", "catch", "char", "class", "const", "continue", "debugger", "default", "delete", "do", "double", "else", "enum", "export", "extends", "false", "final", "finally", "float", "for", "function", "goto", "if", "implements", "import", "in", "instanceof", "int", "interface", "long", "native", "new", "null", "package", "private", "protected", "public", "return", "short", "static", "super", "switch", "synchronized", "this", "throw", "throws", "transient", "true", "try", "typeof", "var", "void", "volatile", "while", "with"], name)
+fn structure_property_info(subject, key) = {
+  value arms: filter(value_parts(subject) ?? [], arm => !all(arm.parts, part =>
+    contains(part.traits, "null") || contains(part.traits, "undefined")))
+  value lookups: map(arms, arm => value_lookup(arm.handle, key))
+  value declared: count(lookups) > 0 && all(lookups, lookup => lookup != null
+    && count(lookup.alternatives) > 0 && all(lookup.alternatives, alternative =>
+      any(alternative.sources, source => source.kind == "named")))
+  value sources: if declared then flat_map(lookups, lookup =>
+    flat_map(lookup.alternatives, alternative => filter(alternative.sources, source => source.kind == "named"))) else []
+  value flags: first(sources).flags
+  value {
+    declared: declared,
+    visibility: if !declared then null else if contains(flags, "private_access") then "private"
+      else if contains(flags, "protected_access") then "protected" else "public",
+  }
+}
 
 @macro structure_dot_options {
   option allowKeywords boolean = true "allow ES3 keywords in dot notation"
@@ -107,9 +123,10 @@ in ts_index rule dot-notation:computed {
   let name if template then key.static_name else literal.value
   when re_test(name, /^[a-zA-Z_$][a-zA-Z0-9_$]*$/) && (allowKeywords || !structure_dot_keyword(name))
   when allowPattern == "" || !re_test(name, allowPattern)
-  let property property_info
+  let allow_index allowIndexSignaturePropertyAccess || structure_typescript(file) && ts_compiler_option(node, "noPropertyAccessFromIndexSignature") == true
+  let property if allowPrivateClassPropertyAccess || allowProtectedClassPropertyAccess || allow_index
+    then structure_property_info(object.node, name) else null
   when !(allowPrivateClassPropertyAccess && property.visibility == "private" || allowProtectedClassPropertyAccess && property.visibility == "protected")
-  let allow_index allowIndexSignaturePropertyAccess || structure_typescript(file) && compiler_options.noPropertyAccessFromIndexSignature == true
   when !allow_index || property.declared == true || !any(object.index_key_types, key_type => key_type.string_like)
   let open index.space_before.start - 1
   let fixable { value overlapping(ts_comment, open, end_offset); count } == 0
@@ -175,9 +192,9 @@ fn structure_fix_edits(source, edits) = if count(edits) == 0 then null else {
   value { start: start, end: end, text: expression_fix_edits(region, start, edits) }
 }
 fn structure_declaration_join(n, source) = {
-  value before: n.kind.token_neighbours.before
-  value first: n.kind.first_token
-  value last: n.kind.last_token
+  value before: ts_token_neighbours(source, n.kind.node).before
+  value first: ts_token_record(token(n.kind.node, "first"))
+  value last: ts_token_record(token(n.kind.node, "last"))
   value edits: [
     { start: if before.text == ";" then before.start else before.end, end: before.end, text: "," },
     { start: first.start, end: first.end, text: "" },
@@ -244,9 +261,10 @@ in ts_variable_declaration rule one-var {
     structure_declaration_issue(split_message, split_fix)
   ]
     compact
+  } {
+    fix at issue.fix if issue.fix != null as issue.fix.text
+    warn "{issue.message}"
   }
-  fix at issue.fix if issue.fix != null as issue.fix.text
-  warn "{issue.message}"
 }
 
 group structure_template ts_template, ts_template_type
@@ -625,11 +643,12 @@ in ts_program rule indent-binary-ops {
       }]
     }
   }
-  each info in measurements
-  when info.actual != info.expected
-  report at info.offset
-  fix at { start: info.offset, end: info.end } as info.expected
-  warn "Expected indentation of " len(info.expected) " " (if mode == "tab" then "tab" else "space") (if len(info.expected) == 1 then "" else "s")
+  each info in measurements {
+    when info.actual != info.expected
+    report at info.offset
+    fix at { start: info.offset, end: info.end } as info.expected
+    warn "Expected indentation of " len(info.expected) " " (if mode == "tab" then "tab" else "space") (if len(info.expected) == 1 then "" else "s")
+  }
 }
 
 fn structure_operator_gap(gap, keep) = if keep || trim(gap) != "" then gap else re_replace(gap, /\r\n|[\n\r\u{2028}\u{2029}]/, "")
@@ -651,6 +670,7 @@ fn structure_operator_fix(before, after, next, policy, operator, before_comment,
   }
 
 in ts_binary.operator, ts_logical.operator, ts_assignment.operator, ts_equals, ts_question, ts_colon, ts_punctuator rule operator-linebreak {
+  @ts_token_context
   option mode "before" | "after" | "none" | null = null "operator side of a line break"
   option overrides { [key: string]: "before" | "after" | "none" | "ignore" } = {} "operator-specific placement"
   when parent is (ts_binary, ts_logical, ts_assignment)

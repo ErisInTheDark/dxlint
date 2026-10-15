@@ -31,7 +31,11 @@ fn return_await_certainty(n) = {
   value complete: parts != null && len(parts) > 0
     && all(parts, arm => len(arm) > 0 && all(arm, part => !contains(part.uncertain_traits, "thenable")
       && !contains(part.traits, "any") && !contains(part.traits, "unknown")))
-  value if complete && n could thenable then "always" else if ts_value_nonthenable(n) == true then "never" else "may"
+  value when {
+    complete && n could thenable then "always"
+    ts_value_nonthenable(n) == true then "never"
+    else then "may"
+  }
 }
 fn return_await_result(n, owner, resources) = {
   value awaited: n is ts_await
@@ -63,7 +67,11 @@ fn return_await_add(n) = {
   value expression_fix_edges(n, replacement)
 }
 fn return_await_selected(result, mode) = result.certainty == "never" && result.awaited || result.certainty == "always"
-  && (if mode == "always" || mode != "never" && result.handling then !result.awaited else if mode == "error-handling-correctness-only" then false else result.awaited)
+  && (when {
+    mode == "always" || mode != "never" && result.handling then !result.awaited
+    mode == "error-handling-correctness-only" then false
+    else then result.awaited
+  })
 
 in ts_function, ts_arrow, ts_method rule return-await {
   option mode ("always" | "error-handling-correctness-only" | "in-try-catch" | "never") = "in-try-catch" "Await policy for returned promises"
@@ -87,14 +95,22 @@ in ts_function, ts_arrow, ts_method rule return-await {
     map (result) {
       data: result,
       # Promise awaits change rejection handling; keep those reports manual.
-      replacement: if result.certainty == "always" && result.handling then null
-        else if result.awaited then return_await_remove(source, result.expression) else return_await_add(result.expression)
+      replacement: when {
+        result.certainty == "always" && result.handling then null
+        result.awaited then return_await_remove(source, result.expression)
+        else then return_await_add(result.expression)
+      }
     }
   }
-  each result in results
-  report at result.data.expression
-  warn if result.data.certainty == "never" then "Returning an awaited value that is not a promise is not allowed." else if result.data.awaited then "Returning an awaited promise is not allowed in this context." else "Returning an awaited promise is required in this context."
-  fix at result.data.expression if result.replacement != null as result.replacement
+  each result in results {
+    report at result.data.expression
+    warn when {
+      result.data.certainty == "never" then "Returning an awaited value that is not a promise is not allowed."
+      result.data.awaited then "Returning an awaited promise is not allowed in this context."
+      else then "Returning an awaited promise is required in this context."
+    }
+    fix at result.data.expression if result.replacement != null as result.replacement
+  }
 }
 
 }

@@ -18,8 +18,9 @@ define {
 in ts_assignment rule require-atomic-updates {
   option allowProperties boolean = false
   let updates scoping_atomic_updates(node)
-  each updated in filter(updates, u => !u.property || !allowProperties)
-  warn if updated.property then "Possible race condition: `{updated.value}` might be assigned based on an outdated state of `{updated.name}`." else "Possible race condition: `{updated.name}` might be reassigned based on an outdated value of `{updated.name}`."
+  each updated in filter(updates, u => !u.property || !allowProperties) {
+    warn if updated.property then "Possible race condition: `{updated.value}` might be assigned based on an outdated state of `{updated.name}`." else "Possible race condition: `{updated.name}` might be reassigned based on an outdated value of `{updated.name}`."
+  }
 }
 
 in ts_this rule no-invalid-this {
@@ -32,16 +33,18 @@ in ts_this rule no-invalid-this {
 in ts_this let arrow_bound_this true
 in ts_parenthesized forward arrow_bound_this from expression
 in ts_call let arrow_bind_lexical count(argument) == 1 && first([] argument.arrow_bound_this) == true
-in ts_node let arrow_bound_callback
-  if parent is ts_parenthesized then parent.arrow_bound_callback
-  else if is ts_call.callee && parent.arrow_callback_receiver != null then parent.arrow_bind_lexical
-  else null
+in ts_node let arrow_bound_callback when {
+  parent is ts_parenthesized then parent.arrow_bound_callback
+  is ts_call.callee && parent.arrow_callback_receiver != null then parent.arrow_bind_lexical
+  else then null
+}
 # Null: not a callback; boolean: its receiver is lexical.
-in ts_node let arrow_callback_receiver
-  if is (ts_call.argument, ts_new.argument) then false
-  else if parent is (ts_parenthesized, ts_logical) || parent is ts_conditional && not ts_conditional.test then parent.arrow_callback_receiver
-  else if is ts_member.object && parent.property == "bind" then parent.arrow_bound_callback
-  else null
+in ts_node let arrow_callback_receiver when {
+  is (ts_call.argument, ts_new.argument) then false
+  parent is (ts_parenthesized, ts_logical) || parent is ts_conditional && not ts_conditional.test then parent.arrow_callback_receiver
+  is ts_member.object && parent.property == "bind" then parent.arrow_bound_callback
+  else then null
+}
 in ts_node let arrow_callback_barrier
   if is (ts_function, ts_method) then false
   else is ts_super || is ts_meta_property && starts_with(text, "new") || any(children.arrow_callback_barrier, b => b == true)
@@ -107,9 +110,11 @@ in ts_function, ts_arrow rule no-loop-func {
 }
 
 in ts_node let scoping_outer_parens if parent is ts_parenthesized then parent.scoping_outer_parens else node
-in ts_node let scoping_callback_destination
-  if parent is (ts_parenthesized, ts_logical, ts_conditional, ts_return) then parent.scoping_callback_destination
-  else if parent is ts_call then { call: parent.node, argument: node } else null
+in ts_node let scoping_callback_destination when {
+  parent is (ts_parenthesized, ts_logical, ts_conditional, ts_return) then parent.scoping_callback_destination
+  parent is ts_call then { call: parent.node, argument: node }
+  else then null
+}
 in ts_return let scoping_callback_destination {
   value owner: containing(ts_function_like).scoping_outer_parens
   value if owner.parent is ts_call && owner.parent.callee.node == owner then owner.parent.scoping_callback_destination else null
@@ -124,16 +129,21 @@ in ts_function, ts_arrow let scoping_callback_method {
   value index: if factory then 1 else 0
   value next_index: index + 1
   value asynchronous: contains([] modifier, "async")
-  value if destination == null || body == null || callee not (ts_member, ts_index)
-    || { value arguments; slice index next_index; first } != destination.argument then null
-    else if factory && (method == "fromAsync" || !asynchronous)
-      || !asynchronous && contains(["every", "filter", "find", "findLast", "findIndex", "findLastIndex", "flatMap", "forEach", "map", "reduce", "reduceRight", "some", "sort", "toSorted"], method) then method else null
+  value when {
+    destination == null || body == null || callee not (ts_member, ts_index)
+      || { value arguments; slice index next_index; first } != destination.argument then null
+    factory && (method == "fromAsync" || !asynchronous)
+      || !asynchronous && contains(["every", "filter", "find", "findLast", "findIndex", "findLastIndex", "flatMap", "forEach", "map", "reduce", "reduceRight", "some", "sort", "toSorted"], method) then method
+    else then null
+  }
 }
 in ts_function, ts_arrow let scoping_callback_label
   if contains(["from", "fromAsync"], scoping_callback_method) then "Array." scoping_callback_method else "Array.prototype." scoping_callback_method
-in ts_function, ts_arrow let scoping_callback_head
-  if parent is (ts_property, ts_class_property) && is (ts_property.value, ts_class_property.init) then parent.offset
-  else if is ts_arrow then operator.offset else offset
+in ts_function, ts_arrow let scoping_callback_head when {
+  parent is (ts_property, ts_class_property) && is (ts_property.value, ts_class_property.init) then parent.offset
+  is ts_arrow then operator.offset
+  else then offset
+}
 in ts_function, ts_arrow rule array-callback-return {
   option allowImplicit boolean = false
   option checkForEach boolean = false
@@ -147,9 +157,10 @@ in ts_function, ts_arrow rule array-callback-return:return {
   option checkForEach boolean = false
   option allowVoid boolean = false
   when scoping_callback_method != null && body is ts_block
-  each returned in filter(scoping_own_returns, r => if scoping_callback_method == "forEach" then checkForEach && r.argument != null && !(allowVoid && r.argument.scoping_void_expression == true) else !allowImplicit && r.argument == null)
-  report at returned.offset
-  warn if scoping_callback_method == "forEach" then "{scoping_callback_label}() expects no useless return value from {function_name}." else "{scoping_callback_label}() expects a return value from {function_name}."
+  each returned in filter(scoping_own_returns, r => if scoping_callback_method == "forEach" then checkForEach && r.argument != null && !(allowVoid && r.argument.scoping_void_expression == true) else !allowImplicit && r.argument == null) {
+    report at returned.offset
+    warn if scoping_callback_method == "forEach" then "{scoping_callback_label}() expects no useless return value from {function_name}." else "{scoping_callback_label}() expects a return value from {function_name}."
+  }
 }
 in ts_arrow rule array-callback-return:concise {
   option allowImplicit boolean = false
@@ -197,11 +208,13 @@ in ts_function let scoping_function_context {
   value destination: scoping_outer_parens.parent.node
   value declaration: destination is (ts_program, ts_block, ts_export, ts_if, ts_labeled, ts_case, ts_while, ts_for)
   value target: destination.left.node ?? destination.parent.key.node
-  value inferred: if destination is (ts_declarator, ts_parameter) then destination.name is ts_identifier
-    else if destination is (ts_property, ts_class_property) then true
-    else if destination is (ts_assignment, ts_assignment_pattern) then target is ts_identifier
-    else if destination is ts_pattern_property then destination.key is ts_identifier
-    else false
+  value inferred: when {
+    destination is (ts_declarator, ts_parameter) then destination.name is ts_identifier
+    destination is (ts_property, ts_class_property) then true
+    destination is (ts_assignment, ts_assignment_pattern) then target is ts_identifier
+    destination is ts_pattern_property then destination.key is ts_identifier
+    else then false
+  }
   value if destination == null then null else {
     eligible: !declaration || destination is ts_export && destination.kind == "default",
     expression: !declaration, named: name != null, recursive: count(name.references) > 0,
@@ -266,12 +279,13 @@ in ts_function rule func-name-matching {
   warn "Function name `{name}` should{if mode == 'never' then ' not' else ''} match {if matched.property then 'property' else 'variable'} name `{target}`."
 }
 
-in ts_node let scoping_camelcase_assignment_target
-  if is ts_assignment.left && parent.flow_destructuring_target != true then true
-  else if is (ts_parenthesized.expression, ts_as.expression, ts_satisfies.expression, ts_non_null.expression,
+in ts_node let scoping_camelcase_assignment_target when {
+  is ts_assignment.left && parent.flow_destructuring_target != true then true
+  is (ts_parenthesized.expression, ts_as.expression, ts_satisfies.expression, ts_non_null.expression,
     ts_type_assertion.expression, ts_instantiation.expression)
     || flow_destructuring_target == true && parent.flow_destructuring_target == true then parent.scoping_camelcase_assignment_target
-  else false
+  else then false
+}
 in ts_object let scoping_camelcase_import_options
   parent is ts_import_call
   || parent is ts_property && parent.parent is ts_object && parent.parent.parent is ts_import_call
@@ -324,12 +338,13 @@ in ts_statement let scoping_following_meaningful scoping_meaningful || next.scop
 in ts_statement let scoping_following_break is ts_break || next.scoping_following_break
 in ts_case let scoping_case_meaningful any(body.nodes, statement => statement.scoping_meaningful == true) || next.scoping_case_meaningful == true
 in ts_case let scoping_case_exit first([] body.scoping_following_break) || next.node == null || next.scoping_case_meaningful != true
-in ts_statement, ts_case let scoping_return_tail
-  if parent is ts_function_like then true
-  else if parent is ts_loop || is ts_try.finalizer then false
-  else if parent is (ts_block, ts_case, ts_program) then
+in ts_statement, ts_case let scoping_return_tail when {
+  parent is ts_function_like then true
+  parent is ts_loop || is ts_try.finalizer then false
+  parent is (ts_block, ts_case, ts_program) then
     !next.scoping_following_meaningful && (parent not ts_case || parent.scoping_case_exit) && parent.scoping_return_tail
-  else parent.scoping_return_tail
+  else then parent.scoping_return_tail
+}
 in ts_program let scoping_return_tail ts_source_type(node) == "commonjs" || ts_environment(node, "globalReturn") == true
 in ts_node let scoping_return_fix_owner
   if parent is (ts_function_like, ts_program) then parent.node
@@ -377,14 +392,18 @@ in ts_program, ts_function, ts_arrow, ts_method let scoping_consistent_returns
     then filter(scoping_own_returns, returned => returned.argument != null) else scoping_own_returns
 in ts_node let scoping_return_undefined
   is ts_identifier && text == "undefined" || scoping_void_expression == true
-  || re_test(file, /\.(ts|tsx|mts|cts)$/) && type == "undefined" && contains(type_flags, "undefined")
+  || re_test(file, /\.(ts|tsx|mts|cts)$/) && ts_value_trait(value_constituents(node), "undefined") && ts_value_has_void(node) == false
 in ts_parenthesized let scoping_return_undefined expression.scoping_return_undefined
 fn scoping_return_specified(returned, unspecified) = returned.argument != null && !(unspecified && returned.argument.scoping_return_undefined == true)
 in ts_program, ts_function, ts_arrow, ts_method let scoping_return_name function_name.nonempty ?? "program"
 in ts_program, ts_function, ts_arrow, ts_method let scoping_return_capitalized
   { value scoping_return_name; slice 0 1; upper } { value scoping_return_name; slice 1 }
-in ts_program, ts_function, ts_arrow, ts_method let scoping_return_head
-  if is ts_arrow then operator.offset else if is ts_method then key.offset else if is ts_function then name.offset.nonempty ?? offset else offset
+in ts_program, ts_function, ts_arrow, ts_method let scoping_return_head when {
+  is ts_arrow then operator.offset
+  is ts_method then key.offset
+  is ts_function then name.offset.nonempty ?? offset
+  else then offset
+}
 in ts_function let scoping_return_uppercase name != null && re_test(name, /^\p{Uppercase}/)
 in ts_program, ts_function, ts_arrow, ts_method let scoping_return_constructor
   function_name == "constructor" || scoping_return_uppercase == true
@@ -393,9 +412,10 @@ in ts_program, ts_function, ts_arrow, ts_method rule consistent-return {
   let returns scoping_consistent_returns
   let initial first(returns)
   let expected scoping_return_specified(initial, treatUndefinedAsUnspecified)
-  each returned in filter(returns, r => r != initial && scoping_return_specified(r, treatUndefinedAsUnspecified) != expected)
-  report at returned
-  warn if expected then "{scoping_return_capitalized} expected a return value." else "{scoping_return_capitalized} expected no return value."
+  each returned in filter(returns, r => r != initial && scoping_return_specified(r, treatUndefinedAsUnspecified) != expected) {
+    report at returned
+    warn if expected then "{scoping_return_capitalized} expected a return value." else "{scoping_return_capitalized} expected no return value."
+  }
 }
 in ts_program, ts_function, ts_arrow, ts_method rule consistent-return:fallthrough {
   option treatUndefinedAsUnspecified boolean = false "treat undefined and void as bare returns"
@@ -406,27 +426,30 @@ in ts_program, ts_function, ts_arrow, ts_method rule consistent-return:fallthrou
   warn "Expected to return a value at the end of {scoping_return_name}."
 }
 
-in ts_node let underscore_declarator
-  if is ts_declarator.name then parent.node
-  else if parent is (ts_array_pattern, ts_object_pattern) || is (ts_pattern_property.value, ts_assignment_pattern.left, ts_rest.argument)
+in ts_node let underscore_declarator when {
+  is ts_declarator.name then parent.node
+  parent is (ts_array_pattern, ts_object_pattern) || is (ts_pattern_property.value, ts_assignment_pattern.left, ts_rest.argument)
     || is ts_pattern_property.key && (parent.value == null || parent.value is ts_assignment_pattern && parent.value.left == null) then parent.underscore_declarator
-  else null
-in ts_node let underscore_pattern
-  if parent is ts_array_pattern then "array"
-  else if parent is ts_object_pattern then "object"
-  else if parent is (ts_pattern_property, ts_assignment_pattern, ts_rest) then parent.underscore_pattern
-  else null
+  else then null
+}
+in ts_node let underscore_pattern when {
+  parent is ts_array_pattern then "array"
+  parent is ts_object_pattern then "object"
+  parent is (ts_pattern_property, ts_assignment_pattern, ts_rest) then parent.underscore_pattern
+  else then null
+}
 in ts_parameter let underscore_parameter_position if parent is (ts_function, ts_arrow, ts_method) then {start: offset, end: parent.end_offset} else null
 in ts_rest let underscore_parameter_position if is ts_parameter.name then parent.underscore_parameter_position else null
 in ts_method let underscore_method_position if parent is ts_class || kind != "get" && kind != "set" then offset else null
-in ts_identifier, ts_private_name let underscore_candidate
-  if underscore_declarator != null then {context: underscore_pattern.nonempty ?? "variable"}
-  else if is ts_function.name && declaration_kind == "function" then {context: "function"}
-  else if is (ts_parameter.name, ts_rest.argument) && parent.underscore_parameter_position != null then {context: "parameter"}
-  else if is ts_method.key && parent.underscore_method_position != null then {context: "method"}
-  else if is ts_class_property.key then {context: "field"}
-  else if is ts_identifier && is (ts_member.property, ts_index.index) then {context: "member"}
-  else null
+in ts_identifier, ts_private_name let underscore_candidate when {
+  underscore_declarator != null then {context: underscore_pattern.nonempty ?? "variable"}
+  is ts_function.name && declaration_kind == "function" then {context: "function"}
+  is (ts_parameter.name, ts_rest.argument) && parent.underscore_parameter_position != null then {context: "parameter"}
+  is ts_method.key && parent.underscore_method_position != null then {context: "method"}
+  is ts_class_property.key then {context: "field"}
+  is ts_identifier && is (ts_member.property, ts_index.index) then {context: "member"}
+  else then null
+}
 fn underscore_this_constructor(object) = object is ts_member && object.property == "constructor" && (object.object.scoping_unparen_node.nonempty ?? object.object.node) is ts_this
 in ts_identifier, ts_private_name rule no-underscore-dangle {
   option allow string[] = [] "names allowed to have dangling underscores"
@@ -461,9 +484,11 @@ in ts_function, ts_arrow, ts_parenthesized let scoping_executor_argument
   if parent is ts_parenthesized then parent.scoping_executor_argument
   else is ts_new.argument && index == 0 && parent.scoping_promise_new
 in ts_statement, ts_arrow, ts_method, ts_static_block, ts_program, ts_case let scoping_executor_body
-  if is ts_function_like then scoping_executor_argument.nonempty ?? false
-  else if is (ts_program, ts_static_block) then false
-  else parent.scoping_executor_body
+  when {
+    is ts_function_like then scoping_executor_argument.nonempty ?? false
+    is (ts_program, ts_static_block) then false
+    else then parent.scoping_executor_body
+  }
 
 in ts_return let scoping_executor_result
   if scoping_executor_body && argument != null then {void: argument.scoping_void_expression, offset: offset} else null
@@ -479,20 +504,28 @@ in ts_return, ts_arrow rule no-promise-executor-return {
 }
 
 in ts_identifier rule block-scoped-var {
-  each definition in scoping_outside_definitions(node)
-  warn "'{text}' declared on line {definition.line} column {definition.column} is used outside of binding context."
+  each definition in scoping_outside_definitions(node) {
+    warn "'{text}' declared on line {definition.line} column {definition.column} is used outside of binding context."
+  }
 }
 
 in ts_statement, ts_arrow, ts_method, ts_static_block, ts_program, ts_case let scoping_declaration_body
-  if is ts_program then "program"
-  else if is ts_static_block then "class static block body"
-  else if is ts_function_like then "function body"
-  else parent.scoping_declaration_body
+  when {
+    is ts_program then "program"
+    is ts_static_block then "class static block body"
+    is ts_function_like then "function body"
+    else then parent.scoping_declaration_body
+  }
 in ts_program, ts_static_block let scoping_body_root true
 in ts_block let scoping_body_root parent is (ts_function_like, ts_static_block)
 in ts_block let scoping_static_body parent is ts_static_block
 fn scoping_var_step(prior, variable, prefix, static_body) =
-  if prior == 2 then 2 else if variable then 1 else if prior == 0 && prefix && !static_body then 0 else 2
+  when {
+    prior == 2 then 2
+    variable then 1
+    prior == 0 && prefix && !static_body then 0
+    else then 2
+  }
 in ts_expression_statement let scoping_var_directive expression is ts_string
 in ts_export let scoping_export_variable declaration is ts_variable_declaration
 in ts_statement let scoping_var_prefix {
@@ -528,15 +561,24 @@ in ts_identifier rule no-redeclare {
   let redeclared scoping_redeclaration_context(node)
   when redeclared != null && (redeclared.duplicate || redeclared.comment || builtinGlobals && redeclared.builtin)
   when !(ignoreDeclarationMerge && redeclared.safe_merge && !redeclared.comment && !(builtinGlobals && redeclared.builtin))
-  warn if builtinGlobals && redeclared.builtin then "'{text}' is already defined as a built-in global variable." else if redeclared.comment then "'{text}' is already defined by a variable declaration." else "'{text}' is already defined."
+  warn when {
+    builtinGlobals && redeclared.builtin then "'{text}' is already defined as a built-in global variable."
+    redeclared.comment then "'{text}' is already defined by a variable declaration."
+    else then "'{text}' is already defined."
+  }
 }
 in ts_program rule no-redeclare:global {
   option builtinGlobals boolean = true "also report built-in global redeclarations"
   option ignoreDeclarationMerge boolean = true "allow typescript declaration merging"
   let redeclarations scoping_global_mentions(node)
-  each redeclaration in filter(redeclarations, d => d.duplicate || d.syntax || builtinGlobals && d.builtin)
-  report at redeclaration.offset
-  warn if builtinGlobals && redeclaration.builtin then "'{redeclaration.name}' is already defined as a built-in global variable." else if redeclaration.syntax then "'{redeclaration.name}' is already defined by a variable declaration." else "'{redeclaration.name}' is already defined."
+  each redeclaration in filter(redeclarations, d => d.duplicate || d.syntax || builtinGlobals && d.builtin) {
+    report at redeclaration.offset
+    warn when {
+      builtinGlobals && redeclaration.builtin then "'{redeclaration.name}' is already defined as a built-in global variable."
+      redeclaration.syntax then "'{redeclaration.name}' is already defined by a variable declaration."
+      else then "'{redeclaration.name}' is already defined."
+    }
+  }
 }
 
 in ts_this let scoping_captures_this true
@@ -583,7 +625,11 @@ in ts_program.binding_declarations rule no-shadow {
   when !(ignoreFunctionTypeParameterNameValueShadow && shadowed.function_type)
   when !(ignoreOnInitialization && shadowed.initializing)
   when !shadowed.early || hoist == "all" || (hoist == "functions" || hoist == "functions-and-types") && shadowed.kind == "function" || (hoist == "types" || hoist == "functions-and-types") && contains(["type", "interface"], shadowed.kind)
-  warn if shadowed.enum_member then "Enum members are added to the enum scope, so references to '{text}' in enum member initializers resolve to this member instead of the declaration in the upper scope on line {shadowed.line} column {shadowed.column}." else if shadowed.global then "'{text}' is already a global variable." else "'{text}' is already declared in the upper scope on line {shadowed.line} column {shadowed.column}."
+  warn when {
+    shadowed.enum_member then "Enum members are added to the enum scope, so references to '{text}' in enum member initializers resolve to this member instead of the declaration in the upper scope on line {shadowed.line} column {shadowed.column}."
+    shadowed.global then "'{text}' is already a global variable."
+    else then "'{text}' is already declared in the upper scope on line {shadowed.line} column {shadowed.column}."
+  }
 }
 
 in ts_identifier rule no-use-before-define {
@@ -609,9 +655,14 @@ fn implicit_global_label(kind) = if kind == "function" || kind == "class" then k
 in ts_variable_declaration, ts_function, ts_class rule no-implicit-globals {
   option lexicalBindings boolean = false "also top-level let, const and class declarations"
   let declarations scoping_global_bindings(node)
-  each global_declaration in filter(declarations, d => !d.exported && contains(["var", "let", "const", "function", "class"], d.kind) && d.setting != "writable" && (lexicalBindings || d.kind == "var" || d.kind == "function"))
-  report at global_declaration.offset
-  warn if global_declaration.setting == "readonly" then "Unexpected redeclaration of read-only global variable." else if global_declaration.kind == "var" || global_declaration.kind == "function" then "Unexpected {implicit_global_label(global_declaration.kind)} declaration in the global scope, wrap in an IIFE for a local variable, assign as global property for a global variable." else "Unexpected {implicit_global_label(global_declaration.kind)} declaration in the global scope, wrap in a block or in an IIFE."
+  each global_declaration in filter(declarations, d => !d.exported && contains(["var", "let", "const", "function", "class"], d.kind) && d.setting != "writable" && (lexicalBindings || d.kind == "var" || d.kind == "function")) {
+    report at global_declaration.offset
+    warn when {
+      global_declaration.setting == "readonly" then "Unexpected redeclaration of read-only global variable."
+      global_declaration.kind == "var" || global_declaration.kind == "function" then "Unexpected {implicit_global_label(global_declaration.kind)} declaration in the global scope, wrap in an IIFE for a local variable, assign as global property for a global variable."
+      else then "Unexpected {implicit_global_label(global_declaration.kind)} declaration in the global scope, wrap in a block or in an IIFE."
+    }
+  }
 }
 in ts_identifier rule no-implicit-globals:leak {
   option lexicalBindings boolean = false "also top-level let, const and class declarations"
@@ -638,9 +689,11 @@ in ts_function, ts_class rule no-case-declarations:declaration {
 in ts_node let scoping_pattern_write_owner
   if flow_destructuring_target == true && parent.flow_destructuring_target == true then parent.scoping_pattern_write_owner else node
 in ts_node let scoping_parameter_property_write
-  if is (ts_member.property, ts_index.index, ts_conditional.test, ts_call.argument, ts_new.argument) then null
-  else if parent is (ts_member, ts_index) && parent.write_site != null then parent.scoping_pattern_write_owner
-  else parent.scoping_parameter_property_write
+  when {
+    is (ts_member.property, ts_index.index, ts_conditional.test, ts_call.argument, ts_new.argument) then null
+    parent is (ts_member, ts_index) && parent.write_site != null then parent.scoping_pattern_write_owner
+    else then parent.scoping_parameter_property_write
+  }
 in ts_identifier rule no-param-reassign {
   option props boolean = false "also assignments to parameter properties"
   option ignorePropertyModificationsFor string[] = [] "parameter names whose properties may change"

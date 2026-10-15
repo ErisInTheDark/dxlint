@@ -3,7 +3,11 @@ import .ts/expression-fixes
 
 define {
 
-fn signature_key_shape(key, name) = if key is ts_private_name then "private" else if key is (ts_identifier, ts_string, ts_number, ts_bigint, ts_boolean, ts_null) then (if starts_with(name, '"') then "quoted" else "normal") else "expression"
+fn signature_key_shape(key, name) = when {
+  key is ts_private_name then "private"
+  key is (ts_identifier, ts_string, ts_number, ts_bigint, ts_boolean, ts_null) then if starts_with(name, '"') then "quoted" else "normal"
+  else then "expression"
+}
 in ts_function let overload_identity if name != null then { name: name, shape: "normal", static: null, call: false } else null
 in ts_method, ts_method_signature let overload_identity { name: style_member_name, shape: { value key.member_key_node.nonempty ?? key.node; signature_key_shape style_member_name }, static: if is ts_method then is_static else null, call: false }
 in ts_call_signature let overload_identity { name: if kind == "new" then "new" else "call", shape: "normal", static: null, call: kind != "new" }
@@ -66,7 +70,11 @@ fn signature_callable_source(source, n) = {
 in ts_call_signature let signature_return_colon return_type.node.token_neighbours.before
 
 # Only a call signature: a function type says it better.
-in style_tree_node let function_this_offset if is ts_type_literal then null else if is ts_type_keyword && text == "this" then offset else { value children.function_this_offset; compact; first }
+in style_tree_node let function_this_offset when {
+  is ts_type_literal then null
+  is ts_type_keyword && text == "this" then offset
+  else then { value children.function_this_offset; compact; first }
+}
 in ts_type_reference let function_base name == "Function"
 in ts_interface let function_type_container { name: name, kind: "Interface", eligible: count(member) == 1 && (count(extends) == 0 || count(extends) == 1 && (first([] extends) == "Function" || first([] extends.function_base) == true)), this: function_this_offset }
 in ts_type_literal let function_type_container { name: "", kind: "Type literal", eligible: count(member) == 1, this: null }
@@ -223,13 +231,17 @@ in ts_export let unified_outer_names parent.unified_outer_names
 fn unified_parameter_at(signature, at) = { value signature.parameters; slice at (at + 1); first }
 fn unified_sigils(a, b) = a.rest == b.rest && a.optional == b.optional
 fn unified_difference(a, b) = if unified_sigils(a, b) && !a.rest then { offset: b.offset, other_line: a.line, ending: " taking `" unified_union(a.union b.union) "`." } else null
-fn unified_equal_length(a, b, differences) = if count(differences) == 0 then { offset: b.head.offset, other_line: a.head.line, ending: " with identical parameters." } else if count(differences) == 1 then {
-  value differences
-  first_differences: first
-  value at: first(differences).index
-  value unified_parameter_at: unified_parameter_at(b, at)
-  value unified_difference(first_differences, unified_parameter_at)
-} else null
+fn unified_equal_length(a, b, differences) = when {
+  count(differences) == 0 then { offset: b.head.offset, other_line: a.head.line, ending: " with identical parameters." }
+  count(differences) == 1 then {
+    value differences
+    first_differences: first
+    value at: first(differences).index
+    value unified_parameter_at: unified_parameter_at(b, at)
+    value unified_difference(first_differences, unified_parameter_at)
+  }
+  else then null
+}
 fn unified_shorter(short, long) = if last(short.parameters).rest == true || !all(short.parameters, p => p.type == unified_parameter_at(long, p.index).type) || !{
   value result: count(short.parameters) + 1
   value long.parameters
@@ -237,11 +249,16 @@ fn unified_shorter(short, long) = if last(short.parameters).rest == true || !all
   value slice(long.parameters, result, parameters_count)
   all (p) p.optional || p.rest
 } then null else { offset: last(long.parameters).offset, other_line: short.head.line, ending: " with " (if last(long.parameters).rest then "a rest" else "an optional") " parameter." }
-fn unified_parameter_difference(a, b) = if count(a.parameters) == count(b.parameters) then {
-  value a.parameters
-  differences: filter (p) !{ value b; unified_parameter_at_3: unified_parameter_at p.index; value unified_sigils(p, unified_parameter_at_3) } || p.type != unified_parameter_at(b, p.index).type
-  value unified_equal_length(a, b, differences)
-} else if (first(a.parameters).name == "this") != (first(b.parameters).name == "this") then null else if count(a.parameters) < count(b.parameters) then unified_shorter(a, b) else unified_shorter(b, a)
+fn unified_parameter_difference(a, b) = when {
+  count(a.parameters) == count(b.parameters) then {
+    value a.parameters
+    differences: filter (p) !{ value b; unified_parameter_at_3: unified_parameter_at p.index; value unified_sigils(p, unified_parameter_at_3) } || p.type != unified_parameter_at(b, p.index).type
+    value unified_equal_length(a, b, differences)
+  }
+  (first(a.parameters).name == "this") != (first(b.parameters).name == "this") then null
+  count(a.parameters) < count(b.parameters) then unified_shorter(a, b)
+  else then unified_shorter(b, a)
+}
 fn unified_comparison(a, b, outer_names) = if a.result != b.result || any(a.outer, name => contains(outer_names, name)) != any(b.outer, name => contains(outer_names, name)) || a.types != b.types || first(a.parameters).name == "this" && first(a.parameters).raw_type == "void" || first(b.parameters).name == "this" && first(b.parameters).raw_type == "void" then null else unified_parameter_difference(a, b)
 fn unified_names(a, b) = {
   value b.parameters
@@ -266,9 +283,10 @@ in unified_signature_node rule unified-signatures {
       value unified_pair(signature, candidate, parent.unified_outer_names, group_count_2)
     }
   }
-  each pair in filter(pairs, p => p.difference != null && (!ignoreDifferentlyNamedParameters || unified_names(p.a, p.b)) && (!ignoreOverloadsWithDifferentJSDoc || p.a.node.unified_doc == p.b.node.unified_doc))
-  report at pair.difference.offset
-  warn "{if pair.count == 2 then 'These overloads' else 'This overload and the one on line ' pair.difference.other_line} can be combined into one signature{pair.difference.ending}"
+  each pair in filter(pairs, p => p.difference != null && (!ignoreDifferentlyNamedParameters || unified_names(p.a, p.b)) && (!ignoreOverloadsWithDifferentJSDoc || p.a.node.unified_doc == p.b.node.unified_doc)) {
+    report at pair.difference.offset
+    warn "{if pair.count == 2 then 'These overloads' else 'This overload and the one on line ' pair.difference.other_line} can be combined into one signature{pair.difference.ending}"
+  }
 }
 
 }

@@ -1,9 +1,10 @@
 define {
 
-fn ts_value_has_void(n) = {
+fn ts_value_has_trait(n, trait) = {
   value arms: value_parts(n)
-  value if arms == null then null else any(arms, arm => any(arm.parts, part => contains(part.traits, "void")))
+  value if arms == null then null else any(arms, arm => any(arm.parts, part => contains(part.traits, trait)))
 }
+fn ts_value_has_void(n) = ts_value_has_trait(n, "void")
 # The value can't be computed (unsupported or unresolved), unlike explicit `unknown`.
 fn ts_value_opaque(n) = value_parts(n) == null
 fn ts_value_trait(parts, trait) = parts != null && len(parts) > 0

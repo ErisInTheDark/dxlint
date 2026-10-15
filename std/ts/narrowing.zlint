@@ -11,14 +11,14 @@ in ts_for { in update propagates test }
 in ts_logical {
   when operator == "&&" { in right propagates left }
   when operator == "||" { in right propagates !left }
-  when operator == "??" { in right propagates !excludes nullable from left }
+  when operator == "??" { in right propagates !(left \ nullable) }
   when operator == "&&" { unwraps truthy left & right }
   when operator == "||" { unwraps truthy left | right }
 }
 in ts_assignment {
   when operator == "&&=" { in right propagates left }
   when operator == "||=" { in right propagates !left }
-  when operator == "??=" { in right propagates !excludes nullable from left }
+  when operator == "??=" { in right propagates !(left \ nullable) }
 }
 in ts_parenthesized { unwraps truthy expression }
 in ts_non_null { unwraps truthy expression }
@@ -41,20 +41,20 @@ in ts_binary {
   when operator == "!==" { unwraps truthy !includes right from left }
   when operator == "!==" { unwraps truthy !includes left from right }
   when operator == "==" && (right.structure_unwrapped is ts_null || right always undefined) {
-    unwraps truthy !excludes nullable from left
+    unwraps truthy !(left \ nullable)
   }
   when operator == "==" && (left.structure_unwrapped is ts_null || left always undefined) {
-    unwraps truthy !excludes nullable from right
+    unwraps truthy !(right \ nullable)
   }
   when operator == "!=" && (right.structure_unwrapped is ts_null || right always undefined) {
-    unwraps truthy excludes nullable from left
+    unwraps truthy left \ nullable
   }
   when operator == "!=" && (left.structure_unwrapped is ts_null || left always undefined) {
-    unwraps truthy excludes nullable from right
+    unwraps truthy right \ nullable
   }
   when operator == "in" { unwraps truthy has left from right }
   when operator == "instanceof" {
-    unwraps truthy includes from right at "prototype" from left
+    unwraps truthy includes right.["prototype"] from left
   }
 }
 
@@ -84,7 +84,7 @@ in ts_binary {
 @narrowing_typeof("bigint", (trait bigint, truthy, nonthenable | trait bigint, falsy, nonthenable))
 @narrowing_typeof("symbol", (trait symbol, truthy, nonthenable))
 @narrowing_typeof("undefined", (trait undefined, nullable, falsy, nonthenable))
-@narrowing_typeof("function", (trait callable, truthy | trait constructible, truthy))
+@narrowing_typeof("function", (instance "Function"))
 @narrowing_typeof("object", (trait object, truthy | trait null, nullable, falsy, nonthenable))
 
 }

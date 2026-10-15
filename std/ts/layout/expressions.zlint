@@ -18,21 +18,28 @@ in ts_rest, ts_spread let layout_spread_property parent is (ts_object, ts_object
 in ts_function let generator_star_named name != null
 in ts_method let generator_star_shorthand parent is ts_object
 @macro layout_yield_star_options {
+  @ts_token_context
   option mode "before" | "after" | "both" | "neither" = "after" "spacing around yield star"
   option before boolean | null = null "override space before star"
   option after boolean | null = null "override space after star"
 }
 @macro layout_generator_star_options {
+  @ts_token_context
   option before boolean = true "space before generator star"
   option after boolean = false "space after generator star"
   when text == "*"
   let star_before_space layout_comma_space(space_before.text, true)
   let star_after_space layout_comma_space(space_after.text, false)
-  each star_before in [true, false]
-  when if star_before then previous_token != null && (parent not ts_method || offset != token_neighbours.parent_start) else next_token != null
-  when ((if star_before then star_before_space else star_after_space) != "") != (if star_before then before else after)
-  fix at { start: if star_before then offset - byte_len(star_before_space) else end_offset, end: if star_before then offset else end_offset + byte_len(star_after_space) } as if (if star_before then before else after) then " " else ""
-  warn if star_before then (if star_before_space != "" then "Unexpected space before *." else "Missing space before *.") else if star_after_space != "" then "Unexpected space after *." else "Missing space after *."
+  each star_before in [true, false] {
+    when if star_before then previous_token != null && (parent not ts_method || offset != token_neighbours.parent_start) else next_token != null
+    when ((if star_before then star_before_space else star_after_space) != "") != (if star_before then before else after)
+    fix at { start: if star_before then offset - byte_len(star_before_space) else end_offset, end: if star_before then offset else end_offset + byte_len(star_after_space) } as if (if star_before then before else after) then " " else ""
+    warn when {
+      star_before then if star_before_space != "" then "Unexpected space before *." else "Missing space before *."
+      star_after_space != "" then "Unexpected space after *."
+      else then "Missing space after *."
+    }
+  }
 }
 
 group infix_spacing_owners ts_binary, ts_logical, ts_assignment, ts_union, ts_intersection,
@@ -40,6 +47,7 @@ group infix_spacing_owners ts_binary, ts_logical, ts_assignment, ts_union, ts_in
   ts_class_property, ts_enum_member, ts_type_alias, ts_type_parameter
 in infix_spacing_owners let infix_spacing_enabled true
 in ts_binary.operator, ts_logical.operator, ts_assignment.operator, ts_equals, ts_question, ts_colon, ts_punctuator rule space-infix-ops {
+  @ts_token_context
   option int32Hint boolean = false "allow terminal |0 conversion"
   let infix_types parent is (ts_union, ts_intersection)
   when parent is infix_spacing_owners && parent.infix_spacing_enabled
@@ -169,11 +177,12 @@ in ts_unary, ts_update, ts_new, ts_await, ts_yield, ts_non_null rule space-unary
   let wants_space { value overrides; get unary_override; nonempty } ?? { value overrides; get unary_operator; nonempty } ?? if unary_word then words else nonwords
   when wants_space != unary_separated
   when !(wants_space && layout_unary_double_bang == true) && !(unary_word && !wants_space && !unary_joinable)
-  warn if unary_word then
-    if wants_space then "Unary word operator '{unary_operator}' must be followed by whitespace." else "Unexpected space after unary word operator '{unary_operator}'."
-    else if wants_space then
-      if unary_prefix then "Unary operator '{unary_operator}' must be followed by whitespace." else "Space is required before unary operator '{unary_operator}'."
-    else if unary_prefix then "Unexpected space after unary operator '{unary_operator}'." else "Unexpected space before unary operator '{unary_operator}'."
+  warn when {
+    unary_word then if wants_space then "Unary word operator '{unary_operator}' must be followed by whitespace." else "Unexpected space after unary word operator '{unary_operator}'."
+    wants_space then if unary_prefix then "Unary operator '{unary_operator}' must be followed by whitespace." else "Space is required before unary operator '{unary_operator}'."
+    unary_prefix then "Unexpected space after unary operator '{unary_operator}'."
+    else then "Unexpected space before unary operator '{unary_operator}'."
+  }
   let left_token if unary_prefix then unary_token else unary_argument
   let right_token if unary_prefix then unary_argument else unary_token
   let gap byte_slice(source, left_token.end, right_token.start)

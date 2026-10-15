@@ -9,12 +9,15 @@ define {
 
   fn ts_calls_return_candidate(n) = {
     value bare: unparenthesised_node(n)
-    value if bare is (ts_number, ts_string, ts_boolean, ts_bigint) then true
-      else if bare is ts_identifier then {
+    value when {
+      bare is (ts_number, ts_string, ts_boolean, ts_bigint) then true
+      bare is ts_identifier then {
         value declaration: bare.scope_declaration.parent.node
         value declaration is ts_declarator && declaration.type == null
           && declaration.parent.kind == "const"
-      } else bare is (ts_unary, ts_conditional, ts_logical, ts_sequence, ts_satisfies)
+      }
+      else then bare is (ts_unary, ts_conditional, ts_logical, ts_sequence, ts_satisfies)
+    }
   }
 
   fn ts_calls_return_arguments(owner) = if owner.body is ts_block then {
@@ -142,7 +145,7 @@ define {
   in ts_rest, ts_spread { fits rest }
 
   in ts_call {
-    when in_optional_chain == true { calls (excludes nullable, undefined from callee) with argument }
+    when in_optional_chain == true { calls (callee \ nullable, undefined) with argument }
     when in_optional_chain != true { calls callee with argument }
   }
   in ts_new { constructs callee with argument }
@@ -158,22 +161,22 @@ define {
   in ts_assignment { in right expects left }
   in ts_parenthesized { in expression expects it.expected }
   in ts_as, ts_type_assertion { in expression expects type }
-  in ts_array { in element expects each from (excludes nullable from parent.expected) at position }
+  in ts_array { in element expects each (parent.expected \ nullable).[position] }
   in ts_method, ts_class_property, ts_property {
     let calls_member_key if key is ts_computed_key then key.expression.node else ts_value_key(key.node)
     when parent is ts_object {
-      in it expects from parent.expected at calls_member_key
+      in it expects parent.expected.[calls_member_key]
     }
     when parent is ts_class && parent.extends != null {
       when !contains([] modifier, "static") {
-        in it expects from (from parent.extends at "prototype") at calls_member_key
+        in it expects parent.extends.["prototype"].[calls_member_key]
       }
       when contains([] modifier, "static") {
-        in it expects from parent.extends at calls_member_key
+        in it expects parent.extends.[calls_member_key]
       }
     }
     when parent is ts_class && parent.implements != null && !contains([] modifier, "static") {
-      in it expects from (...parent.implements) at calls_member_key
+      in it expects (...parent.implements).[calls_member_key]
     }
   }
   in ts_property { in value expects it.expected }

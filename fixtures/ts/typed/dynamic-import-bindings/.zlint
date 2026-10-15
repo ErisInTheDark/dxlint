@@ -1,6 +1,6 @@
 import .ts
 in ts_call.argument rule binding-type {
-  when contains(type_flags, "number") && { value type_flags.nonempty ?? []; has_only_flags(["number", "union", "literal"]) }
+  when node always number && ts_value_has_trait(node, "any") == false && ts_value_has_trait(node, "unknown") == false
   warn "number binding"
 }
 rule binding-type

@@ -6,8 +6,12 @@ define {
 in ts_identifier let no_unused_vars_checked unused_var.setter != true
 in ts_identifier let no_unused_vars_ignored null
 in ts_identifier let unused_binding_context if unused_var.array_element || unused_var.array_target then "array" else unused_var.def
-fn unused_binding_names(context) = if context == "array" then "elements of array destructuring"
-  else if context == "catch" then "caught errors" else if context == "parameter" then "args" else "vars"
+fn unused_binding_names(context) = when {
+  context == "array" then "elements of array destructuring"
+  context == "catch" then "caught errors"
+  context == "parameter" then "args"
+  else then "vars"
+}
 
 @macro unused_binding_options {
   option ignorePattern regex = "" "names allowed to be unused"
@@ -55,9 +59,10 @@ in ts_identifier rule no-unused-vars:array-elements {
 in ts_program rule no-unused-vars:globals {
   option vars "all" | "local" = "all" "`local`: skip the global scope of scripts"
   when vars == "all"
-  each g in unused_globals
-  report at { start: g.offset, end: g.offset + byte_len(g.name) }
-  warn "'{g.name}' is defined but never used."
+  each g in unused_globals {
+    report at { start: g.offset, end: g.offset + byte_len(g.name) }
+    warn "'{g.name}' is defined but never used."
+  }
 }
 
 }

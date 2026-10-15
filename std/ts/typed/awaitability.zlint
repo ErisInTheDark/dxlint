@@ -17,6 +17,29 @@ fn ts_await_function_name(n) = {
 fn ts_awaitable_result(n) = n != null
   && unparenthesised_node(n) not (ts_null, ts_boolean, ts_number, ts_bigint, ts_string, ts_template)
   && n could thenable
+fn ts_await_nonthenable_element(handle) = {
+  value arms: value_parts(handle)
+  value arms != null && any(arms, arm => ts_value_nonthenable(arm.handle) == true
+    && all(arm.parts, part => !contains(part.traits, "any") && !contains(part.traits, "unknown")))
+}
+fn ts_await_iterable_elements(part, n) = {
+  value shape: ts_value_array_part(part, n)
+  value if shape.tuple then value_children(part.handle, true, [])
+    else if shape.array then value_children(part.handle, false, [0])
+    else if part.carrier == null then [] else {
+      value ancestry: ts_value_ancestry(part)
+      value bases: filter(ancestry.parts, base => base.carrier.description.kind == "named"
+        && contains(["Iterable", "IterableIterator", "Generator", "Set", "ReadonlySet"], base.carrier.description.name)
+        && ts_value_builtin_part(base, n, [base.carrier.description.name]) == true)
+      value flat_map(bases, base => value_children(base.handle, false, [0]) ?? [])
+    }
+}
+fn ts_await_nonawaitable_iterable(n) = {
+  value arms: value_parts(n)
+  value arms != null && any(arms, arm => any(arm.parts, part =>
+    any(ts_await_iterable_elements(part, n) ?? [], element => element.member.optional == true
+      || ts_await_nonthenable_element(element.handle))))
+}
 group ts_await_sites ts_await, ts_for_of, ts_variable_declaration, ts_return, ts_yield
 in ts_node let ts_await_owner parent.ts_await_owner
 in ts_function, ts_arrow, ts_method let ts_await_owner node

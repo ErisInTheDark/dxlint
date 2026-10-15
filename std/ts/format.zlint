@@ -115,7 +115,14 @@ in ts_open_paren rule space-in-parens:after {
   option mode "always" | "never" = "never" "spacing inside parentheses"
   option exceptions ("{}" | "[]" | "()" | "empty")[] = [] "invert spacing for nested delimiters"
   let paren_space { value space_after.text; re_find /^\s*/; nonempty } ?? ""
-  let paren_next if space_after.comments then "" else if next_token is ts_open_brace then "{{}}" else if next_token is ts_open_bracket then "[]" else if next_token is ts_open_paren then "()" else if next_token is ts_close_paren then "empty" else ""
+  let paren_next when {
+    space_after.comments then ""
+    next_token is ts_open_brace then "{{}}"
+    next_token is ts_open_bracket then "[]"
+    next_token is ts_open_paren then "()"
+    next_token is ts_close_paren then "empty"
+    else then ""
+  }
   let paren_wants if count(exceptions) == 0 then mode == "always" else (mode == "always") != contains(exceptions, paren_next)
   when if paren_space != "" then !re_test(paren_space, /[\n\r\u{2028}\u{2029}]/) && !{ value space_after.text; trim_start; starts_with "//" } && !paren_wants else paren_wants && (paren_next != "empty" || contains(exceptions, "empty"))
   report at if paren_space != "" then end_offset else offset
@@ -126,7 +133,14 @@ in ts_close_paren rule space-in-parens:before {
   option mode "always" | "never" = "never" "spacing inside parentheses"
   option exceptions ("{}" | "[]" | "()" | "empty")[] = [] "invert spacing for nested delimiters"
   let paren_space { value space_before.text; re_find /\s*$/; nonempty } ?? ""
-  let paren_previous if space_before.comments then "" else if previous_token is ts_close_brace then "{{}}" else if previous_token is ts_close_bracket then "[]" else if previous_token is ts_close_paren then "()" else if previous_token is ts_open_paren then "empty" else ""
+  let paren_previous when {
+    space_before.comments then ""
+    previous_token is ts_close_brace then "{{}}"
+    previous_token is ts_close_bracket then "[]"
+    previous_token is ts_close_paren then "()"
+    previous_token is ts_open_paren then "empty"
+    else then ""
+  }
   let paren_wants if count(exceptions) == 0 then mode == "always" else (mode == "always") != contains(exceptions, paren_previous)
   when if paren_space != "" then !re_test(paren_space, /[\n\r\u{2028}\u{2029}]/) && !paren_wants else paren_wants && (paren_previous != "empty" || contains(exceptions, "empty"))
   report at if paren_space != "" then offset - byte_len(paren_space) else offset
@@ -167,12 +181,14 @@ in ts_array, ts_array_pattern rule array-bracket-spacing {
     edits: map (edge) { start: edge.gap.start, end: edge.gap.end, text: format_gap_text(edge.gap, edge.wanted, array_comments) }
     value expression_fix_edits(text, offset, edits)
   }
-  each array_edge in array_bad
-  report at array_edge.position
-  fix as array_fixed
-  warn if array_edge.wanted then (if array_edge.open then "A space is required after '['." else "A space is required before ']'.") else (if array_edge.open then "There should be no space after '['." else "There should be no space before ']'.")
+  each array_edge in array_bad {
+    report at array_edge.position
+    fix as array_fixed
+    warn if array_edge.wanted then (if array_edge.open then "A space is required after '['." else "A space is required before ']'.") else (if array_edge.open then "There should be no space after '['." else "There should be no space before ']'.")
+  }
 }
 in ts_dot, ts_punctuator, ts_member.optional rule dot-location {
+  @ts_token_context
   option style "object" | "property" = "property" "line for a member-access dot"
   when text == "." || text == "?."
   when parent is (ts_member, ts_qualified_name, ts_import_type, ts_meta_property, ts_jsx_name)
@@ -186,6 +202,7 @@ in ts_dot, ts_punctuator, ts_member.optional rule dot-location {
 }
 
 @macro format_template_curly {
+  @ts_token_context
   option mode "always" | "never" = "never" "spacing inside template substitutions"
   let template_before { value space_before.text; re_find /\s*$/; nonempty } ?? ""
   let template_after { value space_after.text; re_find /^\s*/; nonempty } ?? ""
@@ -216,7 +233,7 @@ in ts_template.quasi rule template-curly-spacing:missing-before warn "Expected s
 
 @macro format_template_tag {
   option style "always" | "never" = "never" "spacing after a template tag"
-  let tag_gap quasi.space_before
+  let tag_gap ts_token_space(source, quasi.node, true)
   let tag_comments { value overlapping(ts_comment); filter (comment) comment.offset >= tag_gap.start && comment.end_offset <= tag_gap.end }
   let tag_line_comment any(tag_comments, comment => comment is ts_line_comment)
 }
@@ -246,6 +263,7 @@ in ts_tagged_template rule template-tag-spacing:missing warn "Missing space betw
 # The nearest syntax or comment token owns the report position.
 in ts_arrow, ts_function_type let format_arrow_comments overlapping(ts_comment)
 @macro format_arrow_spacing {
+  @ts_token_context
   option before boolean = true "require space before the arrow"
   option after boolean = true "require space after the arrow"
   when parent is ts_arrow || parent is ts_function_type && text == "=>"
@@ -379,7 +397,11 @@ in ts_close_brace rule object-curly-spacing:close {
   when !curly_empty
   let curly_gap re_find(space_before.text, /\s*$/)
   when !re_test(curly_gap, /[\n\r\u{2028}\u{2029}]/)
-  let curly_tail if parent is (ts_object, ts_object_pattern) then { value parent.property.format_curly_tail; last; nonempty } ?? last(parent.property.node) else if parent is ts_mapped_type then parent.format_object_tail else { value parent.member.format_curly_tail; last; nonempty } ?? last(parent.member.node)
+  let curly_tail when {
+    parent is (ts_object, ts_object_pattern) then { value parent.property.format_curly_tail; last; nonempty } ?? last(parent.property.node)
+    parent is ts_mapped_type then parent.format_object_tail
+    else then { value parent.member.format_curly_tail; last; nonempty } ?? last(parent.member.node)
+  }
   let curly_required if !space_before.comments && (curly_arrays && previous_token is ts_close_bracket && curly_tail is (ts_array, ts_tuple_type) || curly_objects && previous_token is ts_close_brace && curly_tail is (ts_object, ts_object_pattern, ts_mapped_type, ts_type_literal)) then !curly_spaced else curly_spaced
   when (curly_gap != "") != curly_required
   report at if curly_required then offset else offset - byte_len(curly_gap)
@@ -451,16 +473,16 @@ in key_spacing_containers let format_key_anchors map(format_key_members, m => {
   site: m.format_key_site
 })
 in key_spacing_containers let format_key_group_comments overlapping(ts_comment) overlapping(ts_import_attribute_comment)
-fn format_key_bridge(previous, current, comments, typed) = (
-  if current == null || previous == null then false
-  else if (if typed then current.site.owner.format_key_colon_line.nonempty ?? current.start_line else current.site.owner.format_key_value_line.nonempty ?? current.start_line) - previous.start_line <= 1 then true
-  else {
+fn format_key_bridge(previous, current, comments, typed) = when {
+  current == null || previous == null then false
+  (if typed then current.site.owner.format_key_colon_line.nonempty ?? current.start_line else current.site.owner.format_key_value_line.nonempty ?? current.start_line) - previous.start_line <= 1 then true
+  else then {
     value to: if typed then current.site.owner.format_key_colon_line.nonempty ?? current.start_line else current.site.owner.format_key_value_line.nonempty ?? current.start_line
     value comments
     comments_2: filter (c) c.offset >= previous.end && c.end_offset <= current.start
     value format_key_comment_bridge(previous.start_line, to, comments_2)
   }
-)
+}
 fn format_key_comment_end(chain, to) = chain.connected && to - chain.line <= 1
 fn format_key_comment_bridge(from, to, comments) = count(comments) > 0 && {
   value comments
@@ -471,18 +493,18 @@ fn format_key_comment_bridge(from, to, comments) = count(comments) > 0 && {
   format_key_comment_end to
 }
 fn format_key_add_group(groups, item) = slice(groups, 0, -1) [last(groups) [item]]
-fn format_key_group_step(state, item, comments, typed) = (
-  if state.previous == null then { previous: item, groups: [[item]], unaligned: [] }
-  else if typed && item.start_line == state.previous.start_line then {
+fn format_key_group_step(state, item, comments, typed) = when {
+  state.previous == null then { previous: item, groups: [[item]], unaligned: [] }
+  typed && item.start_line == state.previous.start_line then {
     previous: item,
     groups: if { value state.groups; last; last }.node == state.previous.node then slice(state.groups, 0, -1) [{ value state.groups; last; slice 0 -1 }] else state.groups,
     unaligned: state.unaligned [item] (if { value state.groups; last; last }.node == state.previous.node then [state.previous] else [])
   }
-  else if { value state.groups; last; last }.node == state.previous.node && format_key_bridge(state.previous, item, comments, typed) then {
+  { value state.groups; last; last }.node == state.previous.node && format_key_bridge(state.previous, item, comments, typed) then {
     previous: item, groups: format_key_add_group(state.groups, item), unaligned: state.unaligned
   }
-  else { previous: item, groups: state.groups [[item]], unaligned: state.unaligned }
-)
+  else then { previous: item, groups: state.groups [[item]], unaligned: state.unaligned }
+}
 fn format_key_group_rows(state, typed) = {
   value state.groups map(state.unaligned, item => [item])
   map (g) {
@@ -519,18 +541,19 @@ fn format_key_expected(site, group, policy, alignment, typed) = if alignment == 
   after_mode: if typed && alignment.on == "value" then "strict" else alignment.mode
 }
 fn format_key_wrong(actual, wanted, mode, typed) = if mode == "minimum" then actual < wanted || !typed && wanted == 0 && actual > 0 else actual != wanted
-fn format_key_fixed_gap(gap, wanted, keep_end, insert_end) = (
-  if utf16_len(gap) >= wanted then if keep_end then { value result: utf16_len(gap) - wanted; value slice(gap, result) } else slice(gap, 0, wanted)
-  else if insert_end then gap { value result_2: wanted - utf16_len(gap); value repeat(" ", result_2) } else { value result_3: wanted - utf16_len(gap); value repeat(" ", result_3) } gap
-)
-fn format_key_fix(site, before, wanted) = (
-  if before then { start: site.colon.offset - byte_len(site.before), end: site.colon.offset, text: format_key_fixed_gap(site.before, wanted, !site.typed, site.typed) }
-  else if wanted < 0 then {
+fn format_key_fixed_gap(gap, wanted, keep_end, insert_end) = when {
+  utf16_len(gap) >= wanted then if keep_end then { value result: utf16_len(gap) - wanted; value slice(gap, result) } else slice(gap, 0, wanted)
+  insert_end then gap { value result_2: wanted - utf16_len(gap); value repeat(" ", result_2) }
+  else then { value result_3: wanted - utf16_len(gap); value repeat(" ", result_3) } gap
+}
+fn format_key_fix(site, before, wanted) = when {
+  before then { start: site.colon.offset - byte_len(site.before), end: site.colon.offset, text: format_key_fixed_gap(site.before, wanted, !site.typed, site.typed) }
+  wanted < 0 then {
     start: site.colon.offset - byte_len(site.before), end: site.colon.end_offset + byte_len(site.after),
     text: { value result: utf16_len(site.before) + wanted; value slice(site.before, 0, result) } ":"
   }
-  else { start: site.colon.end_offset, end: site.colon.end_offset + byte_len(site.after), text: format_key_fixed_gap(site.after, wanted, site.typed, !site.typed) }
-)
+  else then { start: site.colon.end_offset, end: site.colon.end_offset + byte_len(site.after), text: format_key_fixed_gap(site.after, wanted, site.typed, !site.typed) }
+}
 @macro format_key_options {
   option beforeColon boolean = false "space before colons"
   option afterColon boolean = true "space after colons"
@@ -545,17 +568,21 @@ fn format_key_fix(site, before, wanted) = (
   }
   let key_multi { value multiLine.nonempty ?? key_base; format_key_policy }
   # Typed nested alignment resets spacing defaults, but inherits line mode.
-  let key_alignment if align == null && multiLine.align == null then null else if type_of(align) == "record" then { value {}; line: format_key_policy; value format_key_alignment_policy(align, line) } else {
-    value align_2: if format_key_typed then multiLine.align.nonempty ?? align else (multiLine.nonempty ?? key_base).align
-    value line_2: if format_key_typed && type_of(multiLine.align) == "record" then { before: 0, after: 1, mode: key_multi.mode } else key_multi
-    value format_key_alignment_policy(align_2, line_2)
+  let key_alignment when {
+    align == null && multiLine.align == null then null
+    type_of(align) == "record" then { value {}; line: format_key_policy; value format_key_alignment_policy(align, line) }
+    else then {
+      value align_2: if format_key_typed then multiLine.align.nonempty ?? align else (multiLine.nonempty ?? key_base).align
+      value line_2: if format_key_typed && type_of(multiLine.align) == "record" then { before: 0, after: 1, mode: key_multi.mode } else key_multi
+      value format_key_alignment_policy(align_2, line_2)
+    }
   }
 }
 @macro format_key_aligned_entries {
   when key_spacing_enabled
   @format_key_options
   when key_alignment != null && !format_key_single_line
-  each spacing_entry in {
+  let key_aligned_entries {
     value format_key_groups
     format_key_rows
     map (entry) {
@@ -563,6 +590,8 @@ fn format_key_fix(site, before, wanted) = (
       policy: format_key_expected(entry.site, entry.group, key_line, key_alignment, format_key_typed)
     }
   }
+}
+@macro format_key_aligned_entry {
   when !spacing_entry.site.typed || position(spacing_entry.site.owner.offset).js_line == spacing_entry.site.owner.format_key_colon_line
 }
 @macro format_key_individual {
@@ -573,11 +602,19 @@ fn format_key_fix(site, before, wanted) = (
   let spacing_entry { site: parent.format_key_site, policy: key_line }
 }
 @macro format_key_before_report {
-  report at if spacing_entry.site.typed then { start: spacing_entry.site.owner.offset, end: spacing_entry.site.owner.end_offset } else if utf16_len(spacing_entry.site.before) > spacing_entry.policy.before then { start: spacing_entry.site.colon.offset - byte_len(spacing_entry.site.before), end: spacing_entry.site.colon.offset } else { start: spacing_entry.site.owner.format_key_before_comment.offset.nonempty ?? spacing_entry.site.colon.token_neighbours.before.start, end: spacing_entry.site.owner.format_key_before_comment.end_offset.nonempty ?? spacing_entry.site.colon.token_neighbours.before.end }
+  report at when {
+    spacing_entry.site.typed then { start: spacing_entry.site.owner.offset, end: spacing_entry.site.owner.end_offset }
+    utf16_len(spacing_entry.site.before) > spacing_entry.policy.before then { start: spacing_entry.site.colon.offset - byte_len(spacing_entry.site.before), end: spacing_entry.site.colon.offset }
+    else then { start: spacing_entry.site.owner.format_key_before_comment.offset.nonempty ?? spacing_entry.site.colon.token_neighbours.before.start, end: spacing_entry.site.owner.format_key_before_comment.end_offset.nonempty ?? spacing_entry.site.colon.token_neighbours.before.end }
+  }
   warn if utf16_len(spacing_entry.site.before) > spacing_entry.policy.before then "Extra space after {if spacing_entry.site.owner.format_key_computed == true then 'computed ' else ''}key '{spacing_entry.site.owner.format_key_label}'." else "Missing space after {if spacing_entry.site.owner.format_key_computed == true then 'computed ' else ''}key '{spacing_entry.site.owner.format_key_label}'."
 }
 @macro format_key_after_report {
-  report at if spacing_entry.site.typed then { start: spacing_entry.site.owner.offset, end: spacing_entry.site.owner.end_offset } else if utf16_len(spacing_entry.site.after) > spacing_entry.policy.after then { start: spacing_entry.site.colon.offset, end: spacing_entry.site.colon.end_offset + byte_len(spacing_entry.site.after) } else { start: spacing_entry.site.owner.format_key_after_comment.offset.nonempty ?? spacing_entry.site.colon.token_neighbours.after.start, end: spacing_entry.site.owner.format_key_after_comment.end_offset.nonempty ?? spacing_entry.site.colon.token_neighbours.after.end }
+  report at when {
+    spacing_entry.site.typed then { start: spacing_entry.site.owner.offset, end: spacing_entry.site.owner.end_offset }
+    utf16_len(spacing_entry.site.after) > spacing_entry.policy.after then { start: spacing_entry.site.colon.offset, end: spacing_entry.site.colon.end_offset + byte_len(spacing_entry.site.after) }
+    else then { start: spacing_entry.site.owner.format_key_after_comment.offset.nonempty ?? spacing_entry.site.colon.token_neighbours.after.start, end: spacing_entry.site.owner.format_key_after_comment.end_offset.nonempty ?? spacing_entry.site.colon.token_neighbours.after.end }
+  }
   warn if utf16_len(spacing_entry.site.after) > spacing_entry.policy.after then "Extra space before value for {if spacing_entry.site.owner.format_key_computed == true then 'computed ' else ''}key '{spacing_entry.site.owner.format_key_label}'." else "Missing space before value for {if spacing_entry.site.owner.format_key_computed == true then 'computed ' else ''}key '{spacing_entry.site.owner.format_key_label}'."
 }
 in ts_colon, ts_import_attribute_colon rule key-spacing {
@@ -606,31 +643,37 @@ in ts_colon, ts_import_attribute_colon rule key-spacing:after {
 }
 in key_spacing_containers rule key-spacing:aligned-before {
   @format_key_aligned_entries
-  when {
-    value spacing_entry.site.before
-    utf16_len
-    format_key_wrong spacing_entry.policy.before spacing_entry.policy.before_mode spacing_entry.site.typed
+  each spacing_entry in key_aligned_entries {
+    @format_key_aligned_entry
+    when {
+      value spacing_entry.site.before
+      utf16_len
+      format_key_wrong spacing_entry.policy.before spacing_entry.policy.before_mode spacing_entry.site.typed
+    }
+    when spacing_entry.policy.before == 0 || !re_test(spacing_entry.site.before, /[\n\r\u{2028}\u{2029}]/)
+    fix at format_key_fix(spacing_entry.site, true, spacing_entry.policy.before) as {
+      value key_fix: format_key_fix(spacing_entry.site, true, spacing_entry.policy.before)
+      value key_fix.text
+    }
+    @format_key_before_report
   }
-  when spacing_entry.policy.before == 0 || !re_test(spacing_entry.site.before, /[\n\r\u{2028}\u{2029}]/)
-  fix at format_key_fix(spacing_entry.site, true, spacing_entry.policy.before) as {
-    value key_fix: format_key_fix(spacing_entry.site, true, spacing_entry.policy.before)
-    value key_fix.text
-  }
-  @format_key_before_report
 }
 in key_spacing_containers rule key-spacing:aligned-after {
   @format_key_aligned_entries
-  when {
-    value spacing_entry.site.after
-    utf16_len
-    format_key_wrong spacing_entry.policy.after spacing_entry.policy.after_mode spacing_entry.site.typed
+  each spacing_entry in key_aligned_entries {
+    @format_key_aligned_entry
+    when {
+      value spacing_entry.site.after
+      utf16_len
+      format_key_wrong spacing_entry.policy.after spacing_entry.policy.after_mode spacing_entry.site.typed
+    }
+    when spacing_entry.policy.after == 0 || !re_test(spacing_entry.site.after, /[\n\r\u{2028}\u{2029}]/)
+    fix at format_key_fix(spacing_entry.site, false, spacing_entry.policy.after) as {
+      value key_fix: format_key_fix(spacing_entry.site, false, spacing_entry.policy.after)
+      value key_fix.text
+    }
+    @format_key_after_report
   }
-  when spacing_entry.policy.after == 0 || !re_test(spacing_entry.site.after, /[\n\r\u{2028}\u{2029}]/)
-  fix at format_key_fix(spacing_entry.site, false, spacing_entry.policy.after) as {
-    value key_fix: format_key_fix(spacing_entry.site, false, spacing_entry.policy.after)
-    value key_fix.text
-  }
-  @format_key_after_report
 }
 
 # ---- keywords ---------------------------------------------------------------
@@ -640,7 +683,11 @@ schema format_keyword_policy { before?: boolean; after?: boolean }
   option before boolean = true "space before keywords"
   option after boolean = true "space after keywords"
   option overrides { [keyword: string]: format_keyword_policy } = {} "spacing by keyword"
-  let keyword_value if is ts_for_of.modifier then "for" else if parent is ts_variable_declaration && starts_with(text, "await") then "await" else text
+  let keyword_value when {
+    is ts_for_of.modifier then "for"
+    parent is ts_variable_declaration && starts_with(text, "await") then "await"
+    else then text
+  }
   let keyword_label if parent is ts_for_of && parent.modifier != null && (text == "for" || is ts_for_of.modifier) then "for await" else keyword_value
   let keyword_module parent is (ts_import, ts_export, ts_import_specifier, ts_export_specifier) && contains(["import", "export", "from", "as", "type"], text)
   let keyword_statement parent is (ts_debugger, ts_with, ts_break, ts_continue, ts_return, ts_throw, ts_try, ts_if, ts_switch, ts_case, ts_do_while, ts_for, ts_for_in, ts_for_of, ts_while, ts_static_block) && contains(["debugger", "with", "break", "continue", "return", "throw", "try", "catch", "finally", "if", "else", "switch", "case", "default", "do", "for", "in", "of", "while", "static", "await"], text) && !(text == "await" && parent is ts_for_of && is ts_keyword)
@@ -649,6 +696,7 @@ schema format_keyword_policy { before?: boolean; after?: boolean }
   let keyword_leading parent is (ts_function, ts_arrow, ts_class) && contains(["function", "async", "class"], text) && offset == parent.offset || parent is ts_unary && contains(["typeof", "void", "delete"], text) || parent is (ts_new, ts_await, ts_yield) && contains(["new", "await", "yield"], text) || is (ts_super, ts_this) || is ts_yield && text == "yield"
 }
 in ts_keyword, ts_variable_declaration.kind, ts_try.kind, ts_unary.operator, ts_function.modifier, ts_arrow.modifier, ts_method.modifier, ts_method.kind, ts_class_property.modifier, ts_import.kind, ts_export.kind, ts_for_of.modifier, ts_super, ts_this, ts_debugger, ts_break, ts_continue, ts_return, ts_yield rule keyword-spacing:before {
+  @ts_token_context
   @format_keyword_options
   # Cheapest and most selective first: most keywords are spaced as wanted.
   let keyword_required if len(overrides) == 0 then before else { value get(overrides, keyword_value).before; nonempty } ?? before
@@ -667,6 +715,7 @@ in ts_keyword, ts_variable_declaration.kind, ts_try.kind, ts_unary.operator, ts_
   warn if keyword_required then "Expected space(s) before \"{keyword_label}\"." else "Unexpected space(s) before \"{keyword_label}\"."
 }
 in ts_keyword, ts_variable_declaration.kind, ts_try.kind, ts_method.modifier, ts_method.kind, ts_class_property.modifier, ts_import.kind, ts_export.kind, ts_for_of.modifier, ts_debugger, ts_break, ts_continue, ts_return rule keyword-spacing:after {
+  @ts_token_context
   @format_keyword_options
   # Cheapest and most selective first: most keywords are spaced as wanted.
   let keyword_required if len(overrides) == 0 then after else { value get(overrides, keyword_value).after; nonempty } ?? after
@@ -681,7 +730,11 @@ in ts_keyword, ts_variable_declaration.kind, ts_try.kind, ts_method.modifier, ts
     value re_test(token_neighbours.after.text, result)
   }
   when !re_test(token_neighbours.after.text, /^\}/)
-  report at if !keyword_required then end_offset else if is ts_for_of.modifier then parent.offset else offset
+  report at when {
+    !keyword_required then end_offset
+    is ts_for_of.modifier then parent.offset
+    else then offset
+  }
   fix space_after as if keyword_required then " " else ""
   warn if keyword_required then "Expected space(s) after \"{keyword_label}\"." else "Unexpected space(s) after \"{keyword_label}\"."
 }

@@ -24,3 +24,4 @@ invoke(function() { return { arguments }; });
 invoke(function() { return ((arguments) => arguments[0])([]); });
 const parameterThis = (function(value = this.x) { return value; }).bind(context);
 invoke(function(value = arguments[0]) { return value; });
+var staticField = function() { class C { static field = this.x; } }.bind(context);

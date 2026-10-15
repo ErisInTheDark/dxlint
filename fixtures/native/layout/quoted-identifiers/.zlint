@@ -1,5 +1,6 @@
 import .ts
 in ts_property rule quoting {
-  each site in filter(property_quote_sites, s => s.quoted && s.redundant)
-  error "redundant"
+  each site in filter(layout_property_quote_sites(node), s => s.quoted && s.redundant) {
+    error "redundant"
+  }
 }

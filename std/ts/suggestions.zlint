@@ -28,7 +28,11 @@ in ts_return let branch_exit true
 in ts_if let branch_exit consequent.return_end == true && alternate.return_end == true
 in ts_return, ts_if let returning_branch branch_exit == true
 in ts_block let returning_branch any([] body.branch_exit, r => r == true)
-in ts_if let chain_else_node if consequent.returning_branch != true || alternate == null then null else if alternate is ts_if then alternate.chain_else_node else alternate.node
+in ts_if let chain_else_node when {
+  consequent.returning_branch != true || alternate == null then null
+  alternate is ts_if then alternate.chain_else_node
+  else then alternate.node
+}
 in ts_if let chain_else_offset chain_else_node.offset
 
 in ts_unary let negative_test operator == "!"
@@ -49,7 +53,11 @@ in ts_block let return_value_braced first([] body.return_value_braced) == true
 in ts_function let function_this function_uses_this(node)
 in ts_member let bind_property_site property.node
 in ts_index let bind_property_site index.node
-in ts_member, ts_index let bind_target if static_name != "bind" then null else if (object.unwrapped_node.nonempty ?? object.node) is ts_arrow || (object.unwrapped_node.nonempty ?? object.node) is ts_function && object.function_this != true then bind_property_site else null
+in ts_member, ts_index let bind_target when {
+  static_name != "bind" then null
+  (object.unwrapped_node.nonempty ?? object.node) is ts_arrow || (object.unwrapped_node.nonempty ?? object.node) is ts_function && object.function_this != true then bind_property_site
+  else then null
+}
 in ts_parenthesized forward function_this, bind_target from expression
 
 in ts_throw let thrown_identifier if (argument.unwrapped_node.nonempty ?? argument.node) is ts_identifier then argument.unwrapped_text.nonempty ?? argument else null
@@ -67,12 +75,25 @@ in ts_function, ts_arrow, ts_method let parameter_required [] parameter.required
 in ts_template let static_template count(expression) == 0
 in ts_parenthesized forward static_template from expression
 
-in ts_node let return_assignment_context if parent is ts_return then { arrow: false, offset: parent.offset } else if is ts_arrow.body then { arrow: true, offset: parent.offset } else if parent is (ts_function, ts_method, ts_arrow, ts_class, ts_block, ts_static_block, ts_expression_statement, ts_variable_declaration, ts_if, ts_for, ts_for_in, ts_for_of, ts_while, ts_do_while, ts_switch, ts_throw, ts_with, ts_labeled, ts_try, ts_export) then null else parent.return_assignment_context
+in ts_node let return_assignment_context when {
+  parent is ts_return then { arrow: false, offset: parent.offset }
+  is ts_arrow.body then { arrow: true, offset: parent.offset }
+  parent is (ts_function, ts_method, ts_arrow, ts_class, ts_block, ts_static_block, ts_expression_statement, ts_variable_declaration, ts_if, ts_for, ts_for_in, ts_for_of, ts_while, ts_do_while, ts_switch, ts_throw, ts_with, ts_labeled, ts_try, ts_export) then null
+  else then parent.return_assignment_context
+}
 in ts_variable_declaration let async_resource_declaration kind == "await using"
 in ts_for_of let asynchronous_iteration contains([] modifier, "await")
 in ts_labeled let declared_label label
-in ts_node let repeated_evaluation if parent is ts_function_like || parent is ts_for_of && parent.asynchronous_iteration == true then false else if is (ts_for.body, ts_for.test, ts_for.update, ts_for_in.body, ts_for_of.body) || is (ts_for_in.left, ts_for_of.left) && async_resource_declaration == true || is (ts_while.body, ts_while.test, ts_do_while.body, ts_do_while.test) then true else parent.repeated_evaluation == true
-in ts_node let nearest_break_target if is (ts_loop, ts_switch) then { label: if parent is ts_labeled then parent.declared_label else null } else if is ts_function_like || is ts_labeled && declared_label == get(parent.nearest_break_target, "label") then null else parent.nearest_break_target
+in ts_node let repeated_evaluation when {
+  parent is ts_function_like || parent is ts_for_of && parent.asynchronous_iteration == true then false
+  is (ts_for.body, ts_for.test, ts_for.update, ts_for_in.body, ts_for_of.body) || is (ts_for_in.left, ts_for_of.left) && async_resource_declaration == true || is (ts_while.body, ts_while.test, ts_do_while.body, ts_do_while.test) then true
+  else then parent.repeated_evaluation == true
+}
+in ts_node let nearest_break_target when {
+  is (ts_loop, ts_switch) then { label: if parent is ts_labeled then parent.declared_label else null }
+  is ts_function_like || is ts_labeled && declared_label == get(parent.nearest_break_target, "label") then null
+  else then parent.nearest_break_target
+}
 
 in ts_parenthesized let inner_comparison_tokens expression.unparenthesised_tokens
 in ts_node let unparenthesised_tokens if is ts_parenthesized then inner_comparison_tokens else token_texts
@@ -135,9 +156,10 @@ in ts_string rule no-nonoctal-decimal-escape {
     value overlapping(ts_literal_piece, offset, end_offset)
     filter (piece) re_test(piece.text, /^\\[89]$/)
     unique_by (piece) {start: piece.offset, end: piece.end_offset}
+  } {
+    report at decimal_escape.node
+    warn "Don't use '{decimal_escape.text}' escape sequence."
   }
-  report at decimal_escape.node
-  warn "Don't use '{decimal_escape.text}' escape sequence."
 }
 
 # Comma operators, except loop init/update and explicitly grouped expressions.
@@ -158,11 +180,14 @@ fn suggestion_possible_error(n) = {
   value n
   walk (current) {
     value bare: unparenthesised_node(current)
-    value if bare is ts_assignment && contains(["=", "&&="], bare.operator) then bare.right.node
-      else if bare is ts_assignment && contains(["||=", "??="], bare.operator) then [bare.left.node, bare.right.node]
-      else if bare is ts_logical then if bare.operator == "&&" then bare.right.node else [bare.right.node, bare.left.node]
-      else if bare is ts_conditional then [bare.consequent.node, bare.alternate.node]
-      else if bare is ts_sequence then last(bare.expression.nodes) else null
+    value when {
+      bare is ts_assignment && contains(["=", "&&="], bare.operator) then bare.right.node
+      bare is ts_assignment && contains(["||=", "??="], bare.operator) then [bare.left.node, bare.right.node]
+      bare is ts_logical then if bare.operator == "&&" then bare.right.node else [bare.right.node, bare.left.node]
+      bare is ts_conditional then [bare.consequent.node, bare.alternate.node]
+      bare is ts_sequence then last(bare.expression.nodes)
+      else then null
+    }
   }
   any (current) unparenthesised_node(current) is (ts_identifier, ts_call, ts_new, ts_member, ts_index, ts_tagged_template, ts_yield, ts_await)
 }
@@ -209,7 +234,11 @@ in ts_call rule radix {
   }
   when first_argument not ts_spread && second_argument not ts_spread
   when argument_count < 2 || invalid_radix(second_argument)
-  warn if argument_count == 0 then "Missing parameters." else if argument_count == 1 then "Missing radix parameter." else "Invalid radix parameter, must be an integer between 2 and 36."
+  warn when {
+    argument_count == 0 then "Missing parameters."
+    argument_count == 1 then "Missing radix parameter."
+    else then "Invalid radix parameter, must be an integer between 2 and 36."
+  }
 }
 
 in ts_identifier rule no-shadow-restricted-names {
@@ -318,12 +347,25 @@ in ts_call rule prefer-numeric-literals {
   when count(argument) == 2 && parse_int_name != null
   when first([] argument.literal_value).type == "string"
   when { value argument; last_argument: last; value contains(["2", "8", "16"], last_argument) }
-  warn "Use {if last(argument) == '2' then 'binary' else if last(argument) == '8' then 'octal' else 'hexadecimal'} literals instead of {parse_int_name}()."
+  let radix_label when {
+    last(argument) == "2" then "binary"
+    last(argument) == "8" then "octal"
+    else then "hexadecimal"
+  }
+  warn "Use {radix_label} literals instead of {parse_int_name}()."
   let literal first(argument.nodes)
   let base last(argument)
   let digits literal.literal_value.value
-  let valid_digits if base == "2" then /\A[01]+\z/ else if base == "8" then /\A[0-7]+\z/ else /\A[0-9a-fA-F]+\z/
-  let replacement (if base == "2" then "0b" else if base == "8" then "0o" else "0x") digits
+  let valid_digits when {
+    base == "2" then /\A[01]+\z/
+    base == "8" then /\A[0-7]+\z/
+    else then /\A[0-9a-fA-F]+\z/
+  }
+  let replacement (when {
+    base == "2" then "0b"
+    base == "8" then "0o"
+    else then "0x"
+  }) digits
   fix if (literal is ts_string || literal is ts_template && count(literal.expression) == 0) && re_test(digits, valid_digits) && expression_fix_clean(node) as expression_fix_edges(node, replacement)
 }
 
@@ -337,7 +379,11 @@ in ts_string rule no-octal-escape {
   warn "Don't use octal: '{if re_test(octal_escape, /^\\0[89]$/) then '\\0' else octal_escape}'. Use '\\u....' instead."
 }
 
-fn concat_endpoint_next(n, right_side) = if n is ts_parenthesized then n.expression.node else if n is ts_binary && n.operator == "+" then (if right_side then n.right.node else n.left.node) else null
+fn concat_endpoint_next(n, right_side) = when {
+  n is ts_parenthesized then n.expression.node
+  n is ts_binary && n.operator == "+" then if right_side then n.right.node else n.left.node
+  else then null
+}
 fn concat_endpoint(n, right_side) = { value n; walk (current) concat_endpoint_next(current, right_side); last }
 
 in ts_binary rule no-useless-concat {
@@ -359,11 +405,13 @@ fn ternary_fix_inverse(operand) = {
 fn ternary_fix_boolean(n, consequent, alternate) = {
   value operand: n.test.node
   value bare: unparenthesised_node(operand)
-  value if consequent == alternate then if bare is ts_identifier then consequent else null
-    else if alternate == "true" then ternary_fix_inverse(operand)
-    else if bare is ts_binary && contains(["==", "===", "!=", "!==", ">", ">=", "<", "<=", "in", "instanceof"], bare.operator)
+  value when {
+    consequent == alternate then if bare is ts_identifier then consequent else null
+    alternate == "true" then ternary_fix_inverse(operand)
+    bare is ts_binary && contains(["==", "===", "!=", "!==", ">", ">=", "<", "<=", "in", "instanceof"], bare.operator)
       || bare is ts_unary && bare.operator == "!" then operand.text
-    else "!" ternary_fix_inverse(operand)
+    else then "!" ternary_fix_inverse(operand)
+  }
 }
 
 in ts_conditional rule no-unneeded-ternary {
@@ -540,9 +588,11 @@ fn suggestion_else_scope_safe(body, destination, declarations) = body not ts_fun
 fn suggestion_else_fix(body, declarations) = {
   value conditional: body.parent.node
   value consequent: conditional.consequent.node
-  value destination: if conditional.parent is ts_case then conditional.parent.parent.node
-    else if conditional.parent is ts_block && conditional.parent.parent is ts_function_like then conditional.parent.parent.node
-    else conditional.parent.node
+  value destination: when {
+    conditional.parent is ts_case then conditional.parent.parent.node
+    conditional.parent is ts_block && conditional.parent.parent is ts_function_like then conditional.parent.parent.node
+    else then conditional.parent.node
+  }
   value owner: {
     value conditional
     walk (current) if current is (ts_function_like, ts_program) then null else current.parent.node
@@ -628,14 +678,29 @@ in ts_arrow rule arrow-body-style {
   let body_object if body_block then body.return_value_object == true else (body.unwrapped_node.nonempty ?? body.node) is ts_object
   when body_block && (mode == "never" || mode == "as-needed" && body.single_return == true && !(requireReturnForObjectLiteral && body_object)) || !body_block && (mode == "always" || mode == "as-needed" && requireReturnForObjectLiteral && body_object)
   report at unparenthesised_node(body.node)
-  warn if !body_block then "Expected block statement surrounding arrow body." else if body.statement_count == 0 then "Unexpected block statement surrounding arrow body; put a value of `undefined` immediately after the `=>`." else if body.single_return != true then "Unexpected block statement surrounding arrow body." else if body.return_value_braced == true then "Unexpected block statement surrounding arrow body; parenthesize the returned value and move it immediately after the `=>`." else "Unexpected block statement surrounding arrow body; move the returned value immediately after the `=>`."
+  warn when {
+    !body_block then "Expected block statement surrounding arrow body."
+    body.statement_count == 0 then "Unexpected block statement surrounding arrow body; put a value of `undefined` immediately after the `=>`."
+    body.single_return != true then "Unexpected block statement surrounding arrow body."
+    body.return_value_braced == true then "Unexpected block statement surrounding arrow body; parenthesize the returned value and move it immediately after the `=>`."
+    else then "Unexpected block statement surrounding arrow body; move the returned value immediately after the `=>`."
+  }
   let edit if body_block then arrow_body_expression_fix(source, node) else arrow_body_block_fix(source, node)
   fix at (edit ?? { start: body.offset, end: body.end_offset }) if edit != null as edit.text
 }
 
 in ts_block let uncommented_empty_block count(body) == 0 && { value descendants(ts_comment); count } == 0
 fn empty_function_constructor(n) = n is ts_method && n.parent is ts_class && n.key.text == "constructor" && !contains(n.modifier, "static")
-fn empty_function_category(n, constructor) = if n is ts_arrow then "arrowFunctions" else if constructor then "constructors" else if n is ts_method && n.kind == "get" then "getters" else if n is ts_method && n.kind == "set" then "setters" else if contains(n.modifier, "*") then (if n is ts_method then "generatorMethods" else "generatorFunctions") else if contains(n.modifier, "async") then (if n is ts_method then "asyncMethods" else "asyncFunctions") else if n is ts_method then "methods" else "functions"
+fn empty_function_category(n, constructor) = when {
+  n is ts_arrow then "arrowFunctions"
+  constructor then "constructors"
+  n is ts_method && n.kind == "get" then "getters"
+  n is ts_method && n.kind == "set" then "setters"
+  contains(n.modifier, "*") then (if n is ts_method then "generatorMethods" else "generatorFunctions")
+  contains(n.modifier, "async") then (if n is ts_method then "asyncMethods" else "asyncFunctions")
+  n is ts_method then "methods"
+  else then "functions"
+}
 fn empty_function_decorated(n, constructor) = n is ts_method && !constructor && count(n.decorator.node) > 0
 
 in ts_function, ts_arrow, ts_method rule no-empty-function {
@@ -687,15 +752,17 @@ in ts_string rule no-multi-str {
 
 in ts_string, ts_template, ts_regex rule no-useless-escape {
   option allowRegexCharacters string[] = [] "allow otherwise unnecessary regex escapes"
-  each escape_info in regexp_useless_escapes
-  when !escape_info.regex || !contains(allowRegexCharacters, escape_info.character)
-  report at escape_info.offset
-  warn "Unnecessary escape character: \\{escape_info.character}."
+  each escape_info in regexp_useless_escapes {
+    when !escape_info.regex || !contains(allowRegexCharacters, escape_info.character)
+    report at escape_info.offset
+    warn "Unnecessary escape character: \\{escape_info.character}."
+  }
 }
 
 in ts_regex, ts_call, ts_new rule prefer-named-capture-group {
-  each capture in regexp_unnamed_captures
-  warn "Capture group '{capture}' should be converted to a named or non-capturing group."
+  each capture in regexp_unnamed_captures {
+    warn "Capture group '{capture}' should be converted to a named or non-capturing group."
+  }
 }
 
 in ts_regex rule no-div-regex {
@@ -707,29 +774,39 @@ in ts_regex rule no-div-regex {
 fn regex_raw_tag(tag) = tag is (ts_member, ts_index) && tag.static_name == "raw" && { value tag.object.node; unparenthesised_node; enabled_global_identifier "String" }
 fn regex_static_argument(n) = n is ts_string || n is ts_template && n.static_template == true || n is ts_tagged_template && n.quasi.static_template == true && { value n.tag.node; unparenthesised_node; regex_raw_tag }
 fn regex_construction_kind(args) =
-  if len(args) < 1 || len(args) > 2 then null
-  else if all(args, arg => { value arg; unparenthesised_node; regex_static_argument }) then "static"
-  else if { value args; first; unparenthesised_node } is ts_regex && (len(args) == 1 || {
-    value args
-    last
-    unparenthesised_node
-    regex_static_argument
-  }) then (if len(args) == 1 then "wrapped" else "flags")
-  else null
+  when {
+    len(args) < 1 || len(args) > 2 then null
+    all(args, arg => { value arg; unparenthesised_node; regex_static_argument }) then "static"
+    { value args; first; unparenthesised_node } is ts_regex && (len(args) == 1 || {
+      value args
+      last
+      unparenthesised_node
+      regex_static_argument
+    }) then (if len(args) == 1 then "wrapped" else "flags")
+    else then null
+  }
 
 in ts_call, ts_new rule prefer-regex-literals {
   option disallowRedundantWrapping boolean = false "disallow constructors wrapping regex literals"
   when callee.global_value == "RegExp"
   let regex_preference regex_construction_kind(argument.nodes)
   when regex_preference != null && (regex_preference == "static" || disallowRedundantWrapping)
-  warn if regex_preference == "static" then "Use a regular expression literal instead of the 'RegExp' constructor." else if regex_preference == "wrapped" then "Regular expression literal is unnecessarily wrapped within a 'RegExp' constructor." else "Use regular expression literal with flags instead of the 'RegExp' constructor."
+  warn when {
+    regex_preference == "static" then "Use a regular expression literal instead of the 'RegExp' constructor."
+    regex_preference == "wrapped" then "Regular expression literal is unnecessarily wrapped within a 'RegExp' constructor."
+    else then "Use regular expression literal with flags instead of the 'RegExp' constructor."
+  }
 }
 
 in ts_regex, ts_call, ts_new rule require-unicode-regexp {
   option requireFlag ("u" | "v" | null) = null "require a particular unicode mode"
   let unicode_info regexp_unicode_info
   when unicode_info != null
-  when if requireFlag == "u" then !re_test(unicode_info.flags, /u/) else if requireFlag == "v" then !re_test(unicode_info.flags, /v/) else !re_test(unicode_info.flags, /[uv]/)
+  when (when {
+    requireFlag == "u" then !re_test(unicode_info.flags, /u/)
+    requireFlag == "v" then !re_test(unicode_info.flags, /v/)
+    else then !re_test(unicode_info.flags, /[uv]/)
+  })
   warn if requireFlag == "v" then "Use the 'v' flag." else "Use the 'u' flag."
 }
 
@@ -740,18 +817,23 @@ fn strict_enclosing_function_directive(n) =
     any (current) current is (ts_function, ts_arrow, ts_method) && count(current.directive_scope.directives) > 0
   }
 fn strict_directive_kind(n, scope, mode, directive) =
-  if n not ts_program && !scope.simple_parameters then
-    if directive == first(scope.directives) then "non-simple" else "multiple"
-  else if mode == "never" then "never"
-  else if mode == "module" then "module"
-  else if mode == "implied" then "implied"
-  else if n is ts_program then
-    if mode == "function" then "function" else if directive == first(scope.directives) then null else "multiple"
-  else if mode == "global" then "global"
-  else if directive != first(scope.directives) then "multiple"
-  else if strict_enclosing_function_directive(n) then "unnecessary"
-  else if scope.class_body then "class"
-  else null
+  when {
+    n not ts_program && !scope.simple_parameters then
+      if directive == first(scope.directives) then "non-simple" else "multiple"
+    mode == "never" then "never"
+    mode == "module" then "module"
+    mode == "implied" then "implied"
+    n is ts_program then when {
+      mode == "function" then "function"
+      directive == first(scope.directives) then null
+      else then "multiple"
+    }
+    mode == "global" then "global"
+    directive != first(scope.directives) then "multiple"
+    strict_enclosing_function_directive(n) then "unnecessary"
+    scope.class_body then "class"
+    else then null
+  }
 fn strict_directive_message(kind) = get({
   "non-simple": "'use strict' directive inside a function with non-simple parameter list throws a syntax error since ES2016.",
   multiple: "Multiple 'use strict' directives.",
@@ -764,17 +846,24 @@ fn strict_directive_message(kind) = get({
   class: "'use strict' is unnecessary inside of classes."
 }, kind)
 fn strict_missing(n, scope, mode) =
-  if count(scope.directives) != 0 then []
-  else if n is ts_program && mode == "global" && count(n.body.node) > 0 then [{ offset: first(n.body.node).offset, message: "Use the global form of 'use strict'." }]
-  else if n not ts_program && mode == "function" && !scope.parent_function && !scope.class_body then [{
-    offset: n.offset,
-    message: if scope.simple_parameters then "Use the function form of 'use strict'." else "Wrap " (n.function_name.nonempty ?? "function") " in a function with 'use strict' directive."
-  }]
-  else []
+  when {
+    count(scope.directives) != 0 then []
+    n is ts_program && mode == "global" && count(n.body.node) > 0 then [{ offset: first(n.body.node).offset, message: "Use the global form of 'use strict'." }]
+    n not ts_program && mode == "function" && !scope.parent_function && !scope.class_body then [{
+      offset: n.offset,
+      message: if scope.simple_parameters then "Use the function form of 'use strict'." else "Wrap " (n.function_name.nonempty ?? "function") " in a function with 'use strict' directive."
+    }]
+    else then []
+  }
 in ts_program, ts_function, ts_arrow, ts_method rule strict {
   option mode ("safe" | "never" | "global" | "function") = "safe" "strict directive policy"
   let strict_scope directive_scope
-  let strict_mode if ts_source_type(ts_module_program(node)) == "module" then "module" else if source_environment.implied_strict then "implied" else if mode == "safe" then if source_environment.root_function then "global" else "function" else mode
+  let strict_mode when {
+    ts_source_type(ts_module_program(node)) == "module" then "module"
+    source_environment.implied_strict then "implied"
+    mode == "safe" then if source_environment.root_function then "global" else "function"
+    else then mode
+  }
   let strict_findings {
     value initial_findings: strict_missing(node, strict_scope, strict_mode)
     value strict_scope.directives
@@ -788,10 +877,11 @@ in ts_program, ts_function, ts_arrow, ts_method rule strict {
       }]
     }
   }
-  each strict_finding in filter(strict_findings, finding => finding.message != null)
-  report at strict_finding.offset
-  fix at strict_finding.directive if contains(["multiple", "unnecessary", "module", "implied", "class"], strict_finding.kind) && expression_fix_clean(strict_finding.directive) as ""
-  warn strict_finding.message
+  each strict_finding in filter(strict_findings, finding => finding.message != null) {
+    report at strict_finding.offset
+    fix at strict_finding.directive if contains(["multiple", "unnecessary", "module", "implied", "class"], strict_finding.kind) && expression_fix_clean(strict_finding.directive) as ""
+    warn strict_finding.message
+  }
 }
 
 in ts_call rule prefer-object-has-own {
@@ -828,14 +918,15 @@ fn assignment_fix_rank(operator) = get({
 fn assignment_fix_text(source, n, mode, shorthand) = {
   value binary: unparenthesised_node(n.right.node)
   value before: byte_slice(source, n.offset, n.operator.offset)
-  value if !assignment_fix_reference(n.left.node) then null
-    else if mode == "always" then {
+  value when {
+    !assignment_fix_reference(n.left.node) then null
+    mode == "always" then {
       value if binary not ts_binary || n.left.reference_key_strict != binary.left.reference_key_strict
         || !assignment_fix_reference(binary.left.node)
         || !expression_fix_clean({ offset: n.operator.end_offset, end_offset: binary.operator.offset }) then null
       else before shorthand byte_slice(source, binary.operator.end_offset, binary.end_offset)
     }
-    else {
+    else then {
       value operator: slice(n.operator, 0, -1)
       value if !expression_fix_clean({ offset: n.offset, end_offset: n.operator.offset }) then null
       else {
@@ -847,6 +938,7 @@ fn assignment_fix_text(source, n, mode, shorthand) = {
         value before "= " before operator right
       }
     }
+  }
 }
 in ts_assignment rule operator-assignment {
   option mode ("always" | "never") = "always" "compound arithmetic assignment policy"
@@ -861,10 +953,12 @@ in ts_assignment rule operator-assignment {
 fn caught_throw_property_value(property) = unparenthesised_node(property.value.node ?? property)
 fn caught_throw_property_kind(parameter, property) = {
   value value: caught_throw_property_value(property)
-  value if property == null then "missing"
-    else if value not ts_identifier || value.text != parameter.text then "incorrect"
-    else if value.declaration.node != parameter then "shadowed"
-    else "preserved"
+  value when {
+    property == null then "missing"
+    value not ts_identifier || value.text != parameter.text then "incorrect"
+    value.declaration.node != parameter then "shadowed"
+    else then "preserved"
+  }
 }
 fn caught_throw_cause_kind(parameter, argument, preceding) =
   if any(preceding, arg => unparenthesised_node(arg) is ts_spread)
@@ -881,11 +975,19 @@ in ts_throw rule preserve-caught-error {
   let caught_info catch_throw
   when caught_info != null
   let caught_parameter get(caught_info, "parameter")
-  let catch_kind if caught_parameter == null then "missing" else if caught_parameter is ts_identifier then "present" else "destructured"
+  let catch_kind when {
+    caught_parameter == null then "missing"
+    caught_parameter is ts_identifier then "present"
+    else then "destructured"
+  }
   let builtin_error caught_info.global && contains(["Error", "EvalError", "RangeError", "ReferenceError", "SyntaxError", "TypeError", "URIError", "AggregateError"], caught_info.name)
   let configured_error find_last(errorClassNames, x => caught_info.name == (if type_of(x) == "str" then x else x.name))
   when builtin_error || configured_error != null
-  let cause_position if builtin_error then (if caught_info.name == "AggregateError" then 2 else 1) else if type_of(configured_error) == "str" then 1 else configured_error.argumentPosition - 1
+  let cause_position when {
+    builtin_error then (if caught_info.name == "AggregateError" then 2 else 1)
+    type_of(configured_error) == "str" then 1
+    else then configured_error.argumentPosition - 1
+  }
   let cause_argument {
     value argument: { value caught_info.arguments; slice cause_position; first }
     value unparenthesised_node(argument)
@@ -896,8 +998,18 @@ in ts_throw rule preserve-caught-error {
   }
   let cause_property { value [] cause_argument.property.nodes; find_last (property) property.static_name == "cause" }
   when catch_kind == "destructured" || catch_kind == "missing" && requireCatchParameter || catch_kind == "present" && contains(["missing", "incorrect", "shadowed"], cause_kind)
-  report at if catch_kind == "destructured" then caught_info.catch_offset else if catch_kind == "present" && cause_kind == "incorrect" then caught_throw_property_value(cause_property).offset else caught_info.throw_offset
-  warn if catch_kind == "destructured" then "Re-throws cannot preserve the caught error as a part of it is being lost due to destructuring." else if catch_kind == "missing" then "The caught error is not accessible because the catch clause lacks the error parameter. Start referencing the caught error using the catch parameter." else if cause_kind == "missing" then "There is no `cause` attached to the symptom error being thrown." else if cause_kind == "incorrect" then "The symptom error is being thrown with an incorrect `cause`." else "The caught error is being attached as `cause`, but is shadowed by a closer scoped redeclaration."
+  report at when {
+    catch_kind == "destructured" then caught_info.catch_offset
+    catch_kind == "present" && cause_kind == "incorrect" then caught_throw_property_value(cause_property).offset
+    else then caught_info.throw_offset
+  }
+  warn when {
+    catch_kind == "destructured" then "Re-throws cannot preserve the caught error as a part of it is being lost due to destructuring."
+    catch_kind == "missing" then "The caught error is not accessible because the catch clause lacks the error parameter. Start referencing the caught error using the catch parameter."
+    cause_kind == "missing" then "There is no `cause` attached to the symptom error being thrown."
+    cause_kind == "incorrect" then "The symptom error is being thrown with an incorrect `cause`."
+    else then "The caught error is being attached as `cause`, but is shadowed by a closer scoped redeclaration."
+  }
 }
 
 }

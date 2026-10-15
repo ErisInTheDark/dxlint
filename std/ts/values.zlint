@@ -64,6 +64,16 @@ fn ts_value_global_declaration(n, name) = {
   value identity != null && targets != null
     && any(targets, target => target.file == identity.file && target.node == identity.node)
 }
+fn ts_value_library_type_sites(n, name) = {
+  value sites: global_declarations(n, name, "type")
+  value origins: map(sites ?? [], site => declaration_origin(n, site))
+  value if sites == null || any(origins, origin => origin == null) then null
+    else filter(sites, site => declaration_origin(n, site).kind == "library")
+}
+fn ts_value_function_members(n) = {
+  value sites: ts_value_library_type_sites(n, "Function")
+  value sites == null || count(sites) > 0
+}
 # Syntax first: only `const x = Symbol(...)` / `Symbol.for(...)` reaches the
 # semantic checks, so other declarators never ask (or wait on) them.
 fn ts_value_unique_symbol_binding(n) = n.type == null && n.name is ts_identifier && n.parent.kind == "const"
@@ -223,7 +233,7 @@ fn ts_value_then_contract(member) = if member == null then { known: true, thenab
   else { value signatures: call_parameters(member); value ts_value_then_headers(signatures) }
 fn ts_value_nonthenable(n) = {
   value parts: value_parts(n)
-  value certain: parts != null && count(parts) > 0 && all(parts, arm =>
+  value certain: parts != null && all(parts, arm =>
     any(arm.parts, part => contains(part.traits, "nonthenable") && !contains(part.uncertain_traits, "nonthenable")))
   value if certain then true else {
     value shape: ts_value_then_headers(member_call_parameters(n, "then"))
@@ -489,8 +499,14 @@ in ts_object {
 in ts_object { fits object, truthy in members }
 in ts_interface {
   when extends != null { members members inherits &...extends }
+  fits builtin_function in members when
+    contains(ts_value_library_type_sites(node, "Function"), declaration_identity(node))
+    || any(extends.nodes, base => base always builtin_function)
 }
 in ts_interface, ts_type_literal {
+  when (node could callable || node could constructible) && ts_value_function_members(node) {
+    members members inherits instance "Function"
+  }
   when ts_value_closed_type_members(member.nodes) { members members closed }
 }
 in ts_interface, ts_type_literal, ts_class {
@@ -551,10 +567,11 @@ in ts_method_signature {
 }
 in ts_member {
   let ts_value_member_key ts_value_key(property.node)
+  let ts_value_member_nullish in_optional_chain == true && object could nullable
   when object always any { unwraps object }
   when !(object always any) {
-    when in_optional_chain != true { unwraps (object \ nullable, undefined).[ts_value_member_key] }
-    when in_optional_chain == true { unwraps (object \ nullable, undefined).[ts_value_member_key] | trait undefined, nullable, falsy, nonthenable }
+    when !ts_value_member_nullish { unwraps (object \ nullable, undefined).[ts_value_member_key] }
+    when ts_value_member_nullish { unwraps (object \ nullable, undefined).[ts_value_member_key] | trait undefined, nullable, falsy, nonthenable }
   }
 }
 fn ts_value_unchecked_index(n) = {
@@ -567,23 +584,32 @@ fn ts_value_unchecked_index(n) = {
       || source.kind == "ordinal" && !finite))
 }
 in ts_index {
-  let ts_value_index_nullish optional != null
+  let ts_value_index_nullish in_optional_chain == true && object could nullable
     || (if ts_compiler_option(node, "noUncheckedIndexedAccess") == true then ts_value_unchecked_index(node) else false)
   when object always any { unwraps object }
   when !(object always any) {
-    when in_optional_chain == true { unwraps (object \ nullable, undefined).[index] | trait undefined, nullable, falsy, nonthenable }
-    when in_optional_chain != true {
-      when !ts_value_index_nullish { unwraps (object \ nullable, undefined).[index] }
-      when ts_value_index_nullish { unwraps (object \ nullable, undefined).[index] | trait undefined, nullable, falsy, nonthenable }
-    }
+    when !ts_value_index_nullish { unwraps (object \ nullable, undefined).[index] }
+    when ts_value_index_nullish { unwraps (object \ nullable, undefined).[index] | trait undefined, nullable, falsy, nonthenable }
   }
 }
 in ts_function, ts_arrow, ts_function_type, ts_call_signature {
+  scope callable_members
+  members callable_members
+  when ts_value_function_members(node) {
+    members callable_members inherits instance "Function"
+  }
   fits callable, object, truthy
 }
 in ts_function { fits constructible when !any(modifier.nodes, modifier => modifier.text == "async") }
 in ts_method, ts_method_signature {
+  scope callable_members
   when kind != "get" && kind != "set" { fits callable, object, truthy }
+  when kind != "get" && kind != "set" {
+    members callable_members
+    when ts_value_function_members(node) {
+      members callable_members inherits instance "Function"
+    }
+  }
   when kind == "get" { unwraps it.result }
   when kind == "set" { unwraps parameter.type }
 }
@@ -593,6 +619,9 @@ in ts_class {
   members statics
   fits constructible, object, truthy in statics
   fits structural, object, truthy in members
+  when ts_value_function_members(node) { members statics inherits instance "Function" }
+  fits builtin_function in members when extends != null
+    && ts_value_trait(value_member(extends.node, "prototype"), "builtin_function")
   unwraps scope statics from it
   unwraps scope members from it for type
   member statics "prototype" unwraps scope members from it
@@ -768,18 +797,17 @@ fn ts_value_bare_type(n) = last(walk(n, item => if item is ts_parenthesized_type
 in ts_mapped_type {
   let ts_value_mapped_constraint ts_value_bare_type(type_parameter.constraint.node)
   let ts_value_mapped_template ts_value_bare_type(type.node)
-  let ts_value_mapped_key ts_value_bare_type(ts_value_mapped_template.index.node)
-  let ts_value_mapped_source {
+  let ts_value_mapped_source if name == null && ts_value_mapped_constraint is ts_type_operator
+    && ts_value_mapped_constraint.operator == "keyof" && ts_value_mapped_template is ts_indexed_access then {
     value source: ts_value_bare_type(ts_value_mapped_constraint.type.node)
     value object: ts_value_bare_type(ts_value_mapped_template.object.node)
-    value if name == null && ts_value_mapped_constraint is ts_type_operator
-      && ts_value_mapped_constraint.operator == "keyof" && ts_value_mapped_template is ts_indexed_access
-      && source != null && source.token_texts == object.token_texts
-      && ts_value_mapped_key is ts_type_reference && count(ts_value_mapped_key.type_argument.nodes) == 0
-      && ts_value_mapped_key.name is ts_identifier
-      && contains(ts_value_mapped_key.name.definition.nodes, type_parameter.node)
+    value key: ts_value_bare_type(ts_value_mapped_template.index.node)
+    value if source != null && token_list(source) == token_list(object)
+      && key is ts_type_reference && count(key.type_argument.nodes) == 0
+      && key.name is ts_identifier
+      && contains(key.name.definition.nodes, type_parameter.node)
       then source else null
-  }
+  } else null
   when ts_value_mapped_source != null { unwraps ts_value_mapped_source }
   when ts_value_mapped_source == null { unwraps unknown }
 }

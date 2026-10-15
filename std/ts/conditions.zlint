@@ -402,7 +402,6 @@ fn strict_boolean_value_variants(arms) = when {
     value variants (if any(arms, arm => strict_boolean_value_has(arm, "enum")) then ["enum"] else [])
   }
 }
-fn strict_boolean_native_metadata(n) = contains(n.type_flags, "enum")
 fn strict_boolean_native_variants(n) = {
   value parts: { value n.type_domains; strict_boolean_parts; unique }
   value if all(parts, part => strict_boolean_resolved(part)) then strict_boolean_variants(parts) else null
@@ -419,7 +418,7 @@ in ts_if.test, ts_while.test, ts_do_while.test, ts_for.test, ts_conditional.test
   @strict_boolean_options
   let subject unparenthesised_node(node)
   when strict_boolean_use(subject) && (subject not ts_logical || subject.operator == "??")
-  let variants if strict_boolean_native_metadata(subject) then strict_boolean_native_variants(subject)
+  let variants if ts_value_has_enum(subject) then strict_boolean_native_variants(subject)
     else { value subject; value_constituents; strict_boolean_value_variants }
   when variants != null
   let failure strict_boolean_report(variants, strict_boolean_settings)

@@ -6,7 +6,7 @@ in ts_index rule index-value-contract {
   let parts value_constituents(node)
   let actual parts != null && any(parts, arm => any(arm, part => contains(part.traits, "undefined")))
   let expected parent.name.text == "optionalRead"
-    || compiler_options.noUncheckedIndexedAccess == true
+    || ts_compiler_option(node, "noUncheckedIndexedAccess") == true
       && contains(["arrayRead", "recordRead", "dynamicRead", "variadicRead", "dynamicRecordRead"], parent.name.text)
   when parts == null || actual != expected
   warn "index value contract failed"

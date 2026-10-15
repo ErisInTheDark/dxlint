@@ -2,7 +2,7 @@ import .ts
 
 # `node.fact(...)` asks the fact about that node, not the rule's; a `fn`
 # may ask it about a node it is given.
-fn token_tail(n) = n.last_token()
+fn key_of(n) = n.reference_key()
 in ts_binary rule lit warn "lit" {
-  when token_tail(left.node).text == "1" && right.node.first_token().text == "x"
+  when key_of(left.node) == null && right.node.reference_key() == "x"
 }

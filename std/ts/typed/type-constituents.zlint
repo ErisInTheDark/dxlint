@@ -18,33 +18,45 @@ fn constituent_explicit_undefined(arms) = {
     && !contains(part.traits, "void") && part.carrier.description.kind != "parameter"
 }
 fn constituent_collect(n, group, union, entries) = {
-  value bare: { value n; walk (item) if item is ts_parenthesized_type then item.type.node else null; last }
-  value arms: value_parts(bare)
-  value keys: if arms == null then null else unique(map(arms, arm => constituent_arm_key(arm)))
-  value complete: arms != null && !any(arms, arm => any(arm.parts, part => contains(part.traits, "error")))
-  value tokens: bare.token_texts
-  value previous_syntax: find(entries, entry => entry.complete && entry.tokens == tokens).node
-  value previous_identity: if complete then find(entries, entry => entry.complete
-    && count(entry.keys) == count(keys) && all(keys, key => contains(entry.keys, key))).node else null
-  value next: entries [{
-    node: bare, group: group, previous_syntax: previous_syntax, previous_identity: previous_identity,
-    complete: complete, tokens: tokens, keys: keys, explicit_undefined: constituent_explicit_undefined(arms),
-  }]
-  value if union && bare is ts_union || !union && bare is ts_intersection then
-    fold(bare.type.nodes, next, (state, child) => constituent_collect(child, bare, union, state))
-    else next
+  value candidates: {
+    value {node: n, group: group}
+    walk (item) when {
+      item.node is ts_parenthesized_type then {node: item.node.type.node, group: item.group}
+      union && item.node is ts_union || !union && item.node is ts_intersection then
+        map(item.node.type.nodes, child => {node: child, group: item.node})
+      else then null
+    }
+    filter (item) item.node not ts_parenthesized_type
+    sort_by (item) item.node.offset
+  }
+  value fold(candidates, entries, (state, item) => {
+    value bare: item.node
+    value arms: value_parts(bare)
+    value keys: if arms == null then null else unique(map(arms, arm => constituent_arm_key(arm)))
+    value complete: arms != null && !any(arms, arm => any(arm.parts, part => contains(part.traits, "error")))
+    value tokens: bare.token_texts
+    value previous_syntax: find(state, entry => entry.complete && entry.tokens == tokens).node
+    value previous_identity: if complete then find(state, entry => entry.complete
+      && count(entry.keys) == count(keys) && all(keys, key => contains(entry.keys, key))).node else null
+    value state [{
+      node: bare, group: item.group, previous_syntax: previous_syntax, previous_identity: previous_identity,
+      complete: complete, tokens: tokens, keys: keys, explicit_undefined: constituent_explicit_undefined(arms),
+    }]
+  })
 }
 fn constituent_components(n, union) = fold(n.type.nodes, [],
   (entries, child) => constituent_collect(child, n, union, entries))
 
 fn constituent_wrappers(source, n) = {
-  value parent: n.parent
-  value if parent is ts_parenthesized_type then {
-    value outer: constituent_wrappers(source, parent)
-    value before: byte_slice(source, parent.first_token.end, n.offset)
-    value after: byte_slice(source, n.end_offset, parent.last_token.start)
-    value {node: outer.node, before: outer.before before, after: after outer.after}
-  } else {node: n, before: "", after: ""}
+  value wrappers: walk(n, current => if current.parent is ts_parenthesized_type then current.parent.node else null)
+  value fold(wrappers, {node: n, before: "", after: ""}, (state, current) => {
+    value parent: current.parent
+    value if parent not ts_parenthesized_type then state else {
+      node: parent.node,
+      before: byte_slice(source, parent.first_token.end, current.offset) state.before,
+      after: state.after byte_slice(source, current.end_offset, parent.last_token.start),
+    }
+  })
 }
 fn constituent_equivalent(part) = part.previous_syntax ?? part.previous_identity
 fn constituent_optional(part, optional) = {
@@ -61,14 +73,18 @@ fn constituent_replacement(source, part, wrapped, parts, optional) = {
   value after: wrapped.node.token_neighbours.after
   value remains: any(parts, other => other.group.offset == part.group.offset
     && !constituent_removed(other, optional))
-  value if !remains then null
-  else if contains(["|", "&"], before.text) && before.start >= part.group.offset then {
-    value gap: byte_slice(source, before.end, wrapped.node.offset)
-    value {start: before.start, end: wrapped.node.end_offset, text: gap wrapped.before wrapped.after}
-  } else if contains(["|", "&"], after.text) && after.end <= part.group.end_offset then {
-    value gap: byte_slice(source, wrapped.node.end_offset, after.start)
-    value {start: wrapped.node.offset, end: after.end, text: wrapped.before wrapped.after gap}
-  } else null
+  value when {
+    !remains then null
+    contains(["|", "&"], before.text) && before.start >= part.group.offset then {
+      value gap: byte_slice(source, before.end, wrapped.node.offset)
+      value {start: before.start, end: wrapped.node.end_offset, text: gap wrapped.before wrapped.after}
+    }
+    contains(["|", "&"], after.text) && after.end <= part.group.end_offset then {
+      value gap: byte_slice(source, wrapped.node.end_offset, after.start)
+      value {start: wrapped.node.offset, end: after.end, text: wrapped.before wrapped.after gap}
+    }
+    else then null
+  }
 }
 fn constituent_candidate(source, part, parts, optional) = {
   value wrapped: constituent_wrappers(source, part.node)
@@ -94,19 +110,21 @@ in duplicate_type_constituent {
 
   rule no-duplicate-type-constituents {
     when duplicate_type_constituents_checked
-    each part in constituent_candidates
-    when part.previous != null
-    report at {start: part.node.offset, end: part.wrapped.end_offset}
-    warn "{constituent_kind} type constituent is duplicated with {part.previous}."
-    fix at part.replacement if part.replacement != null as part.replacement.text
+    each part in constituent_candidates {
+      when part.previous != null
+      report at {start: part.node.offset, end: part.wrapped.end_offset}
+      warn "{constituent_kind} type constituent is duplicated with {part.previous}."
+      fix at part.replacement if part.replacement != null as part.replacement.text
+    }
   }
   rule no-duplicate-type-constituents:optional {
     when duplicate_type_constituents_checked && constituent_optional_parameter
-    each part in constituent_candidates
-    when part.previous == null
-    report at {start: part.node.offset, end: part.wrapped.end_offset}
-    warn "Explicit undefined is unnecessary on an optional parameter."
-    fix at part.replacement if part.replacement != null as part.replacement.text
+    each part in constituent_candidates {
+      when part.previous == null
+      report at {start: part.node.offset, end: part.wrapped.end_offset}
+      warn "Explicit undefined is unnecessary on an optional parameter."
+      fix at part.replacement if part.replacement != null as part.replacement.text
+    }
   }
 }
 

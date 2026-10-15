@@ -1,5 +1,6 @@
 import .ts
 in ts_call rule lists {
-  each site in trailing_comma_sites
-  warn site.kind
+  each site in layout_trailing_commas(node) {
+    warn site.kind
+  }
 }

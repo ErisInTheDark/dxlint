@@ -1,4 +1,4 @@
 import .ts
 in ts_expression_statement.expression rule overlap { when text == 'source'
-when { value (type_members.nonempty ?? []); contains 'a' } && { value (type_members.nonempty ?? []); contains 'b' }
+when value_has_member(node, "a", null) == true && value_has_member(node, "b", null) == true
 warn 'overlap' }

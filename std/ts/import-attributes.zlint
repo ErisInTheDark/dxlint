@@ -1,4 +1,6 @@
 # Regular import/export attribute syntax, shared by formatting rules.
+import .ts/tokens
+
 define {
 in ts_import, ts_export layer ts_import_attributes match ts_import_attributes ts_import_attribute_string ts_import_attribute_gap* /\b(?:with|assert)/ ts_import_attribute_gap* open:/\{/ until close:/\}/ ts_import_attribute_gap* /;?\z/
 in ts_import_attributes match ts_import_attribute_string /"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'/
@@ -8,6 +10,10 @@ in ts_import_attributes match ts_import_attribute_gap /\s+/ or ts_import_attribu
 in ts_import_attributes match ts_import_attribute_colon /:/
 in ts_import_attributes match ts_import_attribute_comma /,/
 in ts_import_attributes match ts_import_attribute key:ts_import_attribute_key ts_import_attribute_gap* colon:ts_import_attribute_colon ts_import_attribute_gap* value:ts_import_attribute_string
+
+group ts_token_query_node ts_import_attributes, ts_import_attribute, ts_import_attribute_string,
+  ts_import_attribute_key, ts_import_attribute_comment, ts_import_attribute_gap,
+  ts_import_attribute_colon, ts_import_attribute_comma
 
 group core_list ts_import_attributes
 group attribute_list_part ts_import_attribute, ts_import_attribute_comma, ts_import_attribute_comment

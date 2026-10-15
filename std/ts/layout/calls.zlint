@@ -46,7 +46,7 @@ in ts_open_paren rule function-call-spacing {
   when parent is (ts_call, ts_new, ts_import_call)
   when offset >= parent.layout_invocation_end
   let invocation_optional parent.layout_invocation_optional
-  let invocation_prefix if invocation_optional then parent.optional.space_before else space_before
+  let invocation_prefix if invocation_optional then ts_token_space(source, parent.optional.node, true) else space_before
   let invocation_spaced invocation_prefix.spaced || space_before.spaced
   let bad_newline mode == "always" && !allowNewlines && (invocation_prefix.line_break || space_before.line_break)
   let bad_space if mode == "never" then invocation_spaced

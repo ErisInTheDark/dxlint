@@ -65,9 +65,20 @@ fn optional_falsy_literal(n) = {
     && any(arm, part => contains(part.traits, "falsy")
       && any(part.traits, trait => contains(["boolean", "number", "string", "bigint"], trait))))
 }
-fn optional_type_allowed(n, opts) = ts_value_has_void(n) == false && { value n.type_flags.nonempty ?? ["unknown"]; all (flag)
-  !contains(["any", "unknown", "string", "number", "boolean", "bigint"], flag) || get(opts, flag) }
-fn optional_uncertain(n, flag) = { value n.type_flags.nonempty ?? ["unknown"]; any (part) contains([flag, "any", "unknown"], part) }
+fn optional_type_allowed(n, opts) = ts_value_has_void(n) == false
+  && all(["any", "unknown", "string", "number", "boolean", "bigint"], trait =>
+    ts_value_has_trait(n, trait) != true || get(opts, trait))
+fn optional_uncertain(n, trait) = {
+  value arms: value_parts(n)
+  value arms == null || any(arms, arm => any(arm.parts, part =>
+    contains(part.traits, trait) || contains(part.traits, "any") || contains(part.traits, "unknown")
+      || contains(part.uncertain_traits, trait)))
+}
+fn optional_nullish_only(n, allow_null) = {
+  value arms: value_parts(n)
+  value arms != null && count(arms) > 0 && all(arms, arm => any(arm.parts, part =>
+    contains(part.traits, "undefined") || allow_null && contains(part.traits, "null")))
+}
 fn optional_span(items, opts) = {
   value head: first(items).subject
   value tail: last(items).subject
@@ -93,8 +104,8 @@ fn optional_valid(current, next, op, last, opts) = current.subject != null && cu
     || current.kind == "undefined" && !optional_uncertain(current.subject, "null"))
 fn optional_terminal_allowed(n, comparison, op) = if comparison == (if op == "&&" then "===" else "!==") then !optional_uncertain(n, "undefined")
   else if comparison == (if op == "&&" then "==" else "!=") then !optional_uncertain(n, "null") && !optional_uncertain(n, "undefined")
-  else if comparison == (if op == "&&" then "!==" else "===") then { value n.type_flags.nonempty ?? ["unknown"]; all (flag) contains(["undefined", "nullable", "union"], flag) }
-  else if comparison == (if op == "&&" then "!=" else "==") then { value n.type_flags.nonempty ?? ["unknown"]; all (flag) contains(["null", "undefined", "nullable", "union"], flag) } else false
+  else if comparison == (if op == "&&" then "!==" else "===") then optional_nullish_only(n, false)
+  else if comparison == (if op == "&&" then "!=" else "==") then optional_nullish_only(n, true) else false
 fn optional_item(current) = {node: current.node, subject: current.subject, kind: current.kind, yoda: current.yoda,
   terminal: current.terminal, end: current.node.end_offset}
 fn optional_member_based(n) = {
@@ -235,10 +246,11 @@ in ts_logical rule prefer-optional-chain {
     }
   }
   each chain in { value state; optional_flush opts;
-    map (report) optional_report(source, report, node, operator, allowPotentiallyUnsafeFixesThatModifyTheReturnTypeIKnowWhatImDoing) }
-  report at chain.span
-  warn "Prefer using an optional chain expression instead, as it's more concise and easier to read."
-  fix at chain.edit.target if chain.edit != null as chain.edit.text
+    map (report) optional_report(source, report, node, operator, allowPotentiallyUnsafeFixesThatModifyTheReturnTypeIKnowWhatImDoing) } {
+    report at chain.span
+    warn "Prefer using an optional chain expression instead, as it's more concise and easier to read."
+    fix at chain.edit.target if chain.edit != null as chain.edit.text
+  }
 }
 in ts_logical rule prefer-optional-chain:empty-object {
   option requireNullish boolean = false "Require a nullable checked operand"

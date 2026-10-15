@@ -1,6 +1,4 @@
-# .ts/typed: typescript-eslint rules that need type information, on the
-# native TypeScript layers and the type facts (`type`, `type_flags`,
-# `type_members`, ...). Unresolved types differ from explicit unknown.
+# Type-aware rules over TypeScript syntax and value queries.
 
 import .ts/arithmetic
 import .ts/deprecation
@@ -8,6 +6,7 @@ import .ts/methods
 import .ts/spreads
 import .ts/type-specifiers
 import .ts/typed/promises
+import .ts/typed/errors
 import .ts/typed/awaitability
 import .ts/typed/optional-chains
 import .ts/typed/floating-promises
@@ -42,9 +41,6 @@ import .ts/constants
 
 define {
 
-@macro thenable ({ value type_members.nonempty ?? []; contains "then" })
-@macro flags type_flags.nonempty ?? []
-fn has_only_flags(fs, wanted) = count(fs) > 0 && { value fs wanted; unique; count } == { value wanted; unique; count }
 fn matches_type_names(groups, names) = all(groups, group => any(group, name => contains(names, name)))
 
 in ts_type_reference, ts_intersection rule no-generated-empty-object-type {
@@ -95,14 +91,14 @@ in ts_throw.argument rule only-throw-error {
   option allowRethrowing boolean = true "Allow rethrowing catch and Promise rejection parameters"
   option allowThrowingAny boolean = true "Allow any values"
   option allowThrowingUnknown boolean = true "Allow unknown values"
-  when error_value.kind != "error"
-  when !allowRethrowing || !error_value.rethrown
-  when !allowThrowingAny || error_value.kind != "any"
-  when !allowThrowingUnknown || error_value.kind != "unknown"
+  when ts_error_value.kind != "error"
+  when !allowRethrowing || !ts_error_value.rethrown
+  when !allowThrowingAny || ts_error_value.kind != "any"
+  when !allowThrowingUnknown || ts_error_value.kind != "unknown"
   when only_throw_error_checked
   when !type_is_allowed(allow, type_specifier_groups)
   report at unparenthesised_node(node)
-  warn if error_value.kind == "undefined" then "Do not throw undefined." else "Expected an error object to be thrown."
+  warn if ts_error_value.kind == "undefined" then "Do not throw undefined." else "Expected an error object to be thrown."
 }
 
 in ts_identifier let rejection_global_promise text == "Promise" && resolved == "global" && global != "off"
@@ -121,7 +117,7 @@ in ts_identifier let rejection_binding is ts_parameter.name && parent.rejection_
 in ts_call let rejection_call
   callee.rejection_member == true || any(callee.declarations, d => d.rejection_binding == true)
 in ts_node let rejection_reason
-  {possible: could_be_error && error_undefined_identifier != true, kind: error_value.kind, groups: type_specifier_groups}
+  {possible: could_be_error && error_undefined_identifier != true, kind: ts_error_value.kind, groups: type_specifier_groups}
 in ts_call let prefer_promise_reject_errors_checked true
 in ts_call rule prefer-promise-reject-errors {
   option allowEmptyReject boolean = false "Allow rejection without a reason"
@@ -186,13 +182,13 @@ in ts_identifier {
   let eval_identifier true
   let eval_core_root if contains(["global", "globalThis", "window", "self"], text) && global != null && global != "off" then text else null
   let eval_timer_global resolved == "global" && (re_test(file, /\.[cm]?tsx?$/) || global != null && global != "off")
-  let eval_constructor ts_value_builtin_type(node, ["FunctionConstructor"]) == true || { value type_flags.nonempty ?? []; contains "any" } || ts_value_opaque(node) && reference_kind == null
+  let eval_constructor ts_value_builtin_type(node, ["FunctionConstructor"]) == true || ts_value_has_trait(node, "any") == true || ts_value_opaque(node) && reference_kind == null
 }
 in ts_member, ts_index {
   let eval_name static_name
   let eval_core_root if object.eval_core_root != null && static_name == object.eval_core_root then object.eval_core_root else null
   let eval_timer_global if re_test(file, /\.[cm]?tsx?$/) then object is ts_identifier && contains(["global", "globalThis", "window"], object) else object.eval_core_root != null
-  let eval_constructor ts_value_builtin_type(node, ["FunctionConstructor"]) == true || { value type_flags.nonempty ?? []; contains "any" } || ts_value_opaque(node)
+  let eval_constructor ts_value_builtin_type(node, ["FunctionConstructor"]) == true || ts_value_has_trait(node, "any") == true || ts_value_opaque(node)
 }
 in ts_member let eval_bind_member property == "bind"
 in ts_parenthesized {
@@ -211,15 +207,20 @@ group typed_simple_expression ts_identifier, ts_private_name, ts_this, ts_super,
 in typed_simple_expression, ts_binary {
   let eval_callback callable || ts_value_builtin_type(node, ["Function"]) == true
 }
+fn eval_constant_string(n) = ts_runtime_string(n) != null && {
+  value arms: value_parts(n)
+  value part: if count(arms) == 1 && count(first(arms).parts) == 1 then first(first(arms).parts) else null
+  value part != null && contains(part.traits, "string") && !contains(part.traits, "enum")
+}
 in typed_simple_expression {
   let eval_string is (ts_string, ts_template)
-    || ts_runtime_string(node) != null && { value type_flags.nonempty ?? []; has_only_flags (["string", "literal"]) }
+    || eval_constant_string(node)
 }
 in ts_call {
   let eval_callback callable || ts_value_builtin_type(node, ["Function"]) == true || callee.eval_bind_member == true || callee is ts_identifier && callee == "bind"
-  let eval_string ts_runtime_string(node) != null && { value type_flags.nonempty ?? []; has_only_flags (["string", "literal"]) } || callee.global_value == "String" && ts_runtime_string(first(argument.nodes)) != null
+  let eval_string eval_constant_string(node) || callee.global_value == "String" && ts_runtime_string(first(argument.nodes)) != null
 }
-in ts_binary let eval_string ts_runtime_string(node) != null && { value type_flags.nonempty ?? []; has_only_flags (["string", "literal"]) } || operator == "+" && (left.eval_string == true || right.eval_string == true)
+in ts_binary let eval_string eval_constant_string(node) || operator == "+" && (left.eval_string == true || right.eval_string == true)
 in ts_parenthesized {
   let eval_callback expression.eval_callback
   let eval_string expression.eval_string
@@ -361,11 +362,11 @@ in ts_call let is_promise_aggregator callee.promise_aggregate_member == true
 in ts_array let is_promise_aggregator_argument parent.is_promise_aggregator == true
 in ts_array.element rule await-thenable:aggregate {
   when not ts_hole && parent.is_promise_aggregator_argument
-    && (if is ts_spread then nonawaitable_type == true else ts_value_nonthenable(node) == true)
+    && (if is ts_spread then ts_await_nonawaitable_iterable(argument.node) else ts_value_nonthenable(node) == true)
   warn "Unexpected iterable of non-Promise (non-\"Thenable\") values passed to promise aggregator."
 }
 in ts_call.argument rule await-thenable:iterable {
-  when parent.is_promise_aggregator == true && not ts_array && nonawaitable_iterable == true
+  when parent.is_promise_aggregator == true && not ts_array && ts_await_nonawaitable_iterable(node)
   warn "Unexpected iterable of non-Promise (non-\"Thenable\") values passed to promise aggregator."
 }
 in ts_for_of rule await-thenable:for-of {
@@ -400,7 +401,8 @@ in ts_template.expression rule restrict-template-expressions {
 }
 
 in ts_unary rule no-unsafe-unary-minus {
-  when operator == "-" && { value argument.type_flags.nonempty ?? []; count } > 0 && !contains(argument.type_flags, "any") && !contains(argument.type_flags, "unknown") && !contains(argument.type_flags, "number") && !contains(argument.type_flags, "bigint") && !contains(argument.type_flags, "enum")
+  when operator == "-" && !ts_value_opaque(argument.node)
+    && !any(["any", "unknown", "number", "bigint", "enum"], trait => ts_value_has_trait(argument.node, trait) == true)
   warn "Argument of unary negation should be assignable to number | bigint but is { { value argument.type.nonempty ?? '?'; re_replace /^\"[\s\S]*\"$/ 'string' } } instead."
 }
 
@@ -445,7 +447,8 @@ in ts_unary rule no-meaningless-void-operator {
   }
   when underlying not ts_assignment
   let call underlying is (ts_call, ts_new)
-  when if call then { value argument.type_flags.nonempty ?? []; has_only_flags (["undefined", "nullable", "union"]) } || checkNever && { value argument.type_flags.nonempty ?? []; has_only_flags (["undefined", "nullable", "never", "union"]) } else !{ value argument.type_members.nonempty ?? []; contains "then" }
+  when if call then ts_value_trait(value_constituents(argument.node), "undefined")
+    || checkNever && value_parts(argument.node) == [] else value_has_member(argument.node, "then", null) != true
   warn if call then "void operator shouldn't be used on {argument.type}; it should convey that a return value is being ignored" else "void operator is useless here; it should only discard a call's return value"
   let operand argument.node
   let parens expression_fix_parens(source, node, operand)

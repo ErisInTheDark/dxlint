@@ -1,5 +1,5 @@
 import .ts
-in ts_expression_statement.expression rule number-proof { when !contains(type_flags, 'number')
+in ts_expression_statement.expression rule number-proof { when ts_value_has_trait(node, "number") != true
 warn 'not numeric' }
 
 # Project inputs remain readable, but the original Rust test linted only this main file.

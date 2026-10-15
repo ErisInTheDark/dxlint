@@ -8,9 +8,12 @@ fn outer_parenthesised_node(n) = { value n; walk (current) if current.parent is 
 
 fn function_uses_this(n) = {
   value n.children.nodes
-  walk (current) if current is ts_function then []
-    else if current is ts_method then filter(current.children.nodes, child => child is (ts_method.key, ts_method.decorator))
-    else current.children.nodes
+  walk (current) when {
+    current is (ts_function, ts_static_block) then []
+    current is (ts_method, ts_class_property) then filter(current.children.nodes, child =>
+      child is (ts_method.key, ts_method.decorator, ts_class_property.key, ts_class_property.decorator))
+    else then current.children.nodes
+  }
   any (current) current is ts_this
 }
 
@@ -22,7 +25,11 @@ fn function_uses_arguments(n) = {
 
 fn function_head_site(n) = {
   value outer: outer_parenthesised_node(n)
-  value member: if n is ts_method then n else if outer.parent is (ts_property, ts_class_property) then outer.parent.node else null
+  value member: when {
+    n is ts_method then n
+    outer.parent is (ts_property, ts_class_property) then outer.parent.node
+    else then null
+  }
   value if member == null && n is ts_arrow then n.operator.node else {
     value from: last(n.type_parameter.nodes).end_offset ?? n.name.end_offset ?? n.key.end_offset ?? n.offset
     value until: first(n.parameter.nodes).offset ?? n.return_type.offset ?? n.body.offset ?? n.end_offset
@@ -35,27 +42,42 @@ fn function_head_site(n) = {
 }
 
 # Function-wide warnings identify the callable, not its body.
-fn function_warning_site(n) = if n is ts_method then n.key.node
-  else if n.name != null then n.name.node
-  else if n.parent is (ts_property, ts_class_property) then n.parent.key.node
-  else if n is ts_arrow then n.operator.node
-  else { start: n.first_token.start, end: n.first_token.end }
+fn function_warning_site(n) = when {
+  n is ts_method then n.key.node
+  n.name != null then n.name.node
+  n.parent is (ts_property, ts_class_property) then n.parent.key.node
+  n is ts_arrow then n.operator.node
+  else then { start: n.first_token.start, end: n.first_token.end }
+}
 
 fn function_description(n) = {
   value outer: outer_parenthesised_node(n)
-  value member: if n is ts_method then n else if outer is (ts_property.value, ts_class_property.init) then outer.parent.node else null
+  value member: when {
+    n is ts_method then n
+    outer is (ts_property.value, ts_class_property.init) then outer.parent.node
+    else then null
+  }
   value in_class: member is ts_class_property || member.parent is ts_class
   value private: member.key is ts_private_name
-  value name: if private then member.key.identifier_name
-    else if member.static_name != null then "'" member.static_name "'"
-    else if n is ts_function && n.name != null then "'" n.name.identifier_name "'"
-    else ""
+  value name: when {
+    private then member.key.identifier_name
+    member.static_name != null then "'" member.static_name "'"
+    n is ts_function && n.name != null then "'" n.name.identifier_name "'"
+    else then ""
+  }
   value static: if in_class && contains(member.modifier, "static") then "static " else ""
   value hidden: if in_class && private then "private " else ""
   value async: if contains(n.modifier, "async") then "async " else ""
   value generator: if contains(n.modifier, "*") then "generator " else ""
-  value kind: if member != null then (if member.kind == "get" then "getter" else if member.kind == "set" then "setter" else "method")
-    else if n is ts_arrow then "arrow function" else "function"
+  value kind: when {
+    member != null then when {
+      member.kind == "get" then "getter"
+      member.kind == "set" then "setter"
+      else then "method"
+    }
+    n is ts_arrow then "arrow function"
+    else then "function"
+  }
   value description: "{static}{hidden}{async}{generator}{kind}"
   value if n is ts_method && in_class && !contains(member.modifier, "static") && member.key not ts_computed_key && member.static_name == "constructor" then "constructor"
     else description (if name != "" then " " name else "")

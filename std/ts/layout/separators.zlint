@@ -12,8 +12,10 @@ group comma_style_lists ts_variable_declaration, ts_array, ts_array_pattern, ts_
   ts_sequence, ts_enum, ts_tuple_type, ts_type_literal, ts_method_signature, ts_call_signature,
   ts_index_signature, ts_class, ts_interface, ts_type_alias, ts_type_reference, ts_tagged_template, ts_import_attributes
 in ts_comma {
-  let comma_style_owner list_owner
-  let comma_style_field list_field
+  let comma_style_context layout_comma_context(node)
+  let comma_style_owner comma_style_context.owner
+  let comma_style_field comma_style_context.field
+  let comma_style_previous comma_style_context.previous
 }
 in ts_import_attribute_comma {
   let comma_style_owner parent
@@ -24,7 +26,7 @@ in ts_comma, ts_import_attribute_comma rule comma-style {
   option style "last" | "first" = "last" "comma line position"
   when if style == "last" then token_neighbours.before.line_break else token_neighbours.after.line_break
   when comma_style_checked
-  when comma_style_owner not (ts_array, ts_array_pattern) || list_previous != null
+  when comma_style_owner not (ts_array, ts_array_pattern) || comma_style_previous != null
   when !(token_neighbours.after.text == "," && token_neighbours.after.line_break)
   let comma_comments overlapping(ts_comment, token_neighbours.before.end, token_neighbours.after.start)
   let comma_after_comment { value comma_comments; filter (comment) comment.offset >= end_offset; first }
@@ -63,12 +65,13 @@ in ts_array, ts_array_pattern, ts_object, ts_object_pattern, ts_function, ts_arr
   option generics trailing_comma_mode | null = null "type parameter policy"
   option tuples trailing_comma_mode | null = null "tuple policy"
   let dangle_policies {arrays:arrays, objects:objects, functions:functions, imports:imports, exports:exports, importAttributes:importAttributes, dynamicImports:dynamicImports, enums:enums, generics:generics, tuples:tuples, "type-arguments":"never"}
-  each dangle_site in if is ts_import_attributes then layout_attribute_comma_sites else trailing_comma_sites
-  when layout_dangle_enabled(dangle_site.kind, ecma_version)
-  when { value dangle_site.kind; mode: layout_dangle_mode style dangle_policies; value layout_dangle_wrong(dangle_site, mode) }
-  report at dangle_site.offset
-  fix at {start:dangle_site.offset, end:dangle_site.offset + (if dangle_site.trailing then 1 else 0)} as if dangle_site.trailing then "" else ","
-  warn if dangle_site.trailing then "Unexpected trailing comma." else "Missing trailing comma."
+  each dangle_site in if is ts_import_attributes then layout_attribute_comma_sites else layout_trailing_commas(node) {
+    when layout_dangle_enabled(dangle_site.kind, ecma_version)
+    when { value dangle_site.kind; mode: layout_dangle_mode style dangle_policies; value layout_dangle_wrong(dangle_site, mode) }
+    report at dangle_site.offset
+    fix at {start:dangle_site.offset, end:dangle_site.offset + (if dangle_site.trailing then 1 else 0)} as if dangle_site.trailing then "" else ","
+    warn if dangle_site.trailing then "Unexpected trailing comma." else "Missing trailing comma."
+  }
 }
 
 in ts_empty, ts_semicolon rule no-extra-semi {
@@ -159,7 +162,7 @@ in semicolon_statement rule semi {
   option omitLastInOneLineBlock boolean = false "omit final semicolons in single-line blocks"
   option omitLastInOneLineClassBody boolean = false "omit final semicolons in single-line class bodies"
   option beforeStatementContinuationChars "always" | "any" | "never" = "any" "semicolons before continuation characters"
-  let statement_semi statement_semicolon
+  let statement_semi layout_statement_semicolon(source, node)
   when statement_semi != null
   let omit_statement_semi omitLastInOneLineBlock && statement_semi.one_line_block || omitLastInOneLineClassBody && statement_semi.one_line_class
   when if mode == "always" then statement_semi.present == omit_statement_semi else if statement_semi.present then statement_semi.redundant || !statement_semi.class_hazard && !statement_semi.same_line && (!statement_semi.hazard_before || !statement_semi.class_field && beforeStatementContinuationChars == "never" && !statement_semi.hazard_after) else !statement_semi.class_field && beforeStatementContinuationChars == "always" && statement_semi.hazard_before

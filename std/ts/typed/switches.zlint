@@ -1,8 +1,11 @@
 define {
 fn switch_part_identity(part) =
-  if contains(part.traits, "undefined") then { kind: "nullish", value: "undefined" }
-  else if contains(part.traits, "null") then { kind: "nullish", value: "null" }
-  else if part.identity_known then part.identity else null
+  when {
+    contains(part.traits, "undefined") then { kind: "nullish", value: "undefined" }
+    contains(part.traits, "null") then { kind: "nullish", value: "null" }
+    part.identity_known then part.identity
+    else then null
+  }
 fn switch_literal(arm) = {
   value part: find(arm, part => {
     value identity: switch_part_identity(part)
@@ -11,19 +14,23 @@ fn switch_literal(arm) = {
   value origin: find(arm, part => part.carrier.description.kind == "enum")
   value if part == null then null else {
     key: { identity: switch_part_identity(part), enum_file: origin.carrier.file, enum_node: origin.carrier.node },
-    label: if contains(part.traits, "symbol") then "symbol"
-      else if switch_part_identity(part).kind == "nullish" then switch_part_identity(part).value
-      else ts_value_print_part(part),
+    label: when {
+      contains(part.traits, "symbol") then "symbol"
+      switch_part_identity(part).kind == "nullish" then switch_part_identity(part).value
+      else then ts_value_print_part(part)
+    },
   }
 }
 fn switch_arm_literals(arm) = {
   value literal: switch_literal(arm)
-  value if literal != null then [literal]
-    else if any(arm, part => contains(part.traits, "boolean")) then map([false, true], value => {
+  value when {
+    literal != null then [literal]
+    any(arm, part => contains(part.traits, "boolean")) then map([false, true], value => {
       key: { identity: { kind: "value", value: value }, enum_file: null, enum_node: null },
       label: "" value,
     })
-    else [null]
+    else then [null]
+  }
 }
 fn switch_case_literal(parts) = {
   value arm: first(parts)
@@ -67,8 +74,9 @@ in ts_switch rule switch-exhaustiveness-check {
     ]
     filter (item) item.enabled
   }
-  each switch_report in switch_reports
-  report at switch_report.node
-  warn "{switch_report.message}"
+  each switch_report in switch_reports {
+    report at switch_report.node
+    warn "{switch_report.message}"
+  }
 }
 }

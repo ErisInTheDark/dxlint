@@ -62,7 +62,7 @@ in ts_colon let layout_annotation_optional token_neighbours.before.text == "?"
 }
 in ts_colon rule type-annotation-spacing:before {
   @layout_annotation_options
-  let annotation_gap if annotation_optional then parent.optional.space_before else space_before
+  let annotation_gap if annotation_optional then ts_token_space(source, parent.optional.node, true) else space_before
   when annotation_gap != null && annotation_gap.spaced != annotation_before
   report at if annotation_optional then parent.optional.offset else offset
   warn if annotation_before then "Expected a space before the '{annotation_label}'." else "Unexpected space before the '{annotation_label}'."
@@ -134,7 +134,7 @@ in ts_close_angle rule type-generic-spacing:inner-close {
 }
 
 # Named tuple members use `name?: Type`.
-in ts_tuple_member let layout_tuple_prefix !name.space_after.comments && (optional == null || !optional.space_after.comments)
+in ts_tuple_member let layout_tuple_prefix !name.space_after.comments && (optional == null || !ts_token_space(source, optional.node, false).comments)
 in ts_colon rule type-named-tuple-spacing:optional {
   when parent is ts_tuple_member && parent.optional != null
   when parent.layout_tuple_prefix
@@ -144,6 +144,7 @@ in ts_colon rule type-named-tuple-spacing:optional {
   warn "Unexpected space between '?' and the ':'."
 }
 in ts_tuple_member.name rule type-named-tuple-spacing:before {
+  @ts_token_context
   when parent.layout_tuple_prefix
   when space_after.spaced
   report at parent.offset

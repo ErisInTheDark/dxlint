@@ -1,5 +1,6 @@
 # .ts/assertions: assertion syntax, type-aware and non-null policy.
 import .ts/expression-fixes
+import .ts/modules
 
 define {
 
@@ -175,7 +176,7 @@ in ts_as, ts_type_assertion rule no-unnecessary-type-assertion {
   when no_unnecessary_type_assertion_checked
   when !contains(typesToIgnore, type.text)
   let relation type_relations
-  let unchanged (assertion_same(relation) || !relation.annotation.any && (relation.original_annotation.identity == true || relation.original.property_bag && assertion_type_same(relation.widened_original, relation.annotation, relation.widened_original_annotation))) && (!relation.annotation.literal || assertion_literal_preserved(node)) && !assertion_fresh_literal(node, relation, type.text) && contains(type_flags ?? [], "enum") == contains(expression.type_flags ?? [], "enum")
+  let unchanged (assertion_same(relation) || !relation.annotation.any && (relation.original_annotation.identity == true || relation.original.property_bag && assertion_type_same(relation.widened_original, relation.annotation, relation.widened_original_annotation))) && (!relation.annotation.literal || assertion_literal_preserved(node)) && !assertion_fresh_literal(node, relation, type.text) && ts_value_has_enum(node) == ts_value_has_enum(expression.node)
   let contextual !unchanged && assertion_context_safe(node) && (assertion_context(node, relation) || assertion_context_known(node, relation) && (relation.operand.any || relation.operand.unknown) && relation.original.contains_any == false && assertion_generics_preserved(relation.original, relation.context) && relation.original_context.assignable == true)
   when unchanged || contextual
   warn if unchanged && assertion_generic_call(expression.node) then "The type arguments for this generic call may be inferred from the assertion. Specify them explicitly instead." else if contextual then "This assertion is unnecessary since the receiver accepts the original type of the expression." else "This assertion is unnecessary since it does not change the type of the expression."
@@ -191,7 +192,7 @@ in ts_non_null rule no-unnecessary-type-assertion:non-null {
   let target assignment && outer is ts_assignment.left
   let unchanged relation.operand != null && relation.constrained != null && !relation.constrained.nullable && (!relation.operand.nullable || relation.operand.contains_variable == true && relation.constrained.contains_variable == false) && !{ value expression.node; unparenthesised_node; assertion_unassigned }
   let contextual (relation.operand.nullable || relation.constrained.nullable) && assertion_non_null_context(relation)
-  let unchecked compiler_options.noUncheckedIndexedAccess == true && unparenthesised_node(expression.node) is ts_index && unparenthesised_node(expression.node).access_resolution.from_index
+  let unchecked ts_compiler_option(node, "noUncheckedIndexedAccess") == true && unparenthesised_node(expression.node) is ts_index && unparenthesised_node(expression.node).access_resolution.from_index
   when target || !assignment && !unchecked && (unchanged || contextual)
   warn if target || !unchanged then "This assertion is unnecessary since the receiver accepts the original type of the expression." else "This assertion is unnecessary since it does not change the type of the expression."
   let edit assertion_fix(source, node, false)

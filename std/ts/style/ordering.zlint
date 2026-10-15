@@ -13,10 +13,19 @@ in ts_interface let ordering_context "interface"
 in ts_type_literal let ordering_context "type-literal"
 in ts_method, ts_class_property, ts_property_signature, ts_index_signature let ordering_modifiers [] modifier
 in ts_method, ts_class_property let ordering_decorated count(decorator) > 0
-in ts_method let ordering_kind if parent is ts_class && !contains([] modifier, "static") && key not ts_computed_key && static_name == "constructor" then "constructor" else if kind == "get" || kind == "set" then kind else "method"
+in ts_method let ordering_kind when {
+  parent is ts_class && !contains([] modifier, "static") && key not ts_computed_key && static_name == "constructor" then "constructor"
+  kind == "get" || kind == "set" then kind
+  else then "method"
+}
 in ts_method_signature let ordering_kind if kind == "get" || kind == "set" then kind else "method"
 in ts_call_signature let ordering_kind if kind == "new" then "constructor" else "call-signature"
-in ts_class_property let ordering_kind if contains([] modifier, "accessor") then "accessor" else if init.returned_function == true then "method" else if contains([] modifier, "readonly") then "readonly-field" else "field"
+in ts_class_property let ordering_kind when {
+  contains([] modifier, "accessor") then "accessor"
+  init.returned_function == true then "method"
+  contains([] modifier, "readonly") then "readonly-field"
+  else then "field"
+}
 in ts_property_signature let ordering_kind if contains([] modifier, "readonly") then "readonly-field" else "field"
 in ts_index_signature let ordering_kind if contains([] modifier, "readonly") then "readonly-signature" else "signature"
 in ts_static_block let ordering_kind "static-initialization"
@@ -25,7 +34,11 @@ in ts_parameter let ordering_parameter_name if name is ts_identifier then name e
 in ts_index_signature let ordering_name { value [] parameter.ordering_parameter_name; first; nonempty } ?? "(index signature)"
 in ts_call_signature let ordering_name if kind == "new" then "new" else "call"
 in ts_static_block let ordering_name "static block"
-in ts_method, ts_method_signature, ts_class_property, ts_property_signature let ordering_name if ordering_kind == "constructor" then "constructor" else if ordering_key.private then re_replace(ordering_key.text, /^#+/, "") else ordering_key.text
+in ts_method, ts_method_signature, ts_class_property, ts_property_signature let ordering_name when {
+  ordering_kind == "constructor" then "constructor"
+  ordering_key.private then re_replace(ordering_key.text, /^#+/, "")
+  else then ordering_key.text
+}
 in ts_method let ordering_skip body == null && !contains([] modifier, "abstract")
 in ts_class_property let ordering_initialiser init != null
 in ts_member let ordering_this_dependency if object is ts_this then re_replace(property, /^#+/, "") else null
@@ -42,26 +55,38 @@ in ordering_member_node let ordering_access if ordering_key.private == true then
   first
   nonempty
 } ?? "public"
-in ordering_member_node let ordering_scope if ordering_decorated == true then "decorated" else if contains(ordering_modifiers, "static") then "static" else if contains(ordering_modifiers, "abstract") then "abstract" else "instance"
+in ordering_member_node let ordering_scope when {
+  ordering_decorated == true then "decorated"
+  contains(ordering_modifiers, "static") then "static"
+  contains(ordering_modifiers, "abstract") then "abstract"
+  else then "instance"
+}
 fn ordering_standard_rank(kind, class_member, access, scope) = (
   if kind == null then null else get({ signature: 0, "readonly-signature": 0, "call-signature": 100, field: 200, "readonly-field": 200, "static-initialization": 300, constructor: 400, accessor: 500, get: 600, set: 700, method: 800 }, kind)
     + (if !class_member || contains(["signature", "readonly-signature", "call-signature", "static-initialization"], kind) then 0 else
-      (if kind == "constructor" then 0 else if scope == "abstract" && contains(["private", "#private"], access) then 80
-        else if scope == "decorated" && access == "#private" then 90
-        else index_of(["static", "decorated", "instance", "abstract"], scope) * 10)
+      (when {
+        kind == "constructor" then 0
+        scope == "abstract" && contains(["private", "#private"], access) then 80
+        scope == "decorated" && access == "#private" then 90
+        else then index_of(["static", "decorated", "instance", "abstract"], scope) * 10
+      })
       + (if kind != "constructor" && (scope == "abstract" && contains(["private", "#private"], access) || scope == "decorated" && access == "#private") then 0 else index_of(["public", "protected", "private", "#private"], access)))
 )
 in ordering_member_node let member_ordering_rank if ordering_skip == true then null else ordering_standard_rank(ordering_kind, parent is ts_class, ordering_access, ordering_scope)
 fn ordering_standard_label(kind, class_member, access, scope) = {
-  value if kind == "readonly-field" then "field" else if kind == "readonly-signature" then "signature" else kind
+  value when {
+    kind == "readonly-field" then "field"
+    kind == "readonly-signature" then "signature"
+    else then kind
+  }
   ordering_category_label class_member access scope
 }
-fn ordering_category_label(kind, class_member, access, scope) = (
-  if !class_member || contains(["signature", "call-signature", "static-initialization"], kind) then kind
-  else if kind == "constructor" then access " constructor"
-  else if scope == "abstract" && contains(["private", "#private"], access) || scope == "decorated" && access == "#private" then scope " " kind
-  else access " " scope " " kind
-)
+fn ordering_category_label(kind, class_member, access, scope) = when {
+  !class_member || contains(["signature", "call-signature", "static-initialization"], kind) then kind
+  kind == "constructor" then access " constructor"
+  scope == "abstract" && contains(["private", "#private"], access) || scope == "decorated" && access == "#private" then scope " " kind
+  else then access " " scope " " kind
+}
 in ordering_member_node let member_ordering_label ordering_standard_label(ordering_kind, parent is ts_class, ordering_access, ordering_scope)
 in ordering_member_node let ordering_member {
   index: index, name: ordering_name.nonempty ?? "", optional: ordering_optional_member == true,
@@ -104,7 +129,11 @@ fn ordering_alpha_states(states, row, partition, rows, mode, optionality, enable
     let preferred optionality == "optional-first"
     let partition if optionality == "none" || row.optional == preferred then 0 else 1
     let first_index previous.first_index.nonempty ?? if checked then row.index else null
-    let first_optional if previous.first_index != null then previous.first_optional else if checked then row.optional else null
+    let first_optional when {
+      previous.first_index != null then previous.first_optional
+      checked then row.optional
+      else then null
+    }
     let phase_start previous.phase_start.nonempty ?? if checked && row.optional != preferred then row.index else null
     let contains_preferred checked && row.optional == preferred || next.contains_preferred == true
     let optionality_error optionality != "none" && checked && row.optional != preferred && next.contains_preferred == true
@@ -140,10 +169,13 @@ fn ordering_alpha_states(states, row, partition, rows, mode, optionality, enable
     let alpha_blocked alpha_bad && ordering_alpha_blocked(row, alpha_before, owner.ordering_members, optionality)
     when owner.ordering_context == context && checked
     each failure in if optionality_bad then (if optionality_error then ["optionality"] else [])
-      else (if rank_bad then ["rank"] else []) (if alpha_bad && !alpha_blocked then ["alpha"] else [])
-    warn if failure == "optionality" then "Member " row.name " should be declared after all " (if preferred then "optional" else "required") " members."
-      else if failure == "rank" then "Member " row.name " should be declared before all " frontier.label " definitions."
-      else "Member " row.name " should be declared before member " alpha_before.name "."
+      else (if rank_bad then ["rank"] else []) (if alpha_bad && !alpha_blocked then ["alpha"] else []) {
+      warn when {
+        failure == "optionality" then "Member " row.name " should be declared after all " (if preferred then "optional" else "required") " members."
+        failure == "rank" then "Member " row.name " should be declared before all " frontier.label " definitions."
+        else then "Member " row.name " should be declared before member " alpha_before.name "."
+      }
+    }
   }
 }
 @ordering_rule(member-ordering:class-declaration, "class-declaration")

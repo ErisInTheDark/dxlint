@@ -934,18 +934,14 @@ is wrong, messages) is written in the rule. A fact taking arguments is called (`
 | `exported` | declared by an `export`ed statement |
 | `symbol_metadata` | `{name, own_doc, declarations, aliases, selected_signature}`; raw declaration and alias docs, overload `signature_docs`, declaration kinds and file/lib/package provenance gates. Alias rows retain lookup order, path and module; `selected_signature` is null or `{doc, kind}` (`call`/`construct`). Ambient package gates retain ordinary file provenance. Rust exposes docs and origins; `.zlint` decides deprecation |
 | `type` | the expression's type as text (`Promise<void>`, `never`, `NodeJS.Timeout`), null when unknown |
-| `type_flags` | what the type is made of: `any`, `never`, `string`, `number`, `boolean`, `bigint`, `symbol`, `literal`, `enum`, `array`, `tuple`, `promise`, `function`, `object`, `null`, `undefined`, `nullable`, `union`, and `unknown` for parts zlint cannot read |
 | `type_domains(constrained?)` | truthy, falsy, nullish and non-nullish possibilities, flags, opacity and scalar literal; constraints apply by default (`true`); `type_domains(false)` retains open types. Default `kind` matches `type_structure`; `parts` retains union/intersection constituent domains; `primitive` names the primitive backing of a primitive, literal or enum member |
 | `evaluated_type_domains` | the same domains before optional-chain short-circuiting, preserving intrinsic member and return nullability |
 | `access_resolution` | native member/index lookup: `from_index` signature origin, `optional` declaration and `evaluated` value domains before optional-chain short-circuiting |
 | `callable_return_domains` | domains of every callable return, including local inferred bodies and in-scope parameter bounds |
 | `predicate_call` | asserted argument index and `asserts`, argument/target domains, `to_target`/`from_target` assignability and `target_union`; null without a resolved argument |
 | `type_iterable` | constrained type supports synchronous iteration; null when unresolved |
-| `error_value` | constrained value category (`error`, `any`, `unknown`, `undefined`, `other`), caught-binding provenance (`rethrown`), and unparenthesised byte `offset` |
 | `argument_transfers` | calls, constructions and tagged templates: any/generic argument and spread transfer rows `{offset, mode, error, sender, receiver}`; modes `argument`, `spread`, `array`, `tuple`; `error` marks unresolved provenance, sender/receiver are raw printed types or null |
 | `return_transfer` | returns and expression arrow bodies: transfer record `{mode, error, sender, receiver}` or null; modes `value`, `array`, `promise`, `generic`; `error` marks unresolved provenance, sender/receiver are raw printed types or null |
-| `type_members` | member names of that type, inherited ones included (`then`, `[Symbol.dispose]`) |
-| `property_info` | on static member or index access: `{declared, visibility}` (`public`, `private`, `protected` or null), preserving declaration presence even when its value type is unresolved |
 | `index_key_types` | constrained index-signature key domains as `{text, string_like}` records, inherited domains included |
 | `static_number` | statically known numeric value of an expression (numeric, boolean and bigint literals, arithmetic, unmodified local bindings); null when unresolved |
 | `type_relations` | operand, annotation, original and context identity, bounded assignability, nested property mutability and generic shape; null when unresolved |
@@ -978,6 +974,7 @@ is wrong, messages) is written in the rule. A fact taking arguments is called (`
 | `value_constructors(node)` | `value_signatures` for `new`: the construct signatures |
 | `declaration_origin(node, site)` | where a `{file, node}` site's file comes from, by path under the program's resolution profile: `{path, kind, package}` with `kind` `"library"` (fits the profile's `libraries` template), `"package"` (inside a package directory; `package` names it, scope included) or `"project"`; null when unknown. Builtin identity = a global declaration site whose origin is `library` |
 | `declaration_value(node, site)` | the value a `{file, node}` declaration site unwraps to (any program file, root frame) as a value handle; null when unknown or not a site. E.g. a library global's value side, to compare constructor identities |
+| `call_binding(node)` | on a call or `new`: its selected signatures in their bound frames (generic parameters instantiated for this call): `{uncertain, choices: [{site, result, parameters: [{site, rest, value, arguments}]}]}`, `result` and `value` as value handles, `arguments` the `{file, node}` sites each parameter receives (several for a rest parameter); null when not an invocation. `call_binding_at(node, ["return_type", "type"])` adds `at` to each choice: the value at that field path from the signature's node, in the bound frame (a type guard's instantiated target) |
 | `value_sources(node)`, `site_sources(node, site)` | one step of where a value comes from, read off the language's value recipe (the site form reads any program file at the root frame): `{combine, sites}`; a reference's site is the declaration it resolves to, union and intersection recipes list their parts (`combine` `union` / `intersection`, else `one`). Sites are `{file, node, kind, name}` (`name`: the declared name, if any). `sites` is empty for a node holding its own value; null when the recipe can't be followed (computed values, products, calls). E.g. walk an annotation's alias route per union arm |
 | `site_text(node, site)` | the source of a `{file, node}` site in any program file, as `{text, leading}` (`leading`: the text between the previous sibling, or the parent's start, and the site — its comments); null when unavailable. `node` is any node of the linted file |
 | `call_selection(node)` | on a call or `new`: the headers it selects, `{selected: [{file, node}], uncertain}` (several when overloads stay open); null when not an invocation or unknown |
@@ -989,7 +986,7 @@ is wrong, messages) is written in the rule. A fact taking arguments is called (`
 | `call_results(node)` | the call signatures' results only (`{result, result_known}` per header, `result` as `value_constituents` rows or null), without parameters or receivers; null when the callables are unknown |
 | `value_lookup(node, key)` | the member `key` of `node`'s value: `{value_known, value, alternatives: [{matched, required, sources: [{kind, domain, site, flags}]}]}`; `kind` is `named`, `ordinal`, `repeated` or `indexer` (`domain` on indexers only); `site` is the declaring `{file, node}` (null when not a node); `flags` are the declaration's `flag` names. `key` is text, an ordinal, a node (its evaluated key) or a `{global, class, path}` recipe (`{global: "Symbol", class: "value", path: ["asyncIterator"]}`). Named members win over index signatures; looks up the value as given (no optional-chain stripping) |
 | `value_has_member(node, key, source)` | true when any alternative has a named member `key` (optional members count: declared, not guaranteed at runtime); false only when every alternative is closed and lacks it (numeric and symbol indexers don't open a type for named keys); null when unknown, open, indexer-only or the key is unresolved. `source` null asks `node`'s value; `{ global: "Array", class: "type", path: [] }` asks the real global declaration's value, following `path` members |
-| `call_signatures(node)` | the node's call signatures as records with parameter, result and receiver constituents and their knownness (type layers); `null` when unknown |
+| `call_signatures(node)` | the node's call signatures as records with parameter, result and receiver constituents and their knownness (type layers), plus `parameter_rest` / `parameter_optional` (one bool or null per parameter, in order); `null` when unknown |
 | `expected_call_signatures(node)` | `call_signatures` of the node's expected value; alternatives that cannot be called drop out; `null` when nothing is expected or unknown |
 | `flow_entry(node)` | the execution entry (body) holding `node` |
 | `flow_normal(entry)` | can `entry` complete normally: `true` / `false`, `null` when unknown |
@@ -1006,11 +1003,7 @@ is wrong, messages) is written in the rule. A fact taking arguments is called (`
 | `type_argument_redundant` | on the last type argument: `default` when it is its parameter's default, `inferred` when the arguments infer it anyway (types assignable both ways count as the same, as for typescript-eslint) |
 | `regex_problems` | on a regex literal or the pattern string of `RegExp(...)`: one problem per line: `empty_class`, `spaces:N`, `backref:<kind>:<backref>:<group>`, `misleading:<kind>` |
 | `regex_error` | on the pattern string of `RegExp(...)`: the syntax error (or bad flags) as ESLint words it |
-| `member_writes`, `member_constructor_writes` | on a class property, method or parameter property: writes outside the constructor (`=`, `++`, `delete`, destructuring, `this.x.y = v`), and writes in it |
 | `identifier_name` | on an identifier or private name: the name as JavaScript reads it (`foo` is `foo`) |
-| `first_token`, `last_token` | the node's first / last code token: `{text, kind, start, end}`; test it with `is` (`first_token is ts_identifier`) |
-| `paired_token` | on a node starting with `(`, `[` or `{` (a bracket token node, or `(a)`), or else ending with `)`, `]` or `}`: the matching bracket, as `first_token` |
-| `token_texts` | the node's code tokens, in order (comments and spacing dropped): equal lists mean the same tokens |
 
 `callable_contracts(parent, node, ["[Symbol.dispose]"])` asks only about that member, without traversing unrelated fields. `[Symbol.<name>]` path selectors require real Symbol identity on both sides, never printed-string properties. Symbol keys retain canonical library identity through proven constructor aliases and unique-symbol member types; arbitrary computed keys remain unknown. Ordinary object-property contexts still match string keys to string keys.
 
@@ -1286,6 +1279,8 @@ and `final-newline`.
 | `.ts/typed/template-expressions` | unnecessary template interpolation checks and raw-escape-preserving, precedence-safe fixes, imported by `.ts/typed` |
 | `.ts/typed/floating-promises` | floating promises, including discarded arrays and tuples with immediate promise elements, imported by `.ts/typed` |
 | `.ts/comments` | JS/TS comment layers (`ts_line_comment`, `ts_block_comment`, group `ts_comment`) under the code layer; imported by `.ts` and by modules that read comments |
+| `.ts/tokens` | shared token edges, pairs, code-token text and comment-aware gaps over the active front end; imported by `.ts` |
+| `.ts/import-attributes` | token attributes for import-attribute pattern nodes outside the code layer; imported by the modules that read them |
 | `.ts/names` | JS/TS scopes, declarations, references and binding attributes over generic name queries; imported by `.ts` |
 | `.ts/literals` | shared `literal_value` and `static_name` attributes over literal syntax and generic JavaScript coercion; imported by `.ts` |
 | `.ts/effects` | JS/TS evaluation order, separate bodies and control, write and suspension effects; imported by `.ts` |
@@ -1333,6 +1328,7 @@ and `final-newline`.
 | `.ts/typed/regexp-exec` | non-global string matching policy and fixes (`prefer-regexp-exec`); imported by `.ts/typed` |
 | `.ts/typed/for-in-arrays` | array-like `for-in` policy (`no-for-in-array`); imported by `.ts/typed` |
 | `.ts/typed/promises` | `no-misused-promises` variants: `conditionals`, `predicates` (array callbacks), `spreads`, `void-arguments`, `void-attributes`, `void-inherited-methods`, `void-properties`, `void-returns`, `void-variables`; imported by `.ts/typed`, diagnostic-only |
+| `.ts/typed/errors` | Error ancestry, any/unknown/undefined categories and caught/rejection-binding provenance; imported by `.ts/typed` |
 | `.ts/enums` | enum transfer policy (`no-unsafe-enum-assignment`) over the `type_flow` fact, imported by `.ts` |
 | `.ts/assertions` | assertion syntax, type-aware assertion and non-null policy, imported by `.ts` and `.ts/style` |
 | `.ts/naming` | name-format policy (`naming-convention` variants), open context groups and shared `naming_failure` helper; imported by `.ts/scoping` |

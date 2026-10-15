@@ -44,17 +44,23 @@ in ts_enum_member {
     value position: index_of(members, node)
     value if position > 0 then { value members; slice (position - 1) position; first } else null
   }
-  let ts_value_enum_literal if init != null then ts_value_enum_literal(init.node)
-    else if ts_value_enum_previous == null then 0
-    else if type_of(ts_value_enum_previous.ts_value_enum_literal) == "num"
-      then ts_value_enum_previous.ts_value_enum_literal + 1 else null
+  let ts_value_enum_literal when {
+    init != null then ts_value_enum_literal(init.node)
+    ts_value_enum_previous == null then 0
+    type_of(ts_value_enum_previous.ts_value_enum_literal) == "num"
+      then ts_value_enum_previous.ts_value_enum_literal + 1
+    else then null
+  }
   let ts_value_enum_prior ts_value_enum_prior(node)
-  let ts_value_enum_kind if type_of(ts_value_enum_literal) == "num" then "number"
-    else if type_of(ts_value_enum_literal) == "str" then "string"
-    else if init == null then "number"
-    else if ts_value_enum_prior != null then ts_value_enum_prior.ts_value_enum_kind
-    else if init always number then "number"
-    else if init always string then "string" else null
+  let ts_value_enum_kind when {
+    type_of(ts_value_enum_literal) == "num" then "number"
+    type_of(ts_value_enum_literal) == "str" then "string"
+    init == null then "number"
+    ts_value_enum_prior != null then ts_value_enum_prior.ts_value_enum_kind
+    init always number then "number"
+    init always string then "string"
+    else then null
+  }
   when ts_value_enum_kind != null {
     fits number, nonthenable when ts_value_enum_kind == "number"
     fits string, nonthenable when ts_value_enum_kind == "string"
@@ -70,7 +76,7 @@ in ts_enum_member {
 in ts_qualified_name {
   arguments parent.type_argument
   let ts_value_qualified_key ts_value_key(right.node)
-  defines (from (scope module, namespace from left.definition) at ts_value_qualified_key) ?? (from (scope statics from left.definition) at ts_value_qualified_key)
+  defines (scope module, namespace from left.definition).[ts_value_qualified_key] ?? (scope statics from left.definition).[ts_value_qualified_key]
   unwraps definition
 }
 

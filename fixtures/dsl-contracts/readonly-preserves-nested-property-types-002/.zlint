@@ -1,3 +1,3 @@
 import .ts
-in ts_expression_statement.expression rule unsafe-result { when { value (type_flags.nonempty ?? []); contains 'any' }
+in ts_expression_statement.expression rule unsafe-result { when ts_value_has_trait(node, "any") == true
 warn 'unsafe result' }

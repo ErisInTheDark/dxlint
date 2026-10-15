@@ -1,4 +1,4 @@
 import .ts
 in ts_expression_statement.expression rule async-value { when text == 'source'
-when { value (type_members.nonempty ?? []); contains '[Symbol.asyncIterator]' }
+when value_has_member(node, "[Symbol.asyncIterator]", null) == true
 warn 'async iterable' }

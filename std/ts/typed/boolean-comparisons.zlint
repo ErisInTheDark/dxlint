@@ -1,5 +1,6 @@
 # Boolean literal comparisons, nullable options and source-preserving fixes.
 import .ts/expression-fixes
+import .ts/modules
 
 define {
 
@@ -64,7 +65,7 @@ in ts_binary rule no-unnecessary-boolean-literal-compare {
 }
 in ts_program rule no-unnecessary-boolean-literal-compare:strict {
   option allowRuleToRunWithoutStrictNullChecksIKnowWhatIAmDoing boolean = false "Run without strict null checks"
-  when compiler_options.strictNullChecks == false && !allowRuleToRunWithoutStrictNullChecksIKnowWhatIAmDoing
+  when ts_compiler_option(node, "strictNullChecks") == false && !allowRuleToRunWithoutStrictNullChecksIKnowWhatIAmDoing
   report at {start: 0, end: 0}
   warn "This rule requires the `strictNullChecks` compiler option to be turned on to function correctly."
 }

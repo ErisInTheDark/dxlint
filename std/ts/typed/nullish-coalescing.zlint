@@ -1,5 +1,6 @@
 # Nullish replacements, stable references and selection policy.
 import .ts/values/inspection
+import .ts/modules
 
 define {
 
@@ -24,8 +25,7 @@ fn nullish_same_reference(a, b) = {
     && nullish_reference_parts(chain_a) == nullish_reference_parts(chain_b)
 }
 fn nullish_unknown(n) = {
-  value domain: n.nullish_type_domains
-  value ts_value_opaque(n) || domain.kind == "any" && contains(domain.flags, "any") || domain.kind == "unknown" && n.type_flags == null
+  value ts_value_opaque(n) || ts_value_has_trait(n, "any") == true || ts_value_has_trait(n, "unknown") == true
 }
 fn nullish_comparison(n) = if n is ts_binary && contains(["==", "===", "!=", "!=="], n.operator)
   then { operator: n.operator, operands: [unparenthesised_node(n.left.node), unparenthesised_node(n.right.node)] } else null
@@ -53,14 +53,13 @@ fn nullish_replacement(test, branch) = {
     value subject: { value comparison.operands; find (part) logical_nullish(part) == null }
     value checks_null: { value comparison.operands; any (part) logical_nullish(part) == false }
     value checks_undefined: { value comparison.operands; any (part) logical_nullish(part) == true }
-    value flags: subject.type_flags ?? []
     value uncovered: if checks_null then "undefined" else "null"
     value if subject == null || !(checks_null || checks_undefined)
       || !{ value comparison.operands; all (part) logical_nullish(part) != null || nullish_same_reference(part, branch) }
       then null
       else if checks_null && checks_undefined || contains(["==", "!="], comparison.operator)
         then { subject: subject, truthiness: false }
-      else if nullish_unknown(subject) || contains(flags, uncovered)
+      else if nullish_unknown(subject) || ts_value_has_trait(subject, uncovered) == true
         then null else { subject: subject, truthiness: false }
   }
 }
@@ -121,7 +120,7 @@ fn nullish_information(n) = {
 in nullish_coalescing_expression let nullish_coalescing nullish_information(node)
 in ts_program rule prefer-nullish-coalescing:strict {
   option allowRuleToRunWithoutStrictNullChecksIKnowWhatIAmDoing boolean = false "Run without strict null checks"
-  when compiler_options.strictNullChecks == false && !allowRuleToRunWithoutStrictNullChecksIKnowWhatIAmDoing
+  when ts_compiler_option(node, "strictNullChecks") == false && !allowRuleToRunWithoutStrictNullChecksIKnowWhatIAmDoing
   report at { start: 0, end: 0 }
   warn "This rule requires the `strictNullChecks` compiler option to be turned on to function correctly."
 }

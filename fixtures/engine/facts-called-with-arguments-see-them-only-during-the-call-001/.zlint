@@ -1,2 +1,2 @@
 import .ts
-in ts_identifier rule u warn "{first_token.text}/{first_token().text}" { when declaration_kind != null }
+in ts_identifier rule u warn "{reference_key}/{reference_key()}" { when declaration_kind != null }

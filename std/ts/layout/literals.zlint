@@ -53,19 +53,51 @@ fn layout_property_quote_text(site, current) = {
   value name: if site.quoted then site.name else key.parent.static_name ?? site.name
   value if site.quoted then name else "\"{name}\""
 }
+fn layout_property_quote_site(owner, group) = {
+  value key: if owner is ts_enum_member then owner.name.node else owner.key.node
+  value quoted: key is (ts_string, ts_import_attribute_key, ts_import_attribute_string) && re_test(key.text, /^["']/)
+  value numeric: key is (ts_number, ts_bigint)
+  value name: if key is ts_identifier || owner is ts_import_attribute && !quoted then key.text else key.literal_value.value
+  value identifier: if contains(name, "\\") then js_string("\"" name "\"") ?? "" else name
+  value redundant_number: re_test(name, /^(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$/)
+    && js_to_string(js_number(name)) == name
+  value redundant: re_test(identifier, /^[$_\p{ID_Start}][$\u{200c}\u{200d}\p{ID_Continue}]*$/) || redundant_number
+  value keyword: re_test(name, /^(?:abstract|boolean|break|byte|case|catch|char|class|const|continue|debugger|default|delete|do|double|else|enum|export|extends|false|final|finally|float|for|function|goto|if|implements|import|in|instanceof|int|interface|long|native|new|null|package|private|protected|public|return|short|static|super|switch|synchronized|this|throw|throws|transient|true|try|typeof|var|void|volatile|while|with)$/)
+  value if key == null || key is ts_computed_key || name == null
+    || owner is (ts_property, ts_pattern_property) && owner.value.node == null then null else {
+    group: group, quoted: quoted, numeric: numeric, redundant: redundant,
+    redundant_number: redundant_number, keyword: keyword, name: name, offset: owner.offset
+  }
+}
+fn layout_property_quote_sites(n) = {
+  value group: n is (ts_object, ts_interface, ts_type_literal, ts_enum)
+  value owners: when {
+    n is ts_object then n.property.nodes
+    n is (ts_interface, ts_type_literal, ts_enum) then n.member.nodes
+    n is (ts_import, ts_export) then overlapping(ts_import_attribute, n.offset, n.end_offset)
+    else then [n]
+  }
+  value sites: flat_map(owners, owner =>
+    if owner is ts_import_attribute then [layout_property_quote_site(owner, false), layout_property_quote_site(owner, true)]
+    else if owner is (ts_property, ts_pattern_property, ts_property_signature, ts_method_signature, ts_enum_member)
+      then [layout_property_quote_site(owner, group)] else [])
+  value filter(sites, site => site != null)
+}
 in ts_property, ts_pattern_property, ts_property_signature, ts_enum_member, ts_object, ts_interface, ts_type_literal, ts_enum, ts_import, ts_export rule quote-props {
   option style "always" | "as-needed" | "consistent" | "consistent-as-needed" = "always" "property quoting policy"
   option keywords boolean = false "require quotes on reserved words"
   option unnecessary boolean = true "report redundant quotes"
   option numbers boolean = false "require quoted numeric keys"
-  let property_any_quoted any(property_quote_sites, s => s.quoted)
-  let property_necessary any(property_quote_sites, s => s.quoted && !s.redundant || keywords && s.keyword)
-  let property_keyword { value property_quote_sites; filter (s) !s.quoted && s.keyword; last }.name
-  each property_site in filter(property_quote_sites, s => s.group == (style == "consistent" || style == "consistent-as-needed"))
-  when if style == "always" then !property_site.quoted else if style == "as-needed" then (if property_site.quoted then unnecessary && property_site.redundant && !(numbers && property_site.redundant_number) && !(keywords && property_site.keyword) else keywords && property_site.keyword || numbers && property_site.numeric) else if style == "consistent-as-needed" && property_any_quoted && !property_necessary then property_site.quoted else !property_site.quoted && (property_any_quoted || style == "consistent-as-needed" && keywords && property_keyword != null)
-  report at property_site.offset
-  fix at layout_property_quote_key(property_site, node) as layout_property_quote_text(property_site, node)
-  warn if style == "always" then "Unquoted property '{property_site.name}' found." else if style == "as-needed" then (if property_site.quoted then "Unnecessarily quoted property '{property_site.name}' found." else if property_site.keyword then "Unquoted reserved word '{property_site.name}' used as key." else "Unquoted number literal '{property_site.name}' used as key.") else if style == "consistent-as-needed" && !property_necessary then "Properties shouldn't be quoted as all quotes are redundant." else if style == "consistent-as-needed" && keywords && property_keyword != null then "Properties should be quoted as '{property_keyword}' is a reserved word." else "Inconsistently quoted property '{property_site.name}' found."
+  let property_sites layout_property_quote_sites(node)
+  let property_any_quoted any(property_sites, s => s.quoted)
+  let property_necessary any(property_sites, s => s.quoted && !s.redundant || keywords && s.keyword)
+  let property_keyword { value property_sites; filter (s) !s.quoted && s.keyword; last }.name
+  each property_site in filter(property_sites, s => s.group == (style == "consistent" || style == "consistent-as-needed")) {
+    when if style == "always" then !property_site.quoted else if style == "as-needed" then (if property_site.quoted then unnecessary && property_site.redundant && !(numbers && property_site.redundant_number) && !(keywords && property_site.keyword) else keywords && property_site.keyword || numbers && property_site.numeric) else if style == "consistent-as-needed" && property_any_quoted && !property_necessary then property_site.quoted else !property_site.quoted && (property_any_quoted || style == "consistent-as-needed" && keywords && property_keyword != null)
+    report at property_site.offset
+    fix at layout_property_quote_key(property_site, node) as layout_property_quote_text(property_site, node)
+    warn if style == "always" then "Unquoted property '{property_site.name}' found." else if style == "as-needed" then (if property_site.quoted then "Unnecessarily quoted property '{property_site.name}' found." else if property_site.keyword then "Unquoted reserved word '{property_site.name}' used as key." else "Unquoted number literal '{property_site.name}' used as key.") else if style == "consistent-as-needed" && !property_necessary then "Properties shouldn't be quoted as all quotes are redundant." else if style == "consistent-as-needed" && keywords && property_keyword != null then "Properties should be quoted as '{property_keyword}' is a reserved word." else "Inconsistently quoted property '{property_site.name}' found."
+  }
 }
 
 in ts_number rule no-floating-decimal:leading {

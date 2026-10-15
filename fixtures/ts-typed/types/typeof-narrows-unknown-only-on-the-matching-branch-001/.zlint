@@ -1,6 +1,6 @@
 import .ts
 
             in ts_identifier rule narrowed {
-                when text == "x" && { value (type_flags.nonempty ?? []); contains "string" }
+                when text == "x" && ts_value_has_trait(node, "string") == true
                 error "narrowed"
             }

@@ -1,0 +1,31 @@
+import .ts/values/inspection
+import .ts/typed/rejection-handlers
+
+define {
+
+fn error_rethrown(n) = {
+  value bare: unparenthesised_node(n)
+  value declaration: if bare is ts_identifier then name_binding(bare).node else null
+  value parameter: declaration.parent.node
+  value function: parameter.parent.node
+  value call: function.parent.node
+  value declaration != null && (declaration.declaration_kind == "catch"
+    || parameter is ts_parameter && function is ts_arrow && call is ts_call
+      && first(function.parameter.nodes) == parameter && rejection_handler(call).handler == function)
+}
+fn error_kind(n) = {
+  value arms: value_parts(n)
+  value parts: map(arms ?? [], arm => arm.parts)
+  value when {
+    arms == null then "unknown"
+    ts_value_trait(parts, "any") then "any"
+    count(arms) > 0 && all(arms, arm =>
+      any(arm.parts, part => ts_value_builtin_ancestor(part, n, ["Error"]) == true)) then "error"
+    ts_value_trait(parts, "unknown") then "unknown"
+    ts_value_trait(parts, "undefined") && !any(parts, arm => any(arm, part => contains(part.traits, "void"))) then "undefined"
+    else then "other"
+  }
+}
+in ts_node let ts_error_value {kind: error_kind(node), rethrown: error_rethrown(node)}
+
+}

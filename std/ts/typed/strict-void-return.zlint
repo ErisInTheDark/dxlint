@@ -31,16 +31,18 @@ fn strict_void_transfer(contract) = {
 fn strict_void_fields(n) = if n.parent is (ts_call, ts_new) then ["declared_target"] else ["declared_target", "contextual_returns"]
 fn strict_void_source(n) = if n is ts_property then n.value.node ?? n.key.node else n
 fn strict_void_site(n) = if n is (ts_property, ts_method) then n else n.parent.node
-fn strict_void_reports(n, any) = if n not (ts_function, ts_arrow, ts_method) then [{site: n, mode: "function"}]
-  else if contains(n.modifier, "*") then [{site: function_head_site(n), mode: "function"}]
-  else if contains(n.modifier, "async") then [{site: function_head_site(n), mode: "async"}]
-  else if n.body not ts_block then [{site: unparenthesised_node(n.body.node), mode: "return"}]
-  else if n.return_type != null && n.return_type.text != "void" then [{site: n.return_type.node, mode: "function"}]
-  else {
+fn strict_void_reports(n, any) = when {
+  n not (ts_function, ts_arrow, ts_method) then [{site: n, mode: "function"}]
+  contains(n.modifier, "*") then [{site: function_head_site(n), mode: "function"}]
+  contains(n.modifier, "async") then [{site: function_head_site(n), mode: "async"}]
+  n.body not ts_block then [{site: unparenthesised_node(n.body.node), mode: "return"}]
+  n.return_type != null && n.return_type.text != "void" then [{site: n.return_type.node, mode: "function"}]
+  else then {
     value invalid: filter(n.scoping_own_returns, returned => returned.argument != null
       && !strict_void_allowed(returned.argument.strict_void_kind, any))
     value map(invalid, returned => {site: {start: returned.offset, end: returned.offset + 6}, mode: "return"})
   }
+}
 fn strict_void_static_contracts(n) = {
   value member: if n is ts_method then n else n.parent.node
   value owner: member.parent.node
@@ -76,11 +78,14 @@ in ts_call.argument, ts_new.argument, ts_declarator.init, ts_assignment.right, t
     else any(contracts, contract => strict_void_transfer(contract)
       && !strict_void_source_allowed(signatures, contract.source, allowReturnAny))
   let unwrapped unparenthesised_node(actual)
-  each report in strict_void_reports(unwrapped, allowReturnAny)
-  report at report.site
-  warn if report.mode == "function" then "Value-returning function used in a context where a void function is expected."
-    else if report.mode == "async" then "Async function used in a context where a void function is expected."
-    else "Value returned in a context where a void return is expected."
+  each report in strict_void_reports(unwrapped, allowReturnAny) {
+    report at report.site
+    warn when {
+      report.mode == "function" then "Value-returning function used in a context where a void function is expected."
+      report.mode == "async" then "Async function used in a context where a void function is expected."
+      else then "Value returned in a context where a void return is expected."
+    }
+  }
 }
 
 }

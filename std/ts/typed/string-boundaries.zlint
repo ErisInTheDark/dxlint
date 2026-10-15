@@ -32,7 +32,7 @@ fn string_boundary_string_part(t) = if t.kind == "union" then len(t.parts) > 0 &
   else if t.kind == "intersection" then any(t.parts, part => string_boundary_string_part(part)) && !any(t.parts, part => contains(["any", "unknown"], part.kind))
   else contains(["string", "null", "undefined"], t.kind)
 fn string_boundary_receiver(n, optional) = ts_value_string_like(n)
-  || optional && string_boundary_string_part(n.collection_type) && { value n.type_flags.nonempty ?? []; contains "string" }
+  || optional && string_boundary_string_part(n.collection_type) && ts_value_has_trait(n, "string") == true
 
 fn string_boundary_access(n) = {
   value bare: unparenthesised_node(n)

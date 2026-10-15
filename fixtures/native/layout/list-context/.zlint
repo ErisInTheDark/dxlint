@@ -1,9 +1,13 @@
 import .ts
 in ts_comma rule context {
-  when list_owner is ts_call
-  warn "{list_field}:{list_previous.text}"
+  let list layout_comma_context(node)
+  when list.owner is ts_call
+  let previous list.previous
+  warn "{list.field}:{previous.text}"
 }
 in ts_comma rule holes {
-  when list_owner is ts_array
-  warn if list_previous == null then "absent" else list_previous.text
+  let list layout_comma_context(node)
+  when list.owner is ts_array
+  let previous list.previous
+  warn if previous == null then "absent" else previous.text
 }

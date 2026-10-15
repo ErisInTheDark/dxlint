@@ -1,4 +1,4 @@
-# .ts/layout/shared: cross-topic spacing helpers.
+# .ts/layout/shared: structural lists and punctuation.
 
 import .ts/helpers
 
@@ -6,6 +6,152 @@ define {
 
 fn layout_comma_space(gap, before_side) = { value result: if before_side then /\s*$/ else /^\s*/; value re_find(gap, result); nonempty } ?? ""
 fn layout_same_line(gap) = !re_test(gap, /[\n\r\u{2028}\u{2029}]/)
+
+fn layout_list_kind(n, field) = when {
+    field == "type_parameter" then "generics"
+    field == "type_argument" then "type-arguments"
+    n is (ts_array, ts_array_pattern) then "arrays"
+    n is ts_tuple_type then "tuples"
+    n is (ts_object, ts_object_pattern) then "objects"
+    n is (ts_function, ts_method, ts_arrow, ts_function_type, ts_call, ts_new) then "functions"
+    n is ts_import_call then "dynamicImports"
+    n is ts_import then "imports"
+    n is ts_export then "exports"
+    n is ts_enum then "enums"
+    else then null
+}
+in ts_node let layout_list_field {
+  value when {
+  is ts_variable_declaration.declaration then "declaration"
+  is (ts_array.element, ts_array_pattern.element, ts_tuple_type.element) then "element"
+  is (ts_object.property, ts_object_pattern.property, ts_object_pattern.rest) then "property"
+  is (ts_function.parameter, ts_method.parameter, ts_arrow.parameter, ts_function_type.parameter,
+    ts_method_signature.parameter, ts_call_signature.parameter, ts_index_signature.parameter) then "parameter"
+  is (ts_call.argument, ts_new.argument, ts_import_call.argument) then "argument"
+  is (ts_import.specifier, ts_import.default_import, ts_import.namespace, ts_export.specifier) then "specifier"
+  is ts_sequence.expression then "expression"
+  is (ts_enum.member, ts_type_literal.member, ts_interface.member) then "member"
+  is ts_class.implements then "implements"
+  is ts_interface.extends then "extends"
+  is (ts_function.type_parameter, ts_arrow.type_parameter, ts_class.type_parameter, ts_method.type_parameter,
+    ts_interface.type_parameter, ts_type_alias.type_parameter, ts_function_type.type_parameter,
+    ts_method_signature.type_parameter, ts_call_signature.type_parameter, ts_infer.type_parameter) then "type_parameter"
+  is (ts_class.type_argument, ts_tagged_template.type_argument, ts_call.type_argument, ts_new.type_argument,
+    ts_instantiation.type_argument, ts_jsx_opening.type_argument, ts_type_reference.type_argument,
+    ts_type_query.type_argument, ts_import_type.type_argument) then "type_argument"
+  else then null
+  }
+}
+in ts_node let layout_syntax_lists {
+  value owner: node
+  value children.nodes
+  filter (item) item.layout_list_field != null
+  group_by (item) item.layout_list_field
+  sort_by (group) when {
+    group.key == "type_parameter" then 2
+    group.key == "type_argument" then 3
+    group.key == "member" then 1
+    else then 0
+  }
+  map (group) {
+    field: group.key,
+    kind: layout_list_kind(owner, group.key),
+    items: { value group.items; sort_by (item) item.offset }
+  }
+}
+fn layout_comma_item(n, before) = {
+  value edge: if before then n.token_neighbours.before else n.token_neighbours.after
+  value tokens: walk(if edge == null then [] else [node_at(edge.start)], current =>
+    if current is (ts_comma, ts_open_paren, ts_close_paren) then {
+      value next: if before then current.token_neighbours.before else current.token_neighbours.after
+      value if next == null then null else node_at(next.start)
+    } else null)
+  value ancestors: walk([last(tokens)], current => current.parent.node)
+  value find(ancestors, item => item.layout_list_field != null && item not ts_hole
+    && item.parent.offset <= n.offset && item.parent.end_offset >= n.end_offset
+    && (if before then item.end_offset <= n.offset || item.last_token.text == "," && item.last_token.start == n.offset
+      else item.offset >= n.end_offset))
+}
+fn layout_comma_context(n) = {
+  value before: layout_comma_item(n, true)
+  value after: layout_comma_item(n, false)
+  value item: before ?? after
+  value if item != null then {owner: item.parent.node, field: item.layout_list_field, previous: before}
+    else if n.parent is (ts_array, ts_array_pattern) then {owner: n.parent.node, field: "element", previous: null}
+    else null
+}
+fn layout_assignment_pattern(n) = {
+  value roots: walk([n], current =>
+    if current.parent is (ts_array, ts_object, ts_parenthesized) then current.parent.node
+    else if current.parent is ts_property && current.parent.value.node == current then current.parent.node
+    else null)
+  value root: last(roots)
+  value root.parent is (ts_assignment, ts_for_in, ts_for_of) && root.parent.left.node == root
+}
+fn layout_trailing_comma(n, list) = {
+  value item: last(list.items)
+  value after: item.token_neighbours.after
+  value trailing: after.text == ","
+  value closing: if trailing then node_at(after.start).token_neighbours.after else after
+  value allowed: item not ts_rest && !(item is ts_spread && layout_assignment_pattern(n))
+    && item.name not ts_rest
+  value if item is ts_hole || !contains(["}}", "]", ")", ">"], closing.text) then null else {
+    kind: list.kind,
+    offset: if trailing then after.start else item.last_token.end,
+    trailing: trailing,
+    multiline: position(if trailing then after.end else item.last_token.end).js_line != position(closing.end).js_line,
+    allowed: allowed,
+    tsx_single: list.kind == "generics" && count(list.items) == 1 && ends_with(n.file, ".tsx")
+  }
+}
+fn layout_trailing_commas(n) = {
+  value lists: filter(n.layout_syntax_lists, list => list.kind != null)
+  value filter(map(lists, list => layout_trailing_comma(n, list)), site => site != null)
+}
+fn layout_terminal_arrow_block(n, end) = {
+  value chain: walk([n], current => if current is ts_block then null
+    else find(current.children.nodes, child => child.end_offset == end))
+  value terminal: last(chain)
+  value terminal is ts_block && terminal.parent is ts_arrow
+}
+fn layout_statement_semicolon(source, n) = {
+  value header: n is ts_variable_declaration
+    && (n.parent is ts_for && n.parent.init.node == n
+      || n.parent is (ts_for_in, ts_for_of) && n.parent.left.node == n)
+  value last: n.last_token
+  value token: node_at(last.start)
+  value present: token is ts_semicolon
+  value before: if present then token.token_neighbours.before else last
+  value next: token.token_neighbours.after
+  value field: n is ts_class_property
+  value closing: next.text == "}}"
+  value body_open: first(filter(n.parent.token.nodes, token => token.text == "{{"))
+  value if header || n is (ts_function, ts_method) && n.body.node != null
+    || n is ts_export && n.declaration.node != null then null else {
+    present: present,
+    offset: if present then last.start else last.end,
+    end: last.end,
+    redundant: next == null || contains(["}}", ";"], next.text),
+    same_line: before != null && next != null && layout_same_line(byte_slice(source, before.end, next.start)),
+    hazard_before: next != null && !contains(["++", "--"], next.text)
+      && re_test(next.text, /^[-\[(\/+`]/),
+    hazard_after: when {
+      n is (ts_do_while, ts_break, ts_continue, ts_debugger, ts_import) then false
+      n is ts_export && n.kind != "default" then false
+      n is ts_return then n.argument.node != null
+      else then !(before.text == "}}" && layout_terminal_arrow_block(n, before.end))
+    },
+    class_field: field,
+    class_hazard: field && (n.init.node == null && n.key is ts_identifier
+      && contains(["get", "set", "static"], n.key.text)
+      && !(n.key.text == "static" && any(n.modifier.nodes, modifier => modifier.text == "static"))
+      || contains(["*", "in", "instanceof"], next.text)),
+    one_line_block: closing && (n.parent is ts_block && layout_same_line(n.parent.text)
+      || n.parent is ts_static_block && layout_same_line(byte_slice(source, n.parent.offset, body_open.offset))),
+    one_line_class: field && closing && n.parent is ts_class && body_open != null
+      && layout_same_line(byte_slice(source, body_open.offset, n.parent.end_offset))
+  }
+}
 
 @macro layout_comment_pattern "(?:/\\*(?:[^*]|\\*+[^*/])*\\*+/|//[^\\n\\r\\u{{2028}}\\u{{2029}}]*)"
 

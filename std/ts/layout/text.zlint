@@ -24,7 +24,7 @@ in multiple_space_gap {
     value result: "^" @multiple_space_horizontal "*(?:$|[\\r\\n\\u{{2028}}\\u{{2029}}])"
     value re_test(multiple_space_right.text_after, result)
   }
-  let multiple_space_display if multiple_space_right is ts_comment then multiple_space_comment_preview(multiple_space_right) else token_neighbours.after.text
+  let multiple_space_display if multiple_space_right is ts_comment then multiple_space_comment_preview(multiple_space_right) else ts_token_neighbours(source, node).after.text
   let multiple_spaces_checked true
 }
 in multiple_space_gap rule no-multi-spaces {
@@ -55,7 +55,11 @@ in multiple_space_gap rule no-multi-spaces {
   when comment_block || !re_test(comment_body, /^\/\s*<(?:reference|amd-)/)
 }
 fn layout_comment_open_wrong(body, style, marker_pattern, exception_pattern) = if style == "always" then !re_test(body, "^" marker_pattern "?" exception_pattern) else re_test(body, "^" marker_pattern "?[ \\t]+")
-fn layout_comment_open_message(style, exceptions, marker, identifier) = if style == "always" then (if count(exceptions) > 0 then "Expected exception block, space or tab after '{identifier}{marker}' in comment." else "Expected space or tab after '{identifier}{marker}' in comment.") else if marker != "" then "Unexpected space or tab after marker ({marker}) in comment." else "Unexpected space or tab after '{identifier}' in comment."
+fn layout_comment_open_message(style, exceptions, marker, identifier) = when {
+  style == "always" then if count(exceptions) > 0 then "Expected exception block, space or tab after '{identifier}{marker}' in comment." else "Expected space or tab after '{identifier}{marker}' in comment."
+  marker != "" then "Unexpected space or tab after marker ({marker}) in comment."
+  else then "Unexpected space or tab after '{identifier}' in comment."
+}
 fn layout_comment_open_fix(n, body, style, marker) = {
   value marker_size: byte_len(marker)
   value start: n.offset + 2 + marker_size
@@ -75,11 +79,16 @@ in ts_block_comment rule spaced-comment:block {
   let opening_fix layout_comment_open_fix(node, comment_body, style, comment_marker)
   let closing_spaces if style == "never" then re_find(comment_body, /[ \t]+$/) ?? "" else ""
   let closing_fix { start: end_offset - 2 - byte_len(closing_spaces), end: end_offset - 2 }
-  each comment_end in [false, true]
-  when !comment_end || balanced
-  when if comment_end then (if style == "always" then !re_test(comment_body, comment_exception_pattern "$") else re_test(comment_body, /[ \t]+$/)) else layout_comment_open_wrong(comment_body, style, comment_marker_pattern, comment_exception_pattern)
-  fix at (if comment_end then closing_fix else opening_fix) as if style == "always" then " " else ""
-  warn if !comment_end then layout_comment_open_message(style, exceptions, comment_marker, "/*") else if style == "always" then "Expected space or tab before '*/' in comment." else "Unexpected space or tab before '*/' in comment."
+  each comment_end in [false, true] {
+    when !comment_end || balanced
+    when if comment_end then (if style == "always" then !re_test(comment_body, comment_exception_pattern "$") else re_test(comment_body, /[ \t]+$/)) else layout_comment_open_wrong(comment_body, style, comment_marker_pattern, comment_exception_pattern)
+    fix at (if comment_end then closing_fix else opening_fix) as if style == "always" then " " else ""
+    warn when {
+      !comment_end then layout_comment_open_message(style, exceptions, comment_marker, "/*")
+      style == "always" then "Expected space or tab before '*/' in comment."
+      else then "Unexpected space or tab before '*/' in comment."
+    }
+  }
 }
 
 
@@ -93,11 +102,23 @@ in layout_blank_run rule no-multiple-empty-lines {
   option max int(0..) = 2 "maximum consecutive blank lines"
   option maxEOF int(0..) | null = null "maximum final blank lines"
   option maxBOF int(0..) | null = null "maximum initial blank lines"
-  let blank_prefix if offset == 0 then 0 else if starts_with(text, "\r\n") then 2 else 1
+  let blank_prefix when {
+    offset == 0 then 0
+    starts_with(text, "\r\n") then 2
+    else then 1
+  }
   let blank_text byte_slice(text, blank_prefix)
-  let blank_kind if offset == 0 then "bof" else if end_offset == byte_len(source) then "eof" else "middle"
+  let blank_kind when {
+    offset == 0 then "bof"
+    end_offset == byte_len(source) then "eof"
+    else then "middle"
+  }
   let blank_count re_count(blank_text, /\r\n|[\n\r]/) + (if re_test(blank_text, /[\r\n]\z/) then 0 else 1)
-  let blank_limit if blank_kind == "bof" then maxBOF.nonempty ?? max else if blank_kind == "eof" then maxEOF.nonempty ?? max else max
+  let blank_limit when {
+    blank_kind == "bof" then maxBOF.nonempty ?? max
+    blank_kind == "eof" then maxEOF.nonempty ?? max
+    else then max
+  }
   when blank_count > blank_limit
   # Searching the syntax tree costs more than counting, so it comes after.
   when containing(ts_template.quasi) == null && containing(ts_template_type.quasi) == null
@@ -111,7 +132,11 @@ in layout_blank_run rule no-multiple-empty-lines {
     join ""
     byte_len
   }, end: end_offset }
-  warn if blank_kind == "bof" then "Too many blank lines at the beginning of file. Max of {blank_limit} allowed." else if blank_kind == "eof" then "Too many blank lines at the end of file. Max of {blank_limit} allowed." else "More than {blank_limit} blank {if blank_limit == 1 then 'line' else 'lines'} not allowed."
+  warn when {
+    blank_kind == "bof" then "Too many blank lines at the beginning of file. Max of {blank_limit} allowed."
+    blank_kind == "eof" then "Too many blank lines at the end of file. Max of {blank_limit} allowed."
+    else then "More than {blank_limit} blank {if blank_limit == 1 then 'line' else 'lines'} not allowed."
+  }
 }
 
 }

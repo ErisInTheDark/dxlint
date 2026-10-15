@@ -7,5 +7,8 @@ input.ts:19:8-19:72 prefer-arrow-callback#0
 input.ts:22:8-22:47 prefer-arrow-callback#0
 input.ts:24:8-24:64 prefer-arrow-callback#0
 input.ts:26:8-26:56 prefer-arrow-callback#0
+input.ts:27:69-27:73 no-extra-bind#0
 input.ts:2:43-2:47 no-extra-bind#0
 input.ts:4:79-4:83 no-extra-bind#0
+input.ts:5:72-5:76 no-extra-bind#0
+input.ts:6:76-6:80 no-extra-bind#0

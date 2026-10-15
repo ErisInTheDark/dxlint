@@ -1,0 +1,4 @@
+input.ts:4:3-4:16 prefer-readonly#0
+input.ts:7:3-7:16 prefer-readonly#0
+input.ts:8:15-8:32 prefer-readonly:parameter#0
+input.ts:8:64-8:80 prefer-readonly:parameter#0

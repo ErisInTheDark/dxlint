@@ -1,11 +1,12 @@
 # .ts/style/type-imports: import binding policy and atomic byte edits.
 import .ts/expression-fixes
+import .ts/modules
 import .ts/import-attributes
 
 define {
 
 fn word_list(xs) = if count(xs) == 1 then first(xs) else { value xs; slice 0 -1; join ', ' } " and " last(xs)
-in ts_program let import_decorator_metadata compiler_options.experimentalDecorators == true && compiler_options.emitDecoratorMetadata == true && { value descendants(ts_decorator); count } > 0
+in ts_program let import_decorator_metadata ts_compiler_option(node, "experimentalDecorators") == true && ts_compiler_option(node, "emitDecoratorMetadata") == true && { value descendants(ts_decorator); count } > 0
 group import_jsx_node ts_jsx_element, ts_jsx_fragment
 in ts_program let import_has_jsx { value descendants(import_jsx_node); count } > 0
 in ts_identifier {
