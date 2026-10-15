@@ -19,11 +19,9 @@ fn regexp_exec_argument(n) = {
     value part: first(arm)
     value len(arm) == 1 && contains(part.traits, "string")
   })
-  value regexes: any(arms, arm => {
-    value part: first(arm)
-    value len(arm) == 1 && part.carrier_known == true
-      && part.carrier.description.kind == "named" && part.carrier.description.name == "RegExp"
-  })
+  value regexes: any(arms, arm => len(arm) > 0 && all(arm, part =>
+    part.carrier_known == true && part.carrier.description.kind == "named"
+      && part.carrier.description.name == "RegExp"))
   value strings != regexes
 }
 fn regexp_match_exec_offset(n) = {
