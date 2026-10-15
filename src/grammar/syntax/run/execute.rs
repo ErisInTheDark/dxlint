@@ -3,6 +3,36 @@ use super::failure::{resource, ChoiceFailures};
 use crate::grammar::syntax::compile::{Action, Op, ScopeRule};
 use crate::grammar::syntax::compile::instructions::{Instruction, Span};
 
+/// Profile names of instruction kinds, in [`kind_slot`] order.
+pub(super) const INSTRUCTION_KINDS: [&str; 17] = [
+    "count.enter.match", "count.enter.pattern", "count.enter.call", "count.enter.sequence", "count.enter.choice",
+    "count.enter.repeat", "count.enter.flag", "count.enter.look", "count.enter.probe", "count.enter.scope",
+    "count.enter.reuse", "count.enter.cut", "count.enter.same_line", "count.enter.same_text", "count.enter.terminator",
+    "count.enter.end", "count.enter.pratt",
+];
+
+fn kind_slot(instruction: &Instruction) -> usize {
+    match instruction {
+        Instruction::Match { .. } => 0,
+        Instruction::Pattern { .. } => 1,
+        Instruction::Call { .. } => 2,
+        Instruction::Sequence(_) => 3,
+        Instruction::Choice { .. } => 4,
+        Instruction::Repeat { .. } => 5,
+        Instruction::Flag { .. } => 6,
+        Instruction::Look { .. } => 7,
+        Instruction::Probe { .. } => 8,
+        Instruction::Scope { .. } => 9,
+        Instruction::Reuse(_) => 10,
+        Instruction::Cut => 11,
+        Instruction::SameLine => 12,
+        Instruction::SameText { .. } => 13,
+        Instruction::Terminator { .. } => 14,
+        Instruction::End => 15,
+        Instruction::Pratt { .. } => 16,
+    }
+}
+
 #[derive(Default)]
 pub(super) struct Storage {
     frames: Vec<Frame>,
@@ -60,6 +90,7 @@ pub(super) fn evaluate(run: &mut Run<'_>, input: Input) -> Answer {
                 }
                 let program = run.program;
                 let code = &program.instructions.code[input.expression];
+                run.scratch.counts.by_instruction[kind_slot(&code.instruction)] += 1;
                 if code.actions.len != 0 {
                     frames.push(Frame { input, state: State::Actions(code.actions) });
                 }
@@ -317,12 +348,13 @@ pub(super) fn evaluate(run: &mut Run<'_>, input: Input) -> Answer {
 
 fn choice(run: &mut Run<'_>, input: Input, items: Span, table: usize, from: usize, failures: ChoiceFailures, frames: &mut Vec<Frame>) -> Next {
     let program = run.program;
+    run.scratch.counts.dispatch_reads += 1;
     let token = run.lex(input.context.goal, input.pos);
     let text = token.token.as_ref().map_or("", |token| &run.text[token.start as usize..token.end as usize]);
     let selected = program.lowered[table].choice.as_ref().expect("choice dispatch")
-        .candidates(token.token.map(|token| token.token), text).iter().copied()
+        .candidates(token.token.as_ref().map(|token| token.token), text).iter().copied()
         .filter(|index| *index >= from)
-        .find(|index| run.possible_start(program.instructions.operands[items.start + index], input.pos, input.context));
+        .find(|index| run.starts_at(program.instructions.operands[items.start + index], input.pos, input.context, &token));
     match selected {
         Some(selected) => {
             frames.push(Frame { input, state: State::Choice { items, table, selected, failures } });
@@ -357,11 +389,12 @@ fn replay(run: &mut Run<'_>, input: Input, items: Span, mut next: usize, mut rec
 fn prefix(run: &mut Run<'_>, input: Input, source: usize, from: usize, frames: &mut Vec<Frame>) -> Next {
     let program = run.program;
     let Op::Pratt { atom, prefix, .. } = &program.expressions[source] else { unreachable!() };
+    run.scratch.counts.dispatch_reads += 1;
     let token = run.lex(input.context.goal, input.pos);
     let text = token.token.as_ref().map_or("", |token| &run.text[token.start as usize..token.end as usize]);
     let selected = program.lowered[source].prefix.as_ref().expect("prefix dispatch")
-        .candidates(token.token.map(|token| token.token), text).iter().copied()
-        .filter(|index| *index >= from).find(|index| run.possible_start(prefix[*index].operator, input.pos, input.context));
+        .candidates(token.token.as_ref().map(|token| token.token), text).iter().copied()
+        .filter(|index| *index >= from).find(|index| run.starts_at(prefix[*index].operator, input.pos, input.context, &token));
     match selected {
         Some(index) => {
             frames.push(Frame { input, state: State::PrefixProbe { source, index } });
@@ -377,12 +410,13 @@ fn prefix(run: &mut Run<'_>, input: Input, source: usize, from: usize, frames: &
 fn row(run: &mut Run<'_>, input: Input, source: usize, from: usize, left: Matched, frames: &mut Vec<Frame>) -> Next {
     let program = run.program;
     let Op::Pratt { rows, .. } = &program.expressions[source] else { unreachable!() };
+    run.scratch.counts.dispatch_reads += 1;
     let token = run.lex(input.context.goal, left.end);
     let text = token.token.as_ref().map_or("", |token| &run.text[token.start as usize..token.end as usize]);
     let selected = program.lowered[source].rows.as_ref().expect("operator dispatch")
-        .candidates(token.token.map(|token| token.token), text).iter().copied()
+        .candidates(token.token.as_ref().map(|token| token.token), text).iter().copied()
         .filter(|index| *index >= from && rows[*index].power >= input.power)
-        .find(|index| run.possible_start(rows[*index].operator, left.end, input.context));
+        .find(|index| run.starts_at(rows[*index].operator, left.end, input.context, &token));
     match selected {
         Some(index) => {
             frames.push(Frame { input, state: State::RowProbe { source, index, left } });

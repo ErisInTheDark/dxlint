@@ -105,7 +105,11 @@ struct Scratch {
 #[derive(Default)]
 struct Counts {
     instructions: u64,
+    by_instruction: [u64; execute::INSTRUCTION_KINDS.len()],
     lex_reads: u64,
+    dispatch_reads: u64,
+    start_reads: u64,
+    terminal_reads: u64,
     enters: u64,
     memo_hits: u64,
     memo_stores: u64,
@@ -119,6 +123,9 @@ impl Scratch {
         for (name, amount) in [
             ("count.instructions", counts.instructions),
             ("count.lex_reads", counts.lex_reads),
+            ("count.lex_reads.dispatch", counts.dispatch_reads),
+            ("count.lex_reads.start", counts.start_reads),
+            ("count.lex_reads.terminal", counts.terminal_reads),
             ("count.enters", counts.enters),
             ("count.memo_hits", counts.memo_hits),
             ("count.memo_stores", counts.memo_stores),
@@ -131,6 +138,9 @@ impl Scratch {
             ("size.fields", self.fields.len() as u64),
             ("size.token_records", self.tokens.len() as u64),
         ] {
+            super::phases::count(name, amount);
+        }
+        for (name, amount) in execute::INSTRUCTION_KINDS.iter().zip(counts.by_instruction) {
             super::phases::count(name, amount);
         }
     }
@@ -314,6 +324,7 @@ impl<'a> Run<'a> {
     }
 
     fn terminal(&mut self, terminal: &Terminal, pos: u32, context: Context, values: bool) -> Answer {
+        self.scratch.counts.terminal_reads += 1;
         let lexed = self.lex(context.goal, pos);
         let Some(token) = lexed.token.filter(|token| terminal.tokens.contains(&token.token)
             && terminal.text.as_deref().is_none_or(|text| text == &self.text[token.start as usize..token.end as usize]))
@@ -327,6 +338,7 @@ impl<'a> Run<'a> {
     }
 
     fn token_pattern(&mut self, predicate: usize, emit: Option<u16>, pos: u32, context: Context, values: bool) -> Answer {
+        self.scratch.counts.terminal_reads += 1;
         let lexed = self.lex(context.goal, pos);
         let Some(token) = lexed.token else { return Err(self.fail(lexed.start, "matching token pattern")) };
         if !tokens::predicate(self, predicate, token.start, token.end) {
@@ -377,8 +389,22 @@ impl<'a> Run<'a> {
     }
 
     fn probe_matches(&mut self, probe: Probe, pos: u32, context: Context) -> bool {
-        let lexed = self.lex(probe.goal.unwrap_or(context.goal), pos);
-        let Some(token) = lexed.token else { return false };
+        let head = self.lex(context.goal, pos);
+        self.probe_matches_at(probe, pos, context, &head)
+    }
+
+    /// Whether `probe` matches at `pos`, where `head` is the token there in
+    /// the current goal; probes in another goal lex their own.
+    fn probe_matches_at(&mut self, probe: Probe, pos: u32, context: Context, head: &Lexed) -> bool {
+        let other;
+        let lexed = match probe.goal {
+            Some(goal) if goal != context.goal => {
+                other = self.lex(goal, pos);
+                &other
+            }
+            _ => head,
+        };
+        let Some(token) = &lexed.token else { return false };
         match &self.program.expressions[probe.expression] {
             Op::Token(terminal) => terminal.tokens.contains(&token.token)
                 && terminal.text.as_deref().is_none_or(|text| text == &self.text[token.start as usize..token.end as usize]),
@@ -390,10 +416,18 @@ impl<'a> Run<'a> {
     }
 
     fn possible_start(&mut self, expression: usize, pos: u32, context: Context) -> bool {
+        if self.program.starts[expression].is_none() { return true; }
+        self.scratch.counts.start_reads += 1;
+        let head = self.lex(context.goal, pos);
+        self.starts_at(expression, pos, context, &head)
+    }
+
+    /// [`Self::possible_start`] with the current goal's token at `pos` already read.
+    fn starts_at(&mut self, expression: usize, pos: u32, context: Context, head: &Lexed) -> bool {
         let program = self.program;
         let Some(start) = &program.starts[expression] else { return true; };
-        if self.lex(context.goal, pos).token.is_some_and(|token| start.has(token.token)) { return true; }
-        start.probes.iter().any(|probe| self.probe_matches(*probe, pos, context))
+        if head.token.as_ref().is_some_and(|token| start.has(token.token)) { return true; }
+        start.probes.iter().any(|probe| self.probe_matches_at(*probe, pos, context, head))
     }
 
     fn field_path(&self, fields: Fields, path: &[u16]) -> Option<&Draft> {
