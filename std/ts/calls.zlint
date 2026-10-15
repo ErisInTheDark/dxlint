@@ -46,6 +46,9 @@ define {
 
   in ts_function, ts_arrow, ts_method, ts_function_type, ts_method_signature, ts_call_signature {
     overloads infer last
+    let calls_overload_implementation node is ts_function && node.body != null
+      && any(name_binding(node.name.node).declarations, declaration =>
+        declaration.parent.node is ts_function && declaration.parent.node.body == null)
     let calls_receivers filter(parameter.nodes, p => p.name is ts_this || p.name is ts_identifier && p.name == "this")
     let calls_parameters filter(parameter.nodes, p => !(p.name is ts_this || p.name is ts_identifier && p.name == "this"))
     let calls_concise_result if node is ts_arrow && node.body not ts_block then node.body.node else null
@@ -62,7 +65,7 @@ define {
         && all(parts, arm => any(arm, part => contains(part.traits, "void")))
     }
     generics type_parameter
-    when !contains([] node.modifier, "async") && !contains([] node.modifier, "*")
+    when !calls_overload_implementation && !contains([] node.modifier, "async") && !contains([] node.modifier, "*")
       && !(node is ts_method && node.calls_constructor && count(node.parent.type_parameter) == 0) {
       when calls_concise_result != null && calls_inferred_widen {
         signature calls_parameters receiver calls_receivers returns calls_concise_result.widened
@@ -71,7 +74,7 @@ define {
         signature calls_parameters receiver calls_receivers returns return_type ?? calls_concise_result ?? (returned default trait void, undefined, nullable, falsy, nonthenable)
       }
     }
-    when contains([] node.modifier, "async") && !contains([] node.modifier, "*") {
+    when !calls_overload_implementation && contains([] node.modifier, "async") && !contains([] node.modifier, "*") {
       when calls_concise_result != null && calls_inferred_widen {
         signature calls_parameters receiver calls_receivers returns instance "Promise" of calls_concise_result.widened
       }
@@ -79,7 +82,7 @@ define {
         signature calls_parameters receiver calls_receivers returns return_type ?? instance "Promise" of (calls_concise_result ?? (returned default trait void, undefined, nullable, falsy, nonthenable))
       }
     }
-    when contains([] node.modifier, "*") {
+    when !calls_overload_implementation && contains([] node.modifier, "*") {
       when return_type != null {
         signature calls_parameters receiver calls_receivers returns return_type
       }
