@@ -170,7 +170,7 @@ in ts_array, ts_array_pattern, ts_tuple_type let indent_items element.nodes
 in ts_object, ts_object_pattern let indent_items property.nodes
 in ts_import let indent_items specifier.nodes
 in ts_import_attributes let indent_items descendants(ts_import_attribute)
-in indent_lists, ts_import_call let indent_first_item first(indent_items)
+in indent_lists, ts_import_call let indent_first_item find(indent_items, item => token(item, "first") != null)
 in indent_lists let indent_list_open if is ts_import_attributes then open.node else { value token.nodes; filter (item) item is (ts_open_paren, ts_open_bracket, ts_open_brace); first }
 in ts_variable_declaration let indent_first_item first(declaration.nodes)
 in ts_variable_declaration let indent_multiline_declaration { value last(declaration.nodes).offset; position }.js_line > position(offset).js_line
