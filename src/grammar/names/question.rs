@@ -263,6 +263,11 @@ pub trait World {
     fn program_option(&self, _at: Leaf, _name: &str, _semantic: &super::semantic::Semantic<'_>) -> Known<crate::expr::Value<'static>> {
         Known::Unknown
     }
+    /// The directory of the configuration the program around `at` loads
+    /// (`/`-separated); null when it loads none.
+    fn program_directory(&self, _at: Leaf, _semantic: &super::semantic::Semantic<'_>) -> Known<crate::expr::Value<'static>> {
+        Known::Unknown
+    }
     /// Every scope merged into module scope `scope`, canonical first:
     /// ambient `declare module "x"` across files and augmentations of a
     /// file module. Just `scope` where nothing merges.

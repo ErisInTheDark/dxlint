@@ -10,8 +10,10 @@ pub fn context<H: Host + ?Sized>(resolver: &Resolver<'_, H>, importer: u32, ques
 fn context_inner<H: Host + ?Sized>(resolver: &Resolver<'_, H>, importer: u32, question: &QueryContext) -> Result<Value<'static>, ()> {
     let path = resolver.host.path(importer).known().ok_or(())?;
     let directory = path.parent().ok_or(())?;
-    let config = resolver.configuration(question)?;
-    let config = Json::Object(config.options.iter().map(|(key, value)| (key.clone(), value.value.clone())).collect()).into_value(question)?;
+    let configuration = resolver.configuration(question)?;
+    let config_directory = configuration.path.as_deref().and_then(std::path::Path::parent)
+        .map_or(Value::Null, |directory| Value::from(directory.to_string_lossy().replace('\\', "/")));
+    let config = Json::Object(configuration.options.iter().map(|(key, value)| (key.clone(), value.value.clone())).collect()).into_value(question)?;
     let mut package = Value::Null;
     if !resolver.settings.packages.metadata.is_empty() {
         for ancestor in directory.ancestors() {
@@ -23,7 +25,10 @@ fn context_inner<H: Host + ?Sized>(resolver: &Resolver<'_, H>, importer: u32, qu
         }
     }
     let conditions = Value::list(resolver.settings.conditions.iter().map(|condition| Value::Str(condition.to_string().into())).collect());
-    Ok(Value::record(vec![("config".into(), config), ("package".into(), package), ("conditions".into(), conditions)]))
+    Ok(Value::record(vec![
+        ("config".into(), config), ("directory".into(), config_directory),
+        ("package".into(), package), ("conditions".into(), conditions),
+    ]))
 }
 
 #[cfg(test)]

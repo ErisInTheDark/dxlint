@@ -339,6 +339,14 @@ impl<'a> Files<'a> {
         Known::Yes(None)
     }
 
+    /// The resolution context of the program around `at`: its config
+    /// options and directory, package metadata and conditions.
+    fn resolution_context(self, at: Leaf, semantic: &Semantic<'_>) -> Known<Value<'static>> {
+        let Some(ctx) = self.0.here(at) else { return Known::Unknown };
+        let Known::Yes(Some(settings)) = self.program_selected() else { return Known::Unknown };
+        self.0.asking(semantic, at, || Resolver { host: &self, settings }.context(ctx.file_id, semantic.question))
+    }
+
     fn program_selected(self) -> Known<Option<&'a Settings>> {
         {
             let mut selected = self.0.program.selected.borrow_mut();
@@ -933,11 +941,15 @@ impl World for Files<'_> {
     }
 
     fn program_option(&self, at: Leaf, name: &str, semantic: &Semantic<'_>) -> Known<Value<'static>> {
-        let Some(ctx) = self.0.here(at) else { return Known::Unknown };
-        let Known::Yes(Some(settings)) = self.program_selected() else { return Known::Unknown };
-        let context = self.0.asking(semantic, at, || Resolver { host: self, settings }.context(ctx.file_id, semantic.question));
-        match context {
+        match self.resolution_context(at, semantic) {
             Known::Yes(context) => Known::Yes(context.key("config").key(name)),
+            Known::Unknown => Known::Unknown,
+        }
+    }
+
+    fn program_directory(&self, at: Leaf, semantic: &Semantic<'_>) -> Known<Value<'static>> {
+        match self.resolution_context(at, semantic) {
+            Known::Yes(context) => Known::Yes(context.key("directory")),
             Known::Unknown => Known::Unknown,
         }
     }

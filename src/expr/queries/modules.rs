@@ -9,11 +9,16 @@ pub(super) static FUNCTIONS: &[QueryFunction] = &[
     QueryFunction { name: "name_classes", arity: 4, call: classes },
     QueryFunction { name: "module_exports", arity: 2, call: exports },
     QueryFunction { name: "program_option", arity: 2, call: program_option },
+    QueryFunction { name: "program_directory", arity: 1, call: program_directory },
 ];
 
 fn program_option(semantic: &Semantic<'_>, at: Leaf, args: &[Value<'static>]) -> Known<Value<'static>> {
     let [Value::Str(name)] = args else { return Known::Unknown };
     semantic.world.program_option(at, name, semantic)
+}
+
+fn program_directory(semantic: &Semantic<'_>, at: Leaf, _: &[Value<'static>]) -> Known<Value<'static>> {
+    semantic.world.program_directory(at, semantic)
 }
 
 fn classes(semantic: &Semantic<'_>, at: Leaf, args: &[Value<'static>]) -> Known<Value<'static>> {
