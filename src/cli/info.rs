@@ -396,10 +396,18 @@ pub fn profile(output: &mut Output<'_>, linter: &Linter, format: super::Format, 
             });
             output.out(format_args!("{row}"));
         }
+        for (nanos, file) in p.slowest_files() {
+            let row = serde_json::json!({ "kind": "file-profile", "file": file, "ms": ms(nanos) });
+            output.out(format_args!("{row}"));
+        }
     } else {
         output.err(format_args!("\n  {BOLD}rules{BOLD:#} {DIM}by time{DIM:#}"));
         for (nanos, evals, name) in rules.iter().take(15) {
             output.err(format_args!("  {:>11.1} ms {evals:>11} nodes  {CYAN}{name}{CYAN:#}", ms(*nanos)));
+        }
+        output.err(format_args!("\n  {BOLD}files{BOLD:#} {DIM}by rules' wall time, slowest first{DIM:#}"));
+        for (nanos, file) in p.slowest_files() {
+            output.err(format_args!("  {:>11.1} ms  {file}", ms(nanos)));
         }
     }
     let mut facts: Vec<(u64, u64, &str)> = crate::expr::facts::FACTS

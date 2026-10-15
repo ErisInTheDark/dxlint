@@ -812,7 +812,7 @@ pub trait Host {
 /// `ZLINT_VM_STATS`: count delegated runs per site.
 pub fn stats() -> bool {
     static STATS: OnceLock<bool> = OnceLock::new();
-    *STATS.get_or_init(|| std::env::var_os("ZLINT_VM_STATS").is_some())
+    *STATS.get_or_init(|| std::env::var_os("ZLINT_VM_STATS").is_some_and(|value| !value.is_empty()))
 }
 
 fn parent_layer(tree: &Tree, node: u32) -> Option<u32> {

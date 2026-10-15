@@ -195,6 +195,9 @@ pub struct Profile {
     /// Reading and parsing files other than the linted ones (once per run).
     pub unit_parse_nanos: AtomicU64,
     pub unit_parses: AtomicU64,
+    /// The files whose rules took longest (wall, groups included), slowest
+    /// first: what bounds a parallel run's wall time.
+    slowest_files: Mutex<Vec<(u64, String)>>,
     effect_failures: Mutex<FxHashMap<(PathBuf, u32, crate::grammar::names::effects::build::Failure), EffectFailureProfile>>,
 }
 
@@ -358,6 +361,21 @@ impl Profile {
 
     pub fn get(counter: &AtomicU64) -> u64 {
         counter.load(Ordering::Relaxed)
+    }
+
+    const SLOWEST_FILES: usize = 10;
+
+    pub(crate) fn note_file(&self, file: &str, d: Duration) {
+        let nanos = d.as_nanos() as u64;
+        let mut slowest = self.slowest_files.lock().unwrap_or_else(|e| e.into_inner());
+        if slowest.len() == Self::SLOWEST_FILES && slowest.last().is_some_and(|&(least, _)| least >= nanos) { return }
+        let at = slowest.partition_point(|&(other, _)| other >= nanos);
+        slowest.insert(at, (nanos, file.to_string()));
+        slowest.truncate(Self::SLOWEST_FILES);
+    }
+
+    pub fn slowest_files(&self) -> Vec<(u64, String)> {
+        self.slowest_files.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     pub(crate) fn begin_value(&self, matcher: usize) -> Option<ValueEvaluation<'_>> {

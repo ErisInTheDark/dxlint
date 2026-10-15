@@ -633,6 +633,7 @@ impl Linter {
                     }
                     if let Some(p) = &self.profile {
                         Profile::add_time(&p.rules_nanos, rules_started.elapsed());
+                        p.note_file(&file, rules_started.elapsed());
                     }
                     pattern_tree = false;
                 }
@@ -655,6 +656,7 @@ impl Linter {
             }
             if let Some(p) = &self.profile {
                 Profile::add_time(&p.rules_nanos, rules_started.elapsed());
+                p.note_file(&file, rules_started.elapsed());
             }
         }
         let suppressions = Suppressions::parse(text, &lines);
