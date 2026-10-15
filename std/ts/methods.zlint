@@ -19,8 +19,8 @@ fn collection_static_value(n) = { value n; collection_value_node; collection_val
 fn collection_method(n, name) = n is ts_member && n.property == name || n is ts_index && collection_static_value(n.index.node).type == "string" && collection_static_value(n.index.node).value == name
 
 fn collection_arrayish(n) = {
-  value arms: value_constituents(n)
-  value parts: map(arms ?? [], arm => filter(arm, part => !contains(part.traits, "parameter")
+  value arms: value_parts(n)
+  value parts: map(arms ?? [], arm => filter(arm.parts, part => !contains(part.traits, "parameter")
     && !(contains(part.traits, "intersection") && count(part.traits) == 1
       && part.carrier_known && part.carrier == null)))
   value nonnull: filter(parts, arm => !(count(arm) > 0 && all(arm, part =>

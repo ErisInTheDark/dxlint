@@ -595,7 +595,6 @@ in ts_property_signature {
 }
 in ts_method_signature {
   declares member key keyed ts_value_key(it) in nearest members hoisted
-  optional when optional != null
 }
 fn ts_value_optional_member(n, key) = {
   value lookup: value_lookup(n.object.node, key)
@@ -636,6 +635,7 @@ in ts_function, ts_arrow, ts_function_type, ts_call_signature {
 }
 in ts_function { fits constructible when !any(modifier.nodes, modifier => modifier.text == "async") }
 in ts_method, ts_method_signature {
+  optional when optional != null
   when kind != "get" && kind != "set" { fits callable, object, truthy }
   when kind == "get" { unwraps it.result }
   when kind == "set" { unwraps parameter.type }
