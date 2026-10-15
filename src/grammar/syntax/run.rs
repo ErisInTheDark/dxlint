@@ -108,6 +108,8 @@ struct Counts {
     by_instruction: [u64; execute::INSTRUCTION_KINDS.len()],
     lex_reads: u64,
     dispatch_reads: u64,
+    /// Dispatched arms that were one token match, run in place.
+    fused_leaves: u64,
     start_reads: u64,
     terminal_reads: u64,
     other_goal_reads: u64,
@@ -128,6 +130,7 @@ impl Scratch {
             ("count.instructions", counts.instructions),
             ("count.lex_reads", counts.lex_reads),
             ("count.lex_reads.dispatch", counts.dispatch_reads),
+            ("count.fused_leaves", counts.fused_leaves),
             ("count.lex_reads.start", counts.start_reads),
             ("count.lex_reads.terminal", counts.terminal_reads),
             ("count.lex_reads.other_goal", counts.other_goal_reads),

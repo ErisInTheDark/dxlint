@@ -230,27 +230,12 @@ pub(super) fn evaluate(run: &mut Run<'_>, input: Input) -> Answer {
                     Instruction::Pratt { source } => prefix(run, input, source, None, &mut frames),
                 };
             }
-            Next::Return(mut answer) => {
+            Next::Return(answer) => {
                 let Some(frame) = frames.pop() else { break answer; };
                 let input = frame.input;
                 let program = run.program;
                 next = match frame.state {
-                    State::Actions(actions) => {
-                        for action in &program.instructions.actions[actions.start..actions.end()] {
-                            answer = match answer {
-                                Ok(mut matched) => { run.apply(&mut matched, action, input.pos, input.context); Ok(matched) }
-                                Err(mut failure) => {
-                                    match action {
-                                        Action::Try if !failure.fatal => failure.committed = false,
-                                        Action::Choice if !failure.committed && !failure.fatal => failure = merge_error(run.fail(input.pos, "alternative"), failure),
-                                        _ => {}
-                                    }
-                                    Err(failure)
-                                }
-                            };
-                        }
-                        Next::Return(answer)
-                    }
+                    State::Actions(actions) => Next::Return(apply_actions(run, input, actions, answer)),
                     State::Memo(key) => Next::Return(memo::finish(run, key, answer)),
                     State::Sequence { items, next, mut matched, mut scope } => match answer {
                         Ok(child) => {
@@ -319,12 +304,7 @@ pub(super) fn evaluate(run: &mut Run<'_>, input: Input) -> Answer {
                         Err(mut failure) => { failure.committed |= header.cut; Err(failure) }
                     }),
                     State::PrefixProbe { source, index, cursor } => match answer {
-                        Ok(operator) => {
-                            let Op::Pratt { prefix, .. } = &program.expressions[source] else { unreachable!() };
-                            let child = input.child(source, operator.end, prefix[index].power, Fields::default());
-                            frames.push(Frame { input, state: State::PrefixRight { source, index, operator } });
-                            Next::Enter(child, true)
-                        }
+                        Ok(operator) => prefix_operand(run, input, source, index, operator, &mut frames),
                         Err(failure) if failure.committed || failure.fatal => Next::Return(Err(failure)),
                         Err(_) => prefix(run, input, source, Some(cursor), &mut frames),
                     },
@@ -341,19 +321,10 @@ pub(super) fn evaluate(run: &mut Run<'_>, input: Input) -> Answer {
                         Err(failure) => Next::Return(Err(failure)),
                     },
                     State::RowProbe { source, index, left, cursor } => match answer {
-                        Ok(operator) => {
-                            let Op::Pratt { rows, .. } = &program.expressions[source] else { unreachable!() };
-                            let spec = &rows[index];
-                            if spec.operand {
-                                let power = if spec.right_associative { spec.power } else { spec.power + 1 };
-                                let child = input.child(source, operator.end, power, Fields::default());
-                                frames.push(Frame { input, state: State::RowRight { source, index, left, operator } });
-                                Next::Enter(child, true)
-                            } else {
-                                let left = pratt::fold(run, spec, left, operator, None, input.pos);
-                                row(run, input, source, None, left, &mut frames)
-                            }
-                        }
+                        Ok(operator) => match row_operand(run, input, source, index, left, operator, &mut frames) {
+                            RowNext::Operand(next) => next,
+                            RowNext::Folded(left) => row(run, input, source, None, left, &mut frames),
+                        },
                         Err(failure) if failure.committed || failure.fatal => Next::Return(Err(failure)),
                         Err(_) => row(run, input, source, Some(cursor), left, &mut frames),
                     },
@@ -375,20 +346,61 @@ pub(super) fn evaluate(run: &mut Run<'_>, input: Input) -> Answer {
     answer
 }
 
+/// A leaf's actions applied to its answer, as its `Actions` frame would.
+fn apply_actions(run: &mut Run<'_>, input: Input, actions: Span, mut answer: Answer) -> Answer {
+    for action in &run.program.instructions.actions[actions.start..actions.end()] {
+        answer = match answer {
+            Ok(mut matched) => { run.apply(&mut matched, action, input.pos, input.context); Ok(matched) }
+            Err(mut failure) => {
+                match action {
+                    Action::Try if !failure.fatal => failure.committed = false,
+                    Action::Choice if !failure.committed && !failure.fatal => failure = merge_error(run.fail(input.pos, "alternative"), failure),
+                    _ => {}
+                }
+                Err(failure)
+            }
+        };
+    }
+    answer
+}
+
+/// A dispatched arm that is one token match, answered in place without arm
+/// or action frames. `None` when the arm needs the general path, and always
+/// while diagnosing (failure replay records each arm on its frame).
+fn leaf_arm(run: &mut Run<'_>, input: Input) -> Option<Answer> {
+    if run.diagnose { return None; }
+    let program = run.program;
+    let code = &program.instructions.code[input.expression];
+    if code.power.is_some() || !matches!(code.scope, ScopeRule::Keep) { return None; }
+    let context = Context { goal: code.goal.unwrap_or(input.context.goal), flags: (input.context.flags | code.set) & !code.clear };
+    let answer = match code.instruction {
+        Instruction::Match { terminal, values } => run.terminal(&program.instructions.terminals[terminal], input.pos, context, values),
+        Instruction::Pattern { predicate, emit, values } => run.token_pattern(predicate, emit, input.pos, context, values),
+        _ => return None,
+    };
+    run.scratch.counts.fused_leaves += 1;
+    Some(apply_actions(run, input, code.actions, answer))
+}
+
 fn choice(run: &mut Run<'_>, input: Input, items: Span, table: usize, cursor: Option<Cursor>, failures: ChoiceFailures, frames: &mut Vec<Frame>) -> Next {
     let program = run.program;
     let dispatch = program.lowered[table].choice.as_ref().expect("choice dispatch");
     let mut cursor = cursor.unwrap_or_else(|| Cursor::open(run, dispatch, input.context.goal, input.pos));
-    let selected = cursor.find(run, dispatch, input.pos, input.context, |index| Some(program.instructions.operands[items.start + index]));
-    match selected {
-        Some(selected) => {
-            frames.push(Frame { input, state: State::Choice { items, table, selected, failures, cursor } });
-            Next::Enter(Input { expression: program.instructions.operands[items.start + selected], ..input }, false)
-        }
-        None => {
+    loop {
+        let Some(selected) = cursor.find(run, dispatch, input.pos, input.context, |index| Some(program.instructions.operands[items.start + index])) else {
             let failure = run.fail(input.pos, "alternative");
             if !run.diagnose { return Next::Return(Err(failure)); }
-            replay(run, input, items, 0, failures.first, failures, failure, frames)
+            return replay(run, input, items, 0, failures.first, failures, failure, frames);
+        };
+        let arm = Input { expression: program.instructions.operands[items.start + selected], ..input };
+        match leaf_arm(run, arm) {
+            Some(Ok(mut matched)) => { failures.clear(run); matched.cut = false; return Next::Return(Ok(matched)); }
+            Some(Err(failure)) if failure.committed || failure.fatal => { failures.clear(run); return Next::Return(Err(failure)); }
+            Some(Err(_)) => {}
+            None => {
+                frames.push(Frame { input, state: State::Choice { items, table, selected, failures, cursor } });
+                return Next::Enter(arm, false);
+            }
         }
     }
 }
@@ -416,29 +428,74 @@ fn prefix(run: &mut Run<'_>, input: Input, source: usize, cursor: Option<Cursor>
     let Op::Pratt { atom, prefix, .. } = &program.expressions[source] else { unreachable!() };
     let dispatch = program.lowered[source].prefix.as_ref().expect("prefix dispatch");
     let mut cursor = cursor.unwrap_or_else(|| Cursor::open(run, dispatch, input.context.goal, input.pos));
-    match cursor.find(run, dispatch, input.pos, input.context, |index| Some(prefix[index].operator)) {
-        Some(index) => {
-            frames.push(Frame { input, state: State::PrefixProbe { source, index, cursor } });
-            Next::Enter(input.child(prefix[index].operator, input.pos, 0, input.scope), false)
-        }
-        None => {
+    loop {
+        let Some(index) = cursor.find(run, dispatch, input.pos, input.context, |index| Some(prefix[index].operator)) else {
             frames.push(Frame { input, state: State::Atom(source) });
-            Next::Enter(input.child(*atom, input.pos, 0, input.scope), false)
+            return Next::Enter(input.child(*atom, input.pos, 0, input.scope), false);
+        };
+        let operator = input.child(prefix[index].operator, input.pos, 0, input.scope);
+        match leaf_arm(run, operator) {
+            Some(Ok(operator)) => return prefix_operand(run, input, source, index, operator, frames),
+            Some(Err(failure)) if failure.committed || failure.fatal => return Next::Return(Err(failure)),
+            Some(Err(_)) => {}
+            None => {
+                frames.push(Frame { input, state: State::PrefixProbe { source, index, cursor } });
+                return Next::Enter(operator, false);
+            }
         }
     }
 }
 
-fn row(run: &mut Run<'_>, input: Input, source: usize, cursor: Option<Cursor>, left: Matched, frames: &mut Vec<Frame>) -> Next {
+/// After a prefix operator: its operand, parsed at the operator's power.
+fn prefix_operand(run: &Run<'_>, input: Input, source: usize, index: usize, operator: Matched, frames: &mut Vec<Frame>) -> Next {
+    let Op::Pratt { prefix, .. } = &run.program.expressions[source] else { unreachable!() };
+    let child = input.child(source, operator.end, prefix[index].power, Fields::default());
+    frames.push(Frame { input, state: State::PrefixRight { source, index, operator } });
+    Next::Enter(child, true)
+}
+
+/// After an operator row matched: its right operand, or the folded postfix
+/// result as the next left side.
+enum RowNext {
+    Operand(Next),
+    Folded(Matched),
+}
+
+fn row_operand(run: &mut Run<'_>, input: Input, source: usize, index: usize, left: Matched, operator: Matched, frames: &mut Vec<Frame>) -> RowNext {
+    let program = run.program;
+    let Op::Pratt { rows, .. } = &program.expressions[source] else { unreachable!() };
+    let spec = &rows[index];
+    if !spec.operand { return RowNext::Folded(pratt::fold(run, spec, left, operator, None, input.pos)); }
+    let power = if spec.right_associative { spec.power } else { spec.power + 1 };
+    let child = input.child(source, operator.end, power, Fields::default());
+    frames.push(Frame { input, state: State::RowRight { source, index, left, operator } });
+    RowNext::Operand(Next::Enter(child, true))
+}
+
+fn row(run: &mut Run<'_>, input: Input, source: usize, cursor: Option<Cursor>, mut left: Matched, frames: &mut Vec<Frame>) -> Next {
     let program = run.program;
     let Op::Pratt { rows, .. } = &program.expressions[source] else { unreachable!() };
     let dispatch = program.lowered[source].rows.as_ref().expect("operator dispatch");
-    let mut cursor = cursor.unwrap_or_else(|| Cursor::open(run, dispatch, input.context.goal, left.end));
     let power = input.power;
-    match cursor.find(run, dispatch, left.end, input.context, |index| (rows[index].power >= power).then_some(rows[index].operator)) {
-        Some(index) => {
-            frames.push(Frame { input, state: State::RowProbe { source, index, left, cursor } });
-            Next::Enter(input.child(rows[index].operator, left.end, 0, input.scope), false)
+    let mut cursor = cursor;
+    loop {
+        let open = cursor.get_or_insert_with(|| Cursor::open(run, dispatch, input.context.goal, left.end));
+        let Some(index) = open.find(run, dispatch, left.end, input.context, |index| (rows[index].power >= power).then_some(rows[index].operator)) else {
+            return Next::Return(Ok(left));
+        };
+        let operator = input.child(rows[index].operator, left.end, 0, input.scope);
+        match leaf_arm(run, operator) {
+            Some(Ok(operator)) => match row_operand(run, input, source, index, left, operator, frames) {
+                RowNext::Operand(next) => return next,
+                RowNext::Folded(folded) => { left = folded; cursor = None; }
+            },
+            Some(Err(failure)) if failure.committed || failure.fatal => return Next::Return(Err(failure)),
+            Some(Err(_)) => {}
+            None => {
+                let cursor = cursor.take().expect("open cursor");
+                frames.push(Frame { input, state: State::RowProbe { source, index, left, cursor } });
+                return Next::Enter(operator, false);
+            }
         }
-        None => Next::Return(Ok(left)),
     }
 }
