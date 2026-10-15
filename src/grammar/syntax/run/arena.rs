@@ -15,9 +15,12 @@ impl<T: Copy> List<T> {
     pub fn first(&self) -> Option<&T> { self.first.as_ref() }
 }
 
-struct Entry<T: Copy> {
-    previous: Option<usize>,
-    value: T,
+/// Entries are never changed once written, so lists (memo answers, sibling
+/// branches) share them freely. A join stands for one list followed by
+/// another without copying either.
+enum Entry<T: Copy> {
+    Item { previous: Option<usize>, value: T },
+    Join { left: usize, right: usize },
 }
 
 pub(super) struct Chain<T: Copy> {
@@ -39,7 +42,7 @@ impl<T: Copy> Chain<T> {
 
     pub fn push(&mut self, list: &mut List<T>, value: T) {
         let last = self.entries.len();
-        self.entries.push(Entry { previous: list.last, value });
+        self.entries.push(Entry::Item { previous: list.last, value });
         *list = List { last: Some(last), first: list.first.or(Some(value)), len: list.len + 1 };
     }
 
@@ -49,43 +52,32 @@ impl<T: Copy> Chain<T> {
         list
     }
 
+    /// `list` followed by `next`, in constant time.
     pub fn append(&mut self, list: &mut List<T>, next: List<T>) {
-        if next.is_empty() { return; }
-        if list.is_empty() { *list = next; return; }
-        self.pending.clear();
-        let mut at = next.last;
-        while let Some(id) = at {
-            let entry = &self.entries[id];
-            self.pending.push(entry.value);
-            at = entry.previous;
-        }
-        for index in (0..self.pending.len()).rev() {
-            self.push(list, self.pending[index]);
-        }
+        let (Some(left), Some(right)) = (list.last, next.last) else {
+            if list.is_empty() { *list = next; }
+            return;
+        };
+        let join = self.entries.len();
+        self.entries.push(Entry::Join { left, right });
+        *list = List { last: Some(join), first: list.first, len: list.len + next.len };
     }
 
     pub fn filter(&mut self, list: List<T>, keep: impl Fn(T) -> bool) -> List<T> {
-        self.pending.clear();
-        let mut at = list.last;
-        while let Some(id) = at {
-            let entry = &self.entries[id];
-            if keep(entry.value) { self.pending.push(entry.value); }
-            at = entry.previous;
-        }
+        let mut pending = std::mem::take(&mut self.pending);
+        pending.clear();
+        pending.extend(self.reversed(list).filter(|&value| keep(value)));
         let mut filtered = List::default();
-        for index in (0..self.pending.len()).rev() {
-            self.push(&mut filtered, self.pending[index]);
+        for index in (0..pending.len()).rev() {
+            self.push(&mut filtered, pending[index]);
         }
+        self.pending = pending;
         filtered
     }
 
-    pub fn reversed(&self, list: List<T>) -> impl Iterator<Item = T> + '_ {
-        let mut at = list.last;
-        std::iter::from_fn(move || {
-            let entry = &self.entries[at?];
-            at = entry.previous;
-            Some(entry.value)
-        })
+    /// The values last to first.
+    pub fn reversed(&self, list: List<T>) -> Reversed<'_, T> {
+        Reversed { chain: self, at: list.last, stack: Stack::default() }
     }
 
     pub fn write_ordered(&self, list: List<T>, values: &mut Vec<T>) {
@@ -99,6 +91,60 @@ impl<T: Copy> Chain<T> {
         let mut values = Vec::new();
         self.write_ordered(list, &mut values);
         values
+    }
+}
+
+/// Pending left halves of joins: a few inline, deeper ones spilled.
+#[derive(Default)]
+struct Stack {
+    inline: [usize; 8],
+    len: usize,
+    spilled: Vec<usize>,
+}
+
+impl Stack {
+    fn push(&mut self, id: usize) {
+        if self.len < self.inline.len() && self.spilled.is_empty() {
+            self.inline[self.len] = id;
+            self.len += 1;
+        } else {
+            self.spilled.push(id);
+        }
+    }
+
+    fn pop(&mut self) -> Option<usize> {
+        if let Some(id) = self.spilled.pop() { return Some(id) }
+        self.len = self.len.checked_sub(1)?;
+        Some(self.inline[self.len])
+    }
+}
+
+pub(super) struct Reversed<'a, T: Copy> {
+    chain: &'a Chain<T>,
+    at: Option<usize>,
+    stack: Stack,
+}
+
+impl<T: Copy> Iterator for Reversed<'_, T> {
+    type Item = T;
+
+    fn next(&mut self) -> Option<T> {
+        loop {
+            let id = match self.at.take() {
+                Some(id) => id,
+                None => self.stack.pop()?,
+            };
+            match self.chain.entries[id] {
+                Entry::Item { previous, value } => {
+                    self.at = previous;
+                    return Some(value);
+                }
+                Entry::Join { left, right } => {
+                    self.stack.push(left);
+                    self.at = Some(right);
+                }
+            }
+        }
     }
 }
 
@@ -122,5 +168,22 @@ mod tests {
         assert_eq!(chain.ordered(right), [7, 17]);
         assert_eq!(chain.ordered(next), [11, 13]);
         assert_eq!(chain.ordered(filtered), [7, 13]);
+    }
+
+    #[test]
+    fn joins_nest_deeply_and_keep_order() {
+        let mut chain = Chain::default();
+        let mut whole = List::default();
+        for value in 0..100 {
+            let part = chain.single(value);
+            let mut grown = whole;
+            chain.append(&mut grown, part);
+            whole = grown;
+        }
+        let mut pushed = whole;
+        chain.push(&mut pushed, 100);
+        assert_eq!(chain.ordered(whole), (0..100).collect::<Vec<_>>());
+        assert_eq!(chain.ordered(pushed), (0..=100).collect::<Vec<_>>());
+        assert_eq!(whole.len(), 100);
     }
 }

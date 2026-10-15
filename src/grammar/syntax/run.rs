@@ -120,7 +120,8 @@ struct Counts {
     memo_hits: u64,
     memo_stores: u64,
     impossible_starts: u64,
-    copied: u64,
+    /// Constant-time list concatenations (captures used to be copied).
+    joins: u64,
 }
 
 impl Scratch {
@@ -141,7 +142,7 @@ impl Scratch {
             ("count.memo_hits", counts.memo_hits),
             ("count.memo_stores", counts.memo_stores),
             ("count.impossible_starts", counts.impossible_starts),
-            ("count.copied_entries", counts.copied),
+            ("count.chain_joins", counts.joins),
             ("size.memo", self.memo.len() as u64),
             ("size.drafts", self.drafts.len() as u64),
             ("size.receipts", self.receipts.len() as u64),
@@ -269,8 +270,8 @@ impl<'a> Run<'a> {
     }
 
     fn append(&mut self, target: &mut Matched, next: Matched) {
-        if !target.values.is_empty() { self.scratch.counts.copied += next.values.len() as u64; }
-        if !target.fields.is_empty() { self.scratch.counts.copied += next.fields.len() as u64; }
+        if !target.values.is_empty() && !next.values.is_empty() { self.scratch.counts.joins += 1; }
+        if !target.fields.is_empty() && !next.fields.is_empty() { self.scratch.counts.joins += 1; }
         target.start = target.start.or(next.start);
         target.end = next.end;
         self.scratch.values.append(&mut target.values, next.values);
