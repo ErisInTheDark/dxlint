@@ -120,6 +120,9 @@ pub enum CExpr {
     Walk(Box<CExpr>, u16, Box<CExpr>),
     /// `descendants(layer)`: selected nodes under this one, in source order.
     Descendants(NodeSel),
+    /// `n.descendants(layer)`: selected nodes under node `n` (none when `n`
+    /// is not a node), in source order.
+    DescendantsOf(NodeSel, Box<CExpr>),
     /// `overlapping(layer)`: selected nodes anywhere in the file whose span
     /// overlaps this node's, in source order.
     Overlapping(NodeSel, Option<Box<(CExpr, CExpr)>>),
@@ -168,7 +171,8 @@ macro_rules! child_visitor {
                 | CExpr::Relative(_, inner) | CExpr::Is(inner, _) | CExpr::Trait(inner, _, _) | CExpr::Semantic(inner, _) | CExpr::Key(inner, _)
                 | CExpr::OnField(_, inner) | CExpr::OwnChild(_, _, inner) | CExpr::OnParent(inner)
                 | CExpr::Position(inner) | CExpr::KindName(inner) | CExpr::NodeAt(inner)
-                | CExpr::FieldElse(_, inner) | CExpr::OnAncestor(_, inner) | CExpr::Token(_, inner, None) => f(inner),
+                | CExpr::FieldElse(_, inner) | CExpr::OnAncestor(_, inner) | CExpr::Token(_, inner, None)
+                | CExpr::DescendantsOf(_, inner) => f(inner),
                 CExpr::Token(_, inner, Some(pairs)) => {
                     f(inner);
                     f(pairs);
@@ -788,6 +792,53 @@ impl Scope<'_> {
         self.node_subject(value, errors)
     }
 
+    /// The layer selection of `descendants`/`overlapping`/`containing`
+    /// (`name`): a layer or group, or `layer.field`.
+    fn node_selection(&self, name: &Name, layer_arg: Option<&Expr>, span: crate::config::source::Span, errors: &mut Vec<ConfigError>) -> Option<NodeSel> {
+        let (layer, field) = match layer_arg {
+            Some(Expr { kind: ExprKind::Var(path), .. }) if path.len() <= 2 => (path.first(), path.get(1)),
+            _ => (None, None),
+        };
+        let label = match field {
+            Some(f) => match self.grammar.labels.get(&f.text) {
+                Some(l) => Some(l),
+                None => {
+                    errors.push(ConfigError::new(f.span, format!("no layer has a field `{}`", f.text)));
+                    return None;
+                }
+            },
+            None => None,
+        };
+        let ids = layer.and_then(|l| match self.grammar.matcher(&l.text) {
+            Some(m) => Some(vec![m]),
+            None => Some(
+                self.grammar.group(&l.text)?.iter().filter_map(|p| match p {
+                    crate::config::ast::Parent::Matcher(n) => self.grammar.matcher(&n.text),
+                    _ => None,
+                }).collect(),
+            ),
+        });
+        let Some(ids) = ids else {
+            errors.push(
+                ConfigError::new(span, format!("`{}` takes a layer or group name, or `name.field`", name.text))
+                    .note(format!("usage: {}(ts_comment), {}(ts_template.quasi)", name.text, name.text)),
+            );
+            return None;
+        };
+        self.note(name.span, Resolved::Function(match name.text.as_str() {
+            "overlapping" => "overlapping",
+            "containing" => "containing",
+            _ => "descendants",
+        }));
+        if let Some(reads) = self.layer_reads {
+            reads.borrow_mut().extend(&ids);
+        }
+        if let Some(l) = layer {
+            self.note(l.span, if ids.len() == 1 && self.grammar.matcher(&l.text).is_some() { Resolved::Layer(l.text.clone()) } else { Resolved::Group(l.text.clone()) });
+        }
+        Some(NodeSel::new(self.grammar, &ids, label))
+    }
+
     pub fn compile(&self, e: &Expr, errors: &mut Vec<ConfigError>) -> Option<CExpr> {
         Some(match &e.kind {
             ExprKind::Pipeline(steps) => self.pipeline_steps(steps, None, errors)?,
@@ -861,57 +912,14 @@ impl Scope<'_> {
                     [l, from, to] if name.text == "overlapping" => (Some(l), Some((from, to))),
                     _ => (None, None),
                 };
-                // `kind` or `kind.field`.
-                let (layer, field) = match layer_arg {
-                    Some(Expr { kind: ExprKind::Var(path), .. }) if path.len() <= 2 => (path.first(), path.get(1)),
-                    _ => (None, None),
-                };
-                let label = match field {
-                    Some(f) => match self.grammar.labels.get(&f.text) {
-                        Some(l) => Some(l),
-                        None => {
-                            errors.push(ConfigError::new(f.span, format!("no layer has a field `{}`", f.text)));
-                            return None;
-                        }
-                    },
-                    None => None,
-                };
-                let ids = layer.and_then(|l| match self.grammar.matcher(&l.text) {
-                    Some(m) => Some(vec![m]),
-                    None => Some(
-                        self.grammar.group(&l.text)?.iter().filter_map(|p| match p {
-                            crate::config::ast::Parent::Matcher(n) => self.grammar.matcher(&n.text),
-                            _ => None,
-                        }).collect(),
-                    ),
-                });
-                let overlapping = name.text == "overlapping";
-                let Some(ids) = ids else {
-                    errors.push(
-                        ConfigError::new(e.span, format!("`{}` takes a layer or group name, or `name.field`", name.text))
-                            .note(format!("usage: {}(ts_comment), {}(ts_template.quasi)", name.text, name.text)),
-                    );
-                    return None;
-                };
-                let containing = name.text == "containing";
-                self.note(name.span, Resolved::Function(if overlapping { "overlapping" } else if containing { "containing" } else { "descendants" }));
-                if let Some(reads) = self.layer_reads {
-                    reads.borrow_mut().extend(&ids);
-                }
-                if let Some(l) = layer {
-                    self.note(l.span, if ids.len() == 1 && self.grammar.matcher(&l.text).is_some() { Resolved::Layer(l.text.clone()) } else { Resolved::Group(l.text.clone()) });
-                }
-                let range = match range {
-                    Some((from, to)) => Some(Box::new((self.compile(from, errors)?, self.compile(to, errors)?))),
-                    None => None,
-                };
-                let sel = NodeSel::new(self.grammar, &ids, label);
-                if containing {
-                    CExpr::Containing(sel)
-                } else if overlapping {
-                    CExpr::Overlapping(sel, range)
-                } else {
-                    CExpr::Descendants(sel)
+                let sel = self.node_selection(name, layer_arg, e.span, errors)?;
+                match name.text.as_str() {
+                    "containing" => CExpr::Containing(sel),
+                    "overlapping" => CExpr::Overlapping(sel, match range {
+                        Some((from, to)) => Some(Box::new((self.compile(from, errors)?, self.compile(to, errors)?))),
+                        None => None,
+                    }),
+                    _ => CExpr::Descendants(sel),
                 }
             }
             // `kind_name(n)`: a node's kind as text, for messages.
@@ -1089,6 +1097,14 @@ impl Scope<'_> {
                 CExpr::FactCall(i, args, None)
             }
             // Allowed in `fn` bodies too: the node is an explicit value.
+            ExprKind::NodeCall(receiver, name, args) if name.text == "descendants" && self.grammar.function(&name.text).is_none() => {
+                let [layer] = args.as_slice() else {
+                    errors.push(ConfigError::new(e.span, "`n.descendants` takes one layer or group").note("usage: n.descendants(ts_comment)"));
+                    return None;
+                };
+                let sel = self.node_selection(name, Some(layer), e.span, errors)?;
+                CExpr::DescendantsOf(sel, Box::new(self.compile(receiver, errors)?))
+            }
             ExprKind::NodeCall(receiver, name, args) => {
                 let Some(i) = facts::fact(&name.text) else {
                     errors.push(

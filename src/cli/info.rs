@@ -110,7 +110,8 @@ pub fn rule_dependencies(output: &mut Output<'_>, linter: &Linter, symbols: &Sym
                 CExpr::Trait(..) | CExpr::Semantic(..) | CExpr::QueryCall(..) => semantic = true,
                 CExpr::Ancestor(matcher, _) | CExpr::OnAncestor(matcher, _) => { layers.insert(*matcher); }
                 CExpr::OwnChild(_, matchers, _) => layers.extend(matchers),
-                CExpr::Descendants(selection) | CExpr::Overlapping(selection, _) | CExpr::Containing(selection) => layers.extend(selection.kinds()),
+                CExpr::Descendants(selection) | CExpr::DescendantsOf(selection, _) | CExpr::Overlapping(selection, _)
+                | CExpr::Containing(selection) => layers.extend(selection.kinds()),
                 CExpr::Is(_, tests) => for test in tests {
                     if let crate::expr::IsTest::Kind(matchers) | crate::expr::IsTest::Field(matchers, _) = test { layers.extend(matchers) }
                 },

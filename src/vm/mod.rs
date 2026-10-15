@@ -339,6 +339,9 @@ pub enum Seq {
     Overlapping(NodeSel, Option<Box<(VExpr, VExpr)>>),
     /// `descendants(sel)`: selected nodes under this one, in source order.
     Descendants(NodeSel),
+    /// `n.descendants(sel)`: selected nodes under node `n`; none when `n` is
+    /// not a node.
+    DescendantsOf(NodeSel, Box<VExpr>),
     /// `walk(roots, n => next)`: every node reached, breadth first, once;
     /// the node binds at the slot for the body.
     Walk(Box<Seq>, Box<Seq>, u16),
@@ -708,6 +711,7 @@ fn lower_in<'a>(e: &'a CExpr, g: &Scope<'a, '_>, args: &[Lowered], bound: u16) -
             return Ok(Lowered::Seq(Seq::Overlapping(sel.clone(), range)));
         }
         CExpr::Descendants(sel) => return Ok(Lowered::Seq(Seq::Descendants(sel.clone()))),
+        CExpr::DescendantsOf(sel, receiver) => return Ok(Lowered::Seq(Seq::DescendantsOf(sel.clone(), boxed(receiver)?))),
         CExpr::Walk(roots, param, body) => {
             let inner = bind_params(args, *param, 1, bound);
             let next = seq(body, g, &inner, bound + 1);
@@ -1320,6 +1324,15 @@ fn walk_seq<H: Host>(h: &Runtime<'_, H>, node: u32, s: &Seq, f: &mut Vec<V>, eac
             for id in h.descendants(node, sel) {
                 if !each(V::Node(id), f)? {
                     return Some(false);
+                }
+            }
+        }
+        Seq::DescendantsOf(sel, receiver) => {
+            if let V::Node(root) | V::NodeText(root) = ev(h, node, receiver, f)? {
+                for id in h.descendants(root, sel) {
+                    if !each(V::Node(id), f)? {
+                        return Some(false);
+                    }
                 }
             }
         }

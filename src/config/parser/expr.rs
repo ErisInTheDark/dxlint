@@ -625,8 +625,20 @@ impl Parser<'_> {
                     args.push(Expr { kind: ExprKind::Lambda(params, Box::new(body)), span });
                 }
             } else {
+                // `name(` written as a call: often a value continued from the
+                // previous line, which a newline ends.
+                let call_shaped = self.ts.peek_raw(0)
+                    .is_some_and(|next| next.kind == Tk::LParen && next.span.start == name.span.end);
                 while !self.step_ends() {
-                    args.push(self.operand()?);
+                    let Some(arg) = self.operand() else {
+                        if call_shaped {
+                            self.errors.push(ConfigError::new(name.span, format!(
+                                "`{}(` at the start of a line begins a new pipeline step; keep a continued value on one line or name it",
+                                name.text)));
+                        }
+                        return None;
+                    };
+                    args.push(arg);
                 }
             }
             PipelineStage::Call(function, args)
