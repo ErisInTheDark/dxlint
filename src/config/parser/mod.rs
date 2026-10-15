@@ -316,6 +316,7 @@ impl<'a> Parser<'a> {
             (Tk::Ident, "group") => self.group(),
             (Tk::Ident, "parser") => self.syntax_parser(),
             (Tk::Ident, "exclusive") => self.exclusive_item(ctx),
+            (Tk::Ident, "trait") => self.implication_item(ctx),
             (Tk::Ident, "top" | "dynamic") => self.algebra_item(ctx),
             (Tk::Ident, "keys") => self.key_domains_item(ctx),
             (Tk::Ident, "product") => self.product_shape_item(ctx),

@@ -120,6 +120,7 @@ struct, signature or literal type is the type; nothing is constructed.
 | `keys text\|ordinal\|symbol <traits>` (language) | which traits a key value must have to belong to each key domain |
 | `indexed text\|ordinal\|symbol <path> [using v] [in views]` | an index signature: an unbounded, lookup-only member inventory for that key domain |
 | `indexed keyed <path> by <key value> [using v] [in views]` | computed members with finite keys evaluated per site (Known keys cached per canonical leaf and path, keeping the frame) |
+| `trait T implies U, ...` (language) | every value fitting `T` fits `U` too (closed over chains): `fits T`, product traits and `trait T` values carry the implied traits, so recipes write `trait undefined` for the whole set. Tests (`excludes`, `could`, conditions) are unchanged |
 | `fits T, ... [in views] open` | the listed traits are known; traits not listed are uncertain (not false) for that view (`any`, `unknown`); `when` and scope views apply as for `fits` |
 | `members <views> closed [inherits v]` | the scope's named-member list is complete (presence proofs may drop absent keys); every active base view must be closed too, and unresolved members or heritage never prove closed |
 | `flag <name> [when c]` (per kind) | a named fact about a declaration (`readonly`, `method`, `private`...), reported on member sources by `value_children`; a flag whose condition is unknown makes the site's flags unknown unless another item of the same name holds |

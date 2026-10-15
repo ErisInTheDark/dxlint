@@ -179,6 +179,9 @@ pub struct Vocabulary {
     pub effects: Vec<String>,
     /// Trait names (`fits`, `excludes`, `could` / `always`); at most 64.
     pub traits: Vec<String>,
+    /// Per trait index, every trait it implies (itself included), closed
+    /// over chains. Shorter than `traits` when later traits imply nothing.
+    pub implied: Vec<u64>,
     pub products: Vec<String>,
 }
 
@@ -195,6 +198,30 @@ impl Vocabulary {
     }
     pub fn trait_bit(&self, name: &str) -> u64 {
         self.traits.iter().position(|t| t == name).map_or(0, |i| 1 << i)
+    }
+    /// `bits` with every trait they imply.
+    pub fn with_implied(&self, bits: u64) -> u64 {
+        self.implied.iter().enumerate().filter(|&(index, _)| bits & (1 << index) != 0).fold(bits, |all, (_, &implied)| all | implied)
+    }
+    /// Closes `trait a implies b, c` items over chains; the names must
+    /// already be interned.
+    fn imply(&mut self, implications: &[(Name, Vec<Name>)], errors: &mut Vec<ConfigError>) {
+        let Some(edges) = implications.iter().map(|(name, implied)| {
+            Some((class_bits(&mut self.traits, std::slice::from_ref(name), errors)?, class_bits(&mut self.traits, implied, errors)?))
+        }).collect::<Option<Vec<_>>>() else { return };
+        self.implied = (0..self.traits.len()).map(|index| 1u64 << index).collect();
+        loop {
+            let mut changed = false;
+            for &(from, to) in &edges {
+                let index = from.trailing_zeros() as usize;
+                let closed = to | self.with_implied(to);
+                if self.implied[index] | closed != self.implied[index] {
+                    self.implied[index] |= closed;
+                    changed = true;
+                }
+            }
+            if !changed { break }
+        }
     }
 }
 
@@ -383,7 +410,7 @@ impl Names {
     /// opened is an error, like an unknown matcher.
     pub fn build(config: &Config, g: &Grammar, errors: &mut Vec<ConfigError>) -> Names {
         let mut names = Names { kinds: vec![KindNames::default(); g.matchers.len()], ..Names::default() };
-        if config.names.is_empty() && config.exclusive.is_empty() && config.top.is_empty() && config.dynamic.is_empty() && config.key_domains.is_empty() && config.products.is_empty() && config.apparent.is_empty() {
+        if config.names.is_empty() && config.exclusive.is_empty() && config.implications.is_empty() && config.top.is_empty() && config.dynamic.is_empty() && config.key_domains.is_empty() && config.products.is_empty() && config.apparent.is_empty() {
             return names;
         }
         let mut vocab = Vocabulary::default();
@@ -398,6 +425,7 @@ impl Names {
                 }
             }
         }
+        vocab.imply(&config.implications, errors);
         // Numbered as the engine numbers them (first definition order).
         let attrs = crate::expr::AttrNames::new(config.attrs.iter().map(|d| d.name.text.as_str()));
         let mut declared = 0u64;
@@ -573,7 +601,7 @@ impl Names {
                     }
                 }
                 NameItem::Fits { traits, views, open } => {
-                    let Some(bits) = class_bits(&mut vocab.traits, traits, errors) else { continue };
+                    let Some(bits) = class_bits(&mut vocab.traits, traits, errors).map(|bits| vocab.with_implied(bits)) else { continue };
                     let Some(views_mask) = class_bits(&mut vocab.scope_classes, views, errors) else { continue };
                     asked.extend(views.iter().map(|name| (name, true)));
                     for (&m, &when) in targets.iter().zip(&when) {

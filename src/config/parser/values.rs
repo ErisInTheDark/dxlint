@@ -251,6 +251,27 @@ impl Parser<'_> {
         self.config.exclusive.push(Exclusive { traits, span: keyword.span });
     }
 
+    /// `trait a implies b, c`.
+    pub(super) fn implication_item(&mut self, context: Option<&Context>) {
+        let keyword = self.bump().expect("peeked");
+        let Some(name) = self.ident("a trait name") else { return };
+        if !self.word("implies") {
+            self.error_here("expected `implies <traits>` after the trait name");
+            return;
+        }
+        let implied = self.name_list("a trait name");
+        self.end_of_item();
+        if context.is_some() || !self.conditions.is_empty() {
+            self.errors.push(ConfigError::new(keyword.span, "trait implications belong at top level"));
+            return;
+        }
+        if implied.is_empty() {
+            self.errors.push(ConfigError::new(name.span, "`implies` needs at least one trait"));
+            return;
+        }
+        self.config.implications.push((name, implied));
+    }
+
     pub(super) fn algebra_item(&mut self, context: Option<&Context>) {
         let keyword = self.bump().expect("peeked");
         let traits = self.name_list("a trait name");

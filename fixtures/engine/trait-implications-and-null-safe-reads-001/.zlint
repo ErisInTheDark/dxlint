@@ -1,0 +1,8 @@
+import .ts
+trait marked implies flagged
+in ts_number { fits marked }
+in ts_number rule e {
+  let implied node always flagged
+  let own node always marked
+  info "{ implied }/{ own }/{ parent?.offset != null }/[{ first([])? }]"
+}

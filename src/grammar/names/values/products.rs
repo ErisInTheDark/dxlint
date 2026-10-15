@@ -35,6 +35,7 @@ pub(in crate::grammar::names) fn lower_shape(
         record(lower_path(grammar, attrs, errors, path))
     };
     let traits = class_bits(&mut vocabulary.traits, &shape.traits, errors)?;
+    let traits = vocabulary.with_implied(traits);
     let mut lower = |recipe: &Option<Unwrap>| match recipe {
         Some(recipe) => lower_value(recipe, &path, vocabulary, errors, requested_classes).map(Some),
         None => Some(None),

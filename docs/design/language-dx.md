@@ -25,7 +25,7 @@ Logic is macros; there is no `fn` keyword. To the author a macro behaves exactly
 - Macros may be declared inside an item or rule block; they are visible only there (`@present = ...` then `@present`).
 - Migration: today's `fn` definitions and calls become typed expression macros; the 75 recursive ones are rewritten flat first.
 
-## Nullability (decided)
+## Nullability (`?.` and `{x?}` implemented as syntax; maybe-null tracking pending)
 
 - Types are non-null by default; `T?` means `T | null` (on the type, never on the name), for macro parameters and option schemas alike.
 - The compiler tracks maybe-null alongside maybe-unknown (optional fields, record keys, `find`, `first`, ...). Sinks (messages, `report at`, `fix`) need non-null values: handle absence with `??` or a guard first.
@@ -76,7 +76,7 @@ in ts_assignment rule no-self-assign {
 - One form for option lists and code lists (`@each` goes); the engine knows which lists are fixed at config load.
 - Prefer a rule on the item's own node kind when one exists; `each` is for derived items (pairs, groups) with no single owning node.
 
-## Type recipes (`\` and `.[k]` implemented; implications, absorbing `any` pending)
+## Type recipes (`\`, `.[k]` and `trait a implies b` implemented; absorbing `any` pending)
 
 - Trait implications are declared once: `trait undefined implies nullable, falsy, nonthenable`; `trait undefined` then means the whole set everywhere.
 - Operators, tightest first: `a.[k]` member lookup (was `from a at k`), `!a` complement, `a \ b` difference (was `excludes b from a`), `a & b`, `a | b`, `a ?? b` (b when a is unknown). No comparisons, arithmetic or conditional types in recipes: yes/no questions stay in conditions (`could`, `always`, `fits`), branching stays in `when`.

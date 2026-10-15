@@ -82,7 +82,7 @@ pub(in crate::grammar::names) fn lower_value(
                 }
                 bits |= bit;
             }
-            Value::Traits(bits)
+            Value::Traits(vocabulary.with_implied(bits))
         }
         Unwrap::Returned { default } => Value::Returned { default: Box::new(lower(default, vocabulary, errors)?) },
         Unwrap::Either(a, b) => Value::Either(Box::new(lower(a, vocabulary, errors)?), Box::new(lower(b, vocabulary, errors)?)),

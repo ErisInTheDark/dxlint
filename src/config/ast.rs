@@ -40,6 +40,8 @@ pub struct Config {
     pub parsers: Vec<ParserDecl>,
     /// `exclusive a, b, ...`: traits no possible value has together.
     pub exclusive: Vec<Exclusive>,
+    /// `trait a implies b, c`: every value fitting `a` fits `b` and `c` too.
+    pub implications: Vec<(Name, Vec<Name>)>,
     pub top: Vec<Name>,
     pub dynamic: Vec<Name>,
     pub key_domains: Vec<(values::KeyDomain, Vec<Name>)>,

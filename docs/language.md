@@ -532,7 +532,7 @@ Item stages may omit the second parameter. `i` is the original input index, incl
 
 | syntax | meaning |
 |---|---|
-| `"text {expr} more"` | template string; `{{` and `}}` for literal braces |
+| `"text {expr} more"` | template string; `{{` and `}}` for literal braces; `{expr?}` is `{expr ?? ""}` (absence prints as nothing) |
 | `'text'` | single-quoted string (handy inside `{...}`) |
 | `"""` ... `"""` | multi-line string, see below |
 | `42`, `1.5`, `7e-8`, `true`, `false`, `null` | literals |
@@ -540,6 +540,7 @@ Item stages may omit the second parameter. `i` is the original input index, incl
 | `{ key: value, ... }` | record (keys are names or strings) |
 | `name` | a field of the node, an option, a `let`, or a variable |
 | `option.key`, `x.key`, `f(...).key` | a record's value for `key` (`null` when missing) |
+| `x?.key` | the same, written where `x` may be null (null stays null); plain `.` still reads through null for now, `?.` marks the intended reads ahead of null checking |
 | `map(xs, x => ...)` | a lambda, for `map`, `filter`, `find`, `find_last`, `all` and `any` |
 | `fold(xs, init, (state, x) => ...)`, `reduce(xs, (state, x) => ...)` | accumulation with an explicit seed, or the first item as seed |
 | `matcher` / `matcher.x` | the closest enclosing node of `matcher`, or anything read on it (`ts_function.name`, `ts_class.offset`, `ts_function.my_attr`) |

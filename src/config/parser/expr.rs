@@ -453,10 +453,26 @@ impl Parser<'_> {
         Some(Expr { kind: ExprKind::Unary(op, Box::new(inner)), span })
     }
 
+    /// `?.key`: reads through a value that may be null (null stays null),
+    /// as `.key` still does everywhere. Consumes the glued `?`, leaving `.key`.
+    fn safe_navigation(&mut self) -> Option<Token> {
+        let question = self.ts.peek_raw(0)?.clone();
+        let dot = self.ts.peek_raw(1)?.clone();
+        let key = self.ts.peek_raw(2)?.clone();
+        if question.kind != Tk::Question || dot.kind != Tk::Dot || key.kind != Tk::Ident || !question.touches(&dot) || !dot.touches(&key) {
+            return None;
+        }
+        self.ts.next_raw();
+        Some(question)
+    }
+
     /// A primary, then `.key` reads into what it gives (`find(xs, x => ...).name`).
     fn e_primary(&mut self) -> Option<Expr> {
         let mut e = self.e_atom()?;
         loop {
+            if self.ts.last_span.zip(self.ts.peek_raw(0)).is_some_and(|(last, q)| last.end == q.span.start) {
+                self.safe_navigation();
+            }
             let dot = self.ts.peek_raw(0).cloned();
             let key = self.ts.peek_raw(1).cloned();
             match (dot, key, self.ts.last_span) {
@@ -822,6 +838,9 @@ impl Parser<'_> {
         let mut path = vec![Name { text: first.text.to_string(), span: first.span }];
         let mut last = first.clone();
         loop {
+            if self.ts.peek_raw(0).is_some_and(|q| last.touches(q)) {
+                if let Some(question) = self.safe_navigation() { last = question; }
+            }
             let dot = self.ts.peek_raw(0).cloned();
             let field = self.ts.peek_raw(1).cloned();
             match (dot, field) {
@@ -910,7 +929,14 @@ impl Parser<'_> {
                     } else {
                         (tok.span, tok.span.start as usize)
                     };
-                    parts.push(TemplatePart::Expr(self.hole(hole, hole_base, span)?, hole.trim().to_string()));
+                    // `{x?}`: absence prints as nothing, `{x ?? ""}`.
+                    let optional = hole.trim_end().strip_suffix('?').filter(|rest| !rest.ends_with('?'));
+                    let expr = self.hole(optional.unwrap_or(hole), hole_base, span)?;
+                    let expr = match optional {
+                        Some(_) => Expr { span: expr.span, kind: ExprKind::Nullish(Box::new(expr), Box::new(Expr { kind: ExprKind::Str(String::new()), span })) },
+                        None => expr,
+                    };
+                    parts.push(TemplatePart::Expr(expr, hole.trim().to_string()));
                     i = close + 1;
                     seg_start = i;
                 }
