@@ -15,6 +15,7 @@ pub(super) static FUNCTIONS: &[QueryFunction] = &[
     QueryFunction { name: "member_call_parameters", arity: 2, call: member_parameters },
     QueryFunction { name: "value_member", arity: 2, call: member },
     QueryFunction { name: "value_lookup", arity: 2, call: lookup },
+    QueryFunction { name: "value_key", arity: 1, call: value_key },
     QueryFunction { name: "value_has_member", arity: 3, call: has_member },
     QueryFunction { name: "value_at", arity: 2, call: path },
     QueryFunction { name: "value_expected_at", arity: 2, call: expected_path },
@@ -251,22 +252,55 @@ pub(super) fn lookup_in(semantic: &Semantic<'_>, value: NodeValue, key: &Key) ->
             ("sources".into(), Value::list(sources)),
         ]));
     }
-    let result = project(semantic, values.member(&value, key)).known();
+    let member = values.member(&value, key);
+    let result = project(semantic, member.clone()).known();
     if semantic.question.budget.exhausted() { return Known::Unknown }
+    let member = if matches!(member, NodeValue::Unknown) { Value::Null } else { super::handles::handle(semantic, member) };
     Known::Yes(Value::record(vec![
         ("value_known".into(), Value::Bool(result.is_some())),
         ("value".into(), result.unwrap_or(Value::Null)),
+        ("member".into(), member),
         ("alternatives".into(), Value::list(alternatives)),
     ]))
 }
 
+/// A member key as rules write it: text, an ordinal, or a key record as
+/// `value_key` / `value_children` give it (`{symbol: {file, node}}`,
+/// `{domain: "text" | "ordinal" | "symbol"}`).
 pub(super) fn member_key(value: &Value<'static>) -> Option<Key> {
+    use crate::config::ast::values::KeyDomain;
     match value {
         Value::Str(key) => Some(Key::Text((&**key).into())),
         Value::Num(index) if *index >= 0.0 && *index <= f64::from(u32::MAX) && index.fract() == 0.0 => {
             Some(Key::Ordinal(*index as u32))
         }
+        Value::Record(_) => {
+            let number = |site: &Value<'static>, name: &str| match site.key(name) {
+                Value::Num(n) if n >= 0.0 && n.fract() == 0.0 && n <= f64::from(u32::MAX) => Some(n as u32),
+                _ => None,
+            };
+            match (value.key("symbol"), value.key("domain")) {
+                (symbol @ Value::Record(_), _) => Some(Key::Symbol(NodeRef { file: number(&symbol, "file")?, node: number(&symbol, "node")? })),
+                (_, Value::Str(domain)) => Some(Key::Domain(match &*domain {
+                    "text" => KeyDomain::Text,
+                    "ordinal" => KeyDomain::Ordinal,
+                    "symbol" => KeyDomain::Symbol,
+                    _ => return None,
+                })),
+                _ => None,
+            }
+        }
         _ => None,
+    }
+}
+
+/// The member key a key expression evaluates to (`obj[key]`'s `key`), in
+/// the form `value_lookup` accepts back; null when unknown.
+fn value_key(semantic: &Semantic<'_>, at: Leaf, _: &[Value<'static>]) -> Known<Value<'static>> {
+    let values = semantic.values();
+    match values.value_key(&values.values(at)) {
+        Known::Yes(key) => Known::Yes(super::handles::key_value(&key)),
+        Known::Unknown => Known::Yes(Value::Null),
     }
 }
 

@@ -368,19 +368,41 @@ impl Values<'_> {
             Known::Yes(None) => None,
             Known::Unknown => return Known::Unknown,
         };
-        if matches!(at.target, Target::Traits(_)) && inherited.is_none() { return Known::Yes(Vec::new()) }
-        if let Some(inherited) = inherited {
-            return match wanted {
-                Some(key) => match self.keyed_members(&inherited, key) {
-                    Known::Yes(rows) => Known::Yes(rows.into_iter().flatten().collect()),
-                    Known::Unknown => Known::Unknown,
-                },
-                None => match self.members(&inherited) {
-                    Known::Yes(rows) => Known::Yes(rows.into_iter().flatten().collect()),
-                    Known::Unknown => Known::Unknown,
-                },
-            };
+        let apparent_members = |inherited: &NodeValue| match wanted {
+            Some(key) => match self.keyed_members(inherited, key) {
+                Known::Yes(rows) => Known::Yes(rows.into_iter().flatten().collect::<Vec<_>>()),
+                Known::Unknown => Known::Unknown,
+            },
+            None => match self.members(inherited) {
+                Known::Yes(rows) => Known::Yes(rows.into_iter().flatten().collect()),
+                Known::Unknown => Known::Unknown,
+            },
+        };
+        if matches!(at.target, Target::Traits(_)) {
+            return inherited.as_ref().map_or(Known::Yes(Vec::new()), apparent_members);
         }
+        // Apparent members (a callable's `Function`) are the lowest layer:
+        // own members win, and a node with no member view of its own reads
+        // only the apparent type.
+        match (self.own_members(at, request), inherited) {
+            (own, None) => own,
+            (Known::Unknown, Some(inherited)) => apparent_members(&inherited),
+            (Known::Yes(mut members), Some(inherited)) => {
+                if wanted.is_some() && !members.is_empty() { return Known::Yes(members) }
+                let Known::Yes(apparent) = apparent_members(&inherited) else { return Known::Unknown };
+                let own: Vec<_> = members.iter().map(|member| member.key.clone()).collect();
+                for member in apparent {
+                    if !own.contains(&member.key) { Self::merge_member(&mut members, member) }
+                }
+                Known::Yes(members)
+            }
+        }
+    }
+
+    /// A node's or scope's own members: declared, linked, indexed and from
+    /// its member bases, without its apparent type.
+    fn own_members(&self, at: Leaf, request: MemberRequest<'_>) -> Known<Vec<Member>> {
+        let wanted = request.key();
         match self.publication_members(at, wanted) {
             Known::Yes(Some(members)) => return Known::Yes(members),
             Known::Unknown => return Known::Unknown,

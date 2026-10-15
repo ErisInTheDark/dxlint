@@ -95,7 +95,7 @@ pub fn handle_of(value: &Value<'_>) -> Option<Handle> {
     Handle::from_number(*number)
 }
 
-fn handle(semantic: &Semantic<'_>, value: NodeValue) -> Value<'static> {
+pub(super) fn handle(semantic: &Semantic<'_>, value: NodeValue) -> Value<'static> {
     let canonical = semantic.calls().without_incidental_frames(&value, true);
     Value::record(vec![(FIELD.into(), Value::Num(semantic.question.handle(canonical).number()))])
 }
@@ -573,7 +573,7 @@ fn frame_depth(semantic: &Semantic<'_>, frame: crate::grammar::names::question::
     deepest
 }
 
-fn key_value(key: &Key) -> Value<'static> {
+pub(super) fn key_value(key: &Key) -> Value<'static> {
     match key {
         Key::Text(text) => Value::from(text.to_string()),
         Key::Ordinal(index) => Value::Num(f64::from(*index)),

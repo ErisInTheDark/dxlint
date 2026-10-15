@@ -434,6 +434,8 @@ impl<'a, 'world> Run<'a, 'world> {
     }
 
     /// The alternatives having none of `traits` (each trait excludes on its own).
+    /// The alternatives not wholly of these traits: an alternative that
+    /// only may have one (`any`, `unknown`, `string` for `falsy`) stays.
     fn excludes(&self, value: NodeValue, traits: u64) -> NodeValue {
         let NodeValue::Alternatives(alternatives) = value else { return NodeValue::Unknown };
         let mut kept = Vec::new();
@@ -442,7 +444,7 @@ impl<'a, 'world> Run<'a, 'world> {
             let mut excluded = Known::Yes(false);
             for bit in (0..u64::BITS).map(|i| 1u64 << i).filter(|bit| traits & bit != 0) {
                 if !self.values.question.budget.step() { return NodeValue::Unknown }
-                match self.values.could(&row, bit) {
+                match self.values.always(&row, bit) {
                     Known::Yes(true) => {
                         excluded = Known::Yes(true);
                         break;
