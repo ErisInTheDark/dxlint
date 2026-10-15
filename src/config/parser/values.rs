@@ -196,20 +196,25 @@ impl Parser<'_> {
     pub(super) fn modified_value(&mut self) -> Option<Unwrap> {
         let source = Box::new(self.unwrap_unary()?);
         let mut required = None;
+        let mut readonly = None;
         let mut flags = Vec::new();
         loop {
-            let optional = self.word("optional");
-            let flag = if optional { None } else if self.word("flag") { Some(self.ident("a declaration flag name")?) } else { break };
+            enum Edit { Optional, Readonly, Flag(Name) }
+            let edit = if self.word("optional") { Edit::Optional }
+                else if self.word("readonly") { Edit::Readonly }
+                else if self.word("flag") { Edit::Flag(self.ident("a declaration flag name")?) }
+                else { break };
             let add = if self.word("add") { true } else if self.word("remove") { false } else {
                 self.error_here("expected `add` or `remove`");
                 return None;
             };
-            match flag {
-                None => required = Some(!add),
-                Some(name) => flags.push((name, add)),
+            match edit {
+                Edit::Optional => required = Some(!add),
+                Edit::Readonly => readonly = Some(add),
+                Edit::Flag(name) => flags.push((name, add)),
             }
         }
-        Some(Unwrap::Modified { source, required, flags })
+        Some(Unwrap::Modified { source, required, readonly, flags })
     }
 
     pub(super) fn instance_value(&mut self) -> Option<Unwrap> {

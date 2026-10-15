@@ -848,18 +848,18 @@ in ts_mapped_type {
   let ts_value_mapped_readonly if modifier == null then "keep" else if modifier == "-readonly" then "remove" else "add"
   when ts_value_mapped_source != null && ts_value_mapped_optional == "keep" {
     when ts_value_mapped_readonly == "keep" { unwraps ts_value_mapped_source }
-    when ts_value_mapped_readonly == "add" { unwraps modified ts_value_mapped_source flag readonly add }
-    when ts_value_mapped_readonly == "remove" { unwraps modified ts_value_mapped_source flag readonly remove }
+    when ts_value_mapped_readonly == "add" { unwraps modified ts_value_mapped_source readonly add flag readonly add }
+    when ts_value_mapped_readonly == "remove" { unwraps modified ts_value_mapped_source readonly remove flag readonly remove }
   }
   when ts_value_mapped_source != null && ts_value_mapped_optional == "add" {
     when ts_value_mapped_readonly == "keep" { unwraps modified ts_value_mapped_source optional add }
-    when ts_value_mapped_readonly == "add" { unwraps modified ts_value_mapped_source optional add flag readonly add }
-    when ts_value_mapped_readonly == "remove" { unwraps modified ts_value_mapped_source optional add flag readonly remove }
+    when ts_value_mapped_readonly == "add" { unwraps modified ts_value_mapped_source optional add readonly add flag readonly add }
+    when ts_value_mapped_readonly == "remove" { unwraps modified ts_value_mapped_source optional add readonly remove flag readonly remove }
   }
   when ts_value_mapped_source != null && ts_value_mapped_optional == "remove" {
     when ts_value_mapped_readonly == "keep" { unwraps modified ts_value_mapped_source optional remove }
-    when ts_value_mapped_readonly == "add" { unwraps modified ts_value_mapped_source optional remove flag readonly add }
-    when ts_value_mapped_readonly == "remove" { unwraps modified ts_value_mapped_source optional remove flag readonly remove }
+    when ts_value_mapped_readonly == "add" { unwraps modified ts_value_mapped_source optional remove readonly add flag readonly add }
+    when ts_value_mapped_readonly == "remove" { unwraps modified ts_value_mapped_source optional remove readonly remove flag readonly remove }
   }
   when ts_value_mapped_source == null { unwraps unknown }
 }

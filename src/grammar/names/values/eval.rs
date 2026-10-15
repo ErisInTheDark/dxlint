@@ -278,9 +278,9 @@ impl<'a, 'world> Run<'a, 'world> {
                 if answer.exists { answer.value = self.excludes(answer.value, *traits) }
                 self.answers.push(answer);
             }
-            Value::Modified { source, required, flags } => {
+            Value::Modified { source, required, readonly, flags } => {
                 let mut answer = Run { values: self.values, tasks: vec![Task::Expression(at, source)], answers: Vec::new() }.run_answer();
-                if answer.exists { answer.value = self.values.modify(answer.value, *required, flags) }
+                if answer.exists { answer.value = self.values.modify(answer.value, *required, *readonly, flags) }
                 self.answers.push(answer);
             }
             Value::Text(_) | Value::From(..) | Value::Not(_) | Value::Excludes { from: None, .. }

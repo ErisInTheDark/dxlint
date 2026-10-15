@@ -8,3 +8,5 @@ function shallow(arg: Freeze<{ child: { value: number } }>) {}
 function choice(arg: Freeze<{ value: number }> | { value: number }) {}
 function optional(arg: Optional<Freeze<{ value: number }>>) {}
 function complete(arg: Complete<Optional<Freeze<{ value: number }>>>) {}
+function array(arg: Freeze<string[]>) {}
+function mutableArray(arg: string[]) {}

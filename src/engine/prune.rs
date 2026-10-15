@@ -154,7 +154,7 @@ fn value_names(value: &Unwrap, out: &mut HashSet<String>) {
             out.insert(class.text.clone());
             arguments.iter().for_each(|value| value_names(value, out));
         }
-        Unwrap::Modified { source, required: _, flags } => {
+        Unwrap::Modified { source, required: _, readonly: _, flags } => {
             value_names(source, out);
             for (flag, _) in flags { out.insert(flag.text.clone()); }
         }

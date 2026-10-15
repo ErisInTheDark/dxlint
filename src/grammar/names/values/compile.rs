@@ -53,7 +53,7 @@ pub enum Value {
     Product(ProductRecipe),
     Captured(Box<NodeValue>),
     /// See [`crate::grammar::names::question::Modified`].
-    Modified { source: Box<Value>, required: Option<bool>, flags: Box<[(Box<str>, bool)]> },
+    Modified { source: Box<Value>, required: Option<bool>, readonly: Option<bool>, flags: Box<[(Box<str>, bool)]> },
 }
 
 pub(in crate::grammar::names) fn lower_value(
@@ -170,9 +170,10 @@ pub(in crate::grammar::names) fn lower_value(
                 optional, repeated, values, readonly,
             })
         }
-        Unwrap::Modified { source, required, flags } => Value::Modified {
+        Unwrap::Modified { source, required, readonly, flags } => Value::Modified {
             source: Box::new(lower(source, vocabulary, errors)?),
             required: *required,
+            readonly: *readonly,
             flags: flags.iter().map(|(name, add)| (name.text.as_str().into(), *add)).collect(),
         },
     })

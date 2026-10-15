@@ -8,14 +8,26 @@ use super::{Known, Leaf, Member, MemberOrigin, MemberSource, NodeValue, Target, 
 use crate::grammar::names::question::{Modified, ModifiedId};
 
 impl Values<'_> {
-    /// `value` with each node leaf read through the edits. Trait-only leaves
-    /// (primitives) have no members to edit; products (tuples, arrays) keep
-    /// their own shape and readonly flag, so both stay as they are.
-    pub(crate) fn modify(&self, value: NodeValue, required: Option<bool>, flags: &[(Box<str>, bool)]) -> NodeValue {
-        if required.is_none() && flags.is_empty() { return value }
+    /// `value` with each node leaf read through the edits. Products (tuples,
+    /// arrays) are rebuilt with their own element optionality and readonly
+    /// flag edited; trait-only leaves (primitives) have no members to edit.
+    pub(crate) fn modify(&self, value: NodeValue, required: Option<bool>, readonly: Option<bool>, flags: &[(Box<str>, bool)]) -> NodeValue {
+        if required.is_none() && readonly.is_none() && flags.is_empty() { return value }
         let NodeValue::Alternatives(rows) = value else { return value };
         NodeValue::Alternatives(rows.into_iter().map(|row| row.into_iter().map(|source| match source.target {
-            Target::Traits(_) | Target::Product(_) => source,
+            Target::Traits(_) => source,
+            Target::Product(id) => match self.question.product(id) {
+                Some(mut product) => {
+                    product.readonly = readonly.unwrap_or(product.readonly);
+                    if let Some(required) = required {
+                        for element in product.elements.iter_mut().filter(|element| !element.repeated && !element.values) {
+                            element.optional = !required;
+                        }
+                    }
+                    Leaf { target: Target::Product(self.question.intern_product(product)), frame: source.frame }
+                }
+                None => source,
+            },
             // Edits of an already modified value apply after its own.
             Target::Modified(inner) => match self.question.modified(inner) {
                 Some(inner) => self.modified_leaf(Modified {

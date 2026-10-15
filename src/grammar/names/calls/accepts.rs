@@ -85,9 +85,9 @@ impl<'a, 'world> Run<'a, 'world> {
                 let inputs: Vec<_> = parts.iter().map(|part| self.recipe(at, part)).collect();
                 self.values.combine(inputs, matches!(recipe, Value::Intersection(_)))
             }
-            Value::Modified { source, required, flags } => {
+            Value::Modified { source, required, readonly, flags } => {
                 let source = self.recipe(at, source);
-                self.values.modify(source, *required, flags)
+                self.values.modify(source, *required, *readonly, flags)
             }
             Value::Spread { intersection, path, value } => {
                 let Known::Yes(sites) = self.values.follow(at, path) else { return NodeValue::Unknown };
