@@ -628,7 +628,7 @@ impl<'a> Scope<'a> {
         } else if let Some(i) = self.attrs.get(&part.text) {
             self.note(part.span, Resolved::Attr(part.text.clone()));
             CExpr::Attr(i)
-        } else if let Some(i) = facts::fact(&part.text) {
+        } else if let Some(i) = facts::fact(&part.text).filter(|_| self.grammar.labels.get(&part.text).is_none()) {
             self.note(part.span, Resolved::Fact(facts::FACTS[i].name));
             CExpr::Fact(i, FactOf::Node)
         } else if let Some(b) = Builtin::named(&part.text) {
@@ -1332,7 +1332,7 @@ impl Scope<'_> {
         } else if let Some(i) = self.attrs.get(&first.text) {
             self.note(first.span, Resolved::Attr(first.text.clone()));
             Some(CExpr::Attr(i))
-        } else if let Some(i) = facts::fact(&first.text) {
+        } else if let Some(i) = facts::fact(&first.text).filter(|_| self.grammar.labels.get(&first.text).is_none()) {
             self.note(first.span, Resolved::Fact(facts::FACTS[i].name));
             Some(CExpr::Fact(i, FactOf::Node))
         } else {
@@ -1379,6 +1379,12 @@ impl Scope<'_> {
                     return Some(CExpr::Builtin(b));
                 }
                 if let Some(i) = facts::fact(&name.text) {
+                    // A field name never falls back to the native fact of the
+                    // same name (ask for that as a call: `type()`).
+                    if let Some(label) = self.grammar.labels.get(&name.text) {
+                        self.note(name.span, Resolved::Field(name.text.clone()));
+                        return Some(CExpr::Field(label));
+                    }
                     self.note(name.span, Resolved::Fact(facts::FACTS[i].name));
                     return Some(CExpr::Fact(i, FactOf::Node));
                 }

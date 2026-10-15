@@ -354,7 +354,7 @@ fn editing_an_export_relints_its_importers() {
     let dir = std::env::temp_dir().join("zlint-lsp-tests").join("lsp-cross-file");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("tmp dir");
-    std::fs::write(dir.join(".zlint"), "import .ts\nin ts_identifier rule typed info \"{text}: {type}\" { when reference_kind == \"import\" }\n")
+    std::fs::write(dir.join(".zlint"), "import .ts\nin ts_identifier rule typed info \"{text}: {type()}\" { when reference_kind == \"import\" }\n")
         .expect("config");
     let a = dir.join("a.ts");
     let b = dir.join("b.ts");

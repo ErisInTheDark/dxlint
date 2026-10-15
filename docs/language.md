@@ -927,7 +927,7 @@ fields from their tag owner rather than the enclosing element.
 
 **Facts.** Native layers add builtins (null elsewhere): properties of the
 code any rule may ask about. What a rule makes of them (its options, what
-is wrong, messages) is written in the rule. A fact taking arguments is called (`type_structure(["then"])`); on another node, call it there: `source.node.type_structure(names)` asks about `source`, with `names` read where the call is written.
+is wrong, messages) is written in the rule. A fact taking arguments is called (`type_structure(["then"])`); on another node, call it there: `source.node.type_structure(names)` asks about `source`, with `names` read where the call is written. A name that is also a field label reads the field (null on kinds without it); its fact is read only as a call (`type()`).
 
 | name | value |
 |---|---|

@@ -128,7 +128,7 @@ fn conformance_resets_imports_globals_and_project_settings() {
     let dep = dir.join("dep.ts");
     let globals = dir.join("globals.d.ts");
     let settings = dir.join("tsconfig.json");
-    let config = "import .ts\nin ts_identifier rule probe info \"{text}: {type}\" { when text == \"x\" || text == \"G\" }\n";
+    let config = "import .ts\nin ts_identifier rule probe info \"{text}: {type()}\" { when text == \"x\" || text == \"G\" }\n";
     let replies = conformance_matches_standalone(&dir, &[
         (config, vec![(&main, "import { x } from './dep';\nx;\nG;\n"),
             (&dep, "export const x: number = 1;"), (&globals, "declare const G: boolean;"),
@@ -291,7 +291,7 @@ fn packed_sources_resolve_virtual_projects_without_writing_files() {
     std::fs::create_dir_all(&dir).expect("empty project directory");
     let pack = [
         (".zlint", "import shared\n"),
-        ("shared.zlint", "import .ts\nin ts_identifier rule typed info \"{text}: {type}\" { when reference_kind == \"import\" }\n"),
+        ("shared.zlint", "import .ts\nin ts_identifier rule typed info \"{text}: {type()}\" { when reference_kind == \"import\" }\n"),
         ("dir/index.ts", "export const x: number = 1;\n"),
         ("main.ts", "import { x } from './dir';\nx;\n"),
     ].into_iter().map(|(path, text)| serde_json::json!({ "path": path, "text": text }).to_string()).collect::<Vec<_>>().join("\n");
@@ -540,7 +540,7 @@ fn relative_imports_errors_exit_codes_and_fixing() {
 
 #[test]
 fn cache_replays_results_and_relints_exactly_what_changed() {
-    let rules = "import .ts\nin ts_identifier rule typed info \"{text}: {type}\" { when text == \"G\" || reference_kind == \"import\" }\n";
+    let rules = "import .ts\nin ts_identifier rule typed info \"{text}: {type()}\" { when text == \"G\" || reference_kind == \"import\" }\n";
     let dir = project(
         "cli-cache",
         &[
