@@ -8,10 +8,17 @@ define {
 group ts_usage_jsx ts_jsx_element, ts_jsx_fragment
 group ts_usage_iteration ts_for_in, ts_for_of
 in ts_program let ts_usage_jsx_present count(descendants(ts_usage_jsx)) > 0
-in ts_program let ts_usage_jsx_binding {
-  value factory: program_option(node, "jsxFactory") ?? "React"
-  value if type_of(factory) == "str" then first(split(factory, ".")) else null
+in ts_program let ts_usage_jsx_bindings if !ts_usage_jsx_present then [] else {
+  value fragment: count(descendants(ts_jsx_fragment)) > 0
+  value fragments: if fragment then [program_option(node, "jsxFragmentFactory") ?? "React.Fragment"] else []
+  value [program_option(node, "jsxFactory") ?? "React.createElement"] fragments
+  filter (factory) type_of(factory) == "str"
+  map (factory) first(split(factory, "."))
+  unique
 }
+fn ts_usage_jsx_used(binding, program) = binding != null
+  && binding.scope.id == last(program.scoping_lexical_scopes).id
+  && contains(program.ts_usage_jsx_bindings, first(binding.declarations).text)
 in ts_program let ts_usage_return_bindings {
   value descendants(ts_usage_iteration)
   filter (loop) {
@@ -215,11 +222,9 @@ fn ts_usage_global(binding, program) = ts_source_type(program) == "script"
 fn ts_usage_used(binding, sites, references, typed, variable, value_binding, declaration_file) = {
   value declaration: first(sites)
   value program: declaration.scoping_program
-  value root: last(program.scoping_lexical_scopes)
   value global: ts_usage_global(binding, program)
   value exported_comment: global && contains(ts_exported_names(program), declaration.text)
-  value jsx: typed && binding.scope.id == root.id && program.ts_usage_jsx_present
-    && declaration.text == program.ts_usage_jsx_binding
+  value jsx: typed && ts_usage_jsx_used(binding, program)
   value exported: typed && any(sites, site => {
     value owner: ts_usage_site(site)
     value !(value_binding && owner is (ts_interface, ts_type_alias)) && owner.parent is ts_export

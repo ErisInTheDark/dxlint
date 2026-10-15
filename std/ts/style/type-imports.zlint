@@ -2,15 +2,15 @@
 import .ts/expression-fixes
 import .ts/modules
 import .ts/import-attributes
+import .ts/scoping/usage
 
 define {
 
 fn word_list(xs) = if count(xs) == 1 then first(xs) else { value xs; slice 0 -1; join ', ' } " and " last(xs)
 in ts_program let import_decorator_metadata ts_compiler_option(node, "experimentalDecorators") == true && ts_compiler_option(node, "emitDecoratorMetadata") == true && { value descendants(ts_decorator); count } > 0
-group import_jsx_node ts_jsx_element, ts_jsx_fragment
-in ts_program let import_has_jsx { value descendants(import_jsx_node); count } > 0
 in ts_identifier {
-  let import_use if uses == null then null else if uses == 0 then "unused" else if value_uses == 0 then "type" else "value"
+  let import_use if ts_usage_jsx_used(name_binding(node), scoping_program) then "value"
+    else if uses == null then null else if uses == 0 then "unused" else if value_uses == 0 then "type" else "value"
   let type_only_name if import_use == "type" then '"' text '"' else null
 }
 in ts_import_specifier {
@@ -117,7 +117,7 @@ fn import_policy_edits(source, n, style, preference) = if preference == "no-type
   else if n.default_import == null && n.namespace == null && all(n.specifier.nodes, item => item.import_use == "type") then import_whole_edits(source, n)
   else import_split_edits(source, n, style)
 fn import_policy_fix(source, n, style, preference) =
-  if preference == "type-imports" && (n.import_has_attributes || n.parent.import_has_jsx) then null else {
+  if preference == "type-imports" && n.import_has_attributes then null else {
     value edits: import_policy_edits(source, n, style, preference)
     value from: { value edits; map (edit) edit.start; min }
     value until: { value edits; map (edit) edit.end; max }
