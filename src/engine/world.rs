@@ -694,7 +694,9 @@ impl<'a> Files<'a> {
         // it for the run), so its address names the program without hashing
         // every path again in every world.
         let program = Arc::as_ptr(&paths) as usize as u64;
-        let outside = (!paths.iter().any(|path| path == self.0.path)).then(|| self.0.path.to_owned());
+        // File names first: whole-path comparison parses every component.
+        let name = self.0.path.file_name();
+        let outside = (!paths.iter().any(|path| path.file_name() == name && path == self.0.path)).then(|| self.0.path.to_owned());
         self.0.program.outside.borrow_mut().insert(selected as *const Settings, (program, outside.clone()));
         Known::Yes((program, outside))
     }

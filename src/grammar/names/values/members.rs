@@ -442,6 +442,18 @@ impl Values<'_> {
                 index.opened(node.node).filter(|&scope| names.scopes[scope as usize].classes & kind.member_defaults != 0).collect(),
                 kind.member_defaults,
             ),
+            // A node with no member view, links, bases or indexers whose
+            // open traits do not hold (`null`, `undefined`) has no members
+            // of its own; an open one (`any`) may have any.
+            None if kind.member_bases.is_empty() && kind.member_links.is_empty() => {
+                for &(_, when) in &kind.open_fits {
+                    if !self.question.budget.step() { return Known::Unknown }
+                    if when.map_or(Known::Yes(true), |condition| self.world.condition(at, condition, self.semantic)) != Known::Yes(false) {
+                        return Known::Unknown;
+                    }
+                }
+                return Known::Yes(Vec::new());
+            }
             None => return Known::Unknown,
         };
         for scope in scopes {

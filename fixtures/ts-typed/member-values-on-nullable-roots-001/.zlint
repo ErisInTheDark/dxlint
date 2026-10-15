@@ -1,0 +1,3 @@
+import .ts
+ignore "**/tsconfig.json"
+in ts_member, ts_call rule member-values info "{text} null={value_parts(node) == null} arms={count(value_parts(node))}"

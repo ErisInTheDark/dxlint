@@ -1,0 +1,8 @@
+calls.ts:2:1-2:10 member-values#0 y.f().g() null=false arms=2
+calls.ts:2:1-2:4 member-values#0 y.f null=false arms=1
+calls.ts:2:1-2:6 member-values#0 y.f() null=false arms=1
+calls.ts:2:1-2:8 member-values#0 y.f().g null=false arms=1
+nullable.ts:2:1-2:4 member-values#0 x.a null=false arms=2
+nullable.ts:3:1-3:4 member-values#0 x.a null=false arms=2
+nullable.ts:3:8-3:11 member-values#0 x.a null=false arms=1
+nullable.ts:3:8-3:13 member-values#0 x.a.b null=false arms=2
