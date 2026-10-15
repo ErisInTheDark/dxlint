@@ -755,7 +755,7 @@ impl<'a> Parser<'a> {
         // no payload).
         let effect = (first.kind == Tk::Ident
             && !self.ts.peek_raw(1).is_some_and(|token| token.is_ident("for"))
-            && !matches!(&*first.text, "from" | "excludes" | "includes" | "has" | "scope" | "instance" | "trait" | "select" | "product" | "unknown")
+            && !matches!(&*first.text, "from" | "excludes" | "includes" | "has" | "scope" | "instance" | "trait" | "select" | "product" | "modified" | "unknown")
             && !(first.is_ident("returned") && self.ts.peek_raw(1).is_some_and(|token| token.is_ident("default")))
             && (possible || matches!(next, Some(Tk::Ident | Tk::Bang | Tk::Str | Tk::LParen))))
         .then(|| {
@@ -915,6 +915,10 @@ impl<'a> Parser<'a> {
             Tk::Ident if &*t.text == "product" => {
                 self.ts.next_raw();
                 self.product_value()
+            }
+            Tk::Ident if &*t.text == "modified" => {
+                self.ts.next_raw();
+                self.modified_value()
             }
             Tk::Ident if &*t.text == "trait" => {
                 self.ts.next_raw();

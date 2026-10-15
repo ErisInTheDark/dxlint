@@ -40,9 +40,26 @@ impl Values<'_> {
         if answer.is_none() && unknown { Known::Unknown } else { Known::Yes(answer) }
     }
 
+    /// The one key a key expression evaluates to: several literal keys of
+    /// one domain widen to that domain.
     pub fn value_key(&self, value: &NodeValue) -> Known<Key> {
+        let Known::Yes(keys) = self.value_keys(value) else { return Known::Unknown };
+        let mut answer: Option<Key> = None;
+        for key in keys {
+            answer = match answer {
+                None => Some(key),
+                Some(previous) if previous.domain() == key.domain() => Some(Key::Domain(key.domain())),
+                Some(_) => return Known::Unknown,
+            };
+        }
+        answer.map_or(Known::Unknown, Known::Yes)
+    }
+
+    /// The distinct keys a key expression's alternatives evaluate to, in
+    /// order: each literal of a finite union (`'a' | 'b'`), or a wide domain.
+    pub fn value_keys(&self, value: &NodeValue) -> Known<Vec<Key>> {
         let NodeValue::Alternatives(rows) = value else { return Known::Unknown };
-        let mut answer = None;
+        let mut keys: Vec<Key> = Vec::new();
         for row in rows {
             let mut literal = None;
             let mut domain = None;
@@ -73,13 +90,8 @@ impl Values<'_> {
                 }
             }
             let Some(key) = literal.or_else(|| domain.map(Key::Domain)) else { return Known::Unknown };
-            answer = match answer {
-                None => Some(key),
-                Some(previous) if previous == key => Some(previous),
-                Some(previous) if previous.domain() == key.domain() => Some(Key::Domain(key.domain())),
-                Some(_) => return Known::Unknown,
-            };
+            if !keys.contains(&key) { keys.push(key); }
         }
-        answer.map_or(Known::Unknown, Known::Yes)
+        if keys.is_empty() { Known::Unknown } else { Known::Yes(keys) }
     }
 }

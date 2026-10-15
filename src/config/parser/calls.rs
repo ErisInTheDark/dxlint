@@ -26,7 +26,8 @@ impl Parser<'_> {
                     return None;
                 }
                 let arguments = self.name_path("the invocation's argument field")?;
-                Some(Item::Invoke { callee, arguments, construct: keyword == "constructs" })
+                let receiver = if self.word("this") { Some(self.unwrap_value()?) } else { None };
+                Some(Item::Invoke { callee, arguments, construct: keyword == "constructs", receiver })
             }
             "discards" => {
                 if !self.word("result") {

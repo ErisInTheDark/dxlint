@@ -76,7 +76,7 @@ impl Values<'_> {
                     Self::merge_member(&mut members, Member {
                         key,
                         sources: sites.into_iter().map(|site| MemberSource {
-                            site, value: recipe.value.clone(), origin: MemberOrigin::Indexer(*domain),
+                            site, value: recipe.value.clone(), origin: MemberOrigin::Indexer(*domain), edits: None,
                         }).collect(),
                         required,
                     });
@@ -93,7 +93,7 @@ impl Values<'_> {
                             Known::Unknown => Known::Unknown,
                         };
                         Self::merge_member(&mut members, Member {
-                            key, sources: vec![MemberSource { site, value: recipe.value.clone(), origin: MemberOrigin::Named }], required,
+                            key, sources: vec![MemberSource { site, value: recipe.value.clone(), origin: MemberOrigin::Named, edits: None }], required,
                         });
                     }
                     continue;
@@ -106,7 +106,7 @@ impl Values<'_> {
                 Self::merge_member(&mut members, Member {
                     key,
                     sources: sites.into_iter().map(|site| MemberSource {
-                        site, value: recipe.value.clone(), origin: MemberOrigin::Ordinal { repeated: true },
+                        site, value: recipe.value.clone(), origin: MemberOrigin::Ordinal { repeated: true }, edits: None,
                     }).collect(),
                     required,
                 });
@@ -121,7 +121,7 @@ impl Values<'_> {
                     Known::Yes(optional) => Known::Yes(!optional),
                     Known::Unknown => Known::Unknown,
                 };
-                let source = MemberSource { site, value: recipe.value.clone(), origin: MemberOrigin::Ordinal { repeated: false } };
+                let source = MemberSource { site, value: recipe.value.clone(), origin: MemberOrigin::Ordinal { repeated: false }, edits: None };
                 Self::merge_member(&mut members, Member { key, sources: vec![source.clone()], required });
                 if wanted.is_none() && strings {
                     Self::merge_member(&mut members, Member {

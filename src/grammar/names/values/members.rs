@@ -3,6 +3,7 @@ use super::indexed::MemberRequest;
 
 impl Values<'_> {
     pub fn member_shape(&self, at: Leaf) -> Known<bool> {
+        let at = self.modified_source(at).unwrap_or(at);
         let Known::Yes(at) = self.semantic.leaf(at) else { return Known::Unknown };
         if matches!(at.target, Target::Product(_)) {
             return match self.product_info(at) {
@@ -87,6 +88,7 @@ impl Values<'_> {
 
     fn direct_closed(&self, at: Leaf) -> Known<bool> {
         let Some(_nested) = self.question.budget.nest() else { return Known::Unknown };
+        if let Some(source) = self.modified_source(at) { return self.closed_leaf(source) }
         if matches!(at.target, Target::Product(_)) {
             return match self.product_members(at, None) {
                 Known::Yes(_) => Known::Yes(true),
@@ -276,6 +278,7 @@ impl Values<'_> {
     /// bases for its view (`members ... inherits`), a product's base, or the
     /// apparent wrapper of a primitive.
     pub fn bases(&self, at: Leaf) -> Known<Vec<NodeValue>> {
+        let at = self.modified_source(at).unwrap_or(at);
         let Known::Yes(at) = self.semantic.leaf(at) else { return Known::Unknown };
         if matches!(at.target, Target::Product(_)) {
             let Known::Yes(Some(product)) = self.product_info(at) else { return Known::Unknown };
@@ -335,7 +338,7 @@ impl Values<'_> {
                 }
                 found
             }
-            Target::Scope(_) | Target::Product(_) => None,
+            Target::Scope(_) | Target::Product(_) | Target::Modified(_) => None,
         };
         let Some(recipe) = recipe else { return Known::Yes(None) };
         // Apparent members are a layer under the value's own: a program
@@ -358,7 +361,7 @@ impl Values<'_> {
 
     pub(super) fn member_context(&self, at: Leaf) -> Known<(NodeRef, Option<(u32, u64)>)> {
         match at.target {
-            Target::Traits(_) | Target::Product(_) => Known::Unknown,
+            Target::Traits(_) | Target::Product(_) | Target::Modified(_) => Known::Unknown,
             Target::Node(node) => Known::Yes((node, None)),
             Target::Scope(scope) => {
                 let Some(info) = self.world.names(scope.file).and_then(|names| names.scopes.get(scope.scope as usize)) else {
@@ -369,10 +372,11 @@ impl Values<'_> {
         }
     }
 
-    fn direct_members(&self, at: Leaf, request: MemberRequest<'_>) -> Known<Vec<Member>> {
+    pub(super) fn direct_members(&self, at: Leaf, request: MemberRequest<'_>) -> Known<Vec<Member>> {
         let wanted = request.key();
         let Some(_nested) = self.question.budget.nest() else { return Known::Unknown };
         if matches!(at.target, Target::Product(_)) { return self.product_members(at, wanted) }
+        if let Target::Modified(id) = at.target { return self.modified_members(id, request) }
         let inherited = match self.apparent(at) {
             Known::Yes(Some(inherited)) => Some(inherited),
             Known::Yes(None) => None,
@@ -575,7 +579,7 @@ impl Values<'_> {
             for (target, classes) in targets {
                 if !self.question.budget.step() { return Known::Unknown }
                 let (target, owner) = match target {
-                    Target::Traits(_) | Target::Product(_) => return Known::Unknown,
+                    Target::Traits(_) | Target::Product(_) | Target::Modified(_) => return Known::Unknown,
                     Target::Node(node) => {
                         let Known::Yes(owner) = self.declaration_owner(node) else { return Known::Unknown };
                         (Target::Node(owner), owner)

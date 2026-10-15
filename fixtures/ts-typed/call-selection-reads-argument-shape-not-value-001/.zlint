@@ -1,0 +1,3 @@
+import .ts
+ignore "**/tsconfig.json"
+in ts_call rule b info "{ call_binding(node) == null }"

@@ -1,0 +1,3 @@
+import .ts
+ignore "**/tsconfig.json"
+in ts_call rule b info "{ count(first(call_binding(node).choices).parameters) }"

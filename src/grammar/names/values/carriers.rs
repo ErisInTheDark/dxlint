@@ -2,6 +2,8 @@ use super::{Carrier, Known, Leaf, NodeRef, Target, Values};
 
 impl Values<'_> {
     pub fn carrier(&self, at: Leaf) -> Known<Option<Carrier>> {
+        // A modified value instantiates its source's carrier.
+        let at = self.modified_source(at).unwrap_or(at);
         let Known::Yes(at) = self.semantic.leaf(at) else { return Known::Unknown };
         if let Some(answer) = self.semantic.values.carriers.get(&at) {
             return answer;
@@ -16,7 +18,7 @@ impl Values<'_> {
         let Some(_nested) = self.question.budget.nest() else { return Known::Unknown };
         if matches!(at.target, Target::Product(_)) { return self.product_carrier(at) }
         let node = match at.target {
-            Target::Traits(_) | Target::Product(_) => return Known::Yes(None),
+            Target::Traits(_) | Target::Product(_) | Target::Modified(_) => return Known::Yes(None),
             Target::Node(node) => node,
             Target::Scope(scope) => {
                 let Some(info) = self.world.names(scope.file).and_then(|names| names.scopes.get(scope.scope as usize)) else {

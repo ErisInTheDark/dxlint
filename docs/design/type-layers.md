@@ -109,6 +109,7 @@ struct, signature or literal type is the type; nothing is constructed.
 | `apparent <trait> inherits <value>` (language) | trait-only values with the trait (primitives) read members and closedness through `value` (`apparent number inherits instance "Number"`); never their own members, traits or identity; an unresolved `value` leaves them unknown |
 | `product <shape> <items> fits <traits> as <constant record> [inherits v] [readonly inherits v] [optional v]` (language) | an ordered product shape (tuples, rest packs): traits, carrier description, member base (readonly products use `readonly inherits`) and the optional-element payload |
 | `unwraps product <shape> of <sites> [using v] [optional <path>] [repeated <path>] [repeated values <path>] [readonly <path>]` | the node is a product: one element per site (real values and frames, `using` per element), optional/repeated read at each site, readonly at the node; a missing flag is false, an unreadable one unknown. `repeated` marks a spread collection (its ordinal members repeat there); `repeated values` marks an element whose own value repeats (array literals and `T[]`). A missing global base (no library) is no inherited layer |
+| `unwraps modified <value> [optional add\|remove] [flag <name> add\|remove]...` | `value` with every member's requiredness and declaration flags changed (mapped types over a source's own keys); member values, traits, carriers, identity and syntax stay the source's. Index signatures keep their requiredness; primitives and products are unchanged; nested modifications compose, the outer edit winning |
 | `pack <shape>` (on a rest parameter kind) | rest arguments are captured as an ordered product of that shape |
 | `constrains <value>` (on a generic formal) | the formal's bound, evaluated in the bound frame (so dependent bounds see real arguments); inferred candidates violating a known bound fall back to it, explicit ones reject the candidate |
 | `defines <value>` (on a syntax owner) | the raw definition sites the node selects (qualified names: the member, not the left side); without it, name bindings decide. A closed scope proving the member absent yields no sites so `??` falls through; incomplete selection stays unknown; selected frames, files and classes are kept |
@@ -174,6 +175,9 @@ in ts_declarator { in init expects type }
   signature are overloads, tried in declaration order: the first whose
   arity fits and whose parameters `could` take the arguments. `result` is
   the chosen signature's result, unwrapped `through` the call.
+  `... with <field> this <value>` passes a receiver: a signature with a
+  declared receiver applies only when that receiver accepts it (a bare call
+  passes `void`); without `this`, receivers are not checked.
 - `expected` (path step): the node's contextual value: an `in <field>
   expects <value>` of its parent; an argument's matching parameter of the
   chosen signature; a parameter's counterpart in its function's expected

@@ -8,7 +8,9 @@ pub type Path = Vec<Name>;
 pub enum Item {
     Signature { parameters: Path, receiver: Option<Path>, result: Unwrap },
     Sources(Unwrap),
-    Invoke { callee: Unwrap, arguments: Path, construct: bool },
+    /// `calls callee with arguments [this receiver]`: without `this`, the
+    /// receiver is not checked against a signature's declared one.
+    Invoke { callee: Unwrap, arguments: Path, construct: bool, receiver: Option<Unwrap> },
     Expected { field: Path, value: Unwrap, at: ExpectedAt },
     DiscardsResult,
     Identity(Expr),

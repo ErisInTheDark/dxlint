@@ -54,6 +54,7 @@ impl Values<'_> {
     }
 
     pub fn identity(&self, at: Leaf) -> Known<Option<Identity>> {
+        let at = self.modified_source(at).unwrap_or(at);
         let Known::Yes(at) = self.semantic.leaf(at) else { return Known::Unknown };
         if let Some(answer) = self.semantic.values.identities.get(&at) {
             return answer;

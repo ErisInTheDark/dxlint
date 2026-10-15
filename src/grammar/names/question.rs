@@ -136,6 +136,21 @@ pub struct ProductShapeId(pub u32);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ProductId(pub u32);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ModifiedId(pub u32);
+
+/// A value read as `source` with its members' requiredness and declaration
+/// flags changed (`unwraps modified`): mapped types keeping their source's
+/// keys. The members' own values stay the source's.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Modified {
+    pub source: Leaf,
+    /// `Some(false)`: every member optional; `Some(true)`: every member required.
+    pub required: Option<bool>,
+    /// Flag names added (`true`) or removed (`false`) on every member.
+    pub flags: Box<[(Box<str>, bool)]>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ProductElement {
     pub site: Leaf,
@@ -191,6 +206,7 @@ pub enum Target {
     Scope(ScopeRef),
     Traits(u64),
     Product(ProductId),
+    Modified(ModifiedId),
 }
 
 /// A leaf of a value: a node that fits traits (or a namespace scope), seen
@@ -303,6 +319,7 @@ pub struct QueryContext {
     frames: std::cell::RefCell<Interner<Frame>>,
     args: std::cell::RefCell<Interner<Args>>,
     products: std::cell::RefCell<Interner<Product>>,
+    modified: std::cell::RefCell<Interner<Modified>>,
     handles: std::cell::RefCell<Interner<NodeValue>>,
     /// This context's handle namespace, assigned with its first handle.
     owner: std::cell::Cell<u32>,
@@ -373,6 +390,14 @@ impl QueryContext {
 
     pub fn product(&self, id: ProductId) -> Option<Product> {
         self.products.borrow().items.get(id.0 as usize).cloned()
+    }
+
+    pub(crate) fn intern_modified(&self, modified: Modified) -> ModifiedId {
+        ModifiedId(self.modified.borrow_mut().intern(modified))
+    }
+
+    pub fn modified(&self, id: ModifiedId) -> Option<Modified> {
+        self.modified.borrow().items.get(id.0 as usize).cloned()
     }
 
     /// The frame instantiating `owner` through `through` (syntax arguments

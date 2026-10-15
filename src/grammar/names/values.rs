@@ -15,6 +15,7 @@ mod indexed;
 mod keys;
 mod members;
 mod metadata;
+mod modified;
 pub mod products;
 mod reduction;
 
@@ -111,6 +112,8 @@ pub struct MemberSource {
     pub site: Leaf,
     pub value: Option<Value>,
     pub origin: MemberOrigin,
+    /// Declaration flags changed by the modified value it was read through.
+    pub edits: Option<super::question::ModifiedId>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -122,7 +125,7 @@ pub enum MemberOrigin {
 
 impl MemberSource {
     fn normal(site: Leaf) -> Self {
-        Self { site, value: None, origin: MemberOrigin::Named }
+        Self { site, value: None, origin: MemberOrigin::Named, edits: None }
     }
 }
 
@@ -240,18 +243,33 @@ impl Values<'_> {
         let answer = match leaf.target {
             Target::Traits(bits) => Known::Yes(bits & (1 << trait_id) != 0),
             Target::Product(_) => self.product_fits(leaf, trait_id),
-            Target::Scope(scope) => match self.world.names(scope.file)
-                .and_then(|names| names.scopes.get(scope.scope as usize)) {
-                Some(info) => self.direct_fits(leaf, NodeRef { file: scope.file, node: info.node }, trait_id),
+            Target::Modified(_) => match self.modified_source(leaf) {
+                Some(source) => self.fits(source, trait_id),
                 None => Known::Unknown,
             },
-            Target::Node(node) => self.direct_fits(leaf, node, trait_id),
+            Target::Scope(scope) => match self.world.names(scope.file)
+                .and_then(|names| names.scopes.get(scope.scope as usize)) {
+                Some(info) => self.direct_fits(leaf, NodeRef { file: scope.file, node: info.node }, trait_id, true),
+                None => Known::Unknown,
+            },
+            Target::Node(node) => self.direct_fits(leaf, node, trait_id, true),
         };
         self.semantic.values.traits.insert(self.semantic.epoch, (leaf, trait_id), answer);
         answer
     }
 
-    fn direct_fits(&self, leaf: Leaf, node: NodeRef, trait_id: u16) -> Known<bool> {
+    /// Whether a node site's own kind declares `trait_id`, ignoring `open`
+    /// fits: for traits naming a site's shape (a spread argument) rather
+    /// than its value, which an open value (`any`) leaves undecided.
+    pub fn declared_fits(&self, leaf: Leaf, trait_id: u16) -> Known<bool> {
+        let Known::Yes(leaf) = self.semantic.leaf(leaf) else { return Known::Unknown };
+        match leaf.target {
+            Target::Node(node) if trait_id < 64 => self.direct_fits(leaf, node, trait_id, false),
+            _ => self.fits(leaf, trait_id),
+        }
+    }
+
+    fn direct_fits(&self, leaf: Leaf, node: NodeRef, trait_id: u16, open: bool) -> Known<bool> {
         let Some(tree) = self.world.tree(node.file) else { return Known::Unknown };
         let Some(node_data) = tree.nodes.get(node.node as usize) else { return Known::Unknown };
         let Some(kind) = self.tables.kinds.get(node_data.matcher as usize) else { return Known::Yes(false) };
@@ -276,7 +294,7 @@ impl Values<'_> {
                 Known::Yes(false) => {}
             }
         }
-        for &(views, when) in &kind.open_fits {
+        for &(views, when) in kind.open_fits.iter().filter(|_| open) {
             if !self.question.budget.step() { return Known::Unknown }
             if views != 0 {
                 let Target::Scope(scope) = leaf.target else { continue };
@@ -451,7 +469,7 @@ impl Values<'_> {
         for site in sites {
             if !self.question.budget.step() { return Known::Unknown }
             let node = match site.target {
-                Target::Traits(_) | Target::Product(_) => return Known::Unknown,
+                Target::Traits(_) | Target::Product(_) | Target::Modified(_) => return Known::Unknown,
                 Target::Node(node) => node,
                 Target::Scope(scope) => {
                     let Some(info) = self.world.names(scope.file).and_then(|names| names.scopes.get(scope.scope as usize)) else {
@@ -574,6 +592,7 @@ impl Values<'_> {
                     _ => return None,
                 }
             }
+            Target::Modified(_) => return self.importer(self.modified_source(at)?),
         })
     }
 
@@ -627,7 +646,7 @@ impl Values<'_> {
                 for site in sites {
                     if !self.question.budget.step() { return Known::Unknown }
                     let (target, owner) = match site.target {
-                        Target::Traits(_) | Target::Product(_) => return Known::Unknown,
+                        Target::Traits(_) | Target::Product(_) | Target::Modified(_) => return Known::Unknown,
                         Target::Node(node) => {
                             let Known::Yes(owner) = self.declaration_owner(node) else { return Known::Unknown };
                             (Target::Node(owner), owner)
@@ -690,7 +709,7 @@ impl Values<'_> {
         for target in targets {
             if !self.question.budget.step() { return Known::Unknown }
             let (target, owner) = match target {
-                Target::Traits(_) | Target::Product(_) => return Known::Unknown,
+                Target::Traits(_) | Target::Product(_) | Target::Modified(_) => return Known::Unknown,
                 Target::Node(node) => {
                     let Known::Yes(owner) = self.declaration_owner(node) else { return Known::Unknown };
                     (Target::Node(owner), owner)
@@ -797,6 +816,8 @@ impl Values<'_> {
     }
 
     pub fn follow(&self, at: Leaf, path: &[u16]) -> Known<Vec<Leaf>> {
+        // A modified value's syntax is its source's.
+        let at = self.modified_source(at).unwrap_or(at);
         let Known::Yes(at) = self.semantic.leaf(at) else { return Known::Unknown };
         let mut leaves = vec![at];
         for &label in path {
@@ -810,7 +831,7 @@ impl Values<'_> {
                     continue;
                 }
                 let node = match leaf.target {
-                    Target::Traits(_) | Target::Product(_) => return Known::Unknown,
+                    Target::Traits(_) | Target::Product(_) | Target::Modified(_) => return Known::Unknown,
                     Target::Node(node) => node,
                     Target::Scope(scope) => {
                         let Some(names) = self.world.names(scope.file) else { return Known::Unknown };

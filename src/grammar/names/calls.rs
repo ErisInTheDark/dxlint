@@ -35,9 +35,11 @@ fn kind<'a>(leaf: Leaf, values: &'a Values<'_>) -> Option<&'a KindNames> {
     values.tables.kinds.get(node.matcher as usize)
 }
 
+/// Whether a parameter or argument site is a rest/spread: its shape, which
+/// an open (`any`) value does not leave undecided.
 fn rest(at: Leaf, values: &Values<'_>) -> Known<bool> {
     values.tables.vocabulary.traits.iter().position(|name| name == "rest")
-        .map_or(Known::Yes(false), |id| values.fits(at, id as u16))
+        .map_or(Known::Yes(false), |id| values.declared_fits(at, id as u16))
 }
 
 fn node(leaf: Leaf, values: &Values<'_>) -> Option<NodeRef> {
@@ -69,6 +71,9 @@ pub struct Invoke {
     pub callee: Value,
     pub arguments: Path,
     pub construct: bool,
+    /// The value a call passes as its receiver; `None` leaves declared
+    /// receivers unchecked.
+    pub receiver: Option<Value>,
 }
 
 #[derive(Clone, Debug)]

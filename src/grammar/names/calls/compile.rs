@@ -34,10 +34,11 @@ pub fn lower(
             result: value(result, errors)?,
         }),
         ParsedItem::Sources(source) => Item::Sources(value(source, errors)?),
-        ParsedItem::Invoke { callee, arguments, construct } => Item::Invoke(Invoke {
+        ParsedItem::Invoke { callee, arguments, construct, receiver } => Item::Invoke(Invoke {
             callee: value(callee, errors)?,
             arguments: path(arguments, errors)?,
             construct: *construct,
+            receiver: match receiver { Some(receiver) => Some(value(receiver, errors)?), None => None },
         }),
         ParsedItem::Expected { field, value: expected, at } => Item::Expected(Expected {
             field: path(field, errors)?,

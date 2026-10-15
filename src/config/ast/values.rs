@@ -80,6 +80,9 @@ pub enum Unwrap {
         distribute: Option<Vec<Name>>,
         dynamic_both: bool,
     },
+    /// `modified <value> [optional add|remove] [flag <name> add|remove]...`:
+    /// the value with its members' requiredness and flags changed.
+    Modified { source: Box<Unwrap>, required: Option<bool>, flags: Vec<(Name, bool)> },
     Product {
         shape: Name,
         sites: Vec<Name>,

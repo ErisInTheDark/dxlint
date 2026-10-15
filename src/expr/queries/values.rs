@@ -16,6 +16,7 @@ pub(super) static FUNCTIONS: &[QueryFunction] = &[
     QueryFunction { name: "value_member", arity: 2, call: member },
     QueryFunction { name: "value_lookup", arity: 2, call: lookup },
     QueryFunction { name: "value_key", arity: 1, call: value_key },
+    QueryFunction { name: "value_keys", arity: 1, call: value_keys },
     QueryFunction { name: "value_has_member", arity: 3, call: has_member },
     QueryFunction { name: "value_at", arity: 2, call: path },
     QueryFunction { name: "value_expected_at", arity: 2, call: expected_path },
@@ -131,7 +132,7 @@ fn query_key(semantic: &Semantic<'_>, at: Leaf, value: &Value<'static>) -> Known
         let file = match at.target {
             Target::Node(node) => node.file,
             Target::Scope(scope) => scope.file,
-            Target::Traits(_) | Target::Product(_) => return Known::Unknown,
+            Target::Traits(_) | Target::Product(_) | Target::Modified(_) => return Known::Unknown,
         };
         return values.value_key(&values.values(Leaf { target: Target::Node(NodeRef { file, node: *node }), frame: at.frame }));
     }
@@ -206,7 +207,7 @@ pub(super) fn source_value(semantic: &Semantic<'_>, source: &crate::grammar::nam
         ]),
         _ => Value::Null,
     };
-    let Known::Yes(flags) = semantic.values().flags(source.site) else { return Known::Unknown };
+    let Known::Yes(flags) = semantic.values().source_flags(source) else { return Known::Unknown };
     let flags = Value::list(flags.into_iter().map(|flag| Value::from(String::from(flag))).collect());
     Known::Yes(Value::record(vec![("kind".into(), Value::from(kind)), ("domain".into(), domain), ("site".into(), site), ("flags".into(), flags)]))
 }
@@ -301,6 +302,16 @@ fn value_key(semantic: &Semantic<'_>, at: Leaf, _: &[Value<'static>]) -> Known<V
     let values = semantic.values();
     match values.value_key(&values.values(at)) {
         Known::Yes(key) => Known::Yes(super::handles::key_value(&key)),
+        Known::Unknown => Known::Yes(Value::Null),
+    }
+}
+
+/// Every key a key expression may evaluate to (`'a' | 'b'` gives both),
+/// each as `value_key` gives it; null when unknown.
+fn value_keys(semantic: &Semantic<'_>, at: Leaf, _: &[Value<'static>]) -> Known<Value<'static>> {
+    let values = semantic.values();
+    match values.value_keys(&values.values(at)) {
+        Known::Yes(keys) => Known::Yes(Value::list(keys.iter().map(super::handles::key_value).collect())),
         Known::Unknown => Known::Yes(Value::Null),
     }
 }
@@ -403,7 +414,7 @@ fn globals(semantic: &Semantic<'_>, at: Leaf, args: &[Value<'static>]) -> Known<
     let file = match at.target {
         Target::Node(node) => node.file,
         Target::Scope(scope) => scope.file,
-        Target::Traits(_) | Target::Product(_) => return Known::Unknown,
+        Target::Traits(_) | Target::Product(_) | Target::Modified(_) => return Known::Unknown,
     };
     let Known::Yes(targets) = semantic.modules().global(file, name, classes) else { return Known::Unknown };
     let mut declarations = Vec::new();
@@ -417,7 +428,7 @@ fn globals(semantic: &Semantic<'_>, at: Leaf, args: &[Value<'static>]) -> Known<
                 };
                 NodeRef { file: scope.file, node: info.node }
             }
-            Target::Traits(_) | Target::Product(_) => return Known::Unknown,
+            Target::Traits(_) | Target::Product(_) | Target::Modified(_) => return Known::Unknown,
         };
         let Known::Yes(node) = semantic.values().declaration_owner(node) else { return Known::Unknown };
         let declaration = Value::record(vec![
@@ -438,7 +449,7 @@ fn declaration(semantic: &Semantic<'_>, at: Leaf, _: &[Value<'static>]) -> Known
             };
             NodeRef { file: scope.file, node: info.node }
         }
-        Target::Traits(_) | Target::Product(_) => return Known::Unknown,
+        Target::Traits(_) | Target::Product(_) | Target::Modified(_) => return Known::Unknown,
     };
     let Known::Yes(node) = semantic.values().resolved_declaration(node) else { return Known::Unknown };
     Known::Yes(Value::record(vec![

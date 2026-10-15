@@ -193,6 +193,25 @@ impl Parser<'_> {
         }
     }
 
+    pub(super) fn modified_value(&mut self) -> Option<Unwrap> {
+        let source = Box::new(self.unwrap_unary()?);
+        let mut required = None;
+        let mut flags = Vec::new();
+        loop {
+            let optional = self.word("optional");
+            let flag = if optional { None } else if self.word("flag") { Some(self.ident("a declaration flag name")?) } else { break };
+            let add = if self.word("add") { true } else if self.word("remove") { false } else {
+                self.error_here("expected `add` or `remove`");
+                return None;
+            };
+            match flag {
+                None => required = Some(!add),
+                Some(name) => flags.push((name, add)),
+            }
+        }
+        Some(Unwrap::Modified { source, required, flags })
+    }
+
     pub(super) fn instance_value(&mut self) -> Option<Unwrap> {
         let (text, span) = self.string("a global declaration name")?;
         let name = Name { text, span };

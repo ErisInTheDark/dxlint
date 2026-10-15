@@ -361,7 +361,7 @@ fn call_fixture() -> (TestWorld, Names) {
         });
     }
     tables.kinds[5].calls.invokes.push(Conditional {
-        item: Invoke { callee: super::Value::Path(vec![14]), arguments: vec![15], construct: false },
+        item: Invoke { callee: super::Value::Path(vec![14]), arguments: vec![15], construct: false, receiver: None },
         when: None,
     });
     (world, tables)

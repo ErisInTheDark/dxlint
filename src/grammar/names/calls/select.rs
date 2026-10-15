@@ -26,6 +26,7 @@ pub(super) fn candidates(call: Leaf, values: &Values<'_>) -> Answer {
             }
         }
         let callee = values.evaluate(call, &invoke.item.callee);
+        let receiver = invoke.item.receiver.as_ref().map(|receiver| values.evaluate(call, receiver));
         let invoke_kind = if invoke.item.construct { InvokeKind::Construct } else { InvokeKind::Call };
         let Known::Yes(sets) = values.calls().headers(&callee, invoke_kind) else { return Known::Unknown };
         let mut groups = Vec::new();
@@ -33,7 +34,7 @@ pub(super) fn candidates(call: Leaf, values: &Values<'_>) -> Answer {
             let mut group = Vec::new();
             for header in set {
                 if !values.question.budget.step() { return Known::Unknown }
-                let candidate = candidate(header, call, &arguments, values);
+                let candidate = candidate(header, call, &arguments, receiver.as_ref(), values);
                 let proven = matches!(&candidate, Known::Yes(candidate) if candidate.compatible == Known::Yes(true));
                 group.push(candidate);
                 if proven { break }
@@ -121,7 +122,7 @@ fn agreement(group: &[Known<Candidate>], values: &Values<'_>) -> Known<NodeValue
     agreed.map_or(Known::Unknown, Known::Yes)
 }
 
-fn candidate(header: Header, call: Leaf, arguments: &[Leaf], values: &Values<'_>) -> Known<Candidate> {
+fn candidate(header: Header, call: Leaf, arguments: &[Leaf], receiver: Option<&NodeValue>, values: &Values<'_>) -> Known<Candidate> {
     let declaration = header;
     let Some(owner) = node(header.site, values) else { return Known::Unknown };
     let Some(kind) = kind(header.site, values) else { return Known::Unknown };
@@ -153,6 +154,15 @@ fn candidate(header: Header, call: Leaf, arguments: &[Leaf], values: &Values<'_>
     let Known::Yes(parameters) = values.follow(header.site, &signature.item.parameters) else { return Known::Unknown };
     let mut mapping = Vec::new();
     let mut compatible = Known::Yes(true);
+    // A declared receiver must accept the one the call passes.
+    if let Some(receiver) = receiver {
+        let answer = match values.calls().receiver(header) {
+            Known::Yes(Some(declared)) => values.calls().accepts(&values.values(declared), receiver),
+            Known::Yes(None) => Known::Yes(true),
+            Known::Unknown => Known::Unknown,
+        };
+        compatible = answer;
+    }
     let mut has_rest = false;
     let needs_inference = !formals.is_empty() && !arguments.is_empty();
     for (index, parameter) in parameters.iter().copied().enumerate() {

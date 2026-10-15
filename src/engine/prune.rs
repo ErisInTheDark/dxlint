@@ -154,6 +154,10 @@ fn value_names(value: &Unwrap, out: &mut HashSet<String>) {
             out.insert(class.text.clone());
             arguments.iter().for_each(|value| value_names(value, out));
         }
+        Unwrap::Modified { source, required: _, flags } => {
+            value_names(source, out);
+            for (flag, _) in flags { out.insert(flag.text.clone()); }
+        }
     }
 }
 
@@ -199,9 +203,10 @@ fn item_names(item: &NameItem, out: &mut HashSet<String>) {
                 value_names(result, out);
             }
             calls::Item::Sources(value) => value_names(value, out),
-            calls::Item::Invoke { callee, arguments, construct: _ } => {
+            calls::Item::Invoke { callee, arguments, construct: _, receiver } => {
                 value_names(callee, out);
                 path_names(arguments, out);
+                if let Some(receiver) = receiver { value_names(receiver, out); }
             }
             calls::Item::Expected { field, value, .. } => {
                 path_names(field, out);

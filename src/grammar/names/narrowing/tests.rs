@@ -444,7 +444,7 @@ mod places {
             ..Default::default()
         });
         tables.kinds[11].calls.invokes.push(Conditional {
-            item: Invoke { callee: Value::Path(vec![13]), arguments: vec![14], construct: false }, when: None,
+            item: Invoke { callee: Value::Path(vec![13]), arguments: vec![14], construct: false, receiver: None }, when: None,
         });
         (world, tables)
     }

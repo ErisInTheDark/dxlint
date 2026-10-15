@@ -146,7 +146,11 @@ define {
 
   in ts_call {
     when in_optional_chain == true { calls (callee \ nullable, undefined) with argument }
-    when in_optional_chain != true { calls callee with argument }
+    # A bare call's `this` is void: a signature declaring `this: object` does not apply.
+    when in_optional_chain != true && callee is ts_identifier {
+      calls callee with argument this (trait void, undefined, nullable, falsy, nonthenable)
+    }
+    when in_optional_chain != true && !(callee is ts_identifier) { calls callee with argument }
   }
   in ts_new { constructs callee with argument }
   in ts_tagged_template {

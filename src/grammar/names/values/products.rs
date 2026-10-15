@@ -271,6 +271,7 @@ impl Values<'_> {
                 site: element.site,
                 value: Some(Value::Captured(Box::new(value))),
                 origin: MemberOrigin::Ordinal { repeated: element.repeated || element.values },
+                edits: None,
             };
             members.push(Member { key, sources: vec![source], required: Known::Yes(!element.optional && !element.repeated && !element.values) });
         }
@@ -282,6 +283,7 @@ impl Values<'_> {
                         site: product.source,
                         value: Some(Value::Captured(Box::new(self.combine(selected, false)))),
                         origin: MemberOrigin::Ordinal { repeated: selected_repeated },
+                        edits: None,
                     }],
                     required: Known::Yes(selected_required),
                 }]);
@@ -293,6 +295,7 @@ impl Values<'_> {
                     site: product.source,
                     value: Some(Value::Captured(Box::new(self.combine(selected, false)))),
                     origin: MemberOrigin::Ordinal { repeated: true },
+                    edits: None,
                 }],
                 required: Known::Yes(false),
             });

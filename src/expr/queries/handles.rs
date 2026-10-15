@@ -545,7 +545,7 @@ fn own_member_free(semantic: &Semantic<'_>, at: crate::grammar::names::question:
         // intersection marker is open). Rules read openness from the
         // part's `uncertain_traits`.
         Target::Traits(_) => Known::Yes(true),
-        Target::Product(_) | Target::Scope(_) => Known::Yes(false),
+        Target::Product(_) | Target::Scope(_) | Target::Modified(_) => Known::Yes(false),
         Target::Node(node) => {
             let Some(data) = semantic.world.tree(node.file).and_then(|tree| tree.nodes.get(node.node as usize)) else { return Known::Unknown };
             let Some(kind) = semantic.tables.kinds.get(data.matcher as usize) else { return Known::Unknown };
