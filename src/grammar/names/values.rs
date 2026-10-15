@@ -687,13 +687,20 @@ impl Values<'_> {
             Known::Unknown => return Known::Unknown,
             Known::Yes(Some(targets)) => targets,
             Known::Yes(None) => match name {
-                // Every declaration merged into the name (overloads,
-                // interface merging), as the global publication route gives.
+                // Declarations merged into the name that combine (overloads,
+                // interface and namespace merging), as the global publication
+                // route gives. A plain redeclaration (`var a; var a`) keeps
+                // the first one's value.
                 Some(name) => {
+                    let Some(tree) = self.world.tree(node.file) else { return Known::Unknown };
+                    let combines = |owner: u32| tree.nodes.get(owner as usize)
+                        .and_then(|data| self.tables.kinds.get(data.matcher as usize))
+                        .is_some_and(|kind| !kind.calls.signatures.is_empty() || !kind.calls.sources.is_empty() || kind.member_defaults != 0);
                     // Later declarations by their own owners: their names
                     // resolve to the first.
                     let mut later: Vec<u32> = names.merged.iter().filter(|&(_, &first)| first == name)
-                        .map(|(&later, _)| names.declared.get(&later).map_or(later, |&(_, owner, ..)| owner)).collect();
+                        .map(|(&later, _)| names.declared.get(&later).map_or(later, |&(_, owner, ..)| owner))
+                        .filter(|&owner| combines(owner)).collect();
                     later.sort_unstable();
                     let file = node.file;
                     std::iter::once(name).chain(later).map(|declared| Target::Node(NodeRef { file, node: declared })).collect()
