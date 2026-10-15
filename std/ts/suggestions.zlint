@@ -458,7 +458,7 @@ fn suggestion_coercion_string(n) = {
 }
 fn suggestion_coercion_empty(n) = {
   value n: unparenthesised_node(n)
-  value n is (ts_string, ts_template) && n.literal_value.value == ""
+  value n is (ts_string, ts_template) && n.literal_value.type == "string" && n.literal_value.value == ""
 }
 fn suggestion_coercion_operand(n) = {
   value n: unparenthesised_node(n)
@@ -512,8 +512,10 @@ fn suggestion_implicit_coercion(source, n) = {
     value expression: first(n.expression.nodes)
     value prefix: trim_end(byte_slice(source, n.offset + 1, expression.offset))
     value suffix: trim_start(byte_slice(source, expression.end_offset, n.end_offset - 1))
+    value head: js_string_parts("`" slice(prefix, 0, -2) "`")
+    value tail: js_string_parts("`" slice(suffix, 1) "`")
     value if !suggestion_coercion_string(expression) && ends_with(prefix, "${{") && starts_with(suffix, "}}")
-      && js_string("`" slice(prefix, 0, -2) "`") == "" && js_string("`" slice(suffix, 1) "`") == ""
+      && head != null && tail != null && head.text == "" && tail.text == ""
       then {kind: "template", operator: "", recommendation: "String(" suggestion_coercion_operand(expression) ")"}
       else null
   } else null

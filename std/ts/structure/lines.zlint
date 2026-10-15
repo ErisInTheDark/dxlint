@@ -18,13 +18,14 @@ fn structure_operand_line(source, at) = {
 fn structure_operand_start(right) = {
   value inner: unparenthesised_node(right)
   value before: token(inner, "before")
-  value parens: walk(if before.text == "(" then node_at(before.start) else null, current => {
+  value parens: walk(if before.text == "(" then ts_token_node(before) else null, current => {
     value previous: token(current, "before")
-    value if previous.text == "(" && token(node_at(previous.start), "before") != null
-      then node_at(previous.start) else null
+    value if previous.text == "(" && token(ts_token_node(previous), "before") != null
+      then ts_token_node(previous) else null
   })
   value {
     first: if count(parens) > 0 then token(last(parens), "first") else token(inner, "first"),
+    before: if count(parens) > 0 then token(last(parens), "before") else before,
     climbed: count(parens) > 0,
   }
 }
@@ -32,8 +33,8 @@ fn structure_operand_measure(source, n, right, member) = {
   value start: structure_operand_start(right)
   value first: start.first
   value operator: if n is (ts_binary, ts_logical) then token(n.operator.node, "first")
-    else token(node_at(first.start), "before")
-  value left: token(node_at(operator.start), "before")
+    else start.before
+  value left: token(ts_token_node(operator), "before")
   value type_member: n is (ts_union, ts_intersection)
   value if first == null || left == null
     || operator.start <= n.offset && !(type_member && member == 0 && !start.climbed)

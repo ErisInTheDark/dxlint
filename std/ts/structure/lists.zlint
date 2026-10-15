@@ -70,14 +70,14 @@ fn structure_list_open(n, group, items) = {
     value find(candidates, item => item.offset >= after)
   } else if first != null then {
     value edge: token(unparenthesised_node(first), "before")
-    value if edge.text == open then node_at(edge.start) else null
+    value if edge.text == open then ts_token_node(edge) else null
   } else find(candidates, item => token(item, "after").text == close)
   value if selected != null then token(selected, "first") else null
 }
 fn structure_list_close(n, group, items, left) = {
-  value after: if count(items) == 0 then token(node_at(left.start), "after") else token(last(items), "after")
-  value chain: walk(if after == null then [] else node_at(after.start), current =>
-    if token(current, "first").text == "," then node_at(token(current, "after").start) else null)
+  value after: if count(items) == 0 then token(ts_token_node(left), "after") else token(last(items), "after")
+  value chain: walk(ts_token_node(after), current =>
+    if token(current, "first").text == "," then ts_token_node(token(current, "after")) else null)
   value right: token(last(chain), "first")
   value if right.text == byte_slice(group.brackets, 1) && right.end <= n.end_offset then right else null
 }
@@ -89,9 +89,9 @@ fn structure_list_wrap(items, left, after_open) = {
     value first: token(unparenthesised_node(item), "first")
     value previous: token(item, "last")
     value before: if first == null then null else {
-      value chain: walk(node_at(token(unparenthesised_node(item), "before").start), current =>
+      value chain: walk(ts_token_node(token(unparenthesised_node(item), "before")), current =>
         if current.offset >= state.previous && token(current, "first").text == "("
-          then node_at(token(current, "before").start) else null)
+          then ts_token_node(token(current, "before")) else null)
       value edge: token(last(chain), "first")
       value if edge.start >= state.previous then edge else state.edge
     }
@@ -110,8 +110,8 @@ fn structure_list_sites(source, n, group) = {
     value first_item: find(items, item => item not ts_hole)
     value first_start: if first_item == null then right.start else unparenthesised_node(first_item).offset
     value last_end: last(items).end_offset ?? left.end
-    value after_open: token(node_at(left.start), "after")
-    value before_close: token(node_at(right.start), "before")
+    value after_open: token(ts_token_node(left), "after")
+    value before_close: token(ts_token_node(right), "before")
     value first_edge: structure_list_first(
       if after_open.start <= first_start then after_open else token(unparenthesised_node(first_item), "first"),
       structure_list_comments(left.end, first_start)) ?? right

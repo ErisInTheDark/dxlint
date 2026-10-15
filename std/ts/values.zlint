@@ -354,8 +354,14 @@ in ts_tuple_member, ts_rest { let ts_value_tuple_optional optional != null }
 in ts_rest, ts_spread { let ts_value_tuple_repeated true }
 in ts_assignment_pattern { unwraps left ?? right }
 in ts_pattern_property, ts_object_pattern, ts_array_pattern, ts_import, ts_import_specifier,
-    ts_import_equals, ts_super, ts_meta_property, ts_import_call {
+    ts_import_equals, ts_meta_property, ts_import_call {
   unwraps unknown
+}
+in ts_super {
+  let ts_value_super_context ts_value_this_context(node)
+  let ts_value_super_base ts_value_super_context.container.extends.node
+  when ts_value_super_context.static || node is ts_call.callee { unwraps ts_value_super_base }
+  when !ts_value_super_context.static && node not ts_call.callee { unwraps ts_value_super_base.["prototype"] }
 }
 in ts_this {
   let ts_value_this ts_value_this_context(node)
@@ -399,7 +405,24 @@ in ts_assignment {
   when operator == "||=" { unwraps (left \ falsy) | right }
   when operator == "??=" { unwraps (left \ nullable) | right }
   when operator == "+=" { unwraps left.widened | right.widened }
-  when !contains(["=", "&&=", "||=", "??=", "+="], operator) { unwraps right.widened }
+}
+in ts_binary, ts_assignment {
+  let ts_value_numeric_kind if contains([">>>", ">>>="], operator) then "number"
+    else if left always bigint && right always bigint then "bigint"
+    else if (left could bigint) != false && (right could bigint) != false then "both"
+    else "number"
+  when contains(["-", "*", "/", "%", "**", "&", "|", "^", "<<", ">>", ">>>",
+    "-=", "*=", "/=", "%=", "**=", "&=", "|=", "^=", "<<=", ">>=", ">>>="], operator) {
+    when ts_value_numeric_kind == "number" {
+      unwraps (trait number, truthy, nonthenable) | (trait number, falsy, nonthenable)
+    }
+    when ts_value_numeric_kind == "bigint" {
+      unwraps (trait bigint, truthy, nonthenable) | (trait bigint, falsy, nonthenable)
+    }
+    when ts_value_numeric_kind == "both" {
+      unwraps (trait number, truthy, nonthenable) | (trait number, falsy, nonthenable) | (trait bigint, truthy, nonthenable) | (trait bigint, falsy, nonthenable)
+    }
+  }
 }
 in ts_conditional { unwraps consequent | alternate }
 in ts_logical {
@@ -416,7 +439,11 @@ in ts_sequence {
   unwraps ts_value_last_expression
 }
 
-in ts_new, ts_tagged_template { unwraps it.result }
+in ts_tagged_template { unwraps it.result }
+in ts_new {
+  fits object, truthy
+  unwraps self & it.result
+}
 in ts_call {
   when callee always any { unwraps callee }
   when !(callee always any) {
@@ -469,11 +496,6 @@ in ts_binary {
       || operator == "<" || operator == "<=" || operator == ">" || operator == ">="
       || operator == "in" || operator == "instanceof" { fits boolean, nonthenable }
   when operator == "+" { unwraps left.widened | right.widened }
-  when operator == "-" || operator == "*" || operator == "/" || operator == "%"
-      || operator == "**" || operator == "&" || operator == "|" || operator == "^"
-      || operator == "<<" || operator == ">>" || operator == ">>>" {
-    unwraps left.widened | right.widened
-  }
 }
 
 in ts_hole { unwraps trait undefined, nullable, falsy, nonthenable }

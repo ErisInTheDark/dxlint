@@ -72,7 +72,8 @@ fn ts_reference_compute(n, strict) = when {
   n is ts_private_name then ts_reference_atom("private", n.text)
   n is ts_this then "this"
   n is ts_super then "super"
-  n is (ts_string, ts_number, ts_boolean, ts_null, ts_bigint, ts_regex) then {
+  n is (ts_string, ts_number, ts_boolean, ts_null, ts_bigint, ts_regex)
+    || n is ts_template && count(n.expression) == 0 then {
     value literal: n.literal_value
     value if literal == null then null else ts_reference_atom("literal:" literal.type, literal.value)
   }

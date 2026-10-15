@@ -17,9 +17,15 @@ fn typed_template_named(part, n) = {
   value unique(map(candidates, candidate =>
     typed_template_gate(n, candidate.carrier, candidate.carrier.description.name)))
 }
-fn typed_template_disjoin(left, right) = if left == null || right == null
-  || count(left) * count(right) > 256 then null
-  else flat_map(left, a => map(right, b => [] a b))
+fn typed_template_append(clauses, clause) = if clauses == null then null else {
+  value gates: unique(clause)
+  value present: any(clauses, previous => count(previous) == count(gates)
+    && all(gates, gate => contains(previous, gate)))
+  value if present then clauses else if count(clauses) >= 256 then null else [] clauses [gates]
+}
+fn typed_template_disjoin(left, right) = if left == null || right == null then null else
+  fold(unique(left), [], (clauses, a) =>
+    fold(unique(right), clauses, (clauses, b) => typed_template_append(clauses, [] a b)))
 fn typed_template_part(part, n, depth) = {
   value gates: typed_template_named(part, n)
   value primitive: find([

@@ -119,22 +119,19 @@ fn condition_predicate_union(n, descriptor, parts) = {
       && all(parts, arm => any(arm, part => part.identity_known && part.identity.kind == "value"))
       && !any(parts, arm => any(arm, part => contains(part.traits, "enum")))
 }
-fn condition_predicate(n) = {
-  value binding: call_binding_at(n, ["return_type"])
-  value choice: first(binding.choices)
+fn condition_predicate_choice(n, choice, target_choice) = {
   value descriptions: flat_map(value_parts(choice.at) ?? [], arm =>
     map(arm.parts, part => part.carrier.description))
   value descriptor: first(filter(descriptions, description => description.kind == "predicate"))
   value index: descriptor.parameter_index
-  value if binding == null || binding.uncertain || count(binding.choices) != 1 || descriptor == null
-    || index == null then null
+  value if descriptor == null || index == null then null
   else {
     value parameter: first(slice(choice.parameters, index, index + 1))
     value if count(parameter.arguments) != 1
       || any(slice(n.argument.nodes, 0, index + 1), argument => argument is ts_spread) then null
     else {
       value actual: declaration_value(n, first(parameter.arguments))
-      value target: if descriptor.has_target then first(call_binding_at(n, ["return_type", "type"]).choices).at else null
+      value target: if descriptor.has_target then target_choice.at else null
       value parts: if descriptor.has_target then value_constituents(target) else null
       value union: condition_predicate_union(n, descriptor, parts)
       value {
@@ -148,6 +145,15 @@ fn condition_predicate(n) = {
       }
     }
   }
+}
+fn condition_predicate(n) = {
+  value binding: call_binding_at(n, ["return_type"])
+  value targets: call_binding_at(n, ["return_type", "type"])
+  value predicates: map(binding.choices ?? [], (choice, index) =>
+    condition_predicate_choice(n, choice, first(slice(targets.choices ?? [], index, index + 1))))
+  value predicate: first(predicates)
+  value if binding == null || binding.uncertain || predicate == null
+    || !all(predicates, other => other == predicate) then null else predicate
 }
 in ts_call let condition_predicate condition_predicate(node)
 fn condition_boolean_use(n) = {
@@ -241,6 +247,8 @@ fn condition_compare(left, right, op) = when {
 }
 fn condition_comparable_nullish(literal, other, loose) = !contains(["null", "undefined"], literal.type)
   || !condition_known(condition_domain(other)) || ts_value_has_trait(other, literal.type) == true
+  || any(value_constituents(other) ?? [], arm =>
+    all(arm, part => contains(part.traits, literal.type) || contains(part.uncertain_traits, literal.type)))
   || literal.type == "undefined" && ts_value_has_void(other) == true
   || loose && condition_domain(other).nullish
 fn condition_structural_truthy(arms) = arms != null && count(arms) > 0 && all(arms, arm =>

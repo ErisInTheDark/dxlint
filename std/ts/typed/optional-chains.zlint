@@ -183,7 +183,7 @@ fn optional_safe(items, op, unsafe) = {
   value terminal: last(items)
   value unsafe || !terminal.terminal && (contains(["nullish", "undefined"], terminal.kind)
     || op == "||" && terminal.kind == "not"
-    || { value items; any (item) optional_uncertain(item.node, "undefined") })
+    || { value items; any (item) value_parts(item.node) != null && optional_uncertain(item.node, "undefined") })
 }
 fn optional_tail(source, span, boundary) = {
   # Paired code tokens, not character counts: parentheses in comments and strings

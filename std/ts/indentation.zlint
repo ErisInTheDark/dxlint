@@ -184,7 +184,7 @@ in indent_attribute_parts let indent_attribute_container containing(ts_import_at
 in indent_attribute_parts let indent_attribute_item if is ts_import_attribute then node else { value indent_attribute_container.indent_items; filter (item) item.offset >= end_offset; first }
 in ts_import, ts_export let indent_module_attributes { value overlapping(ts_import_attributes); first }
 in ts_import, ts_export let indent_module_from if from.token_neighbours.before.text == "from" then from.token_neighbours.before.start else null
-in ts_import, ts_export let indent_module_tail if indent_module_from != null then indent_module_from else indent_module_attributes.open.token_neighbours.before.start
+in ts_import, ts_export let indent_module_tail if indent_module_from != null then indent_module_from else token(indent_module_attributes.open.node, "before").start
 in ts_import_attributes let indent_module_owner { value containing(ts_import); nonempty } ?? containing(ts_export)
 in ts_import_attributes let indent_attribute_line_node { value position(open.offset).js_line_start + byte_len(open.indent); node_at }
 in ts_import_attributes let indent_attribute_anchor if position(indent_attribute_line_node.offset).js_line < position(open.offset).js_line then {

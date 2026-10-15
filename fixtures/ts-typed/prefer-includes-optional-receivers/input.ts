@@ -1,0 +1,13 @@
+declare const optional: string | undefined;
+declare const nullable: string | null;
+declare const nullish: string | null | undefined;
+declare const mixed: string | number | undefined;
+declare const dynamic: any;
+declare const opaque: unknown;
+optional?.indexOf("x") === -1;
+optional?.indexOf("x") !== -1;
+nullable?.indexOf("x") === -1;
+nullish?.indexOf("x") !== -1;
+mixed?.indexOf("x") === -1;
+dynamic?.indexOf("x") === -1;
+opaque?.indexOf("x") === -1;

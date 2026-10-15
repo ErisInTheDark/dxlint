@@ -92,7 +92,8 @@ fn layout_trailing_comma(n, list) = {
   value item: last(list.items)
   value after: item.token_neighbours.after
   value trailing: after.text == ","
-  value closing: if trailing then node_at(after.start).token_neighbours.after else after
+  value comma: if trailing then first(overlapping(ts_comma, after.start, after.end)) else null
+  value closing: if trailing then token(comma, "after") else after
   value allowed: item not ts_rest && !(item is ts_spread && layout_assignment_pattern(n))
     && item.name not ts_rest
   value if item is ts_hole || !contains(["}}", "]", ")", ">"], closing.text) then null else {

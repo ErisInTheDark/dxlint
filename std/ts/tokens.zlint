@@ -10,7 +10,7 @@ fn ts_token_kind(text) = {
     "?": "ts_question", "...": "ts_ellipsis", "=": "ts_equals",
     "(": "ts_open_paren", ")": "ts_close_paren",
     "[": "ts_open_bracket", "]": "ts_close_bracket",
-    "{{": "ts_open_brace", "}}": "ts_close_brace",
+    "{": "ts_open_brace", "}": "ts_close_brace",
     "<": "ts_open_angle", ">": "ts_close_angle",
   }
   value get(punctuation, text) ?? if re_test(text, /^[A-Za-z]/) then "ts_keyword"
@@ -25,6 +25,12 @@ fn ts_token_record(entry) = if entry == null then null else {
   kind: if entry.node != null then kind_name(entry.node) else ts_token_kind(entry.text),
   start: entry.start,
   end: entry.end,
+}
+
+fn ts_token_node(entry) = if entry == null then null else {
+  value overlapping(ts_token, entry.start, entry.end)
+  filter (item) item.offset == entry.start && item.end_offset == entry.end
+  first
 }
 
 fn ts_token_adjacent(n, before) = if before then token(n, "before") else token(n, "after")

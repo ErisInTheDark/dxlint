@@ -1,0 +1,4 @@
+import .ts
+rule * off
+rule space-in-parens:after { set mode "always"; set exceptions ["{{}}"] }
+rule space-in-parens:before { set mode "always"; set exceptions ["{{}}"] }

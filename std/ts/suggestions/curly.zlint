@@ -24,8 +24,10 @@ fn curly_braces_necessary(n) = {
     || curly_unmatched_tail(statement) && curly_enclosing_else(n)
 }
 fn curly_one_line(source, n) = {
-  value last: last(filter(n.token.nodes, token => token.text != ";"))
-  value n is ts_empty || !re_test(byte_slice(source, n.offset, last.end_offset ?? n.offset), /[\r\n\u{2028}\u{2029}]/)
+  value ending: token(n, "last")
+  value semicolon: if ending.text == ";" then first(overlapping(ts_semicolon, ending.start, ending.end)) else null
+  value last: if semicolon != null then token(semicolon, "before") else ending
+  value n is ts_empty || !re_test(byte_slice(source, n.offset, last.end ?? n.end_offset), /[\r\n\u{2028}\u{2029}]/)
 }
 fn curly_expectations(source, owner, body) = {
   value block: body is ts_block
