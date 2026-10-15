@@ -45,32 +45,30 @@ fn unbound_pattern_sources(n) = {
     else []
 }
 
-fn unbound_type(n, names, path) = n.type_structure(names, ["kind", "parts", "declarations", "member_metadata"], true, path)
-fn unbound_profiles(t) = {
-  value {part: t, path: ""}
-  walk (item) if contains(["union", "intersection"], item.part.kind) then {
-    value parts: item.part.parts
-    value width: len(str(len(parts)))
-    value map(parts, (part, index) => {part: part, path: item.path pad_start(str(index), width, "0")})
-  } else []
-  filter (item) !contains(["union", "intersection"], item.part.kind)
-  sort_by (item) item.path
-  map (item) item.part
+fn unbound_profiles(n, path) = {
+  value subject: fold(path, n, (subject, key) => value_lookup(subject, key).member)
+  value parts: flat_map(value_parts(subject) ?? [], arm => arm.parts)
+  value filter(parts, part => !contains(part.traits, "parameter")
+    && !(contains(part.traits, "intersection") && count(part.traits) == 1
+      && part.carrier_known && part.carrier == null))
 }
-fn unbound_member(t, key) = {
-  value t.member_metadata
-  filter (member) member.name == key
-  flat_map (member) member.declarations
+fn unbound_member(part, key) = {
+  value value_lookup(part.handle, key).alternatives ?? []
+  flat_map (alternative) alternative.sources
   first
 }
-fn unbound_builtin_type(t, key) = {
-  value member: unbound_member(t, key)
-  value key == "compare" && any(t.declarations, declaration => declaration.name == "Collator" && declaration.from == "lib")
-  || member.owner.name == "ArrayConstructor" && member.owner.from == "lib"
-  || any(t.declarations, declaration => declaration.from == "lib"
-    && contains(["NumberConstructor", "ObjectConstructor", "StringConstructor", "SymbolConstructor", "ArrayConstructor",
-      "Array", "ProxyConstructor", "Console", "DateConstructor", "Atomics", "Math", "JSON"], declaration.name))
-    && member.provenance.from == "lib"
+fn unbound_library_name(part, n, names) = part.carrier_known && part.carrier != null
+  && contains(names, part.carrier.description.name)
+  && declaration_origin(n, {file: part.carrier.file, node: part.carrier.node}).kind == "library"
+fn unbound_builtin_type(part, n, key) = {
+  value member: unbound_member(part, key)
+  value member_library: declaration_origin(n, member.site).kind == "library"
+  value ancestry: ts_value_ancestry(part).parts
+  value key == "compare" && any(ancestry, ancestor => unbound_library_name(ancestor, n, ["Collator"]))
+    || member_library && contains(member.flags, "array_constructor_member")
+    || member_library && any(ancestry, ancestor => unbound_library_name(ancestor, n,
+      ["NumberConstructor", "ObjectConstructor", "StringConstructor", "SymbolConstructor", "ArrayConstructor",
+        "Array", "ProxyConstructor", "Console", "DateConstructor", "Atomics", "Math", "JSON"]))
 }
 fn unbound_global(n, key) = {
   value spelling: join([n.text, key.text], ".")
@@ -104,14 +102,13 @@ fn unbound_global(n, key) = {
   ], spelling)
 }
 
-fn unbound_danger(t, key, ignore_static) = {
-  value declaration: unbound_member(t, key)
-  value receiver: first(declaration.signatures).receiver
-  value if declaration == null || ignore_static && declaration.is_static
-    || !(declaration.kind == "method" || declaration.kind == "property" && declaration.initializer_kind == "function")
-    then null
-    else if receiver.annotation.kind == "ts_type_keyword" && receiver.annotation.keyword == "void" then null
-    else {without_this: receiver == null}
+fn unbound_danger(part, key, ignore_static) = {
+  value declaration: unbound_member(part, key)
+  value flags: declaration.flags ?? []
+  value if declaration == null || ignore_static && contains(flags, "static")
+    || !contains(flags, "method") && !contains(flags, "function_initializer")
+    || contains(flags, "void_receiver") then null
+    else {without_this: !contains(flags, "explicit_receiver")}
 }
 fn unbound_warning(danger) = {
   value [
@@ -138,19 +135,18 @@ in ts_member, ts_index, ts_pattern_property.key, ts_property.key, ts_computed_ke
   let profiles {
     value sources
     map (source) {
-      value profile: unbound_type(source.node, keys, source.path)
       value {
         node: source.node,
         bound: source.bound,
         direct: count(source.path) == 0,
-        profiles: unbound_profiles(profile),
+        profiles: unbound_profiles(source.node, source.path),
       }
     }
   }
   let danger {
     value keys
     flat_map (key) if any(profiles, source => source.bound && (source.direct && unbound_global(source.node, key_node)
-      || count(source.profiles) > 0 && all(source.profiles, profile => unbound_builtin_type(profile, key)))) then []
+      || count(source.profiles) > 0 && all(source.profiles, profile => unbound_builtin_type(profile, source.node, key)))) then []
       else {
         value profiles
         flat_map (source) source.profiles

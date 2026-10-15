@@ -7,7 +7,8 @@ schema readonly_parameter_package_allow { from: "package"; name: string | string
 fn readonly_parameter_all(values) = if contains(values, false) then false
   else if contains(values, null) then null else true
 fn readonly_parameter_marker(part) = count(part.traits) == 1 && contains(part.traits, "intersection")
-fn readonly_parameter_uncertain(part) = !readonly_parameter_marker(part) && count(part.uncertain_traits) > 0
+fn readonly_parameter_uncertain(part) = !readonly_parameter_marker(part)
+  && any(part.uncertain_traits, trait => !contains(["thenable", "nonthenable"], trait))
 fn readonly_parameter_array(part) = contains(["Array", "ReadonlyArray"], part.carrier.description.name)
 fn readonly_parameter_scalar(part) =
   !any(part.traits, trait => contains(["object", "structural", "callable", "constructible"], trait))

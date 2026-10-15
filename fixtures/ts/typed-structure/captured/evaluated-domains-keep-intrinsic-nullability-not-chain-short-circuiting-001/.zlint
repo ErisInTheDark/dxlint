@@ -1,3 +1,4 @@
 import .ts
-in ts_expression_statement.expression rule nonnull { when !evaluated_type_domains.nullish && evaluated_type_domains.non_nullish
+in ts_expression_statement.expression rule nonnull { let domain condition_access_domains(node)
+when domain.known && !domain.nullish && domain.non_nullish
 warn 'nonnull' }

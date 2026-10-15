@@ -1,4 +1,4 @@
-a.ts:9:13-9:23 await-thenable:iterable#0
 a.ts:10:13-10:26 await-thenable:iterable#0
 a.ts:11:13-11:26 await-thenable:iterable#0
 a.ts:12:13-12:19 await-thenable:iterable#0
+a.ts:9:13-9:23 await-thenable:iterable#0

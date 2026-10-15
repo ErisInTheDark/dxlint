@@ -12,10 +12,7 @@ use crate::expr::Value;
 
 use super::facts::Facts;
 
-pub mod conditions;
 pub mod core;
-pub mod structure;
-pub mod suggestions;
 pub mod symbols;
 pub mod type_relations;
 pub mod typed;
@@ -34,23 +31,9 @@ impl Fact {
     pub const SCALAR: Self = Self { name: "", doc: "", get: |_, _| Value::Null, shape: Shape::Scalar };
 }
 
-/// Optional projections of a record-or-null fact. `None` asks whether the
-/// fact is present; field reads must agree with the eager record.
-pub struct FactFields {
-    pub name: &'static str,
-    pub fields: &'static [&'static str],
-    pub get: fn(&dyn Facts, u32, Option<usize>) -> Value<'static>,
-}
-
 const FACT_GROUPS: &[&[Fact]] = &[
-    core::FACTS, structure::FACTS, typed::FACTS, conditions::FACTS,
-    type_relations::FACTS, suggestions::FACTS, symbols::FACTS,
+    core::FACTS, typed::FACTS, type_relations::FACTS, symbols::FACTS,
 ];
-
-const FACT_FIELD_GROUPS: &[&[FactFields]] = &[];
 
 /// Every fact, numbered as the engine reads them.
 pub static FACTS: LazyLock<Vec<&'static Fact>> = LazyLock::new(|| FACT_GROUPS.iter().flat_map(|group| group.iter()).collect());
-
-/// Every projection, numbered as the engine reads them.
-pub static PROJECTIONS: LazyLock<Vec<&'static FactFields>> = LazyLock::new(|| FACT_FIELD_GROUPS.iter().flat_map(|group| group.iter()).collect());

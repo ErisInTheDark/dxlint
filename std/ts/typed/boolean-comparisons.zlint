@@ -10,10 +10,19 @@ fn typed_boolean_comparison(n) = {
   value if right is ts_boolean then {literal: right.text, expression: left}
     else if left is ts_boolean then {literal: left.text, expression: right} else null
 }
-fn typed_boolean_domain(domain) = domain.primitive == "boolean"
-  || domain.kind == "union" && count(domain.parts) > 0 && all(domain.parts, part => part.primitive == "boolean")
-fn typed_nullable_boolean(domain) = domain.kind == "union" && contains(domain.flags, "boolean") && domain.nullish
-  && all(domain.parts, part => part.primitive == "boolean" || part.kind == "null" || part.kind == "undefined")
+fn typed_boolean_kind(arm) = {
+  value parts: filter(arm, part => !contains(part.traits, "parameter"))
+  value part: first(parts)
+  value if count(parts) != 1 || contains(part.traits, "void") then null
+    else find(["boolean", "null", "undefined"], trait => contains(part.traits, trait))
+}
+fn typed_boolean_domain(parts) = parts != null && count(parts) > 0
+  && all(parts, arm => typed_boolean_kind(arm) == "boolean")
+fn typed_nullable_boolean(parts) = {
+  value kinds: map(parts ?? [], arm => typed_boolean_kind(arm))
+  value contains(kinds, "boolean") && (contains(kinds, "null") || contains(kinds, "undefined"))
+    && !contains(kinds, null)
+}
 fn typed_boolean_conditional(n) = {
   value n
   walk (current) if current.parent is ts_parenthesized
@@ -55,7 +64,7 @@ in ts_binary rule no-unnecessary-boolean-literal-compare {
   option allowComparingNullableBooleansToFalse boolean = true "Allow nullable boolean comparisons with false"
   let comparison typed_boolean_comparison(node)
   when re_test(operator, /^[!=]==?$/) && comparison != null
-  let domain comparison.expression.type_domains
+  let domain value_constituents(comparison.expression)
   let nullable typed_nullable_boolean(domain)
   when typed_boolean_domain(domain) || nullable && !(if comparison.literal == "true" then allowComparingNullableBooleansToTrue else allowComparingNullableBooleansToFalse)
   let negative starts_with(operator, "!")

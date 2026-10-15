@@ -27,24 +27,17 @@ pub trait Facts {
     fn with_file(&self, f: for<'a, 't> fn(&'a NativeFile<'t>, u32) -> Value<'static>, node: u32) -> Value<'static>;
     /// A projected record field, or presence (`None`), at its topic owner.
     fn with_field(&self, f: for<'a, 't> fn(&'a NativeFile<'t>, u32, Option<usize>) -> Value<'static>, node: u32, field: Option<usize>) -> Value<'static>;
-    /// `f` on the file itself, for links (nodes a node leads to).
-    fn nodes_of(&self, f: for<'a, 't> fn(&'a NativeFile<'t>, u32) -> Vec<u32>, node: u32) -> Vec<u32>;
-    fn binding(&self, node: u32) -> Option<Binding>;
     fn type_text(&self, node: u32) -> Option<String>;
-    fn type_members(&self, node: u32) -> Option<Vec<Box<str>>>;
     fn type_defaults(&self, node: u32) -> Option<Vec<Option<String>>>;
-    fn type_flags(&self, node: u32) -> Option<Vec<&'static str>>;
     fn type_arg_redundant(&self, node: u32) -> Option<&'static str>;
     /// `local`, `import` or `global` for a referencing identifier.
     fn resolved(&self, node: u32) -> Option<&'static str>;
-    fn member_uses(&self, node: u32) -> Option<MemberUses>;
     /// On a property, member or literal: its statically known name / value
     /// as text.
     fn static_name(&self, node: u32) -> Option<String>;
 }
 
 
-pub use super::class_members::MemberUses;
 
 impl Facts for NativeFile<'_> {
     fn with_file(&self, f: for<'a, 't> fn(&'a NativeFile<'t>, u32) -> Value<'static>, node: u32) -> Value<'static> {
@@ -55,28 +48,12 @@ impl Facts for NativeFile<'_> {
         f(self, node, field)
     }
 
-    fn nodes_of(&self, f: for<'a, 't> fn(&'a NativeFile<'t>, u32) -> Vec<u32>, node: u32) -> Vec<u32> {
-        f(self, node)
-    }
-
-    fn binding(&self, node: u32) -> Option<Binding> {
-        NativeFile::binding(self, node)
-    }
-
     fn type_text(&self, node: u32) -> Option<String> {
         NativeFile::type_text(self, node)
     }
 
-    fn type_members(&self, node: u32) -> Option<Vec<Box<str>>> {
-        NativeFile::type_members(self, node)
-    }
-
     fn type_defaults(&self, node: u32) -> Option<Vec<Option<String>>> {
         NativeFile::type_defaults(self, node)
-    }
-
-    fn type_flags(&self, node: u32) -> Option<Vec<&'static str>> {
-        NativeFile::type_flags(self, node)
     }
 
     fn type_arg_redundant(&self, node: u32) -> Option<&'static str> {
@@ -93,10 +70,6 @@ impl Facts for NativeFile<'_> {
         }
         let decl = b.refs.get(&node)?;
         Some(if b.decls.get(decl).is_some_and(|d| d.kind == "import") { "import" } else { "local" })
-    }
-
-    fn member_uses(&self, node: u32) -> Option<MemberUses> {
-        super::class_members::member_uses(self, node)
     }
 
 
@@ -125,10 +98,6 @@ pub struct NativeFile<'t> {
 }
 
 impl<'t> NativeFile<'t> {
-    pub(crate) fn access(&self, node: u32) -> Option<&'static str> {
-        self.bindings().access.get(&node).copied()
-    }
-
     pub fn new(syntax: Syntax<'t>, path: &'t Path, project: &'t Project) -> Self {
         NativeFile {
             syntax,

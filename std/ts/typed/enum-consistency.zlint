@@ -1,0 +1,68 @@
+define {
+
+in ts_program {
+  let enum_consistency_declarations descendants(ts_enum)
+  let enum_consistency_imports descendants(ts_import) descendants(ts_import_specifier) descendants(ts_import_equals)
+}
+fn enum_consistency_root(n) = { value n; walk (current) current.parent.node; last }
+fn enum_consistency_group(n) = {
+  value ancestors: { value n.parent.node; walk (current) current.parent.node }
+  value state: fold(ancestors, {names: [n.name.text], merge: n.parent is ts_export, stop: null}, (group, owner) =>
+    if group.stop != null then group
+    else if owner is ts_namespace then
+      if !group.merge then {names: group.names, merge: false, stop: owner}
+      else {names: group.names [owner.name.text ?? "global"], merge: owner.parent is ts_export, stop: null}
+    else if owner is (ts_function, ts_method, ts_arrow)
+      || owner is ts_block && owner.parent not ts_namespace
+      then {names: group.names, merge: group.merge, stop: owner}
+    else group)
+  value {names: state.names, stop: state.stop}
+}
+fn enum_consistency_kind(member) = {
+  value init: member.init.node
+  value if init == null then "number"
+    else if init is (ts_string, ts_template) then "string"
+    else if init is (ts_boolean, ts_null, ts_regex, ts_bigint) then null
+    else if init always string then "string" else "number"
+}
+fn enum_consistency_import(n) = {
+  value root: enum_consistency_root(n)
+  value bindings: map(root.enum_consistency_imports, entry =>
+    if entry is ts_import then entry.default_import.node
+    else if entry is ts_import_specifier then entry.local.node ?? entry.imported.node
+    else entry.name.node)
+  value local: declaration_identity(n)
+  value imported: {
+    value filter(bindings, binding => binding != null && binding.text == n.name.text)
+    flat_map (binding) {
+      value value_sources(binding).sites ?? []
+      walk (site) site_sources(n, site).sites ?? []
+      filter (site) site.kind == "ts_enum" && site.file != local.file
+    }
+    first
+  }
+  value arms: if imported == null then [] else value_parts(declaration_value(n, imported))
+  value parts: flat_map(arms ?? [], arm => arm.parts)
+  value candidate: find(parts, part => part.carrier_known && part.carrier.description.kind == "enum")
+  value candidate.carrier.description.first_member_kind
+}
+fn enum_consistency_mismatch(n) = if count(n.member.nodes) == 0 then null else {
+  value group: enum_consistency_group(n)
+  value declarations: filter(enum_consistency_root(n).enum_consistency_declarations, declaration =>
+    declaration.offset <= n.offset && count(declaration.member.nodes) > 0
+      && enum_consistency_group(declaration) == group)
+  value first_declaration: first(sort_by(declarations, declaration => declaration.offset))
+  value desired: enum_consistency_import(n) ?? enum_consistency_kind(first(first_declaration.member.nodes))
+  value first_problem: if desired == null then null else find(n.member.nodes, member =>
+    enum_consistency_kind(member) != desired)
+  value if first_problem == null || enum_consistency_kind(first_problem) == null then null
+    else first_problem.init.node ?? first_problem
+}
+
+in ts_enum rule no-mixed-enums {
+  let mismatch enum_consistency_mismatch(node)
+  when mismatch != null
+  report at mismatch.offset
+  warn "Mixing number and string enums can be confusing."
+}
+}

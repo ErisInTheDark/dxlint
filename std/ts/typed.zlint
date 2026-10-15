@@ -26,6 +26,10 @@ import .ts/typed/boolean-comparisons
 import .ts/typed/void-expressions
 import .ts/typed/strict-void-return
 import .ts/typed/assignments
+import .ts/typed/transfers
+import .ts/typed/defaults
+import .ts/typed/template-values
+import .ts/typed/enum-consistency
 import .ts/typed/type-parameters
 import .ts/typed/switches
 import .ts/typed/enums
@@ -169,12 +173,13 @@ in ts_call, ts_binary, ts_assignment, ts_template rule no-base-to-string {
     join: subject.join,
     certainty: if subject.join then stringification_join(subject.node.stringification_type, ignoredTypeNames, checkUnknown) else stringification_certainty(subject.node.stringification_type, ignoredTypeNames, checkUnknown)
   })
-  each subject in findings
-  when subject.node != null && subject.node not (ts_literal, ts_spread)
-  when subject.certainty > 0
-  report at {start: subject.node.offset, end: subject.node.end_offset}
-  warn if subject.join then "Using `join()` for " subject.node.text " " (if subject.certainty == 2 then "will" else "may") " use Object's default stringification format ('[object Object]') when stringified."
-    else "'" subject.node.text "' " (if subject.certainty == 2 then "will" else "may") " use Object's default stringification format ('[object Object]') when stringified."
+  each subject in findings {
+    when subject.node != null && subject.node not (ts_literal, ts_spread)
+    when subject.certainty > 0
+    report at {start: subject.node.offset, end: subject.node.end_offset}
+    warn if subject.join then "Using `join()` for " subject.node.text " " (if subject.certainty == 2 then "will" else "may") " use Object's default stringification format ('[object Object]') when stringified."
+      else "'" subject.node.text "' " (if subject.certainty == 2 then "will" else "may") " use Object's default stringification format ('[object Object]') when stringified."
+  }
 }
 
 in ts_identifier {
@@ -205,7 +210,7 @@ group typed_simple_expression ts_identifier, ts_private_name, ts_this, ts_super,
   ts_non_null, ts_type_assertion, ts_function, ts_arrow, ts_class, ts_instantiation, ts_meta_property,
   ts_import_call
 in typed_simple_expression, ts_binary {
-  let eval_callback callable || ts_value_builtin_type(node, ["Function"]) == true
+  let eval_callback ts_value_callable(node) || ts_value_builtin_type(node, ["Function"]) == true
 }
 fn eval_constant_string(n) = ts_runtime_string(n) != null && {
   value arms: value_parts(n)
@@ -217,7 +222,7 @@ in typed_simple_expression {
     || eval_constant_string(node)
 }
 in ts_call {
-  let eval_callback callable || ts_value_builtin_type(node, ["Function"]) == true || callee.eval_bind_member == true || callee is ts_identifier && callee == "bind"
+  let eval_callback ts_value_callable(node) || ts_value_builtin_type(node, ["Function"]) == true || callee.eval_bind_member == true || callee is ts_identifier && callee == "bind"
   let eval_string eval_constant_string(node) || callee.global_value == "String" && ts_runtime_string(first(argument.nodes)) != null
 }
 in ts_binary let eval_string eval_constant_string(node) || operator == "+" && (left.eval_string == true || right.eval_string == true)
@@ -248,78 +253,82 @@ in ts_call, ts_new {
   }
 }
 
-in ts_enum rule no-mixed-enums {
-  when mixed_enum_offset != null
-  report at mixed_enum_offset
-  warn "Mixing number and string enums can be confusing."
-}
-
 fn unsafe_argument_sender(transfer) = if transfer.error then if transfer.mode == "array" then "error" else "error typed" else if transfer.mode == "tuple" then "of type `{transfer.sender}`" else "`{transfer.sender}`"
 fn unsafe_assignment_sender(transfer) = if transfer.error then "error typed" else "`{transfer.sender}`"
 
 in ts_call, ts_new, ts_tagged_template {
   rule no-unsafe-argument {
-    each unsafe_arg in argument_transfers.nonempty ?? []
-    when unsafe_arg.mode == "argument"
-    report at unsafe_arg.offset
-    warn "Unsafe argument of type " unsafe_argument_sender(unsafe_arg) " assigned to a parameter of type `{unsafe_arg.receiver}`."
+    each unsafe_arg in argument_transfers.nonempty ?? [] {
+      when unsafe_arg.mode == "argument"
+      report at unsafe_arg.offset
+      warn "Unsafe argument of type " unsafe_argument_sender(unsafe_arg) " assigned to a parameter of type `{unsafe_arg.receiver}`."
+    }
   }
   rule no-unsafe-argument:spread {
-    each unsafe_arg in argument_transfers.nonempty ?? []
-    when unsafe_arg.mode == "spread"
-    report at unsafe_arg.offset
-    warn "Unsafe spread of an " unsafe_argument_sender(unsafe_arg) " type."
+    each unsafe_arg in argument_transfers.nonempty ?? [] {
+      when unsafe_arg.mode == "spread"
+      report at unsafe_arg.offset
+      warn "Unsafe spread of an " unsafe_argument_sender(unsafe_arg) " type."
+    }
   }
   rule no-unsafe-argument:array {
-    each unsafe_arg in argument_transfers.nonempty ?? []
-    when unsafe_arg.mode == "array"
-    report at unsafe_arg.offset
-    warn "Unsafe spread of an " unsafe_argument_sender(unsafe_arg) " array type."
+    each unsafe_arg in argument_transfers.nonempty ?? [] {
+      when unsafe_arg.mode == "array"
+      report at unsafe_arg.offset
+      warn "Unsafe spread of an " unsafe_argument_sender(unsafe_arg) " array type."
+    }
   }
   rule no-unsafe-argument:tuple {
-    each unsafe_arg in argument_transfers.nonempty ?? []
-    when unsafe_arg.mode == "tuple"
-    report at unsafe_arg.offset
-    warn "Unsafe spread of a tuple type. The argument is " unsafe_argument_sender(unsafe_arg) " and is assigned to a parameter of type `{unsafe_arg.receiver}`."
+    each unsafe_arg in argument_transfers.nonempty ?? [] {
+      when unsafe_arg.mode == "tuple"
+      report at unsafe_arg.offset
+      warn "Unsafe spread of a tuple type. The argument is " unsafe_argument_sender(unsafe_arg) " and is assigned to a parameter of type `{unsafe_arg.receiver}`."
+    }
   }
 }
 
 in ts_declarator, ts_parameter, ts_class_property, ts_assignment, ts_assignment_pattern, ts_property, ts_spread, ts_jsx_attribute {
   rule no-unsafe-assignment {
-    each unsafe_assigned in assignment_value_transfers
-    when unsafe_assigned.mode == "any"
-    report at unsafe_assigned.site
-    warn "Unsafe assignment of an " unsafe_assignment_sender(unsafe_assigned) " value."
+    each unsafe_assigned in assignment_value_transfers {
+      when unsafe_assigned.mode == "any"
+      report at unsafe_assigned.site
+      warn "Unsafe assignment of an " unsafe_assignment_sender(unsafe_assigned) " value."
+    }
   }
   rule no-unsafe-assignment:generic {
-    each unsafe_assigned in assignment_value_transfers
-    when unsafe_assigned.mode == "generic"
-    report at unsafe_assigned.site
-    warn "Unsafe assignment of type " unsafe_assignment_sender(unsafe_assigned) " to a variable of type `{unsafe_assigned.receiver}`."
+    each unsafe_assigned in assignment_value_transfers {
+      when unsafe_assigned.mode == "generic"
+      report at unsafe_assigned.site
+      warn "Unsafe assignment of type " unsafe_assignment_sender(unsafe_assigned) " to a variable of type `{unsafe_assigned.receiver}`."
+    }
   }
   rule no-unsafe-assignment:array {
-    each unsafe_assigned in assignment_value_transfers
-    when unsafe_assigned.mode == "array"
-    report at unsafe_assigned.site
-    warn "Unsafe array destructuring of an " unsafe_assignment_sender(unsafe_assigned) " array value."
+    each unsafe_assigned in assignment_value_transfers {
+      when unsafe_assigned.mode == "array"
+      report at unsafe_assigned.site
+      warn "Unsafe array destructuring of an " unsafe_assignment_sender(unsafe_assigned) " array value."
+    }
   }
   rule no-unsafe-assignment:tuple {
-    each unsafe_assigned in assignment_value_transfers
-    when unsafe_assigned.mode == "tuple"
-    report at unsafe_assigned.site
-    warn "Unsafe array destructuring of a tuple element with an " unsafe_assignment_sender(unsafe_assigned) " value."
+    each unsafe_assigned in assignment_value_transfers {
+      when unsafe_assigned.mode == "tuple"
+      report at unsafe_assigned.site
+      warn "Unsafe array destructuring of a tuple element with an " unsafe_assignment_sender(unsafe_assigned) " value."
+    }
   }
   rule no-unsafe-assignment:object {
-    each unsafe_assigned in assignment_value_transfers
-    when unsafe_assigned.mode == "object"
-    report at unsafe_assigned.site
-    warn "Unsafe object destructuring of a property with an " unsafe_assignment_sender(unsafe_assigned) " value."
+    each unsafe_assigned in assignment_value_transfers {
+      when unsafe_assigned.mode == "object"
+      report at unsafe_assigned.site
+      warn "Unsafe object destructuring of a property with an " unsafe_assignment_sender(unsafe_assigned) " value."
+    }
   }
   rule no-unsafe-assignment:spread {
-    each unsafe_assigned in assignment_value_transfers
-    when unsafe_assigned.mode == "spread"
-    report at unsafe_assigned.site
-    warn "Unsafe spread of an " unsafe_assignment_sender(unsafe_assigned) " value in an array."
+    each unsafe_assigned in assignment_value_transfers {
+      when unsafe_assigned.mode == "spread"
+      report at unsafe_assigned.site
+      warn "Unsafe spread of an " unsafe_assignment_sender(unsafe_assigned) " value in an array."
+    }
   }
 }
 
@@ -348,7 +357,7 @@ in ts_as, ts_type_assertion rule non-nullable-type-assertion-style {
   fix at edit.target if edit != null as edit.text
 }
 in ts_method.return_type, ts_method_signature.return_type rule related-getter-setter-pairs {
-  when accessor_type_mismatch == true
+  when typed_accessor_type_mismatch(node)
   warn "`get()` type should be assignable to its equivalent `set()` type."
 }
 # `await` of something that is not a promise; promise aggregators of arrays
@@ -416,9 +425,13 @@ in ts_unary rule no-array-delete {
 }
 
 in ts_assignment_pattern, ts_parameter rule no-useless-default-assignment {
-  when useless_default != null
-  report at useless_default.offset
-  warn if useless_default.kind == "optional" then "Using `= undefined` to make a parameter optional adds unnecessary runtime logic." else if useless_default.kind == "undefined" then "Default value is useless because it is undefined. Optional {useless_default.owner}s are already undefined by default." else "Default value is useless because the {useless_default.owner} is not optional."
+  when typed_default_assignment != null
+  report at typed_default_assignment.offset
+  warn when {
+    typed_default_assignment.kind == "optional" then "Using `= undefined` to make a parameter optional adds unnecessary runtime logic."
+    typed_default_assignment.kind == "undefined" then "Default value is useless because it is undefined. Optional {typed_default_assignment.owner}s are already undefined by default."
+    else then "Default value is useless because the {typed_default_assignment.owner} is not optional."
+  }
 }
 
 in ts_as, ts_type_assertion rule no-unsafe-type-assertion {

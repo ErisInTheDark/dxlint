@@ -58,9 +58,9 @@ in ts_binary {
   }
 }
 
-@macro narrowing_typeof(tag, expected) {
+@macro narrowing_typeof(tag, expected, available) {
   in ts_binary {
-    when left.structure_unwrapped is ts_unary && left.structure_unwrapped.operator == "typeof" && right.literal_value.value == tag {
+    when left.structure_unwrapped is ts_unary && left.structure_unwrapped.operator == "typeof" && right.literal_value.value == tag && available {
       when operator == "===" || operator == "==" {
         unwraps truthy includes expected from left.structure_unwrapped.argument
       }
@@ -68,7 +68,7 @@ in ts_binary {
         unwraps truthy !includes expected from left.structure_unwrapped.argument
       }
     }
-    when right.structure_unwrapped is ts_unary && right.structure_unwrapped.operator == "typeof" && left.literal_value.value == tag {
+    when right.structure_unwrapped is ts_unary && right.structure_unwrapped.operator == "typeof" && left.literal_value.value == tag && available {
       when operator == "===" || operator == "==" {
         unwraps truthy includes expected from right.structure_unwrapped.argument
       }
@@ -78,13 +78,14 @@ in ts_binary {
     }
   }
 }
-@narrowing_typeof("string", (trait string, truthy, nonthenable | trait string, falsy, nonthenable))
-@narrowing_typeof("number", (trait number, truthy, nonthenable | trait number, falsy, nonthenable))
-@narrowing_typeof("boolean", (trait boolean, truthy, nonthenable | trait boolean, falsy, nonthenable))
-@narrowing_typeof("bigint", (trait bigint, truthy, nonthenable | trait bigint, falsy, nonthenable))
-@narrowing_typeof("symbol", (trait symbol, truthy, nonthenable))
-@narrowing_typeof("undefined", (trait undefined, nullable, falsy, nonthenable))
-@narrowing_typeof("function", (instance "Function"))
-@narrowing_typeof("object", (trait object, truthy | trait null, nullable, falsy, nonthenable))
+@narrowing_typeof("string", (trait string, truthy, nonthenable | trait string, falsy, nonthenable), true)
+@narrowing_typeof("number", (trait number, truthy, nonthenable | trait number, falsy, nonthenable), true)
+@narrowing_typeof("boolean", (trait boolean, truthy, nonthenable | trait boolean, falsy, nonthenable), true)
+@narrowing_typeof("bigint", (trait bigint, truthy, nonthenable | trait bigint, falsy, nonthenable), true)
+@narrowing_typeof("symbol", (trait symbol, truthy, nonthenable), true)
+@narrowing_typeof("undefined", (trait undefined, nullable, falsy, nonthenable), true)
+@narrowing_typeof("function", (instance "Function"), global_declarations(node, "Function", "type") != null && count(global_declarations(node, "Function", "type")) > 0)
+@narrowing_typeof("function", (trait callable, object, truthy), global_declarations(node, "Function", "type") == [])
+@narrowing_typeof("object", (trait object, truthy | trait null, nullable, falsy, nonthenable), true)
 
 }

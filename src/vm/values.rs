@@ -235,7 +235,7 @@ impl Config {
         Some(())
     }
 
-    pub(super) fn try_fact_value(&self, value: &Value, fact: usize, projected: bool, listed: bool, arena: &mut Arena, source: &str) -> Result<V, PackError> {
+    pub(super) fn try_fact_value(&self, value: &Value, fact: usize, listed: bool, arena: &mut Arena, source: &str) -> Result<V, PackError> {
         fn convert(config: &Config, value: &Value, shape: &FactShape, arena: &mut Arena, source: &str) -> Result<V, PackError> {
             Ok(match value {
                 Value::Str(text) => V::Text(arena.try_text(text, source)?),
@@ -264,7 +264,7 @@ impl Config {
             })
         }
         let scalar = FactShape::Scalar;
-        let shape = if projected { &scalar } else { self.fact_shapes.get(&fact).unwrap_or(&scalar) };
+        let shape = self.fact_shapes.get(&fact).unwrap_or(&scalar);
         // Multi-field reads wrap results; that list is not the fact's own shape.
         if listed {
             if let Value::List(items) = value {

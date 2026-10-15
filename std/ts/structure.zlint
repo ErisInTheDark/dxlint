@@ -5,6 +5,10 @@ import .ts/parentheses
 import .ts/structure/padding
 import .ts/expression-fixes
 import .ts/import-attributes
+import .ts/precedence
+import .ts/structure/declarations
+import .ts/structure/lists
+import .ts/structure/lines
 
 define {
 
@@ -29,14 +33,19 @@ fn structure_destructure_enabled(settings, role, kind) =
 fn structure_typescript(path) = re_test(path, /\.(?:ts|tsx|mts|cts)$/)
 
 fn structure_iterable(n) = if n.structure_unwrapped is (ts_array, ts_string, ts_template) then true
-  else structure_iterable_parts(n, value_constituents(n))
+  else structure_iterable_parts(n, value_parts(n))
+fn structure_iterable_inventory(handle) = {
+  value members: value_children(handle, true, [])
+  value if members != null && all(members, edge => edge.member != null
+    && contains(["str", "num"], type_of(edge.member.key))) then false else null
+}
 fn structure_iterable_parts(n, parts) = if parts == null then null else if len(parts) == 0 then false else {
   value arms: map(parts, arm => {
-    value builtin: any(arm, part => contains(part.traits, "string") || contains(part.traits, "tuple")
+    value builtin: any(arm.parts, part => contains(part.traits, "string") || contains(part.traits, "tuple")
       || ts_value_array_part(part, n).array)
-    value unresolved: any(arm, part => contains(part.traits, "any") || contains(part.traits, "parameter"))
-    value absent: any(arm, part => any(["unknown", "null", "undefined", "void"], trait => contains(part.traits, trait)))
-    value { builtin: builtin, unresolved: unresolved, absent: absent }
+    value unresolved: any(arm.parts, part => contains(part.traits, "any") || contains(part.traits, "parameter"))
+    value absent: any(arm.parts, part => any(["unknown", "null", "undefined", "void"], trait => contains(part.traits, trait)))
+    value { builtin: builtin, unresolved: unresolved, absent: absent, handle: arm.handle }
   })
   value if all(arms, arm => arm.builtin) then true
     else structure_iterable_members(arms, value_lookup(n, { global: "Symbol", class: "value", path: ["iterator"] }))
@@ -48,7 +57,7 @@ fn structure_iterable_members(arms, lookup) = {
     value if arm.builtin || member.matched == true && any(member.sources, source => source.kind == "named") then true
       else if arm.unresolved then null
       else if arm.absent then false
-      else if lookup == null then null
+      else if lookup == null then structure_iterable_inventory(arm.handle)
       else false
   })
   value if any(states, state => state == false) then false

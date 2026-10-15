@@ -8,20 +8,18 @@ use std::any::Any;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::expr::facts::{FactInfo, ProjectionInfo};
+use crate::expr::facts::FactInfo;
 use crate::expr::Value;
 use crate::grammar::{NativeFront, Node, Tree};
 use super::reads::{Dep, Discovery, Reads};
 
-/// What one parsed file answers about its nodes. Facts, projections and
-/// links are numbered as its front end declares them
-/// ([`Frontend::facts`]); [`crate::expr::facts`] reads them.
+/// What one parsed file answers about its nodes. Facts are numbered as its
+/// front end declares them ([`Frontend::facts`]); [`crate::expr::facts`]
+/// reads them.
 pub trait Native {
     /// Its front end's name.
     fn frontend(&self) -> &'static str;
     fn fact(&self, fact: usize, node: u32) -> Value<'static>;
-    /// One field of a projection's fact (`Some`), or whether it is there.
-    fn projection(&self, projection: usize, node: u32, field: Option<usize>) -> Value<'static>;
     /// Byte `at` lies strictly inside one token or comment (a line of a
     /// multi-line string or block comment starts there).
     fn inside_token(&self, at: usize) -> bool;
@@ -156,9 +154,6 @@ pub trait Frontend: Sync {
     fn file<'t>(&'t self, input: FileInput<'t, '_>) -> Box<dyn Native + 't>;
     /// The facts its files answer, numbered as [`Native::fact`] reads them.
     fn facts(&self) -> Vec<FactInfo> {
-        Vec::new()
-    }
-    fn projections(&self) -> Vec<ProjectionInfo> {
         Vec::new()
     }
 

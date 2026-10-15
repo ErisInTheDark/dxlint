@@ -64,4 +64,31 @@ in ts_member let static_name ts_literal_key(property.node)
 in ts_index let static_name index.ts_literal_text
 in ts_parenthesized let static_name expression.static_name
 
+fn ts_reference_atom(tag, text) = "{tag}{len(text)}:{text}"
+fn ts_reference_read(n, strict) = if strict then n.reference_key_strict else n.reference_key
+fn ts_reference_compute(n, strict) = when {
+  n is ts_parenthesized then ts_reference_read(n.expression.node, strict)
+  n is ts_identifier then ts_reference_atom("id", n.identifier_name)
+  n is ts_private_name then ts_reference_atom("private", n.text)
+  n is ts_this then "this"
+  n is ts_super then "super"
+  n is (ts_string, ts_number, ts_boolean, ts_null, ts_bigint, ts_regex) then {
+    value literal: n.literal_value
+    value if literal == null then null else ts_reference_atom("literal:" literal.type, literal.value)
+  }
+  n is (ts_member, ts_index) then {
+    value object: ts_reference_read(n.object.node, strict)
+    value name: if strict then null else n.static_name
+    value property: if name != null then ts_reference_atom("static", name) else {
+      value key: ts_reference_read(n.property.node ?? n.index.node, strict)
+      value if key == null then null else ts_reference_atom(if n is ts_member then "member" else "index", key)
+    }
+    value if object == null || property == null then null
+      else ts_reference_atom("object", object) ts_reference_atom("property", property)
+  }
+  else then null
+}
+in ts_node let reference_key ts_reference_compute(node, false)
+in ts_node let reference_key_strict ts_reference_compute(node, true)
+
 }

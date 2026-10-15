@@ -1,4 +1,4 @@
-//! Core facts: bindings and printed types.
+//! Core facts: printed types.
 
 use crate::expr::facts::opt;
 use crate::expr::Value;
@@ -6,7 +6,6 @@ use crate::expr::Value;
 use super::Fact;
 
 pub const FACTS: &[Fact] = &[
-    Fact { shape: Fact::SCALAR.shape, name: "exported", doc: "native layers: the declaration is `export`ed", get: |f, n| opt(f.binding(n), |b| Value::Bool(b.exported)) },
     Fact {
         shape: Fact::SCALAR.shape,
         name: "type",

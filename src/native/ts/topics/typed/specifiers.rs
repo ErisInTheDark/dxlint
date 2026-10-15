@@ -26,11 +26,6 @@ pub(crate) fn file_gate(ck: &Checker<'_>, file: FileId, name: &str) -> Value<'st
     ])
 }
 
-/// Template policy also permits named base types.
-pub(super) fn named_gates(ty: &Ty, ck: &Checker<'_>, seen: &mut Vec<DeclRef>) -> Vec<Value<'static>> {
-    named_types(ty, ck, seen).into_iter().map(|(decl, _)| named_gate(ck, decl)).collect()
-}
-
 pub(super) fn named_types(ty: &Ty, ck: &Checker<'_>, seen: &mut Vec<DeclRef>) -> Vec<(DeclRef, Ty)> {
     if let Ty::EnumMember(member) = ty { return named_types(&member.enum_type(), ck, seen) }
     let Ty::Named(sym, args) = ty else { return Vec::new() };

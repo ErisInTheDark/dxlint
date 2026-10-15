@@ -1,6 +1,55 @@
 # Object member policy and source-preserving short/long syntax conversions.
 
+import .ts/helpers
+import .ts/names
+import .ts/literals
+
 define {
+
+fn shorthand_arrow_captures(n) = {
+  value n.children.nodes
+  walk (current) if current is (ts_function, ts_method, ts_class) then [] else current.children.nodes
+  any (current) current is (ts_this, ts_super) || current is ts_meta_property && current.text == "new.target"
+    || current is ts_identifier && current.text == "arguments"
+      && (current.resolved == "global" || ts_arguments_owner(current) != null
+        || current.access != "type" && current.declaration != null
+          && (current.declaration.offset < n.offset || current.declaration.end_offset > n.end_offset))
+}
+fn shorthand_member_info(n) = {
+  value key: n.key.node
+  value name: n.static_name
+  value proto: key not ts_computed_key && name == "__proto__"
+  value expression: if n.value.node != null then unparenthesised_node(n.value.node) else null
+  value method: n is ts_method
+  value function: expression is ts_function && expression.name.node == null
+  value arrow: expression is ts_arrow && expression.body is ts_block && !shorthand_arrow_captures(expression)
+  value quoted_key: key.expression.node ?? key
+  value comments: overlapping(ts_comment, n.offset, n.end_offset)
+  value if n.parent not ts_object || n.parent.write_site != null || n not (ts_property, ts_method)
+    || contains(["get", "set"], n.kind) || key == null then null else {
+    name: name,
+    concise: method || expression == null,
+    method: method,
+    function: function,
+    arrow: arrow,
+    quoted: quoted_key is ts_string,
+    redundant: !proto && (function || expression is ts_identifier && name == expression.text),
+    constructor: re_test(name, /^[_$0-9]*\p{Uppercase}/),
+    annotated: any(comments, comment => starts_with(comment.text, "/*")
+      && re_test(comment.text, /^\/\*\s*\*/) && contains(comment.text, "@type")),
+    proto: proto,
+    computed: key is ts_computed_key
+  }
+}
+in ts_property, ts_method let shorthand_member shorthand_member_info(node)
+in ts_object let shorthand_consistency {
+  value members: filter(map(property.nodes, member => member.shorthand_member), member => member != null)
+  value concise: count(filter(members, member => member.concise))
+  value if write_site != null then null
+    else if concise > 0 && concise < count(members) then "mixed"
+    else if concise == 0 && count(members) > 0 && all(members, member => member.redundant) then "redundant"
+    else null
+}
 
 fn shorthand_modifiers(n) =
   (if contains(n.modifier, "async") then "async " else "") (if contains(n.modifier, "*") then "*" else "")
@@ -74,7 +123,7 @@ in ts_property, ts_method rule object-shorthand {
   option ignoreConstructors boolean = false "ignore capitalised method names"
   option methodsIgnorePattern string = "" "method names to ignore"
   option avoidExplicitReturnArrows boolean = false "prefer methods to block-bodied arrows without lexical captures"
-  let shorthand_info object_shorthand_member
+  let shorthand_info shorthand_member
   when shorthand_info != null && !shorthand_info.proto
   let needs_longform shorthand_info.concise && (mode == "never" || shorthand_info.method && avoidQuotes && shorthand_info.quoted)
   let needs_method !shorthand_info.concise && (mode == "always" || mode == "methods") && (shorthand_info.function || avoidExplicitReturnArrows && shorthand_info.arrow) && !(ignoreConstructors && shorthand_info.constructor) && !(avoidQuotes && shorthand_info.quoted) && !(methodsIgnorePattern != "" && shorthand_info.name != null && re_test(shorthand_info.name, methodsIgnorePattern))
@@ -92,8 +141,8 @@ in ts_property, ts_method rule object-shorthand {
 in ts_object rule object-shorthand:consistent {
   option mode ("always" | "never" | "methods" | "properties" | "consistent" | "consistent-as-needed") = "always" "object shorthand policy"
   when mode == "consistent" || mode == "consistent-as-needed"
-  when object_shorthand_consistency == "mixed" || mode == "consistent-as-needed" && object_shorthand_consistency == "redundant"
-  warn if object_shorthand_consistency == "mixed" then "Unexpected mix of shorthand and non-shorthand properties." else "Expected shorthand for all properties."
+  when shorthand_consistency == "mixed" || mode == "consistent-as-needed" && shorthand_consistency == "redundant"
+  warn if shorthand_consistency == "mixed" then "Unexpected mix of shorthand and non-shorthand properties." else "Expected shorthand for all properties."
 }
 
 }

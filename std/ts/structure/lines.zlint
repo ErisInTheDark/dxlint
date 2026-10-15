@@ -1,0 +1,78 @@
+import .ts/helpers
+import .ts/tokens
+
+define {
+
+in ts_program let bom starts_with(source, "\u{feff}")
+
+group structure_operand ts_binary, ts_logical, ts_union, ts_intersection
+fn structure_operand_line(source, at) = {
+  value line: position(at)
+  value {
+    row: line.js_line,
+    offset: line.js_line_start,
+    indent: re_find(byte_slice(source, line.js_line_start), /^[^\S\r\n\u{2028}\u{2029}]*/),
+    node: first(overlapping(ts_line, at, at + 1)),
+  }
+}
+fn structure_operand_start(right) = {
+  value inner: unparenthesised_node(right)
+  value before: token(inner, "before")
+  value parens: walk(if before.text == "(" then node_at(before.start) else null, current => {
+    value previous: token(current, "before")
+    value if previous.text == "(" && token(node_at(previous.start), "before") != null
+      then node_at(previous.start) else null
+  })
+  value {
+    first: if count(parens) > 0 then token(last(parens), "first") else token(inner, "first"),
+    climbed: count(parens) > 0,
+  }
+}
+fn structure_operand_measure(source, n, right, member) = {
+  value start: structure_operand_start(right)
+  value first: start.first
+  value operator: if n is (ts_binary, ts_logical) then token(n.operator.node, "first")
+    else token(node_at(first.start), "before")
+  value left: token(node_at(operator.start), "before")
+  value type_member: n is (ts_union, ts_intersection)
+  value if first == null || left == null
+    || operator.start <= n.offset && !(type_member && member == 0 && !start.climbed)
+    || position(left.start).js_line == position(first.start).js_line then null else {
+    value left_line: structure_operand_line(source, left.start)
+    value right_line: structure_operand_line(source, first.start)
+    value root_line: structure_operand_line(source, n.offset)
+    value first_on_line: token(left_line.node, "first") ?? left
+    value line_last: token(left_line.node, "last")
+    value last_on_line: if line_last == null || left.start > line_last.start then left else line_last
+    value before: token(n, "before")
+    value {
+      offset: right_line.offset,
+      left_line: left_line.row,
+      right_line: right_line.row,
+      root_line: root_line.row,
+      left: left_line.indent,
+      right: right_line.indent,
+      root: root_line.indent,
+      first: first_on_line.text,
+      last: last_on_line.text,
+      before: if before != null && position(before.start).js_line == left_line.row then before.text else "",
+      parens: sum(map(token_list(left_line.node), text => if text == "(" then 1 else if text == ")" then -1 else 0)),
+      type_keyword: first_on_line.text == "type" && any(walk(n.parent.node, current => current.parent.node),
+        current => current is ts_type_alias && current.offset == first_on_line.start),
+    }
+  }
+}
+in structure_operand let structure_operand_records {
+  value owner: node
+  value if position(offset).js_line == position(end_offset).js_line then [] else {
+    value if is (ts_binary, ts_logical) then right.nodes else type.nodes
+    map (item, index) structure_operand_measure(source, owner, item, index)
+    compact
+  }
+}
+in ts_program let binary_operand_indents {
+  value descendants(structure_operand)
+  flat_map (item) item.structure_operand_records
+}
+
+}

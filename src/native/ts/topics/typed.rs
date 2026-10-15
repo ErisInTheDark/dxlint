@@ -16,16 +16,11 @@ mod unsafe_types;
 mod awaitability;
 mod callables;
 mod assertions;
-mod accessors;
-mod constituents;
-mod redundant;
 mod transfers;
 mod arguments;
-mod enums;
 pub(super) mod specifiers;
 mod promises;
 mod empty_types;
-mod defaults;
 
 pub const FACTS: &[Fact] = &[
     Fact {
@@ -39,12 +34,6 @@ pub const FACTS: &[Fact] = &[
         name: "callable_contracts",
         doc: "native expressions: callable_contracts(site, source, member_path?, fields?) gives callable return kinds and thenability at the requested member path (default root), through receiver contracts and direct heritage; incomplete rows indicate unresolved signatures or work limits. Opt-in contextual_returns contains raw recursive kind/parts result profiles; opt-in declared_target gives declaration-bound receiver returns before argument inference, retaining explicit type arguments. null means unavailable, opaque or work-limited",
         get: |f, n| f.with_file(callables::contracts, n),
-    },
-    Fact {
-        shape: Fact::SCALAR.shape,
-        name: "static_number",
-        doc: "native expressions: statically known numeric value, including numeric/boolean/bigint literals, arithmetic and unmodified local bindings; null when unresolved",
-        get: |f, n| f.with_file(|file, node| file.static_number(node).map_or(Value::Null, Value::from), n),
     },
     Fact {
         shape: Fact::SCALAR.shape,
@@ -67,24 +56,6 @@ pub const FACTS: &[Fact] = &[
             let names = args.first().map(|value| value.items().iter().map(ToString::to_string).collect::<Vec<_>>()).unwrap_or_default();
             type_structure::structure(file, node, &names)
         }, n),
-    },
-    Fact {
-        shape: Fact::SCALAR.shape,
-        name: "callable",
-        doc: "native expressions: the type supplies call signatures (every union arm, or an intersection arm)",
-        get: |f, n| f.with_file(|file, node| Value::Bool(file.typing().checker.callable_type(&file.type_of(node))), n),
-    },
-    Fact {
-        shape: Fact::SCALAR.shape,
-        name: "static_string",
-        doc: "native expressions: constant evaluated text, including templates, concatenation and unmodified variables; null when unknown",
-        get: |f, n| f.with_file(|file, node| file.static_string(node).map_or(Value::Null, Value::from), n),
-    },
-    Fact {
-        shape: Fact::SCALAR.shape,
-        name: "useless_default",
-        doc: "native defaults: source property or contextual parameter cannot use the fallback",
-        get: |f, n| f.with_file(defaults::finding, n),
     },
     Fact {
         shape: Fact::SCALAR.shape,
@@ -112,12 +83,6 @@ pub const FACTS: &[Fact] = &[
     },
     Fact {
         shape: Fact::SCALAR.shape,
-        name: "mixed_enum_offset",
-        doc: "native enums: first mixed string/number member, including merged local declarations",
-        get: |f, n| f.with_file(enums::mixed, n),
-    },
-    Fact {
-        shape: Fact::SCALAR.shape,
         name: "argument_transfers",
         doc: "native calls, constructions and tagged templates: any transfer sites, raw types and error provenance",
         get: |f, n| f.with_file(arguments::findings, n),
@@ -130,12 +95,6 @@ pub const FACTS: &[Fact] = &[
     },
     Fact {
         shape: Fact::SCALAR.shape,
-        name: "redundant_type_constituents",
-        doc: "native unions and intersections: top/bottom overrides and primitive/literal dominance",
-        get: |f, n| f.with_file(redundant::findings, n),
-    },
-    Fact {
-        shape: Fact::SCALAR.shape,
         name: "non_null_assertion",
         doc: "native assertions: removes only null and undefined from an otherwise identical type",
         get: |f, n| f.with_file(assertions::non_null, n),
@@ -145,18 +104,6 @@ pub const FACTS: &[Fact] = &[
         name: "reduce_type_assertion",
         doc: "native assertions: array reduce initialiser safely accepts a type parameter",
         get: |f, n| f.with_file(assertions::reduce, n),
-    },
-    Fact {
-        shape: Fact::SCALAR.shape,
-        name: "accessor_type_mismatch",
-        doc: "native getter return annotations: incompatible with the paired setter parameter",
-        get: |f, n| f.with_file(accessors::mismatch, n),
-    },
-    Fact {
-        shape: Fact::SCALAR.shape,
-        name: "template_type_checks",
-        doc: "native expressions: interpolation requirements, every clause needs an enabled option or allowed named type",
-        get: |f, n| f.with_file(template::checks, n),
     },
     Fact {
         shape: Fact::SCALAR.shape,

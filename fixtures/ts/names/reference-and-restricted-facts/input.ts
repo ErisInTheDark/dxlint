@@ -1,0 +1,23 @@
+loose(a.b, a["b"]);
+same(a[b], a[(b)]);
+different(a["b.c"], a.b.c);
+loose(a["1"], a[1]);
+different(a[b], a["b"]);
+same(this.a, (this).a);
+same(0x10, 16);
+different("16", 16);
+same(a, \u0061);
+different(a.#value, a.value);
+unsupported(f());
+unsupported(a[x + y]);
+unsupported([a]);
+unsupported(a[f()]);
+restricted(function(NaN, Infinity, eval, arguments, globalThis) {});
+restricted(function(undefined) {});
+restricted(function() { var undefined = 1; });
+restricted(function() { var undefined; undefined = 1; });
+restricted(function() { var undefined; var undefined = 1; });
+allowed(function() { var undefined; var undefined; });
+export var exposed = 1;
+var ordinary = 1;
+export function exportedFunction(exportedParameter: number) {}

@@ -1,0 +1,82 @@
+import .ts/values/inspection
+
+define {
+
+fn typed_template_gate(n, site, name) = {
+  value origin: declaration_origin(n, site)
+  value {name: name, from: when {
+    origin.kind == "library" then "lib"
+    origin.kind == "package" then "package"
+    else then "file"
+  }, path: origin.path, package: origin.package}
+}
+fn typed_template_named(part, n) = {
+  value named: part.carrier.description.kind == "named" || contains(part.traits, "enum")
+  value ancestry: if named then ts_value_ancestry(part).parts else []
+  value candidates: filter(ancestry, candidate => contains(["named", "enum"], candidate.carrier.description.kind))
+  value unique(map(candidates, candidate =>
+    typed_template_gate(n, candidate.carrier, candidate.carrier.description.name)))
+}
+fn typed_template_disjoin(left, right) = if left == null || right == null
+  || count(left) * count(right) > 256 then null
+  else flat_map(left, a => map(right, b => [] a b))
+fn typed_template_part(part, n, depth) = {
+  value gates: typed_template_named(part, n)
+  value primitive: find([
+    ["string", "string"], ["any", "any"], ["null", "nullish"], ["undefined", "nullish"],
+    ["boolean", "boolean"], ["number", "number"], ["bigint", "number"]
+  ], pair => contains(part.traits, first(pair)))
+  value regexp: part.carrier.description.kind == "named" && part.carrier.description.name == "RegExp"
+  value shape: ts_value_array_part(part, n)
+  value elements: if shape.tuple then part.carrier.arguments
+    else if shape.array then slice(part.carrier.arguments, 0, 1) else []
+  value children: if shape.array || shape.tuple then
+    map(elements ?? [], element => typed_template_value(element, n, depth + 1)) else []
+  value clauses: when {
+    first(primitive) == "string" then []
+    primitive != null then [[{option: last(primitive)}]]
+    shape.array || shape.tuple then
+      if elements == null || any(children, child => child == null) then null
+      else [] [[{option: "array"}]] flat_map(children, child => child)
+    regexp then [[{option: "regexp"}]]
+    else then [[]]
+  }
+  value if clauses == null then null else map(clauses, clause => [] clause gates)
+}
+fn typed_template_value(handle, n, depth) = {
+  value arms: value_parts(handle)
+  value results: if depth > 64 then null else map(arms ?? [], arm =>
+    fold(arm.parts, [[]], (clauses, part) =>
+      typed_template_disjoin(clauses, typed_template_part(part, n, depth))))
+  value clauses: flat_map(results ?? [], result => result ?? [])
+  value when {
+    arms == null || results == null || any(results, result => result == null) then null
+    count(arms) == 0 then [[{option: "never"}]]
+    count(clauses) > 256 then null
+    else then clauses
+  }
+}
+fn typed_template_annotation(n) = {
+  value bare: unparenthesised_node(n)
+  value if bare is ts_identifier then bare.declaration.parent.type.node else null
+}
+fn typed_template_alias(n) = {
+  value annotation: typed_template_annotation(n)
+  value arms: value_parts(n)
+  value parts: filter(first(arms).parts ?? [], part =>
+    !contains(part.traits, "intersection") && !contains(part.traits, "parameter"))
+  value structural: count(arms) == 1 && count(parts) == 1
+    && contains(first(parts).traits, "object_literal")
+  value roots: if structural && annotation is ts_type_reference then value_sources(annotation) else null
+  value aliases: filter(roots.sites ?? [], site => site.kind == "ts_type_alias")
+  value map(aliases, site => typed_template_gate(n, site, site.name))
+}
+fn typed_template_checks(n) = {
+  value clauses: typed_template_value(n, n, 0)
+  value aliases: typed_template_alias(n)
+  value if clauses == null then null else map(clauses, clause => [] clause aliases)
+}
+
+in ts_node let template_type_checks typed_template_checks(node)
+
+}

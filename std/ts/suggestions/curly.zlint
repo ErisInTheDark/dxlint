@@ -1,7 +1,82 @@
 # Control-body brace policy and statement-safe source rewrites.
 import .ts/expression-fixes
+import .ts/tokens
 
 define {
+
+fn curly_unmatched_tail(n) = {
+  value tail: walk(if n == null then [] else [n], current =>
+    if current is ts_if then current.alternate.node
+    else if current is (ts_for, ts_for_in, ts_for_of, ts_while, ts_with, ts_labeled) then current.body.node
+    else null)
+  value terminal: last(tail)
+  value terminal is ts_if && terminal.alternate.node == null
+}
+fn curly_enclosing_else(n) = {
+  value ancestors: walk([n], current =>
+    if current.parent is (ts_if, ts_for, ts_for_in, ts_for_of, ts_while, ts_with, ts_labeled)
+      then current.parent.node else null)
+  value any(ancestors, current => current is ts_if.consequent && current.parent.alternate.node != null)
+}
+fn curly_braces_necessary(n) = {
+  value statement: first(n.body.nodes)
+  value statement is (ts_function, ts_class) || statement is ts_variable_declaration && statement.kind != "var"
+    || curly_unmatched_tail(statement) && curly_enclosing_else(n)
+}
+fn curly_one_line(source, n) = {
+  value last: last(filter(n.token.nodes, token => token.text != ";"))
+  value n is ts_empty || !re_test(byte_slice(source, n.offset, last.end_offset ?? n.offset), /[\r\n\u{2028}\u{2029}]/)
+}
+fn curly_expectations(source, owner, body) = {
+  value block: body is ts_block
+  value statements: body.body.nodes
+  value required: block && (count(statements) != 1 || curly_braces_necessary(body))
+  value before: body.token_neighbours.before
+  value start: if before.start >= owner.offset then before.start else owner.offset
+  value collapsed: if block then !re_test(byte_slice(source, start, body.end_offset), /[\r\n\u{2028}\u{2029}]/)
+    else {
+      value text: trim_end(re_replace(trim_end(body.text), /;$/, ""))
+      value !re_test(byte_slice(source, start, body.offset + byte_len(text)), /[\r\n\u{2028}\u{2029}]/)
+    }
+  value statement: first(statements)
+  value nested: if block then !curly_one_line(source, statement)
+    || any(overlapping(ts_comment, body.offset + 1, statement.offset), comment => comment.end_offset <= statement.offset)
+    else !curly_one_line(source, body)
+  value {block: block, multi: if required then 1 else 0,
+    multiline: if required then 1 else if collapsed then -1 else 1,
+    nested: if required || nested then 1 else 0}
+}
+in ts_node let curly_body_expectations curly_expectations(source, parent.node, node)
+in ts_if let curly_chain_expectations {
+  value branches: walk([node], current => if current.alternate is ts_if then current.alternate.node else null)
+  value bodies: flat_map(branches, branch => branch.consequent.nodes
+    (if branch.alternate not ts_if then branch.alternate.nodes else []))
+  value map(bodies, body => body.curly_body_expectations)
+}
+fn curly_body_info(n) = {
+  value owner: n.parent.node
+  value alternate: n is ts_if.alternate
+  value name: when {
+    owner is ts_if then if alternate then "else" else "if"
+    owner is ts_while then "while"
+    owner is ts_for then "for"
+    owner is ts_for_in then "for-in"
+    owner is ts_for_of then "for-of"
+    owner is ts_do_while then "do"
+    else then null
+  }
+  value chain: walk([owner], current => if current is ts_if.alternate then current.parent.node else null)
+  value top: last(chain)
+  value expected: n.curly_body_expectations
+  value all: if owner is ts_if then top.curly_chain_expectations else [expected]
+  value if name == null || alternate && n is ts_if then null else {
+    block: expected.block, name: name, condition: !alternate && owner is (ts_if, ts_while, ts_for),
+    multi: expected.multi, multiline: expected.multiline, nested: expected.nested,
+    multi_consistent: any(all, item => item.multi == 1 || item.multi == -1 && item.block),
+    multiline_consistent: any(all, item => item.multiline == 1 || item.multiline == -1 && item.block),
+    nested_consistent: any(all, item => item.nested == 1 || item.nested == -1 && item.block)
+  }
+}
 
 fn curly_fix_allowed(n, block) = if !block then true else {
   value statement: last(n.body.nodes)
@@ -24,7 +99,7 @@ fn curly_replacement(source, n, block) = if !block then "{{" n.text "}}" else {
 @macro suggestion_curly_policy {
   option mode ("all" | "multi" | "multi-line" | "multi-or-nest") = "all" "control body brace policy"
   option style ("consistent" | null) = null "consistent braces throughout if chains"
-  let curly_info curly_body
+  let curly_info curly_body_info(node)
   when curly_info != null
   let body_expected if mode == "all" then 1 else if mode == "multi" then curly_info.multi else if mode == "multi-line" then curly_info.multiline else curly_info.nested
   let chain_required if mode == "multi" then curly_info.multi_consistent else if mode == "multi-line" then curly_info.multiline_consistent else curly_info.nested_consistent

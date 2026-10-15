@@ -116,6 +116,9 @@ fn ts_runtime_number(n) = {
     then null else js_number(constant)
 }
 
+in ts_node let static_string ts_runtime_string(node)
+in ts_node let static_number ts_runtime_number(node)
+
 group ts_constant_expression ts_string, ts_number, ts_boolean, ts_null, ts_regex, ts_bigint, ts_arrow, ts_function, ts_class, ts_object, ts_hole, ts_template, ts_array, ts_unary, ts_binary, ts_logical, ts_new, ts_assignment, ts_sequence, ts_spread, ts_call, ts_identifier, ts_parenthesized, ts_update, ts_conditional
 group ts_constant_literal ts_string, ts_number, ts_boolean, ts_null, ts_regex, ts_bigint
 

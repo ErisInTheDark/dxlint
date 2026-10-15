@@ -2,7 +2,7 @@ import .ts
 
 # `node.fact(...)` asks the fact about that node, not the rule's; a `fn`
 # may ask it about a node it is given.
-fn key_of(n) = n.reference_key()
+fn metadata_of(n) = n.symbol_metadata()
 in ts_binary rule lit warn "lit" {
-  when key_of(left.node) == null && right.node.reference_key() == "x"
+  when metadata_of(left.node) == null && right.node.symbol_metadata().name == "x"
 }

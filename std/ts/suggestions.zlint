@@ -11,14 +11,13 @@ import .ts/suggestions/object-spread
 import .ts/suggestions/computed-keys
 import .ts/expression-fixes
 import .ts/literal-text
+import .ts/literals
 
 define {
 
 # Statement properties stay lazy: rules request only the shape they need.
-in ts_if let statement_has_else alternate != null
-in ts_if let unmatched_tail alternate == null || alternate.unmatched_tail == true
-in ts_for, ts_for_in, ts_for_of, ts_while, ts_with, ts_labeled let unmatched_tail body.unmatched_tail == true
-in ts_if, ts_for, ts_for_in, ts_for_of, ts_while, ts_with, ts_labeled, ts_block let enclosing_else_boundary is ts_if.consequent && parent.statement_has_else == true || parent is (ts_if, ts_for, ts_for_in, ts_for_of, ts_while, ts_with, ts_labeled) && parent.enclosing_else_boundary == true
+in ts_if, ts_for, ts_for_in, ts_for_of, ts_while, ts_with, ts_labeled let unmatched_tail curly_unmatched_tail(node)
+in ts_if, ts_for, ts_for_in, ts_for_of, ts_while, ts_with, ts_labeled, ts_block let enclosing_else_boundary curly_enclosing_else(node)
 in ts_block let else_block is ts_if.alternate
 in ts_block let statement_count count([] body)
 
@@ -448,13 +447,85 @@ in ts_call, ts_new rule no-new-func {
   warn "The Function constructor is eval."
 }
 
+fn suggestion_coercion_numeric(n) = {
+  value n: unparenthesised_node(n)
+  value n is ts_number || n is ts_call && n.callee is ts_identifier
+    && contains(["Number", "parseInt", "parseFloat"], n.callee.text)
+}
+fn suggestion_coercion_string(n) = {
+  value n: unparenthesised_node(n)
+  value n is (ts_string, ts_template) || n is ts_call && n.callee is ts_identifier && n.callee.text == "String"
+}
+fn suggestion_coercion_empty(n) = {
+  value n: unparenthesised_node(n)
+  value n is (ts_string, ts_template) && n.literal_value.value == ""
+}
+fn suggestion_coercion_operand(n) = {
+  value n: unparenthesised_node(n)
+  value if n is ts_sequence then "(" n.text ")" else n.text
+}
+fn suggestion_coercion_one(n) = n is ts_number && js_number(n.literal_value) == 1
+fn suggestion_implicit_coercion(source, n) = {
+  value argument: unparenthesised_node(n.argument.node)
+  value left: unparenthesised_node(n.left.node)
+  value right: unparenthesised_node(n.right.node)
+  value if n is ts_unary then when {
+    contains(["!", "-"], n.operator) && argument is ts_unary && argument.operator == n.operator then {
+      value inner: argument.argument.node
+      value if n.operator == "!" then {kind: "boolean", operator: "!!", recommendation: "Boolean(" suggestion_coercion_operand(inner) ")"}
+        else if !suggestion_coercion_numeric(inner) then {kind: "number", operator: "- -", recommendation: "Number(" suggestion_coercion_operand(inner) ")"}
+        else null
+    }
+    n.operator == "+" && !suggestion_coercion_numeric(argument) then {
+      kind: "number", operator: "+", recommendation: "Number(" suggestion_coercion_operand(argument) ")"
+    }
+    n.operator == "~" && argument is ts_call then {
+      value raw_callee: argument.callee.node
+      value callee: unparenthesised_node(raw_callee)
+      value optional: argument.optional == "?." || raw_callee not ts_parenthesized && callee.optional == "?."
+      value if contains(["indexOf", "lastIndexOf"], callee.static_name) then {
+        kind: "boolean", operator: "~", recommendation: argument.text (if optional then " >= 0" else " !== -1")
+      } else null
+    }
+    else then null
+  } else if n is (ts_binary, ts_assignment) then when {
+    n.operator == "*" then {
+      value fraction: suggestion_coercion_one(right) && n is ts_binary.left && n.parent.operator == "/"
+      value operand: find([right, left], item => item not ts_binary && !suggestion_coercion_numeric(item))
+      value if !fraction && (suggestion_coercion_one(left) || suggestion_coercion_one(right)) && operand != null
+        then {kind: "number", operator: "*", recommendation: "Number(" suggestion_coercion_operand(operand) ")"}
+        else null
+    }
+    n.operator == "-" && right is ts_number && js_number(right.literal_value) == 0 && !suggestion_coercion_numeric(left) then {
+      kind: "number", operator: "-", recommendation: "Number(" suggestion_coercion_operand(left) ")"
+    }
+    n.operator == "+" && (suggestion_coercion_empty(left) && !suggestion_coercion_string(right)
+      || suggestion_coercion_empty(right) && !suggestion_coercion_string(left)) then {
+      value operand: if suggestion_coercion_empty(left) then right else left
+      value {kind: "string", operator: "+", recommendation: "String(" suggestion_coercion_operand(operand) ")"}
+    }
+    n.operator == "+=" && suggestion_coercion_empty(right) then {
+      kind: "string", operator: "+", recommendation: left.text " = String(" left.text ")"
+    }
+    else then null
+  } else if n is ts_template && n.parent not ts_tagged_template && count(n.expression) == 1 then {
+    value expression: first(n.expression.nodes)
+    value prefix: trim_end(byte_slice(source, n.offset + 1, expression.offset))
+    value suffix: trim_start(byte_slice(source, expression.end_offset, n.end_offset - 1))
+    value if !suggestion_coercion_string(expression) && ends_with(prefix, "${{") && starts_with(suffix, "}}")
+      && js_string("`" slice(prefix, 0, -2) "`") == "" && js_string("`" slice(suffix, 1) "`") == ""
+      then {kind: "template", operator: "", recommendation: "String(" suggestion_coercion_operand(expression) ")"}
+      else null
+  } else null
+}
+
 in ts_unary, ts_binary, ts_assignment, ts_template rule no-implicit-coercion {
   option boolean boolean = true "check boolean conversions"
   option number boolean = true "check number conversions"
   option string boolean = true "check string conversions"
   option disallowTemplateShorthand boolean = false "check single-expression templates"
   option allow string[] = [] "shorthand operators to allow"
-  let coercion_info implicit_coercion
+  let coercion_info suggestion_implicit_coercion(source, node)
   when coercion_info != null
   when coercion_info.kind == "boolean" && boolean || coercion_info.kind == "number" && number || coercion_info.kind == "string" && string || coercion_info.kind == "template" && disallowTemplateShorthand
   when coercion_info.kind == "template" || !contains(allow, coercion_info.operator)
@@ -467,12 +538,37 @@ in ts_parameter rule default-param-last {
   warn "Default parameters should be last."
 }
 
+fn suggestion_function_style(n) = {
+  value declaration: n is ts_function && n is (ts_node.body, ts_node.declaration, ts_if.consequent, ts_if.alternate)
+  value outer: outer_parenthesised_node(n)
+  value holder: if declaration then n else if outer.parent is ts_declarator then outer.parent.node else null
+  value export: if declaration then n.parent.node else holder.parent.parent.node
+  value exported: export is ts_export
+  value default_export: exported && export.kind == "default"
+  value owner: if exported || n.parent is ts_case then n.parent.parent.node else n.parent.node
+  value siblings: flat_map(owner.children.nodes, sibling => if sibling is ts_case then sibling.body.nodes else [sibling])
+  value declarations: map(siblings, sibling => if sibling is ts_export then sibling.declaration.node ?? sibling else sibling)
+  value overloaded: declaration && n.name.node != null && any(declarations, sibling =>
+    sibling is ts_function && sibling.body.node == null && sibling.name.text == n.name.text)
+  value nested: walk(n.children.nodes, current =>
+    if current is (ts_function, ts_arrow, ts_method) then [] else current.children.nodes)
+  value if holder == null then null else {
+    declaration: declaration,
+    exported: exported && !default_export,
+    exempt: default_export || overloaded || n.body.node == null,
+    arrow: n is ts_arrow,
+    captures: n is ts_arrow && any(nested, current => current is (ts_this, ts_super)),
+    annotated: holder.type.node != null,
+    offset: holder.offset
+  }
+}
+
 in ts_function, ts_arrow rule func-style {
   option style ("declaration" | "expression") = "expression" "function syntax policy"
   option allowArrowFunctions boolean = false "allow arrow expressions"
   option allowTypeAnnotation boolean = false "allow annotated function variables"
   option overrides { namedExports: "" | "declaration" | "expression" | "ignore" } = { namedExports: "" } "named export policy"
-  let function_info function_style
+  let function_info suggestion_function_style(node)
   when function_info != null && !function_info.exempt
   let requested_style if function_info.exported && overrides.namedExports != "" then overrides.namedExports else style
   when requested_style == "expression" && function_info.declaration || requested_style == "declaration" && !function_info.declaration && !(function_info.arrow && (allowArrowFunctions || function_info.captures)) && !(allowTypeAnnotation && function_info.annotated)

@@ -1,0 +1,19 @@
+import .ts/values/inspection
+
+define {
+
+fn typed_accessor_key(method) = ts_value_key(method.key.node) ?? join(token_list(method.key.node), "")
+fn typed_accessor_type_mismatch(annotation) = {
+  value getter: annotation.parent.node
+  value owner: getter.parent.node
+  value key: typed_accessor_key(getter)
+  value setter: if getter is (ts_method, ts_method_signature) && getter.kind == "get"
+    && owner is (ts_class, ts_interface, ts_type_literal)
+    then find_last(owner.member.nodes, member => member.kind == "set" && typed_accessor_key(member) == key)
+    else null
+  value parameter: first(setter.parameter.nodes)
+  value setter != null && count(setter.parameter.nodes) == 1 && parameter.type != null
+    && value_accepts(parameter.type.node, annotation, "value", "value") == false
+}
+
+}

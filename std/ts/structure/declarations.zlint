@@ -1,0 +1,57 @@
+define {
+
+group structure_function_scope ts_program, ts_function, ts_arrow, ts_method, ts_static_block
+group structure_lexical_scope structure_function_scope, ts_block, ts_for, ts_for_in, ts_for_of, ts_switch
+fn structure_declaration_scope(n) = {
+  value hoisted: n.kind.text == "var"
+  value walk(n.parent.node, current => current.parent.node)
+  find (current) if hoisted then current is structure_function_scope else current is structure_lexical_scope
+}
+fn structure_declaration_counts(n) = {
+  initialized: count(filter(n.declaration.nodes, item => item.init.node != null)),
+  uninitialized: count(filter(n.declaration.nodes, item => item.init.node == null)),
+  requires: count(filter(n.declaration.nodes, item => item.init is ts_call
+    && item.init.callee is ts_identifier && item.init.callee.text == "require")),
+}
+fn structure_declaration_previous(n) = {
+  value body: n.parent.body.nodes
+  value previous: if !contains(body, n) then null else last(filter(body, item => item.offset < n.offset))
+  value if previous is ts_variable_declaration && previous.kind.text == n.kind.text
+    then structure_declaration_counts(previous) else null
+}
+fn structure_declaration_group(entries) = {
+  value entries
+  fold ({ counts: {initialized: 0, uninitialized: 0, requires: 0}, entries: [] }) (state, n) {
+    value counts: structure_declaration_counts(n)
+    value {
+      counts: {
+        initialized: state.counts.initialized + counts.initialized,
+        uninitialized: state.counts.uninitialized + counts.uninitialized,
+        requires: state.counts.requires + counts.requires,
+      },
+      entries: state.entries [{
+        node: n,
+        kind: n.kind.text,
+        counts: counts,
+        prior: state.counts,
+        previous: structure_declaration_previous(n),
+        for_init: n is ts_for.init,
+        for_binding: n.parent is (ts_for_in, ts_for_of),
+      }],
+    }
+  }
+}
+in structure_lexical_scope let structure_declaration_entries {
+  value owner: node
+  value descendants(ts_variable_declaration)
+  filter (item) structure_declaration_scope(item) == owner
+  sort_by (item) item.offset
+  group_by (item) item.kind.text
+  flat_map (group) structure_declaration_group(group.items).entries
+}
+in ts_variable_declaration let declaration_groups {
+  value scope: structure_declaration_scope(node)
+  value find(scope.structure_declaration_entries, entry => entry.node == node)
+}
+
+}

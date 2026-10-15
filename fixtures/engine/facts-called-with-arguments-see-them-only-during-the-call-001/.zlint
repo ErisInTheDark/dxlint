@@ -1,2 +1,2 @@
 import .ts
-in ts_identifier rule u warn "{reference_key}/{reference_key()}" { when declaration_kind != null }
+in ts_identifier rule u warn "{symbol_metadata.name}/{symbol_metadata().name}" { when declaration_kind != null }

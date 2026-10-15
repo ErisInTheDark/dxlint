@@ -4,7 +4,7 @@
 
 use crate::config::ast::BinOp;
 use crate::expr::functions::Function;
-use crate::expr::{facts, Builtin, CExpr, Each, FactOf, IsTest, NodeSel, Position, Relative, Value, MAX_CALL_DEPTH};
+use crate::expr::{Builtin, CExpr, Each, FactOf, IsTest, NodeSel, Position, Relative, Value, MAX_CALL_DEPTH};
 use crate::grammar::{FieldOne, Grammar, Tree, UserFn, ROOT, TEXT};
 use std::sync::OnceLock;
 
@@ -200,8 +200,8 @@ pub enum VExpr {
     IsNull(Box<VExpr>),
     /// `nonempty(x)`: null for empty text, otherwise the value.
     NonEmpty(Box<VExpr>),
-    /// A native fact read (whole, or one registered projection).
-    Fact { fact: usize, projection: Option<usize>, of: FactOf },
+    /// A native fact read.
+    Fact { fact: usize, of: FactOf },
     FactCall { fact: usize, args: Box<[VExpr]>, receiver: Option<Box<VExpr>> },
     FieldElse(u16, Box<VExpr>),
     GroupBy { of: Box<Seq>, key: Box<VExpr>, bind: Binder, shape: u16 },
@@ -512,9 +512,8 @@ fn lower_in<'a>(e: &'a CExpr, g: &Scope<'a, '_>, args: &[Lowered], bound: u16) -
         CExpr::ParentAttr(a) => VExpr::ParentAttr(*a),
         CExpr::Fact(fact, of) => {
             g.values.borrow_mut().register_fact(*fact).ok_or(e)?;
-            VExpr::Fact { fact: *fact, projection: None, of: *of }
+            VExpr::Fact { fact: *fact, of: *of }
         }
-        CExpr::FactField(read, of) => VExpr::Fact { fact: facts::FIELD_READS[*read].fact, projection: Some(*read), of: *of },
         CExpr::FactCall(fact, call_args, receiver) => {
             g.values.borrow_mut().register_fact(*fact).ok_or(e)?;
             VExpr::FactCall { fact: *fact, args: all(call_args), receiver: receiver.as_deref().map(boxed).transpose()? }
@@ -773,7 +772,7 @@ pub trait Host {
     /// An attribute on a node through the VM; `None` gives up on the VM.
     fn attr(&self, node: u32, attr: u16) -> Option<V>;
     /// A native fact read on a node, when its value is one the VM holds.
-    fn fact(&self, node: u32, fact: usize, projection: Option<usize>, of: FactOf) -> Option<V>;
+    fn fact(&self, node: u32, fact: usize, of: FactOf) -> Option<V>;
     fn fact_call(&self, _node: u32, _fact: usize, _args: Vec<Value<'static>>) -> Option<V> { None }
     fn facts_available(&self) -> bool { true }
     fn local(&self, _node: u32, _local: u16) -> Option<V> { None }
@@ -1445,7 +1444,7 @@ fn ev<H: Host>(h: &Runtime<'_, H>, node: u32, e: &VExpr, f: &mut Vec<V>) -> Opti
             Some(p) => h.attr(p, *a)?,
             None => V::Null,
         },
-        VExpr::Fact { fact, projection, of } => h.fact(node, *fact, *projection, *of)?,
+        VExpr::Fact { fact, of } => h.fact(node, *fact, *of)?,
         VExpr::Inlined(_, body, _) if h.calls.get() < MAX_CALL_DEPTH => ev(h, node, body, f)?,
         VExpr::Inlined(i, _, args) => {
             for arg in args.iter() { ev(h, node, arg, f)?; }
@@ -2122,7 +2121,7 @@ mod tests {
             fn source(&self) -> &str { "x" }
             fn lines(&self) -> &crate::line_index::LineIndex { &self.lines }
             fn attr(&self, _: u32, _: u16) -> Option<V> { None }
-            fn fact(&self, _: u32, _: usize, _: Option<usize>, _: FactOf) -> Option<V> { None }
+            fn fact(&self, _: u32, _: usize, _: FactOf) -> Option<V> { None }
             fn values(&self) -> &Values { &self.values }
         }
         let mut host = TestHost {
@@ -2240,7 +2239,7 @@ mod tests {
             fn source(&self) -> &str { "" }
             fn lines(&self) -> &crate::line_index::LineIndex { &self.lines }
             fn attr(&self, _: u32, _: u16) -> Option<V> { None }
-            fn fact(&self, _: u32, _: usize, _: Option<usize>, _: FactOf) -> Option<V> { None }
+            fn fact(&self, _: u32, _: usize, _: FactOf) -> Option<V> { None }
             fn values(&self) -> &Values { &self.values }
         }
         let mut host = TestHost {
@@ -2276,7 +2275,7 @@ mod tests {
             fn source(&self) -> &str { "a\r\nβ\nc" }
             fn lines(&self) -> &crate::line_index::LineIndex { &self.lines }
             fn attr(&self, _: u32, _: u16) -> Option<V> { None }
-            fn fact(&self, _: u32, _: usize, _: Option<usize>, _: FactOf) -> Option<V> { None }
+            fn fact(&self, _: u32, _: usize, _: FactOf) -> Option<V> { None }
             fn values(&self) -> &Values {
                 static VALUES: OnceLock<Values> = OnceLock::new();
                 VALUES.get_or_init(Values::default)
@@ -2355,7 +2354,7 @@ mod tests {
             fn values(&self) -> &Values { &self.values }
             fn file_vm(&self) -> Option<&FileVm> { Some(&self.file) }
             fn attr(&self, _: u32, _: u16) -> Option<V> { None }
-            fn fact(&self, _: u32, _: usize, _: Option<usize>, _: FactOf) -> Option<V> { None }
+            fn fact(&self, _: u32, _: usize, _: FactOf) -> Option<V> { None }
             fn descendants<'s>(&'s self, node: u32, sel: &NodeSel) -> impl Iterator<Item = u32> + 's {
                 sel.descendants(&self.tree, node).inspect(|_| self.yielded.set(self.yielded.get() + 1))
             }

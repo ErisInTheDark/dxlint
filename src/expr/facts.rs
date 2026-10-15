@@ -2,13 +2,13 @@
 //! registry entry each, read like built-in variables. On layers without a
 //! native front end they are null.
 //!
-//! Each front end declares its own ([`Frontend::facts`],
-//! [`Frontend::projections`]); the registry numbers them all, and a read asks
-//! the file's [`Native`] by the front end's own number.
+//! Each front end declares its own ([`Frontend::facts`]); the registry
+//! numbers them all, and a read asks the file's [`Native`] by the front
+//! end's own number.
 
 use std::sync::LazyLock;
 
-use crate::engine::frontend::{Frontend, Native};
+use crate::engine::frontend::Native;
 
 use super::Value;
 
@@ -26,14 +26,6 @@ pub enum Shape {
     List(&'static Shape),
 }
 
-/// Optional projections of a record-or-null fact. Reading one field (or
-/// presence) need not build the whole record; it must agree with it.
-pub struct ProjectionInfo {
-    /// The fact it projects.
-    pub name: &'static str,
-    pub fields: &'static [&'static str],
-}
-
 /// A registered fact: its declaration, and who answers it.
 pub struct Fact {
     pub name: &'static str,
@@ -43,38 +35,12 @@ pub struct Fact {
     local: usize,
 }
 
-/// One projected read: a field of a fact (`key`), or its presence (`None`).
-pub struct FieldRead {
-    pub fact: usize,
-    pub key: Option<&'static str>,
-    field: Option<usize>,
-    front: &'static str,
-    local: usize,
-}
-
-/// Every front end's declarations, numbered in [`crate::FRONTENDS`] order.
-fn declared<T, R>(list: impl Fn(&'static dyn Frontend) -> Vec<T>, entry: impl Fn(T, &'static str, usize) -> R) -> Vec<R> {
+/// Every fact of every front end, numbered in [`crate::FRONTENDS`] order.
+pub static FACTS: LazyLock<Vec<Fact>> = LazyLock::new(|| {
     crate::engine::frontend::all()
         .iter()
-        .flat_map(|&front| list(front).into_iter().enumerate().map(move |(local, item)| (item, front.name(), local)))
-        .map(|(item, front, local)| entry(item, front, local))
-        .collect()
-}
-
-/// Every fact of every front end.
-pub static FACTS: LazyLock<Vec<Fact>> =
-    LazyLock::new(|| declared(|front| front.facts(), |f, front, local| Fact { name: f.name, doc: f.doc, shape: f.shape, front, local }));
-
-/// Compile-time field identities; values live only in the expression memo.
-pub static FIELD_READS: LazyLock<Vec<FieldRead>> = LazyLock::new(|| {
-    declared(|front| front.projections(), |p, front, local| (p, front, local))
-        .into_iter()
-        .flat_map(|(projection, front, local)| {
-            let fact = FACTS.iter().position(|f| f.front == front && f.name == projection.name).expect("projection belongs to a registered fact");
-            std::iter::once(FieldRead { fact, key: None, field: None, front, local }).chain(
-                projection.fields.iter().enumerate().map(move |(field, &key)| FieldRead { fact, key: Some(key), field: Some(field), front, local }),
-            )
-        })
+        .flat_map(|&front| front.facts().into_iter().enumerate()
+            .map(move |(local, f)| Fact { name: f.name, doc: f.doc, shape: f.shape, front: front.name(), local }))
         .collect()
 });
 
@@ -83,20 +49,10 @@ pub fn fact(name: &str) -> Option<usize> {
     FACTS.iter().position(|f| f.name == name)
 }
 
-pub fn field_read(fact: usize, key: Option<&str>) -> Option<usize> {
-    FIELD_READS.iter().position(|read| read.fact == fact && read.key == key)
-}
-
 /// Fact `fact` of `node`; null when another front end answers it.
 pub fn read(native: &dyn Native, fact: usize, node: u32) -> Value<'static> {
     let fact = &FACTS[fact];
     if fact.front == native.frontend() { native.fact(fact.local, node) } else { Value::Null }
-}
-
-/// A projected read of `node` (see [`FIELD_READS`]).
-pub fn read_field(native: &dyn Native, read: usize, node: u32) -> Value<'static> {
-    let read = &FIELD_READS[read];
-    if read.front == native.frontend() { native.projection(read.local, node, read.field) } else { Value::Null }
 }
 
 thread_local! {

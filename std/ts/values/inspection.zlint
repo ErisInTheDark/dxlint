@@ -5,6 +5,10 @@ fn ts_value_has_trait(n, trait) = {
   value if arms == null then null else any(arms, arm => any(arm.parts, part => contains(part.traits, trait)))
 }
 fn ts_value_has_void(n) = ts_value_has_trait(n, "void")
+fn ts_value_callable(n) = {
+  value signatures: value_signatures(n)
+  value signatures != null && count(signatures) > 0 && all(signatures, arm => count(arm) > 0)
+}
 # The value can't be computed (unsupported or unresolved), unlike explicit `unknown`.
 fn ts_value_opaque(n) = value_parts(n) == null
 fn ts_value_trait(parts, trait) = parts != null && len(parts) > 0

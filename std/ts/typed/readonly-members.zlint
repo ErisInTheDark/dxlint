@@ -63,7 +63,7 @@ fn readonly_initializer_annotation(initializer) = {
   value if ts_value_has_trait(initializer, "any") == true then "any"
   else if ts_value_has_enum(initializer) then
     if count(bindings) == 1 && first(bindings).same_declaration
-      && (initializer.type_domains.kind == "enum_member" || first(bindings).name == last(type_parts))
+      && (initializer.type_structure([], ["kind"], false).kind == "enum_member" || first(bindings).name == last(type_parts))
     then first(bindings).name else null
   else readonly_primitive_annotation(initializer)
 }

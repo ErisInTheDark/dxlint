@@ -1,3 +1,4 @@
 import .ts
-in ts_expression_statement.expression rule certain { when type_domains.truthy && !type_domains.falsy
+in ts_expression_statement.expression rule certain { let domain condition_domain(node)
+when domain.known && domain.truthy && !domain.falsy
 warn 'certain' }

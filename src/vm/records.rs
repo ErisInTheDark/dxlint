@@ -94,9 +94,9 @@ pub struct FileVm {
     uncached: RefCell<Vec<(u32, u16)>>,
 }
 
-// Whole-node reads use their target node. Projections and multi-field wrappers
-// stay distinct, because their first-read payload sizes need not agree.
-pub(crate) type FactPackKey = (u32, usize, Option<usize>, Option<u16>);
+// Whole-node reads use their target node. Multi-field wrappers stay distinct,
+// because their first-read payload sizes need not agree.
+pub(crate) type FactPackKey = (u32, usize, Option<u16>);
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum SharedValueKey {
@@ -267,7 +267,7 @@ impl FileVm {
         if let Some(value) = self.packed_facts.borrow().get(&key) { return Some(*value); }
         let mut arena = self.values.borrow_mut();
         let before = measure.then(|| arena.used_bytes());
-        let result = self.packing(config.try_fact_value(value, key.1, key.2.is_some(), key.3.is_some() && key.2.is_none(), &mut arena, source));
+        let result = self.packing(config.try_fact_value(value, key.1, key.2.is_some(), &mut arena, source));
         if let Some(value @ (V::List(_) | V::Record(..) | V::Text(_))) = result {
             self.packed_facts.borrow_mut().insert(key, value);
         }
@@ -300,12 +300,11 @@ impl FileVm {
 
     pub(crate) fn report_stats(&self, tree: &Tree, layout: &[u16], file: &str) {
         let packs = self.fact_packs.borrow();
-        for kind in ["full", "projection", "wrapper", "missing"] {
-            let selected: Vec<_> = packs.iter().filter(|((node, _, projection, field), _)| match kind {
+        for kind in ["full", "wrapper", "missing"] {
+            let selected: Vec<_> = packs.iter().filter(|((node, _, field), _)| match kind {
                 "missing" => *node == u32::MAX,
                 "wrapper" => *node != u32::MAX && field.is_some(),
-                "projection" => *node != u32::MAX && field.is_none() && projection.is_some(),
-                _ => *node != u32::MAX && field.is_none() && projection.is_none(),
+                _ => *node != u32::MAX && field.is_none(),
             }).collect();
             let calls: usize = selected.iter().map(|(_, stats)| stats.calls).sum();
             let bytes: usize = selected.iter().map(|(_, stats)| stats.bytes).sum();
@@ -420,35 +419,31 @@ mod tests {
     #[test]
     fn allocating_fact_queries_share_payload_without_caching_free_results() {
         use crate::expr::{facts, Value};
-        let fact = facts::fact("list_layout").expect("list fact");
+        let fact = facts::fact("symbol_metadata").expect("allocating fact");
         let mut config = super::super::Values::default();
         config.register_fact(fact).expect("declared shape");
         let vm = FileVm::default();
-        let keys = ["offset", "end", "comments", "prev", "next", "spaced", "broken", "kind", "brackets", "count", "single",
-            "node_single", "first_broken", "empty_comments", "mode"];
-        let value = Value::list(vec![Value::record(keys.iter().map(|&key| (key.into(), Value::from("owned text"))).collect::<Vec<_>>())]);
-        let key = (7, fact, None, None);
+        let value = Value::list(vec![Value::from("owned text")]);
+        let key = (7, fact, None);
         assert!(vm.fact_value(&value, &config, "", key, true).is_some());
         let bytes = vm.values.borrow().used_bytes();
         assert!(vm.fact_value(&value, &config, "", key, true).is_some());
         assert_eq!(vm.values.borrow().used_bytes(), bytes, "repeat must share its packed payload");
-        let distinct = (8, fact, None, None);
+        let distinct = (8, fact, None);
         assert!(vm.fact_value(&value, &config, "", distinct, true).is_some());
         assert!(vm.values.borrow().used_bytes() > bytes, "different node is a separate query");
-        let projected = (7, fact, Some(0), None);
-        assert!(matches!(vm.fact_value(&Value::from("projected"), &config, "", projected, false), Some(V::Text(_))));
-        let wrapper = (7, fact, None, Some(3));
+        let wrapper = (7, fact, Some(3));
         let wrapped = Value::list(vec![value.clone()]);
         assert!(vm.fact_value(&wrapped, &config, "", wrapper, false).is_some(), "field wrapper retains its own list shape");
         // A value the fact never declared still packs (as it comes), as its
         // own query rather than the first fact's result.
-        let another = (7, facts::fact("implicit_coercion").expect("record fact"), None, None);
+        let another = (7, facts::fact("type").expect("another fact"), None);
         let bytes = vm.values.borrow().used_bytes();
         assert!(vm.fact_value(&value, &config, "", another, false).is_some(), "an undeclared shape still packs");
         assert!(vm.values.borrow().used_bytes() > bytes, "different fact must not reuse the first result");
         let cached = vm.packed_facts.borrow().len();
         for value in [Value::Null, Value::Bool(true), Value::Num(3.0)] {
-            let free = (20, fact, None, None);
+            let free = (20, fact, None);
             assert!(vm.fact_value(&value, &config, "", free, false).is_some());
         }
         assert_eq!(vm.packed_facts.borrow().len(), cached, "free results must not grow a second fact memo");

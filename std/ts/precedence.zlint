@@ -1,0 +1,25 @@
+define {
+
+in ts_node let precedence 21
+in ts_sequence let precedence 0
+in ts_assignment, ts_arrow let precedence 1
+in ts_yield let precedence 2
+in ts_conditional, ts_conditional_type, ts_function_type let precedence 3
+in ts_union let precedence 4
+in ts_intersection let precedence 5
+in ts_binary, ts_logical let precedence get({
+  "||": 4, "??": 4, "&&": 5, "|": 6, "^": 7, "&": 8,
+  "==": 9, "!=": 9, "===": 9, "!==": 9,
+  "<": 10, ">": 10, "<=": 10, ">=": 10, "in": 10, "instanceof": 10,
+  "<<": 11, ">>": 11, ">>>": 11, "+": 12, "-": 12,
+  "*": 13, "/": 13, "%": 13, "**": 14,
+}, operator.text) ?? 21
+in ts_as, ts_satisfies let precedence 10
+in ts_unary, ts_type_assertion, ts_type_operator let precedence 15
+in ts_await let precedence 16
+in ts_update let precedence 17
+in ts_call, ts_tagged_template, ts_import_call let precedence 19
+in ts_new let precedence if callee.end_offset < end_offset then 19 else 18
+in ts_member, ts_index, ts_non_null, ts_array_type let precedence 20
+
+}

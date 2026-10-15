@@ -534,9 +534,9 @@ impl vm::Host for Ctx<'_> {
         Some(self.test_value(test, &Value::from(text)))
     }
 
-    fn fact(&self, node: u32, fact: usize, projection: Option<usize>, of: super::FactOf) -> Option<V> {
+    fn fact(&self, node: u32, fact: usize, of: super::FactOf) -> Option<V> {
         let on = Ctx { node, ..*self };
-        let value = on.fact_value(fact, projection, of);
+        let value = on.fact_value(fact, of);
         let key = {
             let (target, wrapper) = match of {
                 super::FactOf::Node => (node, None),
@@ -550,7 +550,7 @@ impl vm::Host for Ctx<'_> {
                     }
                 }
             };
-            (target, fact, projection, wrapper)
+            (target, fact, wrapper)
         };
         let packed = self.memo.vm.fact_value(&value, &self.attrs.values, self.source, key, self.attrs.vm_stats);
         if packed.is_none() && self.attrs.vm_stats {
@@ -714,14 +714,14 @@ mod tests {
         let project = Project::default();
         let native = NativeFile::new(Syntax::new(&tree, source, front), std::path::Path::new("/root/test.ts"), &project);
         let reads: Vec<_> = [
-            ("list_layout", "ts_call"),
+            ("symbol_metadata", "ts_identifier"),
         ].into_iter().map(|(name, kind)| {
             let fact = super::super::facts::fact(name).unwrap();
             vm::lower(&CExpr::Fact(fact, super::super::FactOf::Node), &g.functions, &mut attrs.values);
             (fact, g.matcher(kind).unwrap())
         }).collect();
         let argument = front.labels[crate::native::ts::kinds::Field::Arg as usize];
-        let field_fact = super::super::facts::fact("reference_key").unwrap();
+        let field_fact = super::super::facts::fact("symbol_metadata").unwrap();
         vm::lower(&CExpr::Fact(field_fact, super::super::FactOf::Field(argument)), &g.functions, &mut attrs.values);
         let memo = AttrMemo::default();
         let lines = crate::line_index::LineIndex::new(source);
@@ -736,12 +736,12 @@ mod tests {
             let mut represented = 0;
             for node in tree.order.iter().copied().filter(|&node| tree.node(node).matcher == matcher) {
                 let on = Ctx { node, ..ctx };
-                let expected = on.fact_value(fact, None, super::super::FactOf::Node);
+                let expected = on.fact_value(fact, super::super::FactOf::Node);
                 if matches!(expected, Value::Str(_) | Value::Record(_) | Value::List(_)) {
-                    let value = vm::Host::fact(&on, node, fact, None, super::super::FactOf::Node)
+                    let value = vm::Host::fact(&on, node, fact, super::super::FactOf::Node)
                         .expect("native values supported by the VM must not give up at the bridge");
                     assert_eq!(value.to_value(&on, source), expected);
-                    let read = VExpr::Fact { fact, projection: None, of: super::super::FactOf::Node };
+                    let read = VExpr::Fact { fact, of: super::super::FactOf::Node };
                     assert!(vm::eval(&on, node, &read).unwrap().value(&on, source) == expected);
                     assert_eq!(vm::eval(&on, node, &VExpr::Not(Box::new(read.clone()))).unwrap().truthy(&on), !expected.truthy());
                     if matches!(expected, Value::Str(_)) {
@@ -757,11 +757,11 @@ mod tests {
         }
         let call = tree.order.iter().copied().find(|&node| tree.node(node).matcher == g.matcher("ts_call").unwrap()).unwrap();
         let on = Ctx { node: call, ..ctx };
-        for fact in [field_fact, super::super::facts::fact("reference_key_strict").unwrap()] {
+        for fact in [field_fact, super::super::facts::fact("type").unwrap()] {
             let of = super::super::FactOf::Field(argument);
-            let expected = on.fact_value(fact, None, of);
+            let expected = on.fact_value(fact, of);
             assert!(matches!(&expected, Value::List(items) if items.len() == 2), "field reads keep one fact result per argument");
-            let value = vm::Host::fact(&on, call, fact, None, of).expect("a multi-field fact read adds a supported list wrapper");
+            let value = vm::Host::fact(&on, call, fact, of).expect("a multi-field fact read adds a supported list wrapper");
             assert_eq!(value.to_value(&on, source), expected);
         }
     }

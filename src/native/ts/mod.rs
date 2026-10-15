@@ -2,7 +2,6 @@
 //! become `ts_*` layers.
 
 mod bind;
-mod class_members;
 mod check;
 mod comments;
 mod docs;

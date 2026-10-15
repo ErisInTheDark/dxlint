@@ -55,8 +55,6 @@ pub enum CExpr {
     /// A native fact ([`facts::FACTS`]) of the node, of a field (a list
     /// when it repeats), or of the parent layer.
     Fact(usize, FactOf),
-    /// A registered record field (or exact null/presence test).
-    FactField(usize, FactOf),
     Opt(usize),
     Call(&'static Function, Vec<CExpr>),
     QueryCall(&'static queries::QueryFunction, Vec<CExpr>),
@@ -208,7 +206,7 @@ macro_rules! child_visitor {
                     }
                 }
                 CExpr::Const(_) | CExpr::Opt(_) | CExpr::Field(_) | CExpr::Ancestor(_, _)
-                | CExpr::Builtin(_) | CExpr::Fact(_, _) | CExpr::FactField(_, _) | CExpr::Attr(_)
+                | CExpr::Builtin(_) | CExpr::Fact(_, _) | CExpr::Attr(_)
                 | CExpr::FieldAttr(_, _) | CExpr::ParentField(_) | CExpr::ParentAttr(_)
                 | CExpr::Local(_) | CExpr::Param(_)
                 | CExpr::Descendants(_) | CExpr::Containing(_) => {}
@@ -329,15 +327,6 @@ pub enum FactOf {
     Parent,
 }
 
-fn project_fact(base: &CExpr, key: Option<&str>) -> Option<CExpr> {
-    Some(match base {
-        CExpr::Fact(fact, of) => CExpr::FactField(facts::field_read(*fact, key)?, *of),
-        CExpr::OnParent(inner) => CExpr::OnParent(Box::new(project_fact(inner, key)?)),
-        CExpr::Relative(relative @ (Relative::Previous | Relative::Next), inner) => CExpr::Relative(*relative, Box::new(project_fact(inner, key)?)),
-        _ => return None,
-    })
-}
-
 /// Attribute values computed for one file's tree, so each node's attribute
 /// is evaluated once however many rules and parents read it. Rules' `let`
 /// values are kept here too, per (node, rule, slot).
@@ -346,8 +335,7 @@ pub struct AttrMemo<'a> {
     /// VM-lowered attributes' values ([`crate::vm`]).
     vm: crate::vm::FileVm,
     locals: RefCell<FxHashMap<(u32, u32, u16), Value<'a>>>,
-    /// Native fact reads without arguments, per (node, read slot). Whole
-    /// records and registered projections share this owner.
+    /// Native fact reads without arguments, per (node, fact).
     facts: RefCell<FxHashMap<(u32, u16), Value<'a>>>,
     /// Where JavaScript lines start (also after U+2028 and U+2029), for
     /// `position(offset).js_line`.
@@ -657,9 +645,6 @@ impl<'a> Scope<'a> {
 
     /// `base.key`: a record's key, or `key` read on a node.
     fn member(&self, base: CExpr, key: &crate::config::ast::Name) -> CExpr {
-        if let Some(projected) = project_fact(&base, Some(&key.text)) {
-            return projected;
-        }
         CExpr::Member(Box::new(base), key.text.clone().into(), self.relative_path(key, &[]).ok().map(Box::new))
     }
 
@@ -680,11 +665,6 @@ impl<'a> Scope<'a> {
                 CExpr::Member(Box::new(value), suffix.text.clone().into(), None)
             };
             return self.member_path(value, &keys[i + 1..]);
-        }
-        if let Some((first, rest)) = keys.split_first() {
-            if let Some(projected) = project_fact(&base, Some(&first.text)) {
-                return self.member_path(projected, rest);
-            }
         }
         // `n.token`: a node's own tokens, which must then be built.
         for key in keys.iter().filter(|key| key.text == "token" && self.grammar.labels.get("token").is_some()) {
@@ -1165,16 +1145,6 @@ impl Scope<'_> {
                 let a = self.compile(a, errors);
                 let b = self.compile(b, errors);
                 let (a, b) = (a?, b?);
-                if matches!(op, BinOp::Eq | BinOp::Ne) {
-                    let subject = match (&a, &b) {
-                        (CExpr::Const(Value::Null), subject) | (subject, CExpr::Const(Value::Null)) => Some(subject),
-                        _ => None,
-                    };
-                    if let Some(present) = subject.and_then(|subject| project_fact(subject, None)) {
-                        let absent = CExpr::Not(Box::new(present));
-                        return Some(if *op == BinOp::Eq { absent } else { CExpr::Not(Box::new(absent)) });
-                    }
-                }
                 CExpr::Binary(*op, Box::new(a), Box::new(b))
             }
             ExprKind::If(c, a, b) => {
@@ -1756,7 +1726,7 @@ impl<'a> Ctx<'a> {
         if self.memo.here.get().is_some_and(|(here, _)| here == node) {
             let mut slots = self.memo.here_facts.borrow_mut();
             if slots.len() <= slot {
-                slots.resize((facts::FACTS.len() + facts::FIELD_READS.len()).max(slot + 1), (0, Value::Null));
+                slots.resize(facts::FACTS.len().max(slot + 1), (0, Value::Null));
             }
             slots[slot] = (self.memo.visit.get(), value.clone());
         } else {
@@ -1765,39 +1735,20 @@ impl<'a> Ctx<'a> {
         value
     }
 
-    fn fact_value(&self, fact: usize, projection: Option<usize>, of: FactOf) -> Value<'a> {
-        let read = projection.map(|index| &facts::FIELD_READS[index]);
-        let project = |value: Value<'a>| match read {
-            Some(read) => read.key.map_or_else(|| Value::Bool(!matches!(value, Value::Null)), |key| value.key(key)),
-            None => value,
-        };
-        let Some(native) = self.native_facts() else { return project(Value::Null) };
-        let get = |node| {
-            if read.is_some() {
-                if let Some(value) = self.cached_fact(node, fact) {
-                    return project(value);
-                }
+    fn fact_value(&self, fact: usize, of: FactOf) -> Value<'a> {
+        let Some(native) = self.native_facts() else { return Value::Null };
+        let get = |node| self.memo_fact(node, fact, || {
+            let compute = || facts::read(native, fact, node);
+            match self.profile {
+                Some(profile) => profile.time_fact(fact, compute),
+                None => compute(),
             }
-            let slot = projection.map_or(fact, |index| facts::FACTS.len() + index);
-            self.memo_fact(node, slot, || {
-                let compute = || match projection {
-                    Some(read) => facts::read_field(native, read, node),
-                    None => facts::read(native, fact, node),
-                };
-                match self.profile {
-                    Some(profile) => profile.time_fact(fact, compute),
-                    None => compute(),
-                }
-            })
-        };
+        });
         match of {
             FactOf::Node => get(self.node),
-            FactOf::Parent => self.parent_layer().map_or_else(|| project(Value::Null), get),
+            FactOf::Parent => self.parent_layer().map_or(Value::Null, get),
             FactOf::Field(label) => {
                 let nodes = self.tree.fields(self.node, label);
-                if projection.is_some() && nodes.len() != 1 {
-                    return project(self.fact_value(fact, None, of));
-                }
                 let mut values: Vec<_> = nodes.into_iter().map(get).collect();
                 match values.len() {
                     0 => Value::Null,

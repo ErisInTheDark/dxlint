@@ -17,6 +17,7 @@ apparent string inherits instance "String"
 apparent boolean inherits instance "Boolean"
 apparent bigint inherits instance "BigInt"
 apparent symbol inherits instance "Symbol"
+apparent callable inherits instance "Function"
 product ts_tuple items fits object, truthy, tuple as { kind: "tuple" } inherits instance "Array" of ...items readonly inherits instance "ReadonlyArray" of ...items optional trait undefined, nullable, falsy, nonthenable
 
 in ts_program { fits object, truthy in module }
@@ -70,10 +71,6 @@ fn ts_value_library_type_sites(n, name) = {
   value if sites == null || any(origins, origin => origin == null) then null
     else filter(sites, site => declaration_origin(n, site).kind == "library")
 }
-fn ts_value_function_members(n) = {
-  value sites: ts_value_library_type_sites(n, "Function")
-  value sites == null || count(sites) > 0
-}
 # Syntax first: only `const x = Symbol(...)` / `Symbol.for(...)` reaches the
 # semantic checks, so other declarators never ask (or wait on) them.
 fn ts_value_unique_symbol_binding(n) = n.type == null && n.name is ts_identifier && n.parent.kind == "const"
@@ -99,8 +96,9 @@ fn ts_value_array_part(part, n) = {
     && any(declarations, declaration => declaration.file == carrier.file && declaration.node == carrier.node)
   value scalar: any(["null", "undefined", "string", "number", "boolean", "bigint", "symbol"],
     trait => contains(part.traits, trait))
-  value known: tuple || scalar || part.carrier_known && !named && len(part.uncertain_traits) == 0
-    || named && declarations != null
+  value indeterminate: any(["any", "unknown", "error", "parameter"], trait => contains(part.traits, trait))
+  value known: !indeterminate && (tuple || scalar || part.carrier_known && !named
+    || named && declarations != null)
   value { array: array, tuple: tuple, known: known }
 }
 fn ts_value_array_parts(parts, n) = if parts == null then { array: false, tuple: false, known: false } else {
@@ -166,6 +164,12 @@ fn ts_value_literal_branch(n, part) = {
   value part != null && branch != null && part.identity_known && branch.identity_known
     && part.identity != null && part.identity == branch.identity
 }
+fn ts_value_logical_choice(n) = if n.operator == "||" && n.left always falsy then n.right.node
+  else if n.operator == "||" && n.left always truthy then n.left.node
+  else if n.operator == "&&" && n.left always falsy then n.left.node
+  else if n.operator == "&&" && n.left always truthy then n.right.node
+  else if n.operator == "??" && n.left always nullable then n.right.node
+  else if n.operator == "??" && !(n.left could nullable) then n.left.node else null
 fn ts_value_fresh_step(bare, part) = {
   value if bare is (ts_number, ts_string, ts_boolean, ts_bigint) then {valid: true, children: []}
   else if bare is ts_unary && (bare.operator == "-" || bare.operator == "+") then {valid: true, children: [bare.argument.node]}
@@ -177,12 +181,7 @@ fn ts_value_fresh_step(bare, part) = {
     value branches: filter([bare.consequent.node, bare.alternate.node], branch => ts_value_literal_branch(branch, part))
     value {valid: len(branches) > 0, children: branches}
   } else if bare is ts_logical then {
-    value chosen: if bare.operator == "||" && bare.left always falsy then bare.right.node
-      else if bare.operator == "||" && bare.left always truthy then bare.left.node
-      else if bare.operator == "&&" && bare.left always falsy then bare.left.node
-      else if bare.operator == "&&" && bare.left always truthy then bare.right.node
-      else if bare.operator == "??" && bare.left always nullable then bare.right.node
-      else if bare.operator == "??" && !(bare.left could nullable) then bare.left.node else null
+    value chosen: ts_value_logical_choice(bare)
     value if chosen != null then {valid: true, children: [chosen]} else {
       value branches: filter([bare.left.node, bare.right.node], branch => ts_value_literal_branch(branch, part))
       value {valid: len(branches) > 0, children: branches}
@@ -404,9 +403,13 @@ in ts_assignment {
 }
 in ts_conditional { unwraps consequent | alternate }
 in ts_logical {
-  when operator == "&&" { unwraps (left \ truthy) | right }
-  when operator == "||" { unwraps (left \ falsy) | right }
-  when operator == "??" { unwraps (left \ nullable) | right }
+  let ts_value_logical_choice ts_value_logical_choice(node)
+  when ts_value_logical_choice != null { unwraps ts_value_logical_choice }
+  when ts_value_logical_choice == null {
+    when operator == "&&" { unwraps (left \ truthy) | right }
+    when operator == "||" { unwraps (left \ falsy) | right }
+    when operator == "??" { unwraps (left \ nullable) | right }
+  }
 }
 in ts_sequence {
   let ts_value_last_expression last(expression.nodes)
@@ -504,9 +507,6 @@ in ts_interface {
     || any(extends.nodes, base => base always builtin_function)
 }
 in ts_interface, ts_type_literal {
-  when (node could callable || node could constructible) && ts_value_function_members(node) {
-    members members inherits instance "Function"
-  }
   when ts_value_closed_type_members(member.nodes) { members members closed }
 }
 in ts_interface, ts_type_literal, ts_class {
@@ -593,23 +593,11 @@ in ts_index {
   }
 }
 in ts_function, ts_arrow, ts_function_type, ts_call_signature {
-  scope callable_members
-  members callable_members
-  when ts_value_function_members(node) {
-    members callable_members inherits instance "Function"
-  }
   fits callable, object, truthy
 }
 in ts_function { fits constructible when !any(modifier.nodes, modifier => modifier.text == "async") }
 in ts_method, ts_method_signature {
-  scope callable_members
   when kind != "get" && kind != "set" { fits callable, object, truthy }
-  when kind != "get" && kind != "set" {
-    members callable_members
-    when ts_value_function_members(node) {
-      members callable_members inherits instance "Function"
-    }
-  }
   when kind == "get" { unwraps it.result }
   when kind == "set" { unwraps parameter.type }
 }
@@ -619,7 +607,6 @@ in ts_class {
   members statics
   fits constructible, object, truthy in statics
   fits structural, object, truthy in members
-  when ts_value_function_members(node) { members statics inherits instance "Function" }
   fits builtin_function in members when extends != null
     && ts_value_trait(value_member(extends.node, "prototype"), "builtin_function")
   unwraps scope statics from it
@@ -669,6 +656,7 @@ in ts_method, ts_method_signature, ts_property, ts_class_property {
 }
 in ts_method, ts_method_signature {
   flag method when kind != "get" && kind != "set"
+  flag array_constructor_member when parent is ts_interface && parent.name == "ArrayConstructor"
   flag private when key is ts_private_name
   flag readonly when kind == "get" && !any(parent.member.nodes, member =>
     member.kind == "set" && ts_value_key(member.key.node) == ts_value_key(key.node)
@@ -702,6 +690,15 @@ in ts_type_query {
   when name not ts_qualified_name { unwraps name.definition }
 }
 in ts_type_predicate {
+  carries as {
+    kind: "predicate",
+    parameter_index: find(map(parent.calls_parameters, (parameter, index) =>
+      {index: index, name: parameter.name.text}), item => item.name == name.text).index,
+    asserts: modifier != null,
+    has_target: type != null,
+    target_union: type is ts_union,
+    target_source: if type != null then value_sources(type.node) else null,
+  }
   when modifier == null { fits boolean, nonthenable }
   when modifier != null {
     fits void, undefined, nullable, falsy, nonthenable

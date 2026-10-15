@@ -1,0 +1,16 @@
+import .ts
+
+in ts_call rule static-string {
+  when callee.text == "stringValue"
+  let actual first(argument.nodes).static_string
+  let expected last(argument.nodes).literal_value
+  when actual != (if expected.type == "null" then null else expected.value)
+  warn "static string"
+}
+in ts_call rule static-number {
+  when callee.text == "numberValue"
+  let actual first(argument.nodes).static_number
+  let expected last(argument.nodes).literal_value
+  when actual != (if expected.type == "null" then null else js_number(expected))
+  warn "static number"
+}

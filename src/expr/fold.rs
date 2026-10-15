@@ -103,7 +103,7 @@ mod tests {
             in .t match word /[a-z]+/ {
                 rule first_error warn { value num(text); second (1 % 0) }
                 rule lazy_error warn { value num(text); then (n) if true then "unused" else n }
-                rule foreign_error warn { value num(text); exported }
+                rule foreign_error warn { value num(text); symbol_metadata }
                 rule frames warn "{frames([10, 20])}"
             }
         "#);

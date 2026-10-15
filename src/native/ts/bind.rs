@@ -46,10 +46,6 @@ pub struct Bindings {
     pub refs: HashMap<u32, u32>,
     /// Value references that resolve to nothing in the file (globals).
     pub unresolved: HashSet<u32>,
-    /// Referencing identifier -> how it uses the name: `read`, `write`
-    /// (`x = 1`, destructuring, `for (x of ...)`), `read_write` (`x += 1`,
-    /// `x++`) or `type` (type positions, `typeof x` in a type).
-    pub access: HashMap<u32, &'static str>,
     /// Written identifier or member (`x`, `a.b`, `a[b]`), or array or
     /// object literal used as a destructuring target -> the node that writes
     /// it: the assignment, update, `delete` or `for` statement.
@@ -128,15 +124,6 @@ impl Bindings {
                 Some(e) if e == mutated => Use::ReadWrite,
                 _ => classify(s, r, want, value, type_),
             };
-            b.access.insert(
-                r,
-                match use_ {
-                    Use::Value | Use::Namespace | Use::Export => "read",
-                    Use::Write => "write",
-                    Use::ReadWrite => "read_write",
-                    Use::Type | Use::TypeOnly | Use::TypeExport => "type",
-                },
-            );
             let Some(&decl) = names.declaration.get(&r) else {
                 if !matches!(use_, Use::Type | Use::TypeOnly | Use::TypeExport) {
                     b.unresolved.insert(r);

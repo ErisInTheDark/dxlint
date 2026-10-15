@@ -2,7 +2,7 @@ import .ts
 import .ts/values/inspection
 
             in ts_declarator.init rule source-known {
-                when !ts_value_opaque(node) && value_has_member(node, "[Symbol.dispose]", null) == true
+                when !ts_value_opaque(node) && value_has_member(node, {global: "Symbol", class: "value", path: ["dispose"]}, null) == true
                 warn "resolved source"
             }
             in ts_declarator.init rule member-known {

@@ -23,7 +23,7 @@ in ts_enum {
   members statics closed
   fits object, truthy, nonthenable in statics
   fits enum in enum_origin open
-  carries as { kind: "enum", name: name.text }
+  carries as { kind: "enum", name: name.text, first_member_kind: first(member.nodes).ts_value_enum_kind ?? "number" }
   unwraps ...member for type
   unwraps scope statics from it
 }

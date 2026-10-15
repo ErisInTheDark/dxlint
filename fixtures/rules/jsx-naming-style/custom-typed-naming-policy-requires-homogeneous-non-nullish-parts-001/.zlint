@@ -1,10 +1,16 @@
 import .ts
 
-        fn boolean_domain(d) = d.kind == "boolean" || d.kind == "union"
-            && { value d.parts; filter (p) !contains(["null", "undefined"], p.kind); count } > 0
-            && { value d.parts; filter (p) !contains(["null", "undefined"], p.kind); all (p) boolean_domain(p) }
+        fn boolean_domain(n) = {
+            value parts: value_constituents(n)
+            value present: filter(parts ?? [], arm => !any(arm, part =>
+                contains(part.traits, "null") || contains(part.traits, "undefined")))
+            value count(present) > 0 && all(present, arm => {
+                value concrete: filter(arm, part => !contains(part.traits, "parameter"))
+                value count(concrete) == 1 && contains(first(concrete).traits, "boolean")
+            })
+        }
         in ts_identifier rule boolean-names {
-            when naming_context == "variable" && boolean_domain(type_domains)
+            when naming_context == "variable" && boolean_domain(node)
             let failure naming_failure(naming_name, false, { formats: ["UPPER_CASE"], prefix: ["IS_"] })
             when failure != null
             warn naming_message(naming_name, failure)

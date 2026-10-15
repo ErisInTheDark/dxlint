@@ -1,0 +1,30 @@
+import .ts
+
+in ts_call rule reference-equivalence {
+  when contains(["same", "loose", "different", "unsupported"], callee.text)
+  let a first(argument.nodes)
+  let b last(argument.nodes)
+  let valid if callee.text == "unsupported"
+    then a.reference_key == null && a.reference_key_strict == null
+    else a.reference_key != null && b.reference_key != null
+      && (a.reference_key == b.reference_key) == (callee.text != "different")
+      && (a.reference_key_strict == b.reference_key_strict) == (callee.text == "same")
+  when !valid
+  warn "reference equivalence"
+}
+in ts_call rule restricted-declaration {
+  when contains(["restricted", "allowed"], callee.text)
+  let sites {
+    value first(argument.nodes)
+    walk (current) current.children.nodes
+    filter (current) current is ts_identifier && current.ts_name_declared
+      && contains(["NaN", "Infinity", "undefined", "eval", "arguments", "globalThis"], current.identifier_name)
+  }
+  when count(sites) == 0 || any(sites, site => site.restricted_binding != (callee.text == "restricted"))
+  warn "restricted declaration"
+}
+in ts_identifier rule exported-declaration {
+  when contains(["exposed", "ordinary", "exportedParameter"], identifier_name) && ts_name_declared
+  when exported != (identifier_name == "exposed")
+  warn "export status"
+}

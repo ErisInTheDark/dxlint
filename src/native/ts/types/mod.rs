@@ -29,7 +29,7 @@ use super::modules::{DeclRef, FileId, Globals, ModRef, ModuleAt, Project};
 use super::reads::Cached;
 use super::summary::{DeclKind, Member, Sig, Summary, TParam, TupleElement, TypeSyn};
 
-pub use domains::{LiteralValue, ValueDomains};
+pub use domains::LiteralValue;
 pub use enums::EnumMember;
 pub use calls::ResolvedPredicate;
 pub use arguments::Parameters;

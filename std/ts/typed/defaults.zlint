@@ -1,0 +1,90 @@
+import .ts/values/inspection
+
+define {
+
+fn typed_default_maybe_undefined(parts) = parts == null || any(parts, arm => any(arm, part =>
+  any(["any", "unknown", "undefined", "void", "parameter"], trait =>
+    contains(part.traits, trait) || contains(part.uncertain_traits, trait))))
+fn typed_default_context(parameter) = {
+  value function: parameter.parent.node
+  value declaration: function is ts_function && function.parent is (ts_program, ts_block, ts_export)
+  value contextual: value_expected_at(function, [])
+  value signatures: if !declaration && function is (ts_arrow, ts_function)
+    && ts_value_trait(contextual, "callable") then expected_call_signatures(function) else null
+  value position: index_of(function.parameter.nodes, parameter)
+  value headers: flat_map(signatures ?? [], arm => arm)
+  value parameters: map(headers, header => {
+    value selected: { value header.parameters; drop position; first }
+    value optional: { value header.parameter_optional; drop position; first }
+    value rest: { value header.parameter_rest; drop position; first }
+    value if header.parameters_known && optional == false && rest == false then selected else null
+  })
+  value if signatures == null || count(parameters) == 0 || any(parameters, parts => parts == null)
+    then null else flat_map(parameters, parts => parts)
+}
+fn typed_default_ancestor(n) = if n.parent is (ts_declarator, ts_parameter, ts_assignment_pattern,
+  ts_pattern_property, ts_object_pattern, ts_array_pattern) then n.parent.node else null
+fn typed_default_member(handle, child) = {
+  value arms: value_parts(handle)
+  value choices: map(arms ?? [], arm => {
+    value part: find(arm.parts, part => {
+      value shape: ts_value_array_part(part, child)
+      value shape.array || shape.tuple
+    })
+    value carrier: part.carrier
+    value array: child.parent is ts_array_pattern
+    value key: if array then index_of(child.parent.element.nodes, child)
+      else ts_value_key(child.key.node)
+    value elements: part.product.elements
+    value boundary: find(elements, element => element.optional || element.repeated)
+    value required: if boundary == null then count(elements) else index_of(elements, boundary)
+    value member: if key != null then value_lookup(arm.handle, key) else null
+    value when {
+      array && carrier.description.kind == "tuple" then
+        if key < required then member.member else null
+      array && child not ts_assignment_pattern
+        && ts_value_array_parts([arm.parts], child).array then first(carrier.arguments)
+      !array && key != null && member != null && count(member.alternatives) > 0
+        && all(member.alternatives, alternative => alternative.required == true
+          && any(alternative.sources, source => source.kind == "named")) then member.member
+      else then null
+    }
+  })
+  value if arms == null || any(choices, choice => choice == null) then null else choices
+}
+fn typed_default_pattern(n) = {
+  value ancestors: walk(n, current => typed_default_ancestor(current))
+  value root: last(ancestors)
+  value source: if root is ts_declarator then root.init.node
+    else if root is ts_parameter then root.type.node else null
+  value state: fold(reverse(ancestors), {known: source != null, handles: [source]}, (state, child) =>
+    if !state.known || !(child.parent is ts_array_pattern || child is ts_pattern_property) then state else {
+      value choices: map(state.handles, handle => typed_default_member(handle, child))
+      value {known: all(choices, choice => choice != null), handles: flat_map(choices, choice => choice ?? [])}
+    })
+  value results: if state.known then map(state.handles, handle => value_constituents(handle)) else null
+  value if results != null && all(results, parts => parts != null)
+    then flat_map(results, parts => parts) else null
+}
+fn typed_useless_default(n) = {
+  value initial: if n is ts_parameter then n.init.node else n.right.node
+  value property: n is ts_assignment_pattern && n.parent is (ts_pattern_property, ts_array_pattern)
+  value undefined: initial is ts_identifier && initial.text == "undefined"
+  value source: if initial == null || undefined then null
+    else if n is ts_parameter then typed_default_context(n) else typed_default_pattern(n)
+  value optional: n is ts_parameter && n.type != null
+    && typed_default_maybe_undefined(value_constituents(n.type.node))
+  value kind: when {
+    initial == null then null
+    undefined then if optional then "optional" else "undefined"
+    !typed_default_maybe_undefined(source) then "required"
+    else then null
+  }
+  value if kind == null then null else {
+    kind: kind, owner: if property then "property" else "parameter", offset: initial.offset
+  }
+}
+
+in ts_assignment_pattern, ts_parameter let typed_default_assignment typed_useless_default(node)
+
+}

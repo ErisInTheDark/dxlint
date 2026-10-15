@@ -1,0 +1,144 @@
+import .core/lists
+import .ts/layout/shared
+import .ts/tokens
+
+define {
+
+group structure_list_open_token ts_open_paren, ts_open_bracket, ts_open_brace, ts_open_angle
+in ts_node let structure_list_main null
+in ts_array let structure_list_main {kind: "ArrayExpression", brackets: "[]", items: element.nodes}
+in ts_array_pattern let structure_list_main {kind: "ArrayPattern", brackets: "[]", items: element.nodes}
+in ts_object let structure_list_main {kind: "ObjectExpression", brackets: "{{}}", items: property.nodes}
+in ts_object_pattern let structure_list_main {kind: "ObjectPattern", brackets: "{{}}", items: property.nodes rest.nodes}
+in ts_function let structure_list_main {
+  kind: if parent is (ts_program, ts_block, ts_export) then "FunctionDeclaration" else "FunctionExpression",
+  brackets: "()", items: parameter.nodes,
+}
+in ts_arrow let structure_list_main {kind: "ArrowFunctionExpression", brackets: "()", items: parameter.nodes}
+in ts_call let structure_list_main {kind: "CallExpression", brackets: "()", items: argument.nodes}
+in ts_new let structure_list_main {kind: "NewExpression", brackets: "()", items: argument.nodes}
+in ts_if let structure_list_main {kind: "IfStatement", brackets: "()", items: test.nodes}
+in ts_import let structure_list_main {kind: "ImportDeclaration", brackets: "{{}}", items: specifier.nodes}
+in ts_export let structure_list_main if declaration.node == null then {kind: "ExportNamedDeclaration", brackets: "{{}}", items: specifier.nodes} else null
+in ts_enum let structure_list_main {kind: "TSEnumBody", brackets: "{{}}", items: member.nodes}
+in ts_function_type let structure_list_main {kind: "TSFunctionType", brackets: "()", items: parameter.nodes}
+in ts_interface let structure_list_main {kind: "TSInterfaceBody", brackets: "{{}}", items: member.nodes}
+in ts_type_literal let structure_list_main {kind: "TSTypeLiteral", brackets: "{{}}", items: member.nodes}
+in ts_tuple_type let structure_list_main {kind: "TSTupleType", brackets: "[]", items: element.nodes}
+fn structure_list_groups(n) = {
+  value main: n.structure_list_main
+  value (if main == null then [] else [main]) {
+    value n.layout_syntax_lists
+    filter (list) contains(["type_parameter", "type_argument"], list.field)
+    map (list) {
+      kind: if list.field == "type_parameter" then "TSTypeParameterDeclaration" else "TSTypeParameterInstantiation",
+      brackets: "<>", items: list.items,
+    }
+  }
+}
+fn structure_list_comment(n) = {
+  start: n.offset, end: n.end_offset,
+  text: if starts_with(n.text, "/*") then byte_slice(n.text, 2, byte_len(n.text) - 2) else byte_slice(n.text, 2),
+}
+fn structure_list_comments(start, end) = {
+  value overlapping(ts_comment, start, end)
+  filter (item) item.offset >= start && item.end_offset <= end
+  sort_by (item) item.offset
+}
+fn structure_list_first(code, comments) = {
+  value comment: first(comments)
+  value if comment != null && (code == null || comment.offset < code.start)
+    then structure_list_comment(comment) else code
+}
+fn structure_list_last(code, comments) = {
+  value comment: last(comments)
+  value if comment != null && (code == null || comment.offset > code.start)
+    then structure_list_comment(comment) else code
+}
+fn structure_list_open(n, group, items) = {
+  value open: byte_slice(group.brackets, 0, 1)
+  value close: byte_slice(group.brackets, 1)
+  value first: first(items)
+  value prefix_end: if first != null then unparenthesised_node(first).offset else n.body.offset ?? n.end_offset
+  value candidates: {
+    value overlapping(structure_list_open_token, n.offset, prefix_end)
+    filter (item) item.offset >= n.offset && item.end_offset <= prefix_end && item.text == open
+    sort_by (item) item.offset
+  }
+  value selected: if group.brackets == "()" && n is (ts_call, ts_new) then {
+    value after: last(n.type_argument.nodes).end_offset ?? n.callee.end_offset ?? n.offset
+    value find(candidates, item => item.offset >= after)
+  } else if first != null then {
+    value edge: token(unparenthesised_node(first), "before")
+    value if edge.text == open then node_at(edge.start) else null
+  } else find(candidates, item => token(item, "after").text == close)
+  value if selected != null then token(selected, "first") else null
+}
+fn structure_list_close(n, group, items, left) = {
+  value after: if count(items) == 0 then token(node_at(left.start), "after") else token(last(items), "after")
+  value chain: walk(if after == null then [] else node_at(after.start), current =>
+    if token(current, "first").text == "," then node_at(token(current, "after").start) else null)
+  value right: token(last(chain), "first")
+  value if right.text == byte_slice(group.brackets, 1) && right.end <= n.end_offset then right else null
+}
+fn structure_list_wrap(items, left, after_open) = {
+  value items
+  map (item, index) {node: item, index: index}
+  fold ({previous: left.end, edge: left, pairs: [[left, after_open]]}) (state, entry) {
+    value item: entry.node
+    value first: token(unparenthesised_node(item), "first")
+    value previous: token(item, "last")
+    value before: if first == null then null else {
+      value chain: walk(node_at(token(unparenthesised_node(item), "before").start), current =>
+        if current.offset >= state.previous && token(current, "first").text == "("
+          then node_at(token(current, "before").start) else null)
+      value edge: token(last(chain), "first")
+      value if edge.start >= state.previous then edge else state.edge
+    }
+    value {
+      previous: item.end_offset,
+      edge: previous ?? state.edge,
+      pairs: state.pairs (if first == null || entry.index == 0 && after_open.start == first.start then [] else [[before, first]]),
+    }
+  }
+}
+fn structure_list_sites(source, n, group) = {
+  value items: {value group.items; sort_by (item) item.offset}
+  value left: structure_list_open(n, group, items)
+  value right: if left == null then null else structure_list_close(n, group, items, left)
+  value if right == null then [] else {
+    value first_item: find(items, item => item not ts_hole)
+    value first_start: if first_item == null then right.start else unparenthesised_node(first_item).offset
+    value last_end: last(items).end_offset ?? left.end
+    value after_open: token(node_at(left.start), "after")
+    value before_close: token(node_at(right.start), "before")
+    value first_edge: structure_list_first(
+      if after_open.start <= first_start then after_open else token(unparenthesised_node(first_item), "first"),
+      structure_list_comments(left.end, first_start)) ?? right
+    value last_edge: structure_list_last(
+      if before_close.start >= last_end then before_close else token(last(items), "last"),
+      structure_list_comments(last_end, right.start)) ?? left
+    value spacing: [[left, first_edge]] (if first_edge.start == right.start then [] else [[last_edge, right]])
+    value wrapping: if count(items) == 0 then spacing else
+      structure_list_wrap(items, left, after_open).pairs [[before_close ?? left, right]]
+    value context: {
+      kind: group.kind, brackets: group.brackets, count: count(items),
+      single: layout_same_line(byte_slice(source, left.start, right.end)),
+      node_single: layout_same_line(n.text),
+      first_broken: count(items) > 0 && !layout_same_line(byte_slice(source, left.end, unparenthesised_node(first(items)).offset)),
+      empty_comments: first_edge.start != right.start,
+    }
+    value comments: structure_list_comments(left.end, right.start)
+    value spacing_sites: map(spacing, pair => core_list_site(source, context, "spacing", first(pair), last(pair), comments))
+    value wrapping_sites: map(wrapping, pair => core_list_site(source, context,
+      if count(items) == 0 then "empty_wrapping" else "wrapping", first(pair), last(pair), comments))
+    value spacing_sites wrapping_sites
+  }
+}
+in ts_node let list_layout {
+  value owner: node
+  value structure_list_groups(owner)
+  flat_map (group) structure_list_sites(source, owner, group)
+}
+
+}

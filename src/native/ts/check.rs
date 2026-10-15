@@ -959,11 +959,6 @@ impl<'t> NativeFile<'t> {
         Some(resolution)
     }
 
-    pub(super) fn evaluated_type_of(&self, id: u32) -> Ty {
-        let ty = if self.optional_chain_can_short_circuit(id) { self.access_type(id) } else { self.type_of(id) };
-        self.constrain_type(ty, id, &mut Vec::new())
-    }
-
     /// A call's result; this file's own unannotated functions are typed
     /// from their bodies.
     fn call_type(&self, f: &Ty, id: u32) -> Ty {
