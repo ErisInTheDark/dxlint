@@ -1,0 +1,4 @@
+import .ts
+rule prefer-readonly-parameter-types {
+  set allow [{ from: "file", name: "Item", path: "./sub/../allowed.ts" }]
+}

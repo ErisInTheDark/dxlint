@@ -13,6 +13,38 @@ fn readonly_parameter_array(part) = contains(["Array", "ReadonlyArray"], part.ca
 fn readonly_parameter_scalar(part) =
   !any(part.traits, trait => contains(["object", "structural", "callable", "constructible"], trait))
   && any(part.traits, trait => contains(["any", "unknown", "undefined", "null", "boolean", "number", "string", "bigint", "symbol", "void"], trait))
+fn readonly_parameter_path(path) = {
+  value slashes: replace(path, "\\", "/")
+  value rooted: starts_with(slashes, "/")
+  value parts: fold(split(slashes, "/"), [], (parts, part) =>
+    if part == "" || part == "." then parts
+    else if part == ".." then
+      if count(parts) > 0 && !ends_with(last(parts), ":") then slice(parts, 0, count(parts) - 1)
+      else parts
+    else concat(parts, [part]))
+  value (if rooted then "/" else "") join(parts, "/")
+}
+fn readonly_parameter_allowed(part, settings) = {
+  value carrier: part.carrier
+  value name: carrier.description.name
+  value origin: if part.carrier_known && name != null && count(settings.allow) > 0
+    then declaration_origin(settings.node, {file: carrier.file, node: carrier.node}) else null
+  value name != null && any(settings.allow, entry => {
+    value matches_origin: when {
+      entry.from == "lib" then origin.kind == "library"
+      entry.from == "package" then origin.kind == "package"
+        && (origin.package == entry.package
+          || origin.package == "@types/" replace(replace(entry.package, "@", ""), "/", "__"))
+      entry.from == "file" then origin != null && settings.directory != null
+        && (if entry.path == null then starts_with(origin.path,
+            settings.directory (if ends_with(settings.directory, "/") then "" else "/"))
+          else origin.path == readonly_parameter_path(settings.directory "/" entry.path))
+      else then false
+    }
+    value if type_of(entry) == "str" then name == entry
+      else contains(if type_of(entry.name) == "str" then [entry.name] else entry.name, name) && matches_origin
+  })
+}
 fn readonly_parameter_branded(arm) = {
   value parts: filter(arm.parts, part => !readonly_parameter_marker(part))
   value count(parts) > 1
@@ -32,7 +64,7 @@ fn readonly_parameter_children(handle, members, arguments, unchecked) = {
       else {kind: "edge", edge: edge}),
   }
 }
-fn readonly_parameter_step(entry, methods) = if entry.kind == "source" then {
+fn readonly_parameter_step(entry, settings) = if entry.kind == "source" then {
   value arms: value_parts(entry.source)
   value skipped: entry.root && count(arms) > 0 && all(arms, arm => readonly_parameter_branded(arm))
   value {
@@ -42,7 +74,7 @@ fn readonly_parameter_step(entry, methods) = if entry.kind == "source" then {
 } else if entry.kind == "edge" then {
   value edge: entry.edge
   value writable: edge.member != null && !any(edge.member.sources, source => contains(source.flags, "readonly")
-    || contains(source.flags, "private") || methods && contains(source.flags, "method"))
+    || contains(source.flags, "private") || settings.methods && contains(source.flags, "method"))
   value {answer: !writable, children: if writable then [] else [{kind: "source", source: edge.handle, root: false}]}
 } else if entry.kind == "part" then {
   value part: entry.part
@@ -59,20 +91,25 @@ fn readonly_parameter_step(entry, methods) = if entry.kind == "source" then {
     children: branch.children}
 } else {
   value arm: entry.arm
-  value branch: if any(arm.parts, part => contains(part.traits, "error")) then {answer: null, children: []}
+  value allowed: !any(arm.parts, part => contains(part.traits, "error"))
+    && any(arm.parts, part => readonly_parameter_allowed(part, settings))
+  value branch: if allowed then {answer: true, children: []}
+    else if any(arm.parts, part => contains(part.traits, "error")) then {answer: null, children: []}
     else if any(arm.parts, part => part.carrier.description.kind == "parameter")
         && !any(arm.parts, part => readonly_parameter_marker(part))
       || all(arm.parts, part => readonly_parameter_scalar(part)) then {answer: true, children: []}
     else if any(arm.parts, part => readonly_parameter_array(part) || part.product != null) then
       {answer: true, children: map(arm.parts, part => {kind: "part", part: part})}
     else readonly_parameter_children(arm.handle, true, [], false)
-  value {answer: if branch.answer == false then false
+  value {answer: if allowed then true else if branch.answer == false then false
       else if any(arm.parts, part => readonly_parameter_uncertain(part)) then null else branch.answer,
     children: branch.children}
 }
-fn readonly_parameter_walk(source, methods) = {
-  value states: walk({kind: "source", source: source, root: true}, entry => readonly_parameter_step(entry, methods).children)
-  value readonly_parameter_all(map(states, entry => readonly_parameter_step(entry, methods).answer))
+fn readonly_parameter_walk(source, methods, allow) = {
+  value settings: {node: source, methods: methods, allow: allow,
+    directory: if count(allow) > 0 then program_directory(source) else null}
+  value states: walk({kind: "source", source: source, root: true}, entry => readonly_parameter_step(entry, settings).children)
+  value readonly_parameter_all(map(states, entry => readonly_parameter_step(entry, settings).answer))
 }
 
 in ts_parameter rule prefer-readonly-parameter-types {
@@ -84,8 +121,7 @@ in ts_parameter rule prefer-readonly-parameter-types {
   when checkParameterProperties || !any([] modifier, modifier => contains(["private", "public", "protected", "readonly"], modifier))
   when !ignoreInferredTypes || type != null
   let readonly_parameter_source type.node ?? init.node ?? node
-  let readonly_parameter_result if count(allow) > 0 then null
-    else readonly_parameter_walk(readonly_parameter_source, treatMethodsAsReadonly)
+  let readonly_parameter_result readonly_parameter_walk(readonly_parameter_source, treatMethodsAsReadonly, allow)
   when readonly_parameter_result == false
   report at { start: name.offset, end: end_offset }
   warn "Parameter should be a read only type."
