@@ -11,3 +11,10 @@ in ts_index rule index-value-contract {
   when parts == null || actual != expected
   warn "index value contract failed"
 }
+in ts_index rule index-origin-contract {
+  when contains(["arrayRead", "recordRead", "namedRead", "fixedRead", "optionalRead",
+    "dynamicRead", "variadicRead", "dynamicRecordRead"], parent.name.text)
+  let indexed contains(["arrayRead", "recordRead", "dynamicRead", "variadicRead", "dynamicRecordRead"], parent.name.text)
+  when condition_access(node).from_index != indexed
+  warn "index origin contract failed"
+}

@@ -73,7 +73,10 @@ fn condition_member_access(n, arms) = {
     arms: if complete && all(projected, parts => parts != null)
       then flat_map(projected, parts => parts) else null,
     from_index: if !complete then null else any(lookups, lookup =>
-      any(lookup.alternatives, alternative => any(alternative.sources, source => source.kind == "indexer"))),
+      any(lookup.alternatives, alternative =>
+        !any(alternative.sources, source => source.kind == "named")
+        && any(alternative.sources, source => contains(["indexer", "repeated"], source.kind)
+          || source.kind == "ordinal" && key.domain == "ordinal"))),
     optional: if !complete then null else any(lookups, lookup =>
       any(lookup.alternatives, alternative => alternative.required == false
         && any(alternative.sources, source => source.kind == "named"))),
