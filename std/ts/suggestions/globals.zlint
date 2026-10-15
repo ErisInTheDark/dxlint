@@ -141,11 +141,14 @@ in ts_node let ts_global_this
   else if parent is ts_method && not ts_method.key || is ts_class_property.init || parent is ts_static_block then false
   else parent.ts_global_this
 fn ts_global_eval_object(n, key) = {
-  value bare: unparenthesised_node(n)
-  value if bare is ts_identifier then bare.text == key && bare.ts_global_reference
-      && contains(["readonly", "writable"], bare.global)
-    else if bare is (ts_member, ts_index) && bare.static_name == key then ts_global_eval_object(bare.object.node, key)
-    else false
+  value terminal: {
+    value unparenthesised_node(n)
+    walk (current) if current is (ts_member, ts_index) && current.static_name == key
+      then unparenthesised_node(current.object.node) else null
+    last
+  }
+  value terminal is ts_identifier && terminal.text == key && terminal.ts_global_reference
+    && contains(["readonly", "writable"], terminal.global)
 }
 fn ts_global_eval(n) = {
   value outer: n.scoping_outer_parens

@@ -37,30 +37,36 @@ fn ts_runtime_template(n, seen) = {
 }
 fn ts_runtime_unary(n, seen) = {
   value operand: ts_runtime_compute(n.argument.node, seen)
-  value if operand == null then null
-    else if operand.type == "bigint" then
+  value when {
+    operand == null then null
+    operand.type == "bigint" then
       if n.operator != "-" then null else {
         type: "bigint",
-        value: if operand.value == "0" then "0"
-          else if starts_with(operand.value, "-") then slice(operand.value, 1)
-          else "-" operand.value
+        value: when {
+          operand.value == "0" then "0"
+          starts_with(operand.value, "-") then slice(operand.value, 1)
+          else then "-{operand.value}"
+        }
       }
-    else {
+    else then {
       value number: js_number_unary(n.operator.text, js_number(operand))
       value if number == null then null else { type: "number", value: number }
     }
+  }
 }
 fn ts_runtime_binary(n, seen) = {
   value left: ts_runtime_compute(n.left.node, seen)
   value right: ts_runtime_compute(n.right.node, seen)
-  value if left == null || right == null || !contains(["+", "-", "*", "/", "%", "**"], n.operator.text) then null
-    else if n.operator == "+" && (left.type == "string" || right.type == "string")
+  value when {
+    left == null || right == null || !contains(["+", "-", "*", "/", "%", "**"], n.operator.text) then null
+    n.operator == "+" && (left.type == "string" || right.type == "string")
       then { type: "string", value: js_to_string(left) js_to_string(right) }
-    else if left.type == "bigint" || right.type == "bigint" then null
-    else {
+    left.type == "bigint" || right.type == "bigint" then null
+    else then {
       value number: js_number_binary(n.operator.text, js_number(left), js_number(right))
       value if number == null then null else { type: "number", value: number }
     }
+  }
 }
 fn ts_runtime_index(n, seen) = {
   value object: ts_runtime_compute(n.object.node, seen)
@@ -73,29 +79,31 @@ fn ts_runtime_index(n, seen) = {
 fn ts_runtime_compute(n, seen) =
   if n == null || contains(seen, n) then null else {
     value path: seen [n]
-    value if n is ts_string then {
+    value when {
+      n is ts_string then {
         value decoded: js_string(n.text)
         value if type_of(decoded) != "str" then null else { type: "string", value: decoded }
       }
-      else if n is ts_number then {
+      n is ts_number then {
         type: "number", value: js_number({ type: "number", value: n.text })
       }
-      else if n is ts_bigint then {
+      n is ts_bigint then {
         value decoded: js_bigint(n.text)
         value if decoded == null then null else { type: "bigint", value: decoded }
       }
-      else if n is ts_boolean then { type: "boolean", value: n.text == "true" }
-      else if n is ts_null then { type: "null", value: null }
-      else if n is (ts_parenthesized, ts_as, ts_satisfies, ts_non_null, ts_type_assertion)
+      n is ts_boolean then { type: "boolean", value: n.text == "true" }
+      n is ts_null then { type: "null", value: null }
+      n is (ts_parenthesized, ts_as, ts_satisfies, ts_non_null, ts_type_assertion)
         then ts_runtime_compute(n.expression.node, path)
-      else if n is ts_identifier then ts_runtime_compute(ts_runtime_binding_init(n), path)
-      else if n is ts_template && n not ts_tagged_template.quasi then ts_runtime_template(n, path)
-      else if n is ts_sequence then ts_runtime_compute(last(n.expression.nodes), path)
-      else if n is ts_assignment && n.operator == "=" then ts_runtime_compute(n.right.node, path)
-      else if n is ts_unary then ts_runtime_unary(n, path)
-      else if n is ts_binary then ts_runtime_binary(n, path)
-      else if n is ts_index then ts_runtime_index(n, path)
-      else null
+      n is ts_identifier then ts_runtime_compute(ts_runtime_binding_init(n), path)
+      n is ts_template && n not ts_tagged_template.quasi then ts_runtime_template(n, path)
+      n is ts_sequence then ts_runtime_compute(last(n.expression.nodes), path)
+      n is ts_assignment && n.operator == "=" then ts_runtime_compute(n.right.node, path)
+      n is ts_unary then ts_runtime_unary(n, path)
+      n is ts_binary then ts_runtime_binary(n, path)
+      n is ts_index then ts_runtime_index(n, path)
+      else then null
+    }
   }
 fn ts_runtime_constant(n) = ts_runtime_compute(n, [])
 fn ts_runtime_string(n) = {
@@ -121,72 +129,98 @@ fn ts_constant_boolean_call(n) = {
   value argument: first(n.argument.nodes)
   value ts_constant_call(n, ["Boolean"]) && (argument == null || argument.constant_truthiness == true)
 }
-fn ts_constant_answer(n, boolean) = if n == null then false
-  else if boolean then n.constant_truthiness == true else n.ts_constant_value == true
+fn ts_constant_answer(n, boolean) = when {
+  n == null then false
+  boolean then n.constant_truthiness == true
+  else then n.ts_constant_value == true
+}
 fn ts_constant_quasi(q) = {
   value cooked: ts_runtime_quasi(q)
   value type_of(cooked) != "str" || cooked != ""
 }
-fn ts_constant_compute(n, boolean) =
-  if n is (ts_constant_literal, ts_arrow, ts_function, ts_class, ts_object, ts_hole) then true
-  else if n is ts_parenthesized then ts_constant_answer(n.expression.node, boolean)
-  else if n is ts_template then boolean && any(n.quasi.nodes, quasi => ts_constant_quasi(quasi))
+fn ts_constant_compute(n, boolean) = when {
+  n is (ts_constant_literal, ts_arrow, ts_function, ts_class, ts_object, ts_hole) then true
+  n is ts_parenthesized then ts_constant_answer(n.expression.node, boolean)
+  n is ts_template then boolean && any(n.quasi.nodes, quasi => ts_constant_quasi(quasi))
     || all(n.expression.nodes, expression => ts_constant_answer(expression, false))
-  else if n is ts_array then boolean || all(n.element.nodes, element => ts_constant_answer(element, false))
-  else if n is ts_unary then n.operator == "void" || n.operator == "typeof" && boolean
+  n is ts_array then boolean || all(n.element.nodes, element => ts_constant_answer(element, false))
+  n is ts_unary then n.operator == "void" || n.operator == "typeof" && boolean
     || ts_constant_answer(n.argument.node, n.operator == "!")
-  else if n is ts_binary then n.operator != "in" && ts_constant_answer(n.left.node, false) && ts_constant_answer(n.right.node, false)
-  else if n is ts_logical then {
+  n is ts_binary then n.operator != "in" && ts_constant_answer(n.left.node, false) && ts_constant_answer(n.right.node, false)
+  n is ts_logical then {
     value left: ts_constant_answer(n.left.node, boolean)
     value right: ts_constant_answer(n.right.node, boolean)
     value left && (right || ts_constant_identity(n.left.node, n.operator))
       || boolean && right && ts_constant_identity(n.right.node, n.operator)
   }
-  else if n is ts_new then boolean
-  else if n is ts_assignment then n.operator == "=" && ts_constant_answer(n.right.node, boolean)
+  n is ts_new then boolean
+  n is ts_assignment then n.operator == "=" && ts_constant_answer(n.right.node, boolean)
     || boolean && contains(["||=", "&&="], n.operator) && {
       value operator: slice(n.operator, 0, 2)
       value ts_constant_identity(n.right.node, operator)
     }
-  else if n is ts_sequence then { value tail: last(n.expression.nodes); value ts_constant_answer(tail, boolean) }
-  else if n is ts_spread then ts_constant_answer(n.argument.node, boolean)
-  else if n is ts_call then ts_constant_boolean_call(n)
-  else ts_constant_global(n, "undefined")
+  n is ts_sequence then { value tail: last(n.expression.nodes); value ts_constant_answer(tail, boolean) }
+  n is ts_spread then ts_constant_answer(n.argument.node, boolean)
+  n is ts_call then ts_constant_boolean_call(n)
+  else then ts_constant_global(n, "undefined")
+}
 
-fn ts_constant_literal_truth(n) =
-  if n is ts_boolean then n.text == "true"
-  else if n is ts_null then false
-  else if n is ts_string then len(n.text) > 2
-  else if n is ts_regex then true
-  else if n is ts_number then { value number: js_number(n.text); value number != null && number != 0 && number == number }
-  else if n is ts_bigint then { value body: re_replace(n.text, /n+$/, ""); value number: js_number(body); value number != null && number != 0 }
-  else null
+fn ts_constant_literal_truth(n) = when {
+  n is ts_boolean then n.text == "true"
+  n is ts_null then false
+  n is ts_string then len(n.text) > 2
+  n is ts_regex then true
+  n is ts_number then { value number: js_number(n.text); value number != null && number != 0 && number == number }
+  n is ts_bigint then { value body: re_replace(n.text, /n+$/, ""); value number: js_number(body); value number != null && number != 0 }
+  else then null
+}
 fn ts_constant_identity(n, operator) = {
-  value bare: unparenthesised_node(n)
-  value truth: ts_constant_literal_truth(bare)
-  value if bare is ts_constant_literal then operator == "||" && truth == true || operator == "&&" && truth == false
-    else if bare is ts_unary then operator == "&&" && bare.operator == "void"
-    else if bare is ts_logical then bare.operator == operator
-      && (ts_constant_identity(bare.left.node, operator) || ts_constant_identity(bare.right.node, operator))
-    else if bare is ts_assignment then contains(["||=", "&&="], bare.operator) && {
-      value assignment: slice(bare.operator, 0, 2)
-      value assignment == operator && ts_constant_identity(bare.right.node, operator)
-    } else false
+  value n
+  walk (current) {
+    value bare: unparenthesised_node(current)
+    value when {
+      bare is ts_logical && bare.operator == operator then [bare.left.node, bare.right.node]
+      bare is ts_assignment && contains(["||=", "&&="], bare.operator)
+        && slice(bare.operator, 0, 2) == operator then bare.right.node
+      else then null
+    }
+  }
+  any (current) {
+    value bare: unparenthesised_node(current)
+    value truth: ts_constant_literal_truth(bare)
+    value if bare is ts_constant_literal then operator == "||" && truth == true || operator == "&&" && truth == false
+      else bare is ts_unary && operator == "&&" && bare.operator == "void"
+  }
 }
 fn ts_constant_null(n) = {
   value bare: unparenthesised_node(n)
   value bare is ts_null || ts_constant_global(bare, "undefined") || bare is ts_unary && bare.operator == "void"
 }
 fn ts_constant_nullish(n, non_nullish) = {
-  value bare: unparenthesised_node(n)
-  value if bare == null || non_nullish && ts_constant_null(bare) then false
-    else if bare is (ts_constant_literal, ts_object, ts_array, ts_arrow, ts_function, ts_class, ts_new, ts_template, ts_update, ts_binary, ts_unary) then true
-    else if bare is ts_call then ts_constant_call(bare, ["Boolean", "String", "Number", "Symbol", "BigInt"])
-    else if bare is ts_logical then bare.operator == "??" && ts_constant_nullish(bare.right.node, true)
-    else if bare is ts_assignment then if bare.operator == "=" then ts_constant_nullish(bare.right.node, non_nullish)
-      else !contains(["||=", "&&=", "??="], bare.operator)
-    else if bare is ts_sequence then { value tail: last(bare.expression.nodes); value ts_constant_nullish(tail, non_nullish) }
-    else ts_constant_global(bare, "undefined")
+  value terminal: {
+    value {node: unparenthesised_node(n), non_nullish: non_nullish}
+    walk (current) {
+      value bare: current.node
+      value next: when {
+        bare == null || current.non_nullish && ts_constant_null(bare) then null
+        bare is ts_logical && bare.operator == "??" || bare is ts_assignment && bare.operator == "=" then bare.right.node
+        bare is ts_sequence then last(bare.expression.nodes)
+        else then null
+      }
+      value if next == null then null else {
+        node: unparenthesised_node(next), non_nullish: current.non_nullish || bare is ts_logical,
+      }
+    }
+    last
+  }
+  value bare: terminal.node
+  value when {
+    bare == null || terminal.non_nullish && ts_constant_null(bare) then false
+    bare is (ts_constant_literal, ts_object, ts_array, ts_arrow, ts_function, ts_class, ts_new, ts_template, ts_update, ts_binary, ts_unary) then true
+    bare is ts_call then ts_constant_call(bare, ["Boolean", "String", "Number", "Symbol", "BigInt"])
+    bare is ts_assignment then !contains(["=", "||=", "&&=", "??="], bare.operator)
+    else then ts_constant_global(bare, "undefined")
+  }
 }
 fn ts_constant_static_boolean(n) = {
   value bare: unparenthesised_node(n)
@@ -194,37 +228,59 @@ fn ts_constant_static_boolean(n) = {
     || bare is ts_unary && bare.operator == "!" && ts_constant_answer(bare.argument.node, true)
 }
 fn ts_constant_boolean_comparison(n, strict) = {
-  value bare: unparenthesised_node(n)
-  value if bare == null then false
-    else if bare is (ts_object, ts_class, ts_arrow, ts_function) then true
-    else if bare is ts_array then strict || count(bare.element.nodes) == 0
+  value bare: {
+    value unparenthesised_node(n)
+    walk (current) when {
+      current is ts_assignment && current.operator == "=" then unparenthesised_node(current.right.node)
+      current is ts_sequence then unparenthesised_node(last(current.expression.nodes))
+      else then null
+    }
+    last
+  }
+  value when {
+    bare == null then false
+    bare is (ts_object, ts_class, ts_arrow, ts_function) then true
+    bare is ts_array then strict || count(bare.element.nodes) == 0
       || { value bare.element.nodes; filter (element) element not (ts_hole, ts_spread); count } > 1
-    else if bare is ts_unary then
-      if bare.operator == "!" then ts_constant_answer(bare.argument.node, true)
-      else if strict then bare.operator != "delete" else contains(["void", "typeof"], bare.operator)
-    else if bare is ts_binary then strict && contains(["+", "-", "*", "/", "%", "|", "^", "&", "**", "<<", ">>", ">>>"], bare.operator)
-    else if bare is (ts_new, ts_update) then strict
-    else if bare is ts_template then strict || count(bare.expression.nodes) == 0
-    else if bare is ts_call then ts_constant_boolean_call(bare)
+    bare is ts_unary then when {
+      bare.operator == "!" then ts_constant_answer(bare.argument.node, true)
+      strict then bare.operator != "delete"
+      else then contains(["void", "typeof"], bare.operator)
+    }
+    bare is ts_binary then strict && contains(["+", "-", "*", "/", "%", "|", "^", "&", "**", "<<", ">>", ">>>"], bare.operator)
+    bare is (ts_new, ts_update) then strict
+    bare is ts_template then strict || count(bare.expression.nodes) == 0
+    bare is ts_call then ts_constant_boolean_call(bare)
       || strict && ts_constant_call(bare, ["String", "Number", "BigInt", "Symbol"])
-    else if bare is ts_assignment then if bare.operator == "=" then ts_constant_boolean_comparison(bare.right.node, strict)
-      else strict && !contains(["||=", "&&=", "??="], bare.operator)
-    else if bare is ts_sequence then { value tail: last(bare.expression.nodes); value ts_constant_boolean_comparison(tail, strict) }
-    else ts_constant_global(bare, "undefined") || bare is ts_constant_literal
+    bare is ts_assignment then strict && !contains(["=", "||=", "&&=", "??="], bare.operator)
+    else then ts_constant_global(bare, "undefined") || bare is ts_constant_literal
+  }
 }
 fn ts_constant_new(n) = {
-  value bare: unparenthesised_node(n)
-  value if bare is (ts_object, ts_array, ts_arrow, ts_function, ts_class, ts_regex) then true
-    else if bare is ts_new then {
-      value callee: unparenthesised_node(bare.callee.node)
-      value program: ts_module_program(bare)
-      value callee is ts_identifier && ts_global_builtin_setting(program, callee.text) == "readonly"
-        && ts_constant_global(callee, callee.text)
+  value branches: {
+    value unparenthesised_node(n)
+    walk (current) when {
+      current is ts_assignment && current.operator == "=" then unparenthesised_node(current.right.node)
+      current is ts_sequence then unparenthesised_node(last(current.expression.nodes))
+      current is ts_conditional then map([current.consequent.node, current.alternate.node], branch => unparenthesised_node(branch))
+      else then null
     }
-    else if bare is ts_assignment then bare.operator == "=" && ts_constant_new(bare.right.node)
-    else if bare is ts_sequence then { value tail: last(bare.expression.nodes); value ts_constant_new(tail) }
-    else if bare is ts_conditional then ts_constant_new(bare.consequent.node) && ts_constant_new(bare.alternate.node)
-    else false
+  }
+  value count(branches) > 0 && all(branches, bare => {
+    value when {
+      bare is (ts_object, ts_array, ts_arrow, ts_function, ts_class, ts_regex) then true
+      bare is ts_new then {
+        value callee: unparenthesised_node(bare.callee.node)
+        value program: ts_module_program(bare)
+        value callee is ts_identifier && ts_global_builtin_setting(program, callee.text) == "readonly"
+          && ts_constant_global(callee, callee.text)
+      }
+      bare is ts_assignment then bare.operator == "=" && bare.right != null
+      bare is ts_sequence then count(bare.expression.nodes) > 0
+      bare is ts_conditional then bare.consequent != null && bare.alternate != null
+      else then false
+    }
+  })
 }
 fn ts_constant_operand(a, b, operator) = contains(["==", "!=", "===", "!=="], operator)
   && (ts_constant_null(a) && ts_constant_nullish(b, false)
@@ -246,17 +302,20 @@ fn ts_constant_compare(n) = {
   value left: n.left.node
   value right: n.right.node
   value operator: n.operator
-  value if n is ts_logical then
-    if contains(["&&", "||"], operator) && ts_constant_answer(left, true) then ts_constant_report("constantShortCircuit", left, "truthiness")
-    else if operator == "??" && ts_constant_nullish(left, false) then ts_constant_report("constantShortCircuit", left, "nullishness")
-    else null
-  else if n not ts_binary then null
-  else if ts_constant_operand(left, right, operator) then ts_constant_report("constantBinaryOperand", right, "left")
-  else if ts_constant_operand(right, left, operator) then ts_constant_report("constantBinaryOperand", left, "right")
-  else if contains(["===", "!=="], operator) && ts_constant_new(left) then ts_constant_report("alwaysNew", left, "")
-  else if contains(["===", "!=="], operator) && ts_constant_new(right) then ts_constant_report("alwaysNew", right, "")
-  else if contains(["==", "!="], operator) && ts_constant_new(left) && ts_constant_new(right) then ts_constant_report("bothAlwaysNew", left, "")
-  else null
+  value when {
+    n is ts_logical then when {
+      contains(["&&", "||"], operator) && ts_constant_answer(left, true) then ts_constant_report("constantShortCircuit", left, "truthiness")
+      operator == "??" && ts_constant_nullish(left, false) then ts_constant_report("constantShortCircuit", left, "nullishness")
+      else then null
+    }
+    n not ts_binary then null
+    ts_constant_operand(left, right, operator) then ts_constant_report("constantBinaryOperand", right, "left")
+    ts_constant_operand(right, left, operator) then ts_constant_report("constantBinaryOperand", left, "right")
+    contains(["===", "!=="], operator) && ts_constant_new(left) then ts_constant_report("alwaysNew", left, "")
+    contains(["===", "!=="], operator) && ts_constant_new(right) then ts_constant_report("alwaysNew", right, "")
+    contains(["==", "!="], operator) && ts_constant_new(left) && ts_constant_new(right) then ts_constant_report("bothAlwaysNew", left, "")
+    else then null
+  }
 }
 fn ts_constant_relational(n) = n is ts_binary && contains(["<", "<=", ">", ">="], n.operator)
   && ts_constant_static_literal(n.left.node) && ts_constant_static_literal(n.right.node)

@@ -343,23 +343,25 @@ in ts_return rule no-useless-return {
     byte_slice(owner.text, 0, offset - owner.offset) byte_slice(owner.text, end_offset - owner.offset)
 }
 
-fn scoping_return_void(subject, asynchronous, seen) = {
-  value arms: value_parts(subject)
-  value arms != null && any(arms, arm => {
+fn scoping_return_void(subject, asynchronous) = {
+  value value_parts(subject)
+  walk (arm) {
     value part: if count(arm.parts) == 1 then first(arm.parts) else null
-    value part != null && !contains(seen, arm.handle)
-      && (contains(part.traits, "void")
-        || asynchronous && part.carrier_known && part.carrier.description.kind == "named"
-          && contains(["Promise", "PromiseLike"], part.carrier.description.name)
-          && count(part.carrier.arguments) > 0
-          && scoping_return_void(first(part.carrier.arguments), true, seen [arm.handle]))
-  })
+    value if part != null && !contains(part.traits, "void")
+      && asynchronous && part.carrier_known && part.carrier.description.kind == "named"
+      && contains(["Promise", "PromiseLike"], part.carrier.description.name)
+      && count(part.carrier.arguments) > 0 then value_parts(first(part.carrier.arguments)) else null
+  }
+  any (arm) {
+    value part: if count(arm.parts) == 1 then first(arm.parts) else null
+    value part != null && contains(part.traits, "void")
+  }
 }
 in ts_program let scoping_return_void_annotation false
 in ts_function, ts_arrow, ts_method let scoping_return_void_annotation
   return_type != null && {
     value asynchronous: contains([] modifier, "async")
-    value scoping_return_void(return_type.node, asynchronous, [])
+    value scoping_return_void(return_type.node, asynchronous)
   }
 in ts_program, ts_function, ts_arrow, ts_method let scoping_return_entry if is ts_program then node else body.node
 in ts_node let scoping_return_syntax count(descendants(ts_return)) > 0

@@ -1,17 +1,28 @@
 # Type-aware arithmetic policy; syntax and types remain native facts.
 define {
 
-fn arithmetic_type_name(t) =
-  if contains(["string", "number", "bigint", "boolean"], t.kind) then t.kind
-  else if t.kind == "union" then {
+fn arithmetic_type_name(t) = when {
+  contains(["string", "number", "bigint", "boolean"], t.kind) then t.kind
+  t.kind == "union" then {
     value t.parts
     map (part) arithmetic_type_name(part)
     unique
     join " | "
   }
-  else { value t.aliases; first; nonempty } ?? { value t.names; first; nonempty } ?? if t.kind == "unresolved" then "unknown" else t.kind
+  else then { value t.aliases; first; nonempty } ?? { value t.names; first; nonempty } ?? if t.kind == "unresolved" then "unknown" else t.kind
+}
 
-fn arithmetic_union_parts(t) = if t.kind == "union" then { value t.parts; fold ([]) (parts, part) parts arithmetic_union_parts(part) } else [t]
+fn arithmetic_union_parts(t) = {
+  value {part: t, path: ""}
+  walk (item) if item.part.kind == "union" then {
+    value parts: item.part.parts
+    value width: len(str(len(parts)))
+    value map(parts, (part, index) => {part: part, path: item.path pad_start(str(index), width, "0")})
+  } else []
+  filter (item) item.part.kind != "union"
+  sort_by (item) item.path
+  map (item) item.part
+}
 fn arithmetic_has_type(t, kinds) = { value t; arithmetic_union_parts; any (part) contains(kinds, part.kind) }
 fn arithmetic_object_type(t) = t != null && {
   value t
@@ -39,11 +50,13 @@ fn arithmetic_operand_errors(subject, t, other, options) =
     then errors [{ node: subject, type: arithmetic_type_name(part) }] else errors
   }
 
-fn arithmetic_pair_error(left, right, options) =
-  if !options.allowNumberAndString && (arithmetic_has_type(left, ["string"]) && arithmetic_has_type(right, ["number", "bigint"])
+fn arithmetic_pair_error(left, right, options) = when {
+  !options.allowNumberAndString && (arithmetic_has_type(left, ["string"]) && arithmetic_has_type(right, ["number", "bigint"])
     || arithmetic_has_type(right, ["string"]) && arithmetic_has_type(left, ["number", "bigint"])) then "mismatched"
-  else if arithmetic_has_type(left, ["number"]) && arithmetic_has_type(right, ["bigint"])
-    || arithmetic_has_type(right, ["number"]) && arithmetic_has_type(left, ["bigint"]) then "numeric" else null
+  arithmetic_has_type(left, ["number"]) && arithmetic_has_type(right, ["bigint"])
+    || arithmetic_has_type(right, ["number"]) && arithmetic_has_type(left, ["bigint"]) then "numeric"
+  else then null
+}
 
 in ts_node let arithmetic_type type_structure([])
 
@@ -64,11 +77,14 @@ in ts_binary, ts_assignment rule restrict-plus-operands {
   let string_types arithmetic_string_like(settings)
   let string_like (if len(string_types) == 0 then "string" else "string, allowing a string + "
     (if len(string_types) == 1 then first(string_types) else "any of: " join(string_types, ", ")))
-  each finding in errors (if pair_error != null then [{ node: node, pair: pair_error }] else [])
-  report at finding.node
-  warn if finding.pair == "numeric" then "Numeric '+' operations must either be both bigints or both numbers. Got `{arithmetic_type_name(left_type)}` + `{arithmetic_type_name(right_type)}`."
-    else if finding.pair == "mismatched" then "Operands of '+' operations must be a number or {string_like}. Got `{arithmetic_type_name(left_type)}` + `{arithmetic_type_name(right_type)}`."
-    else "Invalid operand for a '+' operation. Operands must each be a number or {string_like}. Got `{finding.type}`."
+  each finding in errors (if pair_error != null then [{ node: node, pair: pair_error }] else []) {
+    report at finding.node
+    warn when {
+      finding.pair == "numeric" then "Numeric '+' operations must either be both bigints or both numbers. Got `{arithmetic_type_name(left_type)}` + `{arithmetic_type_name(right_type)}`."
+      finding.pair == "mismatched" then "Operands of '+' operations must be a number or {string_like}. Got `{arithmetic_type_name(left_type)}` + `{arithmetic_type_name(right_type)}`."
+      else then "Invalid operand for a '+' operation. Operands must each be a number or {string_like}. Got `{finding.type}`."
+    }
+  }
 }
 
 }

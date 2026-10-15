@@ -1,8 +1,15 @@
 define {
 fn qualifier_receiver(n) = if n is ts_qualified_name then n.left.node else n.object.node
 fn qualifier_key(n) = if n is ts_qualified_name then n.right.node else n.property.node
-fn qualifier_entity(n) = n is ts_identifier
-  || (n is (ts_member, ts_qualified_name) && n.optional == null && qualifier_entity(qualifier_receiver(n)))
+fn qualifier_entity(n) = {
+  value terminal: {
+    value n
+    walk (current) if current is (ts_member, ts_qualified_name) && current.optional == null
+      then qualifier_receiver(current) else null
+    last
+  }
+  value terminal is ts_identifier
+}
 fn qualifier_owner_path(n, names, index) = {
   value name: { value names; drop index; first }
   value if index == 0 then {

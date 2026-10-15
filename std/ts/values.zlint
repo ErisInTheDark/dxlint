@@ -29,16 +29,17 @@ in ts_namespace {
   when !ts_value_namespace_runtime { unwraps unknown }
 }
 
-fn ts_value_key(key) = if key is ts_computed_key then {
-    value inner: key.expression.node
-    value if inner is (ts_string, ts_number, ts_bigint, ts_boolean, ts_null)
-      || inner is ts_template && count(inner.expression.nodes) == 0 then ts_value_key(inner) else null
-  }
-  else if key is ts_string then js_string(key.text)
-  else if key is ts_template && count(key.expression.nodes) == 0 then js_string_parts(key.text).text
-  else if key is ts_number then "" key.ts_value_number
-  else if key is ts_bigint then js_bigint(key.text)
-  else { value "\"" key.text "\""; js_string }
+fn ts_value_key(key) = {
+  value literal: if key is ts_computed_key then key.expression.node else key
+  value allowed: key not ts_computed_key || literal is (ts_string, ts_number, ts_bigint, ts_boolean, ts_null)
+    || literal is ts_template && count(literal.expression.nodes) == 0
+  value if !allowed then null
+    else if literal is ts_string then js_string(literal.text)
+    else if literal is ts_template && count(literal.expression.nodes) == 0 then js_string_parts(literal.text).text
+    else if literal is ts_number then "" literal.ts_value_number
+    else if literal is ts_bigint then js_bigint(literal.text)
+    else { value "\"" literal.text "\""; js_string }
+}
 fn ts_value_static(modifiers) = any(modifiers, modifier => modifier.text == "static")
 fn ts_value_negated_bigint(text) = {
   value magnitude: js_bigint(text)
@@ -129,16 +130,16 @@ fn ts_value_const_context(n) = {
   value outer: last(chain).parent.node
   value outer is (ts_as, ts_type_assertion) && outer.type.text == "const"
 }
-fn ts_value_destructuring_receiver(n) = if n is ts_parenthesized.expression then ts_value_destructuring_receiver(n.parent.node)
-  else if n is (ts_declarator.init, ts_parameter.init) then n.parent.name.node
-  else if n is (ts_assignment.right, ts_assignment_pattern.right) then n.parent.left.node
-  else if n is ts_array.element then {
-    value receiver: ts_value_destructuring_receiver(n.parent.node)
-    value items: n.parent.element.nodes
-    value position: index_of(items, n)
-    value end: position + 1
-    value { value receiver.element.nodes; slice position end; first }
-  } else null
+fn ts_value_destructuring_receiver(n) = {
+  value path: walk(n, current => if current is (ts_parenthesized.expression, ts_array.element) then current.parent.node else null)
+  value terminal: last(path)
+  value receiver: if terminal is (ts_declarator.init, ts_parameter.init) then terminal.parent.name.node
+    else if terminal is (ts_assignment.right, ts_assignment_pattern.right) then terminal.parent.left.node else null
+  value fold(reverse(path), receiver, (target, current) => if current is ts_array.element then {
+    value position: index_of(current.parent.element.nodes, current)
+    value { value target.element.nodes; slice position (position + 1); first }
+  } else target)
+}
 fn ts_value_tuple_context(n) = {
   value receiver: ts_value_destructuring_receiver(n)
   value n.flow_destructuring_target || receiver is (ts_array, ts_array_pattern)
@@ -155,17 +156,16 @@ fn ts_value_literal_branch(n, part) = {
   value part != null && branch != null && part.identity_known && branch.identity_known
     && part.identity != null && part.identity == branch.identity
 }
-fn ts_value_fresh_literal(n, part) = {
-  value bare: unparenthesised_node(n)
-  value if bare is (ts_number, ts_string, ts_boolean, ts_bigint) then true
-  else if bare is ts_unary && (bare.operator == "-" || bare.operator == "+") then ts_value_fresh_literal(bare.argument.node, part)
+fn ts_value_fresh_step(bare, part) = {
+  value if bare is (ts_number, ts_string, ts_boolean, ts_bigint) then {valid: true, children: []}
+  else if bare is ts_unary && (bare.operator == "-" || bare.operator == "+") then {valid: true, children: [bare.argument.node]}
   else if bare is ts_identifier then {
     value declaration: bare.scope_declaration.parent.node
-    value declaration is ts_declarator && declaration.type == null && declaration.parent.kind == "const"
-      && ts_value_fresh_literal(declaration.init.node, part)
+    value valid: declaration is ts_declarator && declaration.type == null && declaration.parent.kind == "const"
+    value {valid: valid, children: if valid then [declaration.init.node] else []}
   } else if bare is ts_conditional then {
     value branches: filter([bare.consequent.node, bare.alternate.node], branch => ts_value_literal_branch(branch, part))
-    value len(branches) > 0 && all(branches, branch => ts_value_fresh_literal(branch, part))
+    value {valid: len(branches) > 0, children: branches}
   } else if bare is ts_logical then {
     value chosen: if bare.operator == "||" && bare.left always falsy then bare.right.node
       else if bare.operator == "||" && bare.left always truthy then bare.left.node
@@ -173,14 +173,21 @@ fn ts_value_fresh_literal(n, part) = {
       else if bare.operator == "&&" && bare.left always truthy then bare.right.node
       else if bare.operator == "??" && bare.left always nullable then bare.right.node
       else if bare.operator == "??" && !(bare.left could nullable) then bare.left.node else null
-    value if chosen != null then ts_value_fresh_literal(chosen, part) else {
+    value if chosen != null then {valid: true, children: [chosen]} else {
       value branches: filter([bare.left.node, bare.right.node], branch => ts_value_literal_branch(branch, part))
-      value len(branches) > 0 && all(branches, branch => ts_value_fresh_literal(branch, part))
+      value {valid: len(branches) > 0, children: branches}
     }
-  } else if bare is ts_sequence then {
-    value tail: last(bare.expression.nodes)
-    value ts_value_fresh_literal(tail, part)
-  } else if bare is ts_satisfies then ts_value_fresh_literal(bare.expression.node, part) else false
+  } else if bare is ts_sequence then {valid: true, children: [last(bare.expression.nodes)]}
+  else if bare is ts_satisfies then {valid: true, children: [bare.expression.node]}
+  else {valid: false, children: []}
+}
+fn ts_value_fresh_literal(n, part) = {
+  value {node: unparenthesised_node(n), seen: []}
+  walk (entry) if contains(entry.seen, entry.node) then [] else {
+    value children: ts_value_fresh_step(entry.node, part).children
+    value map(children, child => {node: unparenthesised_node(child), seen: entry.seen [entry.node]})
+  }
+  all (entry) !contains(entry.seen, entry.node) && ts_value_fresh_step(entry.node, part).valid
 }
 fn ts_value_contextual_literal(n, part) = {
   value category: find(["string", "number", "boolean", "bigint"], trait => contains(part.traits, trait))
@@ -214,10 +221,14 @@ fn ts_value_then_headers(signatures) = {
 }
 fn ts_value_then_contract(member) = if member == null then { known: true, thenable: false }
   else { value signatures: call_parameters(member); value ts_value_then_headers(signatures) }
-fn ts_value_nonthenable(n) = if n always nonthenable then true else {
+fn ts_value_nonthenable(n) = {
   value parts: value_parts(n)
-  value shape: ts_value_then_headers(member_call_parameters(n, "then"))
-  value if parts == null || len(parts) == 0 || !shape.known then null else !shape.thenable
+  value certain: parts != null && count(parts) > 0 && all(parts, arm =>
+    any(arm.parts, part => contains(part.traits, "nonthenable") && !contains(part.uncertain_traits, "nonthenable")))
+  value if certain then true else {
+    value shape: ts_value_then_headers(member_call_parameters(n, "then"))
+    value if parts == null || len(parts) == 0 || !shape.known then null else !shape.thenable
+  }
 }
 fn ts_value_intersection_parts(types) = {
   value never: filter(types, item => { value parts: value_constituents(item); value parts != null && len(parts) == 0 })
@@ -298,7 +309,7 @@ in ts_for_of {
   let ts_value_iteration_arguments []
   let ts_value_iteration_string right always string
   when modifier == null && !ts_value_iteration_string {
-    calls (from right at (from instance "Symbol" in value at "iterator")) with ts_value_iteration_arguments
+    calls right.[(from instance "Symbol" in value at "iterator")] with ts_value_iteration_arguments
     unwraps result
   }
 }
@@ -314,8 +325,8 @@ in ts_declarator {
   when ts_value_iteration_binding {
     when parent.parent.ts_value_iteration_string { unwraps type ?? trait string, nonthenable }
     when !parent.parent.ts_value_iteration_string {
-      calls (from parent.parent at "next") with ts_value_iteration_arguments
-      unwraps type ?? (from result at "value")
+      calls parent.parent.["next"] with ts_value_iteration_arguments
+      unwraps type ?? result.["value"]
     }
   }
   when !ts_value_iteration_binding && !ts_value_unique_symbol && name is ts_identifier && parent.kind == "const" { unwraps type ?? init }
@@ -369,23 +380,23 @@ in ts_as, ts_type_assertion {
 }
 in ts_non_null {
   when expression always any { unwraps expression }
-  when !(expression always any) { unwraps excludes nullable from expression }
+  when !(expression always any) { unwraps expression \ nullable }
 }
 in ts_computed_key { unwraps expression }
 in ts_spread { unwraps argument }
 in ts_assignment {
   when operator == "=" { unwraps right }
-  when operator == "&&=" { unwraps (excludes truthy from left) | right }
-  when operator == "||=" { unwraps (excludes falsy from left) | right }
-  when operator == "??=" { unwraps (excludes nullable from left) | right }
+  when operator == "&&=" { unwraps (left \ truthy) | right }
+  when operator == "||=" { unwraps (left \ falsy) | right }
+  when operator == "??=" { unwraps (left \ nullable) | right }
   when operator == "+=" { unwraps left.widened | right.widened }
   when !contains(["=", "&&=", "||=", "??=", "+="], operator) { unwraps right.widened }
 }
 in ts_conditional { unwraps consequent | alternate }
 in ts_logical {
-  when operator == "&&" { unwraps (excludes truthy from left) | right }
-  when operator == "||" { unwraps (excludes falsy from left) | right }
-  when operator == "??" { unwraps (excludes nullable from left) | right }
+  when operator == "&&" { unwraps (left \ truthy) | right }
+  when operator == "||" { unwraps (left \ falsy) | right }
+  when operator == "??" { unwraps (left \ nullable) | right }
 }
 in ts_sequence {
   let ts_value_last_expression last(expression.nodes)
@@ -543,7 +554,7 @@ in ts_member {
   when object always any { unwraps object }
   when !(object always any) {
     when in_optional_chain != true { unwraps (object \ nullable, undefined).[ts_value_member_key] }
-    when in_optional_chain == true { unwraps (from (excludes nullable, undefined from object) at ts_value_member_key) | trait undefined, nullable, falsy, nonthenable }
+    when in_optional_chain == true { unwraps (object \ nullable, undefined).[ts_value_member_key] | trait undefined, nullable, falsy, nonthenable }
   }
 }
 fn ts_value_unchecked_index(n) = {
@@ -557,10 +568,10 @@ fn ts_value_unchecked_index(n) = {
 }
 in ts_index {
   let ts_value_index_nullish optional != null
-    || (if compiler_options.noUncheckedIndexedAccess == true then ts_value_unchecked_index(node) else false)
+    || (if ts_compiler_option(node, "noUncheckedIndexedAccess") == true then ts_value_unchecked_index(node) else false)
   when object always any { unwraps object }
   when !(object always any) {
-    when in_optional_chain == true { unwraps (from (excludes nullable, undefined from object) at index) | trait undefined, nullable, falsy, nonthenable }
+    when in_optional_chain == true { unwraps (object \ nullable, undefined).[index] | trait undefined, nullable, falsy, nonthenable }
     when in_optional_chain != true {
       when !ts_value_index_nullish { unwraps (object \ nullable, undefined).[index] }
       when ts_value_index_nullish { unwraps (object \ nullable, undefined).[index] | trait undefined, nullable, falsy, nonthenable }
@@ -591,7 +602,7 @@ in ts_class {
   }
   when extends != null {
     members statics inherits extends
-    members members inherits (from extends at "prototype")
+    members members inherits extends.["prototype"]
   }
 }
 in ts_method, ts_class_property {
@@ -714,7 +725,7 @@ in ts_tuple_member {
   optional when optional != null
   unwraps type
 }
-in ts_indexed_access { unwraps from object at index }
+in ts_indexed_access { unwraps object.[index] }
 fn ts_value_conditional_owner(n) = find(walk(n, item => item.parent.node), item => item is ts_conditional_type)
 in ts_conditional_type {
   let ts_value_conditional_infers {
@@ -725,7 +736,7 @@ in ts_conditional_type {
   }
   generics ts_value_conditional_infers
   let ts_value_conditional_formal {
-    value bare: last(walk(check.node, item => if item is ts_parenthesized_type then item.type.node else null))
+    value bare: ts_value_bare_type(check.node)
     value if bare is ts_type_reference && count(bare.type_argument.nodes) == 0 && bare.name is ts_identifier
       then find(bare.name.definition.nodes, item => item is ts_type_parameter) else null
   }
@@ -753,7 +764,26 @@ in ts_template_type {
   carries type as { kind: "template" }
 }
 in ts_infer { unwraps type_parameter }
-in ts_import_type, ts_mapped_type { unwraps unknown }
+fn ts_value_bare_type(n) = last(walk(n, item => if item is ts_parenthesized_type then item.type.node else null))
+in ts_mapped_type {
+  let ts_value_mapped_constraint ts_value_bare_type(type_parameter.constraint.node)
+  let ts_value_mapped_template ts_value_bare_type(type.node)
+  let ts_value_mapped_key ts_value_bare_type(ts_value_mapped_template.index.node)
+  let ts_value_mapped_source {
+    value source: ts_value_bare_type(ts_value_mapped_constraint.type.node)
+    value object: ts_value_bare_type(ts_value_mapped_template.object.node)
+    value if name == null && ts_value_mapped_constraint is ts_type_operator
+      && ts_value_mapped_constraint.operator == "keyof" && ts_value_mapped_template is ts_indexed_access
+      && source != null && source.token_texts == object.token_texts
+      && ts_value_mapped_key is ts_type_reference && count(ts_value_mapped_key.type_argument.nodes) == 0
+      && ts_value_mapped_key.name is ts_identifier
+      && contains(ts_value_mapped_key.name.definition.nodes, type_parameter.node)
+      then source else null
+  }
+  when ts_value_mapped_source != null { unwraps ts_value_mapped_source }
+  when ts_value_mapped_source == null { unwraps unknown }
+}
+in ts_import_type { unwraps unknown }
 fn ts_value_intrinsic_text(name, text) = if name == "Uppercase" then upper(text)
   else if name == "Lowercase" then lower(text)
   else {

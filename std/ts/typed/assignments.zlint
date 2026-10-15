@@ -16,15 +16,22 @@ fn assignment_array(parts, source) = {
   value shape.known && shape.array
 }
 fn assignment_unsafe(sender, receiver) = {
-  value direct: ts_value_trait(sender, "any")
-  value safe: ts_value_trait(receiver, "any") || ts_value_trait(receiver, "unknown")
-  value source: first(sender)
-  value target: first(receiver)
-  value if direct then receiver != null && len(receiver) > 0 && !safe
-    else sender != null && receiver != null && len(sender) == 1 && len(receiver) == 1
-      && any(source, part => any(target, other => assignment_carrier_unsafe(part, other)))
+  value {sender: sender, receiver: receiver}
+  walk (pair) if ts_value_trait(pair.sender, "any") || pair.sender == null || pair.receiver == null
+    || len(pair.sender) != 1 || len(pair.receiver) != 1 then [] else {
+      value first(pair.sender)
+      flat_map (source) {
+        value first(pair.receiver)
+        flat_map (target) {
+          value assignment_carrier_arguments(source, target)
+          map (arguments) {sender: first(arguments), receiver: last(arguments)}
+        }
+      }
+    }
+  any (pair) ts_value_trait(pair.sender, "any") && pair.receiver != null && len(pair.receiver) > 0
+    && !ts_value_trait(pair.receiver, "any") && !ts_value_trait(pair.receiver, "unknown")
 }
-fn assignment_carrier_unsafe(source, target) = {
+fn assignment_carrier_arguments(source, target) = {
   value a: source.carrier
   value b: target.carrier
   value tuples: a.description.kind == "tuple" && b.description.kind == "tuple"
@@ -33,49 +40,51 @@ fn assignment_carrier_unsafe(source, target) = {
   value same: tuples || a.description.kind == "named" && b.description.kind == "named"
     && a.file == b.file && a.node == b.node
   value arguments: zip(a.arguments ?? [], b.arguments ?? [])
-  value source.carrier_known && target.carrier_known && a != null && b != null
-    && same && len(a.arguments) == len(b.arguments)
-    && any(arguments, pair => {
-      value sender: first(pair)
-      value receiver: last(pair)
-      value assignment_unsafe(sender, receiver)
-    })
+  value if source.carrier_known && target.carrier_known && a != null && b != null
+    && same && len(a.arguments) == len(b.arguments) then arguments else []
 }
 fn assignment_finding(site, mode, parts, receiver) = {
   site: site, mode: mode, error: ts_value_category(parts) == "error",
   sender: if mode == "generic" then ts_value_print(parts) else "any",
   receiver: if mode == "generic" then ts_value_print(receiver) else null
 }
+fn assignment_destructure_step(entry, source) = {
+  value receiver: entry.receiver
+  value sender: value_at(source, entry.path)
+  value if entry.mode != null && ts_value_category(sender) != null then
+    {finding: assignment_finding(receiver, entry.mode, sender, null), children: []}
+  else {
+    value carrier: assignment_carrier(sender)
+    value array: assignment_array(sender, source)
+    value element: first(carrier.arguments)
+    value if receiver is (ts_array, ts_array_pattern) then
+      if array && ts_value_trait(element, "any") then
+        {finding: assignment_finding(receiver, "array", element, null), children: []}
+      else if carrier.description.kind == "tuple" then {
+        value items: receiver.element.nodes
+        value selected: filter(items, item => item not (ts_hole, ts_rest))
+        value {finding: null, children: map(selected, item => {
+          value position: index_of(items, item)
+          value {receiver: item, path: [] entry.path position, mode: "tuple"}
+        })}
+      } else {finding: null, children: []}
+    else if receiver is (ts_object, ts_object_pattern) && ts_value_category(sender) == null
+        && !ts_value_trait(sender, "unknown") then {
+      value properties: filter(receiver.property.nodes, property => property not ts_rest && ts_value_key(property.key.node) != null)
+      value {finding: null, children: map(properties, property => {
+        value key: ts_value_key(property.key.node)
+        value target: property.value.node ?? property.key.node
+        value {receiver: target, path: [] entry.path key, mode: "object"}
+      })}
+    } else {finding: null, children: []}
+  }
+}
 fn assignment_destructure(receiver, source, path) = {
-  value sender: value_at(source, path)
-  value carrier: assignment_carrier(sender)
-  value array: assignment_array(sender, source)
-  value element: first(carrier.arguments)
-  value if receiver is (ts_array, ts_array_pattern) then
-    if array && ts_value_trait(element, "any") then [assignment_finding(receiver, "array", element, null)]
-    else if carrier.description.kind == "tuple" then {
-      value items: receiver.element.nodes
-      value selected: filter(items, item => item not (ts_hole, ts_rest))
-      value flat_map(selected, item => {
-        value position: index_of(items, item)
-        value next: [] path position
-        value value: value_at(source, next)
-        value if ts_value_category(value) != null then [assignment_finding(item, "tuple", value, null)]
-          else assignment_destructure(item, source, next)
-      })
-    } else []
-  else if receiver is (ts_object, ts_object_pattern) && ts_value_category(sender) == null
-      && !ts_value_trait(sender, "unknown") then {
-    value properties: filter(receiver.property.nodes, property => property not ts_rest && ts_value_key(property.key.node) != null)
-    value flat_map(properties, property => {
-      value key: ts_value_key(property.key.node)
-      value next: [] path key
-      value value: value_at(source, next)
-      value target: property.value.node ?? property.key.node
-      value if ts_value_category(value) != null then [assignment_finding(target, "object", value, null)]
-        else assignment_destructure(target, source, next)
-    })
-  } else []
+  value {receiver: receiver, path: path, mode: null}
+  walk (entry) assignment_destructure_step(entry, source).children
+  map (entry) assignment_destructure_step(entry, source).finding
+  filter (finding) finding != null
+  sort_by (finding) finding.site.offset
 }
 fn assignment_empty_map(source) = {
   value bare: unparenthesised_node(source)

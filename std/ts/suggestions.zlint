@@ -155,14 +155,16 @@ in ts_sequence rule no-sequences {
 }
 
 fn suggestion_possible_error(n) = {
-  value bare: unparenthesised_node(n)
-  value if bare is (ts_identifier, ts_call, ts_new, ts_member, ts_index, ts_tagged_template, ts_yield, ts_await) then true
-    else if bare is ts_assignment && contains(["=", "&&="], bare.operator) then suggestion_possible_error(bare.right.node)
-    else if bare is ts_assignment && contains(["||=", "??="], bare.operator) then suggestion_possible_error(bare.left.node) || suggestion_possible_error(bare.right.node)
-    else if bare is ts_logical then suggestion_possible_error(bare.right.node) || bare.operator != "&&" && suggestion_possible_error(bare.left.node)
-    else if bare is ts_conditional then suggestion_possible_error(bare.consequent.node) || suggestion_possible_error(bare.alternate.node)
-    else if bare is ts_sequence then suggestion_possible_error(last(bare.expression.nodes))
-    else false
+  value n
+  walk (current) {
+    value bare: unparenthesised_node(current)
+    value if bare is ts_assignment && contains(["=", "&&="], bare.operator) then bare.right.node
+      else if bare is ts_assignment && contains(["||=", "??="], bare.operator) then [bare.left.node, bare.right.node]
+      else if bare is ts_logical then if bare.operator == "&&" then bare.right.node else [bare.right.node, bare.left.node]
+      else if bare is ts_conditional then [bare.consequent.node, bare.alternate.node]
+      else if bare is ts_sequence then last(bare.expression.nodes) else null
+  }
+  any (current) unparenthesised_node(current) is (ts_identifier, ts_call, ts_new, ts_member, ts_index, ts_tagged_template, ts_yield, ts_await)
 }
 in ts_node let could_be_error suggestion_possible_error(node)
 in ts_identifier let error_undefined_identifier identifier_name == "undefined"

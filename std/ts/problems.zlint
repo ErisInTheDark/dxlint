@@ -132,38 +132,52 @@ in ts_identifier let is_global_undefined text == "undefined" && global == "reado
 in ts_parenthesized let is_global_undefined expression.is_global_undefined == true
 
 # `a = a`, also inside destructuring and members (`a.b = a.b`).
-fn problem_self_assignments(a, b) = {
+fn problem_self_assignment_pairs(a, b) = {
   value left: unparenthesised_node(a)
   value right: unparenthesised_node(b)
   value if left == null || right == null then []
-    else if left is ts_identifier && right is ts_identifier && left.identifier_name == right.identifier_name then [right]
     else if left is (ts_array, ts_array_pattern) && right is ts_array then {
       value items: right.element.nodes
       value last: find(items, item => item is ts_spread).index ?? (count(items) - 1)
       value left.element.nodes
       zip items (target, value) { left: target, right: value }
       take_while (pair, i) i <= last && !(pair.left is (ts_spread, ts_rest) && i < count(items) - 1)
-      flat_map (pair) problem_self_assignments(pair.left, pair.right)
     }
-    else if left is (ts_spread, ts_rest) && right is ts_spread then problem_self_assignments(left.argument.node, right.argument.node)
+    else if left is (ts_spread, ts_rest) && right is ts_spread then [{left: left.argument.node, right: right.argument.node}]
     else if left is (ts_object, ts_object_pattern) && right is ts_object then {
       value spread: find_last(right.property.nodes, property => property is ts_spread)
       value items: { value right.property.nodes; slice (if spread == null then 0 else spread.index + 1) }
       value left.property.nodes
-      flat_map (target) { value items; flat_map (value) problem_self_assignments(target, value) }
+      flat_map (target) map(items, value => {left: target, right: value})
     }
     else if left is (ts_property, ts_pattern_property) && right is ts_property && (right.kind == null || right.kind == "init")
       && left.static_name != null && left.static_name == right.static_name then
-        problem_self_assignments(left.value.node ?? left.key.node, right.value.node ?? right.key.node)
-    else if left is (ts_member, ts_index) && right is (ts_member, ts_index)
-      && left.reference_key != null && left.reference_key == right.reference_key then [right]
+        [{left: left.value.node ?? left.key.node, right: right.value.node ?? right.key.node}]
     else []
+}
+fn problem_self_assignments(a, b) = {
+  value {left: a, right: b, path: ""}
+  walk (item) {
+    value pairs: problem_self_assignment_pairs(item.left, item.right)
+    value width: len(str(len(pairs)))
+    value map(pairs, (pair, index) => {left: pair.left, right: pair.right, path: item.path pad_start(str(index), width, "0")})
+  }
+  sort_by (item) item.path
+  filter (item) {
+    value left: unparenthesised_node(item.left)
+    value right: unparenthesised_node(item.right)
+    value left is ts_identifier && right is ts_identifier && left.identifier_name == right.identifier_name
+      || left is (ts_member, ts_index) && right is (ts_member, ts_index)
+        && left.reference_key != null && left.reference_key == right.reference_key
+  }
+  map (item) unparenthesised_node(item.right)
 }
 in ts_assignment rule no-self-assign {
   when contains(["=", "&&=", "||=", "??="], operator)
-  each self in map(problem_self_assignments(left.node, right.node), assigned => { node: assigned, name: re_replace(assigned.text, /\s+/, "") })
-  report at self.node
-  warn "'{self.name}' is assigned to itself."
+  each self in map(problem_self_assignments(left.node, right.node), assigned => { node: assigned, name: re_replace(assigned.text, /\s+/, "") }) {
+    report at self.node
+    warn "'{self.name}' is assigned to itself."
+  }
 }
 
 # `if (true)`, `while (1)`, `do ... while (false)`, `false ? a : b`.
@@ -353,11 +367,12 @@ fn problem_duplicate_parameters(owner) = {
 }
 in ts_function rule no-dupe-args {
   when body != null
-  each duplicate_param in problem_duplicate_parameters(node)
   let duplicate_open node_at(function_head_site(node).end)
   when duplicate_open is ts_open_paren
-  report at { start: duplicate_open.offset, end: return_type.end_offset ?? duplicate_open.paired_token.end }
-  warn "Duplicate param '{duplicate_param}'."
+  each duplicate_param in problem_duplicate_parameters(node) {
+    report at { start: duplicate_open.offset, end: return_type.end_offset ?? duplicate_open.paired_token.end }
+    warn "Duplicate param '{duplicate_param}'."
+  }
 }
 
 in ts_enum_member let enum_value init.literal_value
@@ -617,9 +632,10 @@ in ts_program let problem_unreachable_runs {
   value problem_unreachable_ranges(statements, false)
 }
 in ts_program rule no-unreachable {
-  each statement in problem_unreachable_runs
-  report at statement
-  warn "Unreachable code."
+  each statement in problem_unreachable_runs {
+    report at statement
+    warn "Unreachable code."
+  }
 }
 in ts_class rule no-unreachable:derived {
   when extends != null && problem_never_constructed(node)
@@ -627,9 +643,10 @@ in ts_class rule no-unreachable:derived {
     value modifiers: [] property.modifier
     value property is ts_class_property && !contains(modifiers, "static")
   })
-  each statement in problem_unreachable_ranges(statements, true)
-  report at statement
-  warn "Unreachable code."
+  each statement in problem_unreachable_ranges(statements, true) {
+    report at statement
+    warn "Unreachable code."
+  }
 }
 
 in ts_method, ts_function, ts_arrow rule getter-return {
@@ -731,23 +748,24 @@ fn problem_optional_operand(n) =
   else if n is ts_with then n.object.node
   else null
 fn problem_optional_short_circuits(n) = {
-  value bare: unparenthesised_node(n)
-  value if bare == null then []
-    else if bare is ts_logical then
-      if bare.operator == "&&" then problem_optional_short_circuits(bare.left.node) problem_optional_short_circuits(bare.right.node)
-      else problem_optional_short_circuits(bare.right.node)
-    else if bare is ts_sequence then problem_optional_short_circuits(last(bare.expression.nodes))
-    else if bare is ts_conditional then problem_optional_short_circuits(bare.consequent.node) problem_optional_short_circuits(bare.alternate.node)
-    else if bare is ts_await then problem_optional_short_circuits(bare.argument.node)
-    else if bare is (ts_member, ts_index, ts_call) && bare.in_optional_chain == true
-      && !(bare is (ts_member.object, ts_index.object, ts_call.callee, ts_non_null.expression)) then [bare]
-    else []
+  value unparenthesised_node(n)
+  walk (bare) {
+    value children: if bare is ts_logical then if bare.operator == "&&" then [bare.left.node, bare.right.node] else [bare.right.node]
+      else if bare is ts_sequence then [last(bare.expression.nodes)]
+      else if bare is ts_conditional then [bare.consequent.node, bare.alternate.node]
+      else if bare is ts_await then [bare.argument.node] else []
+    value map(children, child => unparenthesised_node(child))
+  }
+  filter (bare) bare is (ts_member, ts_index, ts_call) && bare.in_optional_chain == true
+    && !(bare is (ts_member.object, ts_index.object, ts_call.callee, ts_non_null.expression))
+  sort_by (bare) bare.offset
 }
 group optional_chain_user ts_assignment, ts_assignment_pattern, ts_declarator, ts_parameter, ts_class, ts_call, ts_new, ts_member, ts_index, ts_tagged_template, ts_for_of, ts_spread, ts_binary, ts_with, ts_yield
 in optional_chain_user rule no-unsafe-optional-chaining {
-  each chain in problem_optional_short_circuits(problem_optional_operand(node))
-  report at chain
-  warn "Unsafe usage of optional chaining. If it short-circuits with 'undefined' the evaluation will throw TypeError."
+  each chain in problem_optional_short_circuits(problem_optional_operand(node)) {
+    report at chain
+    warn "Unsafe usage of optional chaining. If it short-circuits with 'undefined' the evaluation will throw TypeError."
+  }
 }
 
 in ts_variable_declaration let declares_loop_variable parent is (ts_for_of, ts_for_in)
@@ -769,41 +787,46 @@ fn backreference_reason(kind) = (if kind == "nested" then "from within that grou
 fn misleading_message(kind) = (if kind == "surrogatePairWithoutUFlag" then "Unexpected surrogate pair in character class. Use 'u' flag." else if kind == "surrogatePair" then "Unexpected surrogate pair in character class." else if kind == "combiningClass" then "Unexpected combined character in character class." else if kind == "emojiModifier" then "Unexpected modified Emoji in character class." else if kind == "regionalIndicatorSymbol" then "Unexpected national flag in character class." else "Unexpected joined character sequence in character class.")
 
 in ts_regex rule no-empty-character-class {
-  each f in regexp_empty_class_findings
-  warn "Empty class."
+  each f in regexp_empty_class_findings {
+    warn "Empty class."
+  }
 }
 
 # On literals, and on plain string patterns of `RegExp(...)` (at the string).
 in regexp_site rule no-control-regex {
-  each f in regexp_control_findings
   when is ts_regex || regexp_input.written == "string"
-  report at regexp_input.offset
-  warn "Unexpected control character(s) in regular expression: {first(f.data)}."
+  each f in regexp_control_findings {
+    report at regexp_input.offset
+    warn "Unexpected control character(s) in regular expression: {first(f.data)}."
+  }
 }
 
 in regexp_site rule no-useless-backreference {
-  each f in regexp_backreference_findings
-  warn "Backreference '{first(f.data)}' will be ignored. It references group '{ { value f.data; slice 1; first } }'{last(f.data)} {backreference_reason(f.kind)}."
+  each f in regexp_backreference_findings {
+    warn "Backreference '{first(f.data)}' will be ignored. It references group '{ { value f.data; slice 1; first } }'{last(f.data)} {backreference_reason(f.kind)}."
+  }
 }
 
 # Each sequence where it is written (or at the pattern when it is
 # computed). With computed flags, nothing is known.
 in regexp_site let misleading_character_class_findings regexp_misleading_findings
 in regexp_site rule no-misleading-character-class {
-  each f in misleading_character_class_findings
   when type_of(regexp_input.flags) == "str" || is ts_regex
-  report at { start: f.offset, end: f.end }
-  warn misleading_message(f.kind)
+  each f in misleading_character_class_findings {
+    report at { start: f.offset, end: f.end }
+    warn misleading_message(f.kind)
+  }
 }
 
 # Literals, and `RegExp` calls with a string literal pattern and flags.
 in regexp_site rule no-regex-spaces {
   let spaces_argument if is (ts_call, ts_new) then { value argument.nodes; first; unparenthesised_node } else null
   let spaces_fixable is ts_regex || regexp_input.source == slice(spaces_argument.text, 1, -1)
-  each f in regexp_space_findings
   when is ts_regex || regexp_input.written == "string" && type_of(regexp_flags) == "str"
-  fix at { start: f.offset, end: f.end } if spaces_fixable as " {{{f.kind}}}"
-  warn "Spaces are hard to count. Use {{{f.kind}}}."
+  each f in regexp_space_findings {
+    fix at { start: f.offset, end: f.end } if spaces_fixable as " {{{f.kind}}}"
+    warn "Spaces are hard to count. Use {{{f.kind}}}."
+  }
 }
 
 # The flags first (`RegExp` checks them first), then the pattern.

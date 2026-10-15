@@ -46,11 +46,17 @@ fn unbound_pattern_sources(n) = {
 }
 
 fn unbound_type(n, names, path) = n.type_structure(names, ["kind", "parts", "declarations", "member_metadata"], true, path)
-fn unbound_profiles(t) =
-  if contains(["union", "intersection"], t.kind) then {
-    value t.parts
-    flat_map (part) unbound_profiles(part)
-  } else [t]
+fn unbound_profiles(t) = {
+  value {part: t, path: ""}
+  walk (item) if contains(["union", "intersection"], item.part.kind) then {
+    value parts: item.part.parts
+    value width: len(str(len(parts)))
+    value map(parts, (part, index) => {part: part, path: item.path pad_start(str(index), width, "0")})
+  } else []
+  filter (item) !contains(["union", "intersection"], item.part.kind)
+  sort_by (item) item.path
+  map (item) item.part
+}
 fn unbound_member(t, key) = {
   value t.member_metadata
   filter (member) member.name == key

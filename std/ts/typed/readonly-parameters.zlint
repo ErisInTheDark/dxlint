@@ -23,52 +23,55 @@ fn readonly_parameter_branded(arm) = {
     || contains(part.traits, "object_literal")
       && !contains(part.traits, "callable") && !contains(part.traits, "constructible"))
 }
-fn readonly_parameter_edge(edge, methods, seen) = {
-  value writable: if edge.member == null then false
-    else !any(edge.member.sources, source => contains(source.flags, "readonly")
-      || contains(source.flags, "private") || methods && contains(source.flags, "method"))
-  value if writable then false else readonly_parameter_walk(edge.handle, methods, seen, false)
-}
-fn readonly_parameter_part(part, methods, seen) = {
-  value result: if readonly_parameter_marker(part) then true
-  else if contains(part.traits, "error") then null
-  else if readonly_parameter_array(part) then {
-    value if part.carrier.description.name == "Array" then false
-      else readonly_parameter_children(part.handle, false,
-        map(part.carrier.arguments, (argument, index) => index), methods, seen)
-  } else if part.product != null then
-    if part.product.readonly then {
-      value elements: value_children(part.handle, true, [])
-      value if elements == null then null else readonly_parameter_all(map(elements,
-        edge => readonly_parameter_walk(edge.handle, methods, seen, false)))
-    }
-    else false
-  else readonly_parameter_children(part.handle, true, [], methods, seen)
-  value if result == false then false
-    else if readonly_parameter_uncertain(part) then null else result
-}
-fn readonly_parameter_children(handle, members, arguments, methods, seen) = {
+fn readonly_parameter_children(handle, members, arguments, unchecked) = {
   value children: value_children(handle, members, arguments)
-  value if children == null then null
-    else readonly_parameter_all(map(children, edge => readonly_parameter_edge(edge, methods, seen)))
+  value {
+    answer: if children == null then null else true,
+    children: map(children ?? [], edge => if unchecked then {kind: "source", source: edge.handle, root: false}
+      else {kind: "edge", edge: edge}),
+  }
 }
-fn readonly_parameter_arm(arm, methods, seen) = {
-  value result: if contains(seen, arm.handle) then true
-  else if any(arm.parts, part => contains(part.traits, "error")) then null
-  else if any(arm.parts, part => part.carrier.description.kind == "parameter")
-      && !any(arm.parts, part => readonly_parameter_marker(part))
-    || all(arm.parts, part => readonly_parameter_scalar(part)) then true
-  else if any(arm.parts, part => readonly_parameter_array(part) || part.product != null) then
-    readonly_parameter_all(map(arm.parts, part => readonly_parameter_part(part, methods, seen [arm.handle])))
-  else readonly_parameter_children(arm.handle, true, [], methods, seen [arm.handle])
-  value if result == false then false
-    else if any(arm.parts, part => readonly_parameter_uncertain(part)) then null else result
+fn readonly_parameter_step(entry, methods) = if entry.kind == "source" then {
+  value arms: value_parts(entry.source)
+  value skipped: entry.root && count(arms) > 0 && all(arms, arm => readonly_parameter_branded(arm))
+  value {
+    answer: if arms == null then null else true,
+    children: if skipped then [] else map(arms ?? [], arm => {kind: "arm", arm: arm}),
+  }
+} else if entry.kind == "edge" then {
+  value edge: entry.edge
+  value writable: edge.member != null && !any(edge.member.sources, source => contains(source.flags, "readonly")
+    || contains(source.flags, "private") || methods && contains(source.flags, "method"))
+  value {answer: !writable, children: if writable then [] else [{kind: "source", source: edge.handle, root: false}]}
+} else if entry.kind == "part" then {
+  value part: entry.part
+  value branch: if readonly_parameter_marker(part) then {answer: true, children: []}
+    else if contains(part.traits, "error") then {answer: null, children: []}
+    else if readonly_parameter_array(part) then
+      if part.carrier.description.name == "Array" then {answer: false, children: []}
+      else readonly_parameter_children(part.handle, false, map(part.carrier.arguments, (argument, index) => index), false)
+    else if part.product != null then
+      if part.product.readonly then readonly_parameter_children(part.handle, true, [], true)
+      else {answer: false, children: []}
+    else readonly_parameter_children(part.handle, true, [], false)
+  value {answer: if branch.answer == false then false else if readonly_parameter_uncertain(part) then null else branch.answer,
+    children: branch.children}
+} else {
+  value arm: entry.arm
+  value branch: if any(arm.parts, part => contains(part.traits, "error")) then {answer: null, children: []}
+    else if any(arm.parts, part => part.carrier.description.kind == "parameter")
+        && !any(arm.parts, part => readonly_parameter_marker(part))
+      || all(arm.parts, part => readonly_parameter_scalar(part)) then {answer: true, children: []}
+    else if any(arm.parts, part => readonly_parameter_array(part) || part.product != null) then
+      {answer: true, children: map(arm.parts, part => {kind: "part", part: part})}
+    else readonly_parameter_children(arm.handle, true, [], false)
+  value {answer: if branch.answer == false then false
+      else if any(arm.parts, part => readonly_parameter_uncertain(part)) then null else branch.answer,
+    children: branch.children}
 }
-fn readonly_parameter_walk(source, methods, seen, root) = {
-  value arms: value_parts(source)
-  value if arms == null then null
-    else if root && count(arms) > 0 && all(arms, arm => readonly_parameter_branded(arm)) then true
-    else readonly_parameter_all(map(arms, arm => readonly_parameter_arm(arm, methods, seen)))
+fn readonly_parameter_walk(source, methods) = {
+  value states: walk({kind: "source", source: source, root: true}, entry => readonly_parameter_step(entry, methods).children)
+  value readonly_parameter_all(map(states, entry => readonly_parameter_step(entry, methods).answer))
 }
 
 in ts_parameter rule prefer-readonly-parameter-types {
@@ -81,7 +84,7 @@ in ts_parameter rule prefer-readonly-parameter-types {
   when !ignoreInferredTypes || type != null
   let readonly_parameter_source type.node ?? init.node ?? node
   let readonly_parameter_result if count(allow) > 0 then null
-    else readonly_parameter_walk(readonly_parameter_source, treatMethodsAsReadonly, [], true)
+    else readonly_parameter_walk(readonly_parameter_source, treatMethodsAsReadonly)
   when readonly_parameter_result == false
   report at { start: name.offset, end: end_offset }
   warn "Parameter should be a read only type."

@@ -11,10 +11,10 @@ fn regexp_field(nodes, entry, name) = {
   value ids: get(entry.fields, name) ?? []
   value map(ids, id => regexp_record(nodes, id))
 }
-fn regexp_ancestors(nodes, entry) = if entry.parent == null then [] else {
-  value parent: regexp_record(nodes, entry.parent)
-  value rest: regexp_ancestors(nodes, parent)
-  value concat([parent], rest)
+fn regexp_ancestors(nodes, entry) = {
+  value entry
+  walk (current) if current.parent == null then null else regexp_record(nodes, current.parent)
+  drop 1
 }
 
 fn regexp_quote(text) = '"' {
@@ -119,12 +119,16 @@ in regexp_site let regexp_tree {
   value sets: contains(regexp_input.flags, "v")
   value regexp_parse(node, regexp_input, unicode, sets)
 }
-fn regexp_ordered(nodes, id) = {
-  value entry: regexp_record(nodes, id)
-  value branches: map(entry.children, child => regexp_ordered(nodes, child))
-  value children: flat(branches)
-  value concat([entry], children)
+fn regexp_traversal(nodes, id, after_children) = {
+  value width: len(str(len(nodes)))
+  value {entry: regexp_record(nodes, id), path: ""}
+  walk (item) map(item.entry.children, (child, index) => {
+    entry: regexp_record(nodes, child), path: item.path pad_start(str(index), width, "0"),
+  })
+  sort_by (item) item.path (if contains(after_children, item.entry.kind) then "~" else "")
+  map (item) item.entry
 }
+fn regexp_ordered(nodes, id) = regexp_traversal(nodes, id, [])
 in regexp_site let regexp_nodes {
   value nodes: get(regexp_tree, "nodes")
   value if regexp_tree.ok then regexp_ordered(nodes, regexp_tree.root) else null
@@ -196,8 +200,8 @@ fn regexp_hex(value) = {
   value digits: split("0123456789abcdef", "")
   value digit: regexp_at(digits, value % 16)
   value if value < 16 then digit else {
-    value high: divide((value - value % 16), 16)
-    value regexp_hex(high) digit
+    value parts: walk(value, current => if current < 16 then null else divide((current - current % 16), 16))
+    value fold(parts, "", (text, current) => regexp_at(digits, current % 16) text)
   }
 }
 fn regexp_character(value) = if value == null || value >= 55296 && value <= 57343 then null else {
@@ -218,9 +222,15 @@ fn regexp_flat_range(nodes, input, entry) = entry.kind == "regexp_range" && !reg
   value regexp_kind(nodes, input, from) != "character" || regexp_kind(nodes, input, to) != "character"
 }
 fn regexp_view_parent(nodes, input, entry) = {
-  value parent: regexp_record(nodes, entry.parent)
-  value if parent.kind == "regexp_string_alternative" || regexp_flat_range(nodes, input, parent)
-    then regexp_view_parent(nodes, input, parent) else entry.parent
+  value terminal: {
+    value entry
+    walk (current) {
+      value parent: regexp_record(nodes, current.parent)
+      value if parent.kind == "regexp_string_alternative" || regexp_flat_range(nodes, input, parent) then parent else null
+    }
+    last
+  }
+  value terminal.parent
 }
 fn regexp_initial(values) = {
   value count: len(values) - 1
@@ -342,15 +352,9 @@ fn regexp_view_entry(nodes, input, entry) = if contains(["TEXT", "regexp_set_ope
       value concat(parts, [record])
     }
 }
-fn regexp_view_ordered(nodes, id) = {
-  value entry: regexp_record(nodes, id)
-  value branches: map(entry.children, child => regexp_view_ordered(nodes, child))
-  value children: flat(branches)
-  value if contains(["regexp_range", "regexp_quantifier"], entry.kind) then concat(children, [entry]) else concat([entry], children)
-}
 fn regexp_view(nodes, input) = {
   value root: first(nodes)
-  value ordered: regexp_view_ordered(nodes, root.id)
+  value ordered: regexp_traversal(nodes, root.id, ["regexp_range", "regexp_quantifier"])
   value entries: filter(ordered, entry => entry.kind != "TEXT")
   value parts: map(entries, entry => regexp_view_entry(nodes, input, entry))
   value flat(parts)
