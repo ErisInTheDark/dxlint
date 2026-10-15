@@ -9,8 +9,11 @@ struct Record {
 
 #[derive(Default)]
 pub(super) struct Tape {
+    /// The first token read at each position; `positions` indexes it.
     records: Vec<Record>,
     positions: Vec<u32>,
+    /// Tokens read at a position in a goal its record cannot answer.
+    alternates: FxHashMap<(u32, u16), Lexed>,
     predicates: FxHashMap<(usize, u32, u32), bool>,
 }
 
@@ -18,6 +21,7 @@ impl Tape {
     pub(super) fn clear(&mut self) {
         self.records.clear();
         self.positions.clear();
+        self.alternates.clear();
         self.predicates.clear();
     }
 
@@ -28,6 +32,7 @@ pub(super) fn prepare(run: &mut Run<'_>, goal: u16) {
     run.scratch.tokens.positions.resize(run.text.len() + 1, u32::MAX);
     let mut pos = 0;
     loop {
+        run.scratch.counts.prepare_reads += 1;
         let lexed = read(run, goal, pos);
         let Some(token) = lexed.token else { break; };
         if token.end <= pos { break; }
@@ -39,16 +44,25 @@ pub(super) fn read(run: &mut Run<'_>, goal: u16, pos: u32) -> Lexed {
     run.scratch.counts.lex_reads += 1;
     let tape = &run.scratch.tokens;
     let id = tape.positions[pos as usize] as usize;
-    if let Some(record) = tape.records.get(id).filter(|record| record.pos == pos) {
+    let recorded = tape.records.get(id).filter(|record| record.pos == pos);
+    if let Some(record) = recorded {
         if record.goal == goal || compatible(run, record, goal) { return record.lexed.clone(); }
+        if let Some(lexed) = run.scratch.tokens.alternates.get(&(pos, goal)) { return lexed.clone(); }
     }
+    run.scratch.counts.scans += 1;
     let lexed = run.scan(goal, pos);
     let tape = &mut run.scratch.tokens;
-    let tail = tape.records.partition_point(|record| record.pos < pos);
-    tape.records.truncate(tail);
-    tape.positions[pos as usize] = tail as u32;
-    tape.records.push(Record { pos, goal, lexed: lexed.clone() });
+    if recorded_at(tape, pos) {
+        tape.alternates.insert((pos, goal), lexed.clone());
+    } else {
+        tape.positions[pos as usize] = tape.records.len() as u32;
+        tape.records.push(Record { pos, goal, lexed: lexed.clone() });
+    }
     lexed
+}
+
+fn recorded_at(tape: &Tape, pos: u32) -> bool {
+    tape.records.get(tape.positions[pos as usize] as usize).is_some_and(|record| record.pos == pos)
 }
 
 fn compatible(run: &Run<'_>, record: &Record, goal: u16) -> bool {

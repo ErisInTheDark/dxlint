@@ -110,6 +110,10 @@ struct Counts {
     dispatch_reads: u64,
     start_reads: u64,
     terminal_reads: u64,
+    other_goal_reads: u64,
+    probe_reads: u64,
+    prepare_reads: u64,
+    scans: u64,
     enters: u64,
     memo_hits: u64,
     memo_stores: u64,
@@ -126,6 +130,10 @@ impl Scratch {
             ("count.lex_reads.dispatch", counts.dispatch_reads),
             ("count.lex_reads.start", counts.start_reads),
             ("count.lex_reads.terminal", counts.terminal_reads),
+            ("count.lex_reads.other_goal", counts.other_goal_reads),
+            ("count.lex_reads.probe", counts.probe_reads),
+            ("count.lex_reads.prepare", counts.prepare_reads),
+            ("count.lex_scans", counts.scans),
             ("count.enters", counts.enters),
             ("count.memo_hits", counts.memo_hits),
             ("count.memo_stores", counts.memo_stores),
@@ -389,6 +397,7 @@ impl<'a> Run<'a> {
     }
 
     fn probe_matches(&mut self, probe: Probe, pos: u32, context: Context) -> bool {
+        self.scratch.counts.probe_reads += 1;
         let head = self.lex(context.goal, pos);
         self.probe_matches_at(probe, pos, context, &head)
     }
@@ -399,6 +408,7 @@ impl<'a> Run<'a> {
         let other;
         let lexed = match probe.goal {
             Some(goal) if goal != context.goal => {
+                self.scratch.counts.other_goal_reads += 1;
                 other = self.lex(goal, pos);
                 &other
             }
