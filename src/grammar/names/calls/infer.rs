@@ -33,7 +33,10 @@ pub(super) fn instantiate(header: Header, call: Leaf, mapping: &[(Leaf, Vec<Leaf
                     if !values.question.budget.step() { return Known::Unknown }
                     let expected = run.recipe(*parameter, &Value::Current);
                     let actual = values.values(actual);
-                    if run.relate(&expected, &actual) == Known::Unknown { return Known::Unknown }
+                    // An argument that cannot be related yet (a callback
+                    // typed by this very call) contributes nothing; the
+                    // other arguments, defaults and constraints decide.
+                    let _ = run.relate_or_skip(&expected, &actual);
                 }
             }
         }

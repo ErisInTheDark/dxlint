@@ -128,6 +128,16 @@ impl<'a, 'world> Run<'a, 'world> {
         self.values.combine(alternatives, false)
     }
 
+    /// [`Run::relate`] for an inference input that may itself wait on this
+    /// inference (an untyped callback reads its parameters from it): an
+    /// undecidable relation leaves the captures as they were.
+    pub(super) fn relate_or_skip(&mut self, expected: &NodeValue, actual: &NodeValue) -> Known<bool> {
+        let saved = self.candidates.clone();
+        let answer = self.relate(expected, actual);
+        if answer == Known::Unknown { self.candidates = saved; }
+        answer
+    }
+
     pub(super) fn relate(&mut self, expected: &NodeValue, actual: &NodeValue) -> Known<bool> {
         if self.positions.is_empty() { return self.values.calls().accepts(expected, actual) }
         let Some(_nest) = self.values.question.budget.nest() else { return Known::Unknown };

@@ -1,0 +1,3 @@
+import .ts
+ignore "**/tsconfig.json"
+in ts_arrow rule e info "{ expected_call_signatures(node) == null }/{ value_has_expected(node) }/{ call_binding(parent.node) == null }"
