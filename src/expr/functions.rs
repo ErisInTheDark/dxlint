@@ -374,6 +374,30 @@ pub static FUNCTIONS: &[Function] = &[
         }),
     },
     Function {
+        name: "js_number_to_precision",
+        signature: "js_number_to_precision(value, digits)",
+        doc: "JavaScript `value.toPrecision(digits)` for a number and whole `digits` 1..100; null otherwise",
+        min: 2,
+        max: 2,
+        call: |a| Ok(match (&a[0], &a[1]) {
+            (Value::Num(value), Value::Num(digits)) if digits.fract() == 0.0 && *digits >= 1.0 =>
+                super::js::number_format::to_precision(*value, *digits as usize).map_or(Value::Null, Value::from),
+            _ => Value::Null,
+        }),
+    },
+    Function {
+        name: "integer_radix",
+        signature: "integer_radix(value, radix)",
+        doc: "A whole finite number written in `radix` 2..36 (lowercase digits, exact for every double); null for fractions, infinities and other radixes",
+        min: 2,
+        max: 2,
+        call: |a| Ok(match (&a[0], &a[1]) {
+            (Value::Num(value), Value::Num(radix)) if radix.fract() == 0.0 && *radix >= 0.0 && *radix <= 36.0 =>
+                super::js::number_format::integer_radix(*value, *radix as u32).map_or(Value::Null, Value::from),
+            _ => Value::Null,
+        }),
+    },
+    Function {
         name: "js_number_binary",
         signature: "js_number_binary(operator, left, right)",
         doc: "A JavaScript numeric binary operator (`+ - * / % ** & | ^ << >> >>>`) on two numbers, with JavaScript's results (NaN, Infinity, ToInt32 for bitwise); null for other operators or non-number operands",

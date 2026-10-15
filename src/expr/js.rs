@@ -5,6 +5,7 @@
 use std::cmp::Ordering;
 use std::sync::OnceLock;
 
+pub mod number_format;
 pub mod strings;
 
 /// A numeric literal's value: decimal, `0x`/`0o`/`0b`, legacy octal and
