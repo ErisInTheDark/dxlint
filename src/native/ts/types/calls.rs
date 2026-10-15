@@ -182,38 +182,6 @@ impl Checker<'_> {
         }
     }
 
-    /// The unspecialised `Function` interface and its subtypes are callable
-    /// only when they supply the signatures TypeScript considers safe.
-    pub fn unsafe_builtin_function(&self, ty: &Ty, construct: bool) -> bool {
-        self.is_builtin_type_or_base(ty, "Function") && !self.safe_function_signature(ty, construct, &mut Vec::new())
-    }
-
-    fn safe_function_signature(&self, ty: &Ty, construct: bool, seen: &mut Vec<super::super::modules::DeclRef>) -> bool {
-        match ty {
-            Ty::Named(sym, args) => {
-                for &r in sym.iter() {
-                    if seen.contains(&r) || seen.len() >= super::MAX_DEPTH as usize { continue }
-                    seen.push(r);
-                    let Some(summary) = self.summary_of(r.file) else { continue };
-                    let decl = &summary.decls[r.decl as usize];
-                    let mut env = self.decl_env(r);
-                    env.tparams = self.bind_tparams(&decl.type_params, args.clone(), &env);
-                    if decl.members.iter().any(|member| {
-                        member.kind == MemberKind::Construct
-                            || member.kind == MemberKind::Call && (!construct || member.sigs.iter().any(|sig| !matches!(sig.ret.as_ref().map_or(Ty::Unknown, |ret| self.eval(ret, &env)), Ty::Void)))
-                    }) { return true }
-                    if self.bases(decl).iter().any(|base| self.safe_function_signature(&self.eval(base, &env), construct, seen)) { return true }
-                }
-                false
-            }
-            Ty::Inter(parts) => parts.iter().any(|part| self.safe_function_signature(part, construct, seen)),
-            Ty::Fn(callable) => !construct || callable.ret.as_ref().is_some_and(|ret| !matches!(ret, Ty::Void))
-                || callable.sigs.iter().any(|sig| !matches!(sig.syntax.ret.as_ref().map_or(Ty::Unknown, |ret| self.eval(ret, &sig.env)), Ty::Void)),
-            Ty::Class(_) => true,
-            _ => false,
-        }
-    }
-
     /// Signatures `t` can be called with (or constructed with).
     fn signatures(&self, t: &Ty, construct: bool) -> Option<Vec<BoundSignature>> {
         match t {

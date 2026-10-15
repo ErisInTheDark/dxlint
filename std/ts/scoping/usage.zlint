@@ -57,19 +57,35 @@ fn ts_usage_in_loop(n) = {
   any (current) current is ts_loop
 }
 fn ts_usage_unused_expression(n) = {
-  value parent: ts_usage_parent(n)
+  value terminal: {
+    value n
+    walk (current) {
+      value parent: ts_usage_parent(current)
+      value if parent is ts_sequence && unparenthesised_node(last(parent.expression.nodes)) == current then parent else null
+    }
+    last
+  }
+  value parent: ts_usage_parent(terminal)
   value parent is ts_expression_statement || parent is ts_sequence
-    && (unparenthesised_node(last(parent.expression.nodes)) != n || ts_usage_unused_expression(parent))
+    && unparenthesised_node(last(parent.expression.nodes)) != terminal
 }
 fn ts_usage_statement(n) = if n is (ts_function, ts_class) then ts_declared_statement(n)
   else n is ts_statement
-fn ts_usage_storable_path(n, rhs) = {
+fn ts_usage_storable_result(n, rhs) = {
   value parent: ts_usage_parent(n)
   value if !scoping_within(parent, rhs) then false
     else if parent is ts_sequence && unparenthesised_node(last(parent.expression.nodes)) != n then false
     else if parent is (ts_call, ts_new) then unparenthesised_node(parent.callee.node) != n
     else if parent is (ts_assignment, ts_tagged_template, ts_yield) || ts_usage_statement(parent) then true
-    else ts_usage_storable_path(parent, rhs)
+    else null
+}
+fn ts_usage_storable_path(n, rhs) = {
+  value terminal: {
+    value n
+    walk (current) if ts_usage_storable_result(current, rhs) == null then ts_usage_parent(current) else null
+    last
+  }
+  value ts_usage_storable_result(terminal, rhs)
 }
 fn ts_usage_storable_function(n, rhs) = {
   value function: {
@@ -93,8 +109,10 @@ fn ts_usage_self_read(n, rhs) = {
   value update && ts_usage_unused_expression(parent)
     || scoping_within(n, rhs) && !ts_usage_storable_function(n, rhs)
 }
-fn ts_usage_type_query(n) = if n.parent is ts_type_query then true
-  else n.parent is (ts_qualified_name, ts_member) && ts_usage_type_query(n.parent.node)
+fn ts_usage_type_query(n) = {
+  value terminal: { value n; walk (current) if current.parent is (ts_qualified_name, ts_member) then current.parent.node else null; last }
+  value terminal.parent is ts_type_query
+}
 fn ts_usage_type_import(n) = n.parent is ts_import_specifier && n.parent.kind == "type"
   || n.parent is (ts_import_specifier, ts_import)
     && (if n.parent is ts_import_specifier then n.parent.parent.kind else n.parent.kind) == "type"

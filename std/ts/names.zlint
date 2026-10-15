@@ -2,6 +2,10 @@
 import .ts/directives
 import .ts/effects
 
+in ts_node let identifier_name null
+in ts_identifier, ts_private_name let identifier_name
+  if !contains(text, "\\") then text else js_string('"' text '"') ?? text
+
 fn ts_identifier_name_valid(name) = re_test(name, /^[\p{ID_Start}_$][\p{ID_Continue}$\u{200c}\u{200d}]*$/)
 
 # Where a function or class is a declaration (else an expression).

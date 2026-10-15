@@ -1,4 +1,5 @@
 import .ts/expression-fixes
+import .ts/constants
 import .ts/suggestions/globals
 
 define {
@@ -76,9 +77,12 @@ fn regexp_string_input(n, flags) = {
     offset: n.offset + 1, end_offset: n.end_offset - 1, written: if n is ts_string then "string" else "template", pattern_node: n
   }
 }
-fn regexp_computed_input(n, flags) = if type_of(n.static_string) != "str" then null else {
-  text: n.static_string, source: n.static_string, flags: flags, spans: null, units: null,
-  offset: n.offset, end_offset: n.end_offset, written: "computed", pattern_node: n
+fn regexp_computed_input(n, flags) = {
+  value text: ts_runtime_string(n)
+  value if type_of(text) != "str" then null else {
+    text: text, source: text, flags: flags, spans: null, units: null,
+    offset: n.offset, end_offset: n.end_offset, written: "computed", pattern_node: n
+  }
 }
 in ts_call, ts_new let regexp_candidate ts_global_method_candidate(node, "RegExp")
   || unparenthesised_node(callee.node) is (ts_non_null, ts_as, ts_satisfies, ts_type_assertion, ts_conditional, ts_logical)
@@ -89,7 +93,7 @@ fn regexp_input(n) = if n is ts_regex then regexp_literal_input(n, null)
     value pattern: unparenthesised_node(argument)
     value flag_args: drop(args, 1)
     value flag_argument: first(flag_args)
-    value flags: if flag_argument == null then "" else flag_argument.static_string
+    value flags: if flag_argument == null then "" else ts_runtime_string(flag_argument)
     value if pattern == null then null
       else if pattern is ts_regex then if flag_argument == null then null else regexp_literal_input(pattern, { value: flags })
       else if pattern is (ts_string, ts_template) then {

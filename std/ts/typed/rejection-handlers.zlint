@@ -4,7 +4,7 @@ define {
 
 fn rejection_handler(call) = {
   value callee: call.callee.node
-  value method: if callee is (ts_member, ts_index) then callee.static_name else null
+  value method: if callee is (ts_member, ts_index) then callee.static_name.nonempty ?? callee.index.static_string else null
   value index: if method == "catch" then 0 else if method == "then" then 1 else null
   value arguments: call.argument.nodes
   value preceding: { value arguments; slice 0 (index + 1) }

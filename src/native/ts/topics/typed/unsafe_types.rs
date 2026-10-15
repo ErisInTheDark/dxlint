@@ -1,45 +1,10 @@
 //! Unsafe value categories. Missing named annotations are error provenance;
 //! unsupported type syntax and explicit `unknown` remain unknown.
 
-use crate::expr::Value;
 use crate::native::ts::facts::NativeFile;
 use crate::native::ts::kinds::{Field as F, Kind as K};
 use crate::native::ts::summary::{type_syn, TypeSyn};
 use crate::native::ts::types::Ty;
-
-pub(super) fn kind(file: &NativeFile<'_>, node: u32) -> Value<'static> {
-    category(file, node).map_or(Value::Null, Value::from)
-}
-
-pub(super) fn call(file: &NativeFile<'_>, node: u32) -> Value<'static> {
-    if let Some(kind) = category(file, node) { return Value::from(kind) }
-    let construct = file.syntax.parent(node).is_some_and(|parent| file.syntax.is(parent, K::New));
-    if file.typing().checker.unsafe_builtin_function(&file.constrained_type_of(node), construct) { Value::from("function") } else { Value::Null }
-}
-
-pub(super) fn key(file: &NativeFile<'_>, node: u32) -> Value<'static> {
-    let bare = file.syntax.unparen(node);
-    Value::record(vec![
-        ("kind".into(), category(file, bare).map_or(Value::Null, Value::from)),
-        ("text".into(), Value::from(file.syntax.text(bare).to_string())),
-        ("offset".into(), Value::from(file.syntax.tree.node(bare).start as usize)),
-    ])
-}
-
-pub(super) fn this_kind(file: &NativeFile<'_>, mut node: u32) -> Value<'static> {
-    let s = &file.syntax;
-    loop {
-        node = s.unparen(node);
-        if s.is(node, K::This) { return kind(file, node) }
-        let field = match s.kind(node) {
-            Some(K::Member | K::Index) => F::Object,
-            Some(K::As | K::Satisfies | K::NonNull | K::TypeAssertion) => F::Expr,
-            _ => return Value::Null,
-        };
-        let Some(inner) = s.get(node, field) else { return Value::Null };
-        node = inner;
-    }
-}
 
 pub(super) fn category(file: &NativeFile<'_>, node: u32) -> Option<&'static str> {
     fn unresolved(ty: &Ty) -> bool {

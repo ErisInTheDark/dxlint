@@ -1,4 +1,5 @@
 # .ts/style/classes: internal part of .ts/style.
+import .ts/constants
 
 define {
 
@@ -80,7 +81,7 @@ in ts_tagged_template let member_literal quasi.member_literal
 in ts_parenthesized let member_literal expression.member_literal
 in ts_return let returned_member_literal argument.member_literal == true
 in ts_block let first_member_literal first([] body.returned_member_literal) == true && first(body.nodes) is ts_return
-in ts_computed_key let member_static_name expression.static_string
+in ts_computed_key let member_static_name ts_runtime_string(expression.node)
 in ts_method, ts_class_property let member_static_name static_name.nonempty ?? key.member_static_name
 in ts_method let setter_member_name if kind == "set" then member_static_name else null
 in ts_member, ts_index let written_this_member if object is ts_this && write_site != null then static_name else null

@@ -2,8 +2,8 @@
 //! become `ts_*` layers.
 
 mod bind;
-mod check;
 mod class_members;
+mod check;
 mod comments;
 mod docs;
 mod equality;

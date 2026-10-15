@@ -1,0 +1,71 @@
+import .ts/values/inspection
+
+define {
+
+fn unsafe_call_kind(n) = {
+  value arms: value_parts(n)
+  value if arms == null then null else ts_value_category(map(arms, arm => arm.parts))
+}
+fn unsafe_call_void_result(handle) = {
+  value arms: value_parts(handle)
+  value if arms == null then null else count(arms) == 1 && count(first(arms).parts) == 1
+    && contains(first(first(arms).parts).traits, "void")
+}
+fn unsafe_call_signature_state(part, construct) = {
+  value ancestry: ts_value_ancestry(part)
+  value calls: map(ancestry.parts, item => value_signatures(item.handle))
+  value constructors: map(ancestry.parts, item => value_constructors(item.handle))
+  value headers: flat_map(calls, arms => flat_map(arms ?? [], arm => arm))
+  value constructor_headers: flat_map(constructors, arms => flat_map(arms ?? [], arm => arm))
+  value constructor_states: map(constructor_headers, header =>
+    if header.site == null || any(calls, arms => arms == null) then null
+    else !any(headers, call => call.site == header.site))
+  value results: if construct then map(headers, header => unsafe_call_void_result(header.result)) else []
+  value safe: any(constructor_states, state => state == true)
+    || (if construct then any(results, result => result == false) else count(headers) > 0)
+  value if safe then true
+    else if !ancestry.complete || any(calls, arms => arms == null)
+      || any(constructors, arms => arms == null) || any(results, result => result == null)
+      || any(constructor_states, state => state == null) then null
+    else false
+}
+fn unsafe_call_value_kind(n, construct) = {
+  value category: unsafe_call_kind(n)
+  value if category != null then category else {
+    value arms: value_parts(n)
+    value arm_parts: if count(arms ?? []) == 1 then first(arms).parts else []
+    value parts: filter(arm_parts, part => !contains(part.traits, "intersection") && !contains(part.traits, "parameter"))
+    value functions: map(parts, part => ts_value_builtin_ancestor(part, n, ["Function"]))
+    value if !any(functions, state => state == true) then null else {
+      value signatures: map(parts, part => unsafe_call_signature_state(part, construct))
+      value if any(signatures, state => state == true) || any(signatures, state => state == null) then null
+        else "function"
+    }
+  }
+}
+fn unsafe_call_this_kind(n) = {
+  value roots: walk([unparenthesised_node(n)], current =>
+    if current is (ts_member, ts_index) then unparenthesised_node(current.object.node)
+    else if current is (ts_as, ts_type_assertion) then unparenthesised_node(current.expression.node)
+    else null)
+  value subject: find(roots, current => current is ts_this)
+  value if subject == null then null else unsafe_call_kind(subject)
+}
+
+in ts_call.callee rule no-unsafe-call {
+  let unsafe_kind unsafe_call_value_kind(node, false)
+  when unsafe_kind != null
+  warn if unsafe_kind == "error" then if unsafe_call_this_kind(node) == "error" then "Unsafe call of a `this` type that could not be resolved." else "Unsafe call of a type that could not be resolved." else "Unsafe call of {if unsafe_kind == 'function' then 'a `Function`' else 'an `any`'} typed value."
+}
+in ts_new rule no-unsafe-call:new {
+  let unsafe_kind unsafe_call_value_kind(callee.node, true)
+  when unsafe_kind != null
+  warn if unsafe_kind == "error" then "Unsafe construction of a type that could not be resolved." else "Unsafe construction of {if unsafe_kind == 'function' then 'a `Function`' else 'an `any`'} typed value."
+}
+in ts_tagged_template.tag rule no-unsafe-call:tag {
+  let unsafe_kind unsafe_call_value_kind(node, false)
+  when unsafe_kind != null
+  warn if unsafe_kind == "error" then "Unsafe use of a template tag whose type could not be resolved." else "Unsafe use of {if unsafe_kind == 'function' then 'a `Function`' else 'an `any`'} typed template tag."
+}
+
+}

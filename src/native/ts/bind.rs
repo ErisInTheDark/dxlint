@@ -62,9 +62,6 @@ pub struct Bindings {
     /// object literal used as a destructuring target -> the node that writes
     /// it: the assignment, update, `delete` or `for` statement.
     pub write_sites: HashMap<u32, u32>,
-    /// Function-like node -> what its own body does ([`USES_THIS`], ...).
-    /// Arrow functions count toward the function around them.
-    pub functions: HashMap<u32, u8>,
     /// Later declaring identifier of a merged name (`var a; var a;`,
     /// overloads, `class X` + `interface X`) -> the first, which owns the
     /// binding.
@@ -72,9 +69,6 @@ pub struct Bindings {
     /// `arguments` reference -> the function whose implicit binding it reads.
     arguments: HashMap<u32, u32>,
 }
-
-pub const USES_THIS: u8 = 1;
-pub const USES_ARGUMENTS: u8 = 2;
 
 /// How a reference uses its name.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -128,14 +122,6 @@ impl Bindings {
                 owners.insert(d, owner);
             }
         }
-        for &id in &s.tree.order {
-            if s.is(id, K::This) {
-                if let Some(f) = this_owner(s, id) {
-                    *b.functions.entry(f).or_default() |= USES_THIS;
-                }
-            }
-        }
-
         for (&node, &(effect, site)) in &names.effects {
             let effect = Some(effect);
             let written = effect == assigned || effect == mutated;
@@ -173,9 +159,6 @@ impl Bindings {
             };
             if names.implicit.contains_key(&decl) {
                 b.arguments.insert(r, decl);
-                if !matches!(use_, Use::TypeOnly | Use::TypeExport) {
-                    *b.functions.entry(decl).or_default() |= USES_ARGUMENTS;
-                }
                 continue;
             }
             let decl = b.merged.get(&decl).copied().unwrap_or(decl);
@@ -339,20 +322,6 @@ fn self_use_owner(s: &Syntax, name: u32, site: u32, kind: &str) -> Option<u32> {
 
 /// The function whose own `this` a node at `id` sees: the nearest
 /// non-arrow function, method or class body.
-fn this_owner(s: &Syntax, id: u32) -> Option<u32> {
-    let mut child = id;
-    while let Some(n) = s.parent(child) {
-        // A computed key (`[this.x]() {}`) runs where the class does.
-        let key = s.field(child) == Some(F::Key);
-        match s.kind(n) {
-            Some(K::Method | K::ClassProp) if !key => return Some(n),
-            Some(K::Function | K::StaticBlock) => return Some(n),
-            _ => child = n,
-        }
-    }
-    None
-}
-
 #[cfg(test)]
 mod tests {
     #[test]

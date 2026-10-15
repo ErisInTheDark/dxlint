@@ -1,4 +1,5 @@
 import .ts/globals
+import .ts/constants
 import .ts/scoping/bindings
 import .ts/scoping/receivers
 
@@ -42,7 +43,7 @@ in ts_program let ts_global_written {
   map (reference) reference.text
   unique
 }
-fn ts_global_method_name(n) = if n is ts_index then n.index.static_string else n.static_name
+fn ts_global_method_name(n) = if n is ts_index then ts_runtime_string(n.index.node) else n.static_name
 fn ts_global_method_candidate(n, name) = {
   value callee: unparenthesised_node(n.callee.node)
   value callee is ts_identifier || callee is (ts_member, ts_index) && ts_global_method_name(callee) == name

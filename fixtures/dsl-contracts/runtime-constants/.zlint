@@ -1,0 +1,22 @@
+import .ts
+
+in ts_call rule runtime-string {
+  when callee.text == "stringValue"
+  let actual ts_runtime_string(first(argument.nodes))
+  when type_of(actual) == "str" && actual == js_string(last(argument.nodes).text)
+  report at callee.node
+  warn "Known runtime string."
+}
+in ts_call rule runtime-number {
+  when callee.text == "numberValue"
+  let actual ts_runtime_number(first(argument.nodes))
+  when actual != null && actual == js_number(last(argument.nodes).text)
+  report at callee.node
+  warn "Known runtime number."
+}
+in ts_call rule runtime-unknown {
+  when callee.text == "unknownValue"
+  when ts_runtime_constant(first(argument.nodes)) == null
+  report at callee.node
+  warn "Unknown runtime value."
+}

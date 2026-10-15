@@ -1,16 +1,18 @@
 # Receiver-preserving method extraction.
 
 define {
-fn unbound_safe_use(n) =
-  if n.parent is (ts_if, ts_for, ts_member, ts_index, ts_switch, ts_update, ts_while) then true
-  else if n is (ts_call.callee, ts_conditional.test, ts_tagged_template.tag) then true
-  else if n.parent is ts_unary then contains(["!", "delete", "typeof", "void"], n.parent.operator)
-  else if n.parent is ts_binary then contains(["!=", "!==", "==", "===", "instanceof"], n.parent.operator)
-  else if n.parent is ts_assignment && n.parent.operator == "=" then n is ts_assignment.left
-    || n.object is ts_super && n.parent.left is ts_member && n.parent.left.object is ts_this
-  else if n.parent is (ts_parenthesized, ts_non_null, ts_as, ts_type_assertion) then unbound_safe_use(n.parent.node)
-  else if n.parent is ts_logical then n.parent.operator == "&&" && n is ts_logical.left || unbound_safe_use(n.parent.node)
-  else false
+fn unbound_safe_use(n) = {
+  value n
+  walk (current) if current.parent is (ts_parenthesized, ts_non_null, ts_as, ts_type_assertion, ts_logical)
+    then current.parent.node else null
+  any (current) current.parent is (ts_if, ts_for, ts_member, ts_index, ts_switch, ts_update, ts_while)
+    || current is (ts_call.callee, ts_conditional.test, ts_tagged_template.tag)
+    || current.parent is ts_unary && contains(["!", "delete", "typeof", "void"], current.parent.operator)
+    || current.parent is ts_binary && contains(["!=", "!==", "==", "===", "instanceof"], current.parent.operator)
+    || current.parent is ts_assignment && current.parent.operator == "=" && (current is ts_assignment.left
+      || current.object is ts_super && current.parent.left is ts_member && current.parent.left.object is ts_this)
+    || current.parent is ts_logical && current.parent.operator == "&&" && current is ts_logical.left
+}
 
 fn unbound_type_only(n) = {
   value n
@@ -21,16 +23,27 @@ fn unbound_type_only(n) = {
 }
 
 fn unbound_source(n, path, bound) = if n == null then [] else [{node: n, path: path, bound: bound}]
-fn unbound_pattern_sources(n) =
-  if n is (ts_declarator.name, ts_parameter.name) then
-    { value unbound_source(n.parent.init.node, [], n.parent is ts_declarator) unbound_source(n, [], false) }
-  else if n is ts_assignment.left then unbound_source(n.parent.right.node, [], true)
-  else if n is ts_assignment_pattern.left then
-    { value unbound_source(n.parent.right.node, [], false) unbound_pattern_sources(n.parent.node) }
-  else if n is ts_pattern_property.value then {
-    value unbound_pattern_sources(n.parent.parent.node)
-    map (source) {node: source.node, path: source.path [n.parent.static_name], bound: source.bound}
-  } else []
+fn unbound_literal_keys(n) = {
+  value arms: value_constituents(n)
+  value keys: flat_map(arms ?? [], arm => map(filter(arm, part =>
+    part.identity_known && part.identity.kind == "value"
+      && contains(["str", "num"], type_of(part.identity.value))
+      && (contains(part.traits, "string") || contains(part.traits, "number"))),
+    part => part.identity.value))
+  value unique(keys)
+}
+fn unbound_pattern_sources(n) = {
+  value {node: n, path: []}
+  walk (current) if current.node is ts_assignment_pattern.left then {node: current.node.parent.node, path: current.path}
+    else if current.node is ts_pattern_property.value then
+      {node: current.node.parent.parent.node, path: [current.node.parent.static_name] current.path}
+    else null
+  flat_map (current) if current.node is (ts_declarator.name, ts_parameter.name) then {
+    value unbound_source(current.node.parent.init.node, current.path, current.node.parent is ts_declarator) unbound_source(current.node, current.path, false)
+  } else if current.node is ts_assignment.left then unbound_source(current.node.parent.right.node, current.path, true)
+    else if current.node is ts_assignment_pattern.left then unbound_source(current.node.parent.right.node, current.path, false)
+    else []
+}
 
 fn unbound_type(n, names, path) = n.type_structure(names, ["kind", "parts", "declarations", "member_metadata"], true, path)
 fn unbound_profiles(t) =
@@ -112,7 +125,7 @@ in ts_member, ts_index, ts_pattern_property.key, ts_property.key, ts_computed_ke
   when if pattern then is ts_identifier && !unbound_type_only(node) else !unbound_safe_use(node)
   when pattern || !(is ts_member) || property.node is ts_identifier
   let keys if pattern then [if parent is ts_computed_key then text else pattern_property.static_name] else if is ts_member then [static_name]
-    else { value node.index.type_literal_values; filter (literal) contains(["string", "number"], literal.type); map (literal) literal.value }
+    else unbound_literal_keys(node.index.node)
   when count(keys) > 0
   let key_node if pattern then node else if is ts_member then property.node else node.index.node
   let sources if pattern then unbound_pattern_sources(pattern_property.parent.node) else unbound_source(object.node, [], true)

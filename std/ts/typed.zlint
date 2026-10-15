@@ -35,7 +35,9 @@ import .ts/typed/for-in-arrays
 import .ts/typed/type-conversions
 import .ts/typed/rejection-handlers
 import .ts/typed/unsafe-members
+import .ts/typed/unsafe-calls
 import .ts/values/inspection
+import .ts/constants
 
 define {
 
@@ -104,9 +106,9 @@ in ts_throw.argument rule only-throw-error {
 
 in ts_identifier let rejection_global_promise text == "Promise" && resolved == "global" && global != "off"
 in ts_identifier, ts_member, ts_index let rejection_constructor
-  if re_test(file, /\.[cm]?tsx?$/) then builtin_constructor("Promise") else rejection_global_promise.nonempty ?? false
+  if re_test(file, /\.[cm]?tsx?$/) then ts_value_builtin_constructor(node, ["Promise"]) == true else rejection_global_promise.nonempty ?? false
 in ts_identifier, ts_member, ts_index let rejection_receiver
-  rejection_constructor || re_test(file, /\.[cm]?tsx?$/) && builtin_type("Promise")
+  rejection_constructor || re_test(file, /\.[cm]?tsx?$/) && ts_value_builtin_type(node, ["Promise"]) == true
 in ts_member, ts_index let rejection_member static_name == "reject" && object.rejection_receiver == true
 in ts_parenthesized forward rejection_global_promise, rejection_constructor, rejection_receiver, rejection_member from expression
 in ts_new let rejection_promise_constructor callee.rejection_constructor == true
@@ -183,13 +185,13 @@ in ts_identifier {
   let eval_identifier true
   let eval_core_root if contains(["global", "globalThis", "window", "self"], text) && global != null && global != "off" then text else null
   let eval_timer_global resolved == "global" && (re_test(file, /\.[cm]?tsx?$/) || global != null && global != "off")
-  let eval_constructor builtin_type("FunctionConstructor") || { value type_flags.nonempty ?? []; contains "any" } || ts_value_opaque(node) && reference_kind == null
+  let eval_constructor ts_value_builtin_type(node, ["FunctionConstructor"]) == true || { value type_flags.nonempty ?? []; contains "any" } || ts_value_opaque(node) && reference_kind == null
 }
 in ts_member, ts_index {
   let eval_name static_name
   let eval_core_root if object.eval_core_root != null && static_name == object.eval_core_root then object.eval_core_root else null
   let eval_timer_global if re_test(file, /\.[cm]?tsx?$/) then object is ts_identifier && contains(["global", "globalThis", "window"], object) else object.eval_core_root != null
-  let eval_constructor builtin_type("FunctionConstructor") || { value type_flags.nonempty ?? []; contains "any" } || ts_value_opaque(node)
+  let eval_constructor ts_value_builtin_type(node, ["FunctionConstructor"]) == true || { value type_flags.nonempty ?? []; contains "any" } || ts_value_opaque(node)
 }
 in ts_member let eval_bind_member property == "bind"
 in ts_parenthesized {
@@ -206,17 +208,17 @@ group typed_simple_expression ts_identifier, ts_private_name, ts_this, ts_super,
   ts_non_null, ts_type_assertion, ts_function, ts_arrow, ts_class, ts_instantiation, ts_meta_property,
   ts_import_call
 in typed_simple_expression, ts_binary {
-  let eval_callback callable || builtin_type("Function")
+  let eval_callback callable || ts_value_builtin_type(node, ["Function"]) == true
 }
 in typed_simple_expression {
   let eval_string is (ts_string, ts_template)
-    || static_string != null && { value type_flags.nonempty ?? []; has_only_flags (["string", "literal"]) }
+    || ts_runtime_string(node) != null && { value type_flags.nonempty ?? []; has_only_flags (["string", "literal"]) }
 }
 in ts_call {
-  let eval_callback callable || builtin_type("Function") || callee.eval_bind_member == true || callee is ts_identifier && callee == "bind"
-  let eval_string static_string != null && { value type_flags.nonempty ?? []; has_only_flags (["string", "literal"]) } || callee.global_value == "String" && first([] argument.static_string) != null
+  let eval_callback callable || ts_value_builtin_type(node, ["Function"]) == true || callee.eval_bind_member == true || callee is ts_identifier && callee == "bind"
+  let eval_string ts_runtime_string(node) != null && { value type_flags.nonempty ?? []; has_only_flags (["string", "literal"]) } || callee.global_value == "String" && ts_runtime_string(first(argument.nodes)) != null
 }
-in ts_binary let eval_string static_string != null && { value type_flags.nonempty ?? []; has_only_flags (["string", "literal"]) } || operator == "+" && (left.eval_string == true || right.eval_string == true)
+in ts_binary let eval_string ts_runtime_string(node) != null && { value type_flags.nonempty ?? []; has_only_flags (["string", "literal"]) } || operator == "+" && (left.eval_string == true || right.eval_string == true)
 in ts_parenthesized {
   let eval_callback expression.eval_callback
   let eval_string expression.eval_string
@@ -359,7 +361,7 @@ in ts_method.return_type, ts_method_signature.return_type rule related-getter-se
 # `await` of something that is not a promise; promise aggregators of arrays
 # of non-promises.
 in ts_await rule await-thenable {
-  when argument always nonthenable
+  when ts_value_nonthenable(argument.node) == true
   warn "Unexpected `await` of a non-Promise (non-\"Thenable\") value."
 }
 in ts_member, ts_index let promise_aggregate_member object.global_value == "Promise" && contains(["all", "allSettled", "race", "any"], static_name)
@@ -367,7 +369,7 @@ in ts_call let is_promise_aggregator callee.promise_aggregate_member == true
 in ts_array let is_promise_aggregator_argument parent.is_promise_aggregator == true
 in ts_array.element rule await-thenable:aggregate {
   when not ts_hole && parent.is_promise_aggregator_argument
-    && (if is ts_spread then nonawaitable_type == true else node always nonthenable)
+    && (if is ts_spread then nonawaitable_type == true else ts_value_nonthenable(node) == true)
   warn "Unexpected iterable of non-Promise (non-\"Thenable\") values passed to promise aggregator."
 }
 in ts_call.argument rule await-thenable:iterable {
@@ -376,11 +378,13 @@ in ts_call.argument rule await-thenable:iterable {
 }
 in ts_for_of rule await-thenable:for-of {
   report at { start: offset, end: last(overlapping(ts_close_paren, right.end_offset, body.offset)).end_offset }
-  when nonasync_for_of == true
+  when contains([] modifier, "await")
+    && value_has_member(right.node, {global: "Symbol", class: "value", path: ["asyncIterator"]}, null) == false
   warn "Unexpected `for await...of` of a value that is not async iterable."
 }
 in ts_declarator.init rule await-thenable:using {
-  when nonasync_using == true
+  when starts_with(parent.parent.kind.text, "await")
+    && value_has_member(node, {global: "Symbol", class: "value", path: ["asyncDispose"]}, null) == false
   warn "Unexpected `await using` of a value that is not async disposable."
 }
 
@@ -408,7 +412,7 @@ in ts_unary rule no-unsafe-unary-minus {
   warn "Argument of unary negation should be assignable to number | bigint but is { { value argument.type.nonempty ?? '?'; re_replace /^\"[\s\S]*\"$/ 'string' } } instead."
 }
 
-in ts_member, ts_index let object_array_type object.array_type
+in ts_member, ts_index let object_array_type ts_value_array_like(object.node)
 in ts_parenthesized let object_array_type expression.object_array_type
 in ts_member, ts_index let array_literal_object object is ts_array
 in ts_parenthesized let array_literal_object expression.array_literal_object
@@ -428,7 +432,7 @@ in ts_as, ts_type_assertion rule no-unsafe-type-assertion {
   warn if unsafe_assertion.kind == "from-any" then "Unsafe assertion from {unsafe_assertion.type} detected: consider using type guards or a safer assertion." else if unsafe_assertion.kind == "to-any" then "Unsafe assertion to {unsafe_assertion.type} detected: consider using a more specific type to ensure safety." else if unsafe_assertion.kind == "unconstrained" then "Unsafe type assertion: '{unsafe_assertion.type}' could be instantiated with an arbitrary type which could be unrelated to the original type." else if unsafe_assertion.kind == "constraint" then "Unsafe type assertion: the original type is assignable to the constraint of type '{unsafe_assertion.type}', but '{unsafe_assertion.type}' could be instantiated with a different subtype of its constraint." else "Unsafe type assertion: type '{unsafe_assertion.type}' is more narrow than the original type."
 }
 
-in ts_member let object_string_array_type object.string_array_type
+in ts_member let object_string_array_type ts_value_string_array(object.node)
 in ts_call rule require-array-sort-compare {
   option ignoreStringArrays boolean = true "Ignore arrays whose elements are all strings"
   when count(argument) == 0 && re_test(callee, /\??\.\s*(sort|toSorted)$/)
@@ -436,24 +440,21 @@ in ts_call rule require-array-sort-compare {
   warn "Require 'compare' argument."
 }
 
-in ts_call.callee rule no-unsafe-call {
-  when unsafe_call_type != null
-  warn if unsafe_call_type == "error" then if unsafe_this_type == "error" then "Unsafe call of a `this` type that could not be resolved." else "Unsafe call of a type that could not be resolved." else "Unsafe call of {if unsafe_call_type == 'function' then 'a `Function`' else 'an `any`'} typed value."
-}
-in ts_new rule no-unsafe-call:new {
-  when callee.unsafe_call_type != null
-  warn if callee.unsafe_call_type == "error" then "Unsafe construction of a type that could not be resolved." else "Unsafe construction of {if callee.unsafe_call_type == 'function' then 'a `Function`' else 'an `any`'} typed value."
-}
-in ts_tagged_template.tag rule no-unsafe-call:tag {
-  when unsafe_call_type != null
-  warn if unsafe_call_type == "error" then "Unsafe use of a template tag whose type could not be resolved." else "Unsafe use of {if unsafe_call_type == 'function' then 'a `Function`' else 'an `any`'} typed template tag."
-}
 
 in ts_unary rule no-meaningless-void-operator {
   option checkNever boolean = false "Also check calls returning never"
-  when operator == "void" && argument != "0" && void_argument_kind != "assignment"
-  when if void_argument_kind == "call" then { value argument.type_flags.nonempty ?? []; has_only_flags (["undefined", "nullable", "union"]) } || checkNever && { value argument.type_flags.nonempty ?? []; has_only_flags (["undefined", "nullable", "never", "union"]) } else !{ value argument.type_members.nonempty ?? []; contains "then" }
-  warn if void_argument_kind == "call" then "void operator shouldn't be used on {argument.type}; it should convey that a return value is being ignored" else "void operator is useless here; it should only discard a call's return value"
+  when operator == "void" && argument != "0"
+  let underlying {
+    value argument.node
+    walk (current) if current is (ts_parenthesized, ts_as, ts_satisfies, ts_non_null, ts_type_assertion)
+      then current.expression.node
+      else if current is ts_sequence then last(current.expression.nodes) else null
+    last
+  }
+  when underlying not ts_assignment
+  let call underlying is (ts_call, ts_new)
+  when if call then { value argument.type_flags.nonempty ?? []; has_only_flags (["undefined", "nullable", "union"]) } || checkNever && { value argument.type_flags.nonempty ?? []; has_only_flags (["undefined", "nullable", "never", "union"]) } else !{ value argument.type_members.nonempty ?? []; contains "then" }
+  warn if call then "void operator shouldn't be used on {argument.type}; it should convey that a return value is being ignored" else "void operator is useless here; it should only discard a call's return value"
   let operand argument.node
   let parens expression_fix_parens(source, node, operand)
   let replacement expression_fix_wrap(operand.text, parens > 0)

@@ -1,0 +1,10 @@
+input.cjs:12:6-12:33 no-loss-of-precision#0
+input.cjs:15:6-15:22 no-loss-of-precision#0
+input.cjs:16:6-16:27 no-loss-of-precision#0
+input.cjs:17:6-17:24 no-loss-of-precision#0
+input.cjs:21:6-21:12 no-loss-of-precision#0
+input.cjs:23:6-23:11 no-loss-of-precision#0
+input.cjs:27:6-27:22 no-loss-of-precision#0
+input.cjs:29:6-29:41 no-loss-of-precision#0
+input.cjs:32:6-32:137 no-loss-of-precision#0
+input.cjs:39:6-39:109 no-loss-of-precision#0

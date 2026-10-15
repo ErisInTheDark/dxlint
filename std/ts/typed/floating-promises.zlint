@@ -55,10 +55,14 @@ fn floating_promise_leaves(n, ignore_void) = {
     && !(part is ts_call && part.callee.node.static_name == "finally")
     && !(!ignore_void && part is ts_unary && part.operator == "void")
 }
-fn floating_promise_allowed(t, safe_promises) =
-  if any(t.aliases, name => contains(safe_promises, name))
-    || any(t.declarations, declaration => contains(safe_promises, declaration.name)) then [t]
-  else flat_map(t.parts, part => floating_promise_allowed(part, safe_promises))
+fn floating_promise_named(t, safe_promises) =
+  any(t.aliases, name => contains(safe_promises, name))
+    || any(t.declarations, declaration => contains(safe_promises, declaration.name))
+fn floating_promise_allowed(t, safe_promises) = {
+  value t
+  walk (part) if floating_promise_named(part, safe_promises) then [] else part.parts
+  filter (part) floating_promise_named(part, safe_promises)
+}
 fn floating_promise_failure(n, check_thenables, ignore_void, safe_promises, safe_calls) = {
   value floating_promise_leaves(n, ignore_void)
   map (part) if part is ts_assignment || floating_promise_safe(part, safe_calls) then null else {
@@ -89,23 +93,30 @@ in ts_expression_statement.expression, ts_arrow.body rule no-floating-promises {
       then " A rejection handler that is not a function will be ignored." else "")
 }
 
-fn floating_callable_arm(t) =
-  if t.kind == "union" then any(t.parts, part => floating_callable_arm(part)) else t.callable
-fn floating_promise_element(t, check_thenables, allowed) =
-  if contains(allowed, t) then false
-  else if contains(["union", "intersection"], t.kind) then any(t.parts, part => floating_promise_element(part, check_thenables, allowed))
-  else any(t.declarations, declaration => declaration.name == "Promise" && declaration.from == "lib")
-    || check_thenables && any(t.member_types, member => member.name == "then"
+fn floating_callable_arm(t) = {
+  value t
+  walk (part) if part.kind == "union" then part.parts else []
+  any (part) part.kind != "union" && part.callable
+}
+fn floating_promise_element(t, check_thenables, allowed) = {
+  value t
+  walk (part) if !contains(allowed, part) && contains(["union", "intersection"], part.kind) then part.parts else []
+  any (part) !contains(allowed, part) && !contains(["union", "intersection"], part.kind)
+    && (any(part.declarations, declaration => declaration.name == "Promise" && declaration.from == "lib")
+    || check_thenables && any(part.member_types, member => member.name == "then"
       && any(member.type.call_signatures, signature => count(signature.parameters) >= 2
         && {
           value signature.parameters
           slice 0 2
           all (parameter) floating_callable_arm(parameter)
-        }))
-fn floating_promise_array(t, check_thenables, allowed) =
-  if contains(allowed, t) then false
-  else if t.kind == "union" then any(t.parts, part => floating_promise_array(part, check_thenables, allowed))
-  else contains(["array", "tuple"], t.kind) && any(t.parts, part => floating_promise_element(part, check_thenables, allowed))
+        })))
+}
+fn floating_promise_array(t, check_thenables, allowed) = {
+  value t
+  walk (part) if !contains(allowed, part) && part.kind == "union" then part.parts else []
+  any (part) !contains(allowed, part) && contains(["array", "tuple"], part.kind)
+    && any(part.parts, element => floating_promise_element(element, check_thenables, allowed))
+}
 
 in ts_expression_statement.expression, ts_arrow.body rule no-floating-promises:array {
   option checkThenables boolean = false "Check promise-like types with fulfilment and rejection callbacks"

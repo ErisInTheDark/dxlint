@@ -3,6 +3,111 @@ import .ts/expression-fixes
 
 define {
 
+fn ts_runtime_binding_init(n) = {
+  value binding: if n is ts_identifier then name_binding(n) else null
+  value declaration: binding.node
+  value owner: declaration.parent.node
+  value if binding == null || count(binding.declarations) != 1 || owner not ts_declarator
+    || owner.name.node != declaration || !contains(["const", "let", "var"], declaration.declaration_kind)
+    || !all(binding.references, reference => reference.access != null
+      && !contains(["write", "read_write"], reference.access))
+    then null else owner.init.node
+}
+fn ts_runtime_quasi(q) = {
+  value body: slice(q.text, 1, if re_test(q.text, /\$\{$/) then -2 else -1)
+  value js_string_parts("`" body "`").text
+}
+fn ts_runtime_template(n, seen) = {
+  value expressions: n.expression.nodes
+  value quasis: n.quasi.nodes
+  value pieces: map(quasis, quasi => {
+    value index: index_of(quasis, quasi)
+    value text: ts_runtime_quasi(quasi)
+    value expression: if index < count(expressions) then {
+      value expressions
+      drop index
+      first
+    } else null
+    value substitution: if expression != null then ts_runtime_compute(expression, seen) else null
+    value if type_of(text) != "str" || expression != null && substitution == null then null
+      else text (if expression != null then js_to_string(substitution) else "")
+  })
+  value if count(quasis) != count(expressions) + 1 || any(pieces, piece => type_of(piece) != "str")
+    then null else { type: "string", value: join(pieces, "") }
+}
+fn ts_runtime_unary(n, seen) = {
+  value operand: ts_runtime_compute(n.argument.node, seen)
+  value if operand == null then null
+    else if operand.type == "bigint" then
+      if n.operator != "-" then null else {
+        type: "bigint",
+        value: if operand.value == "0" then "0"
+          else if starts_with(operand.value, "-") then slice(operand.value, 1)
+          else "-" operand.value
+      }
+    else {
+      value number: js_number_unary(n.operator.text, js_number(operand))
+      value if number == null then null else { type: "number", value: number }
+    }
+}
+fn ts_runtime_binary(n, seen) = {
+  value left: ts_runtime_compute(n.left.node, seen)
+  value right: ts_runtime_compute(n.right.node, seen)
+  value if left == null || right == null || !contains(["+", "-", "*", "/", "%", "**"], n.operator.text) then null
+    else if n.operator == "+" && (left.type == "string" || right.type == "string")
+      then { type: "string", value: js_to_string(left) js_to_string(right) }
+    else if left.type == "bigint" || right.type == "bigint" then null
+    else {
+      value number: js_number_binary(n.operator.text, js_number(left), js_number(right))
+      value if number == null then null else { type: "number", value: number }
+    }
+}
+fn ts_runtime_index(n, seen) = {
+  value object: ts_runtime_compute(n.object.node, seen)
+  value index: ts_runtime_compute(n.index.node, seen)
+  value number: if index != null && index.type == "number" then index.value else null
+  value if n.optional != null || object.type != "string" || number == null
+    || number < 0 || number % 1 != 0 || number >= utf16_len(object.value) then null
+    else { type: "string", value: js_char_at(object.value, number) }
+}
+fn ts_runtime_compute(n, seen) =
+  if n == null || contains(seen, n) then null else {
+    value path: seen [n]
+    value if n is ts_string then {
+        value decoded: js_string(n.text)
+        value if type_of(decoded) != "str" then null else { type: "string", value: decoded }
+      }
+      else if n is ts_number then {
+        type: "number", value: js_number({ type: "number", value: n.text })
+      }
+      else if n is ts_bigint then {
+        value decoded: js_bigint(n.text)
+        value if decoded == null then null else { type: "bigint", value: decoded }
+      }
+      else if n is ts_boolean then { type: "boolean", value: n.text == "true" }
+      else if n is ts_null then { type: "null", value: null }
+      else if n is (ts_parenthesized, ts_as, ts_satisfies, ts_non_null, ts_type_assertion)
+        then ts_runtime_compute(n.expression.node, path)
+      else if n is ts_identifier then ts_runtime_compute(ts_runtime_binding_init(n), path)
+      else if n is ts_template && n not ts_tagged_template.quasi then ts_runtime_template(n, path)
+      else if n is ts_sequence then ts_runtime_compute(last(n.expression.nodes), path)
+      else if n is ts_assignment && n.operator == "=" then ts_runtime_compute(n.right.node, path)
+      else if n is ts_unary then ts_runtime_unary(n, path)
+      else if n is ts_binary then ts_runtime_binary(n, path)
+      else if n is ts_index then ts_runtime_index(n, path)
+      else null
+  }
+fn ts_runtime_constant(n) = ts_runtime_compute(n, [])
+fn ts_runtime_string(n) = {
+  value constant: ts_runtime_constant(n)
+  value if constant == null then null else js_to_string(constant)
+}
+fn ts_runtime_number(n) = {
+  value constant: ts_runtime_constant(n)
+  value if constant == null || !contains(["number", "boolean", "bigint"], constant.type)
+    then null else js_number(constant)
+}
+
 group ts_constant_expression ts_string, ts_number, ts_boolean, ts_null, ts_regex, ts_bigint, ts_arrow, ts_function, ts_class, ts_object, ts_hole, ts_template, ts_array, ts_unary, ts_binary, ts_logical, ts_new, ts_assignment, ts_sequence, ts_spread, ts_call, ts_identifier, ts_parenthesized, ts_update, ts_conditional
 group ts_constant_literal ts_string, ts_number, ts_boolean, ts_null, ts_regex, ts_bigint
 
@@ -19,10 +124,8 @@ fn ts_constant_boolean_call(n) = {
 fn ts_constant_answer(n, boolean) = if n == null then false
   else if boolean then n.constant_truthiness == true else n.ts_constant_value == true
 fn ts_constant_quasi(q) = {
-  value body: { value q.text; re_replace /^[`}]+/ ""; re_replace /`+$/ ""; re_replace /\$\{$/ "" }
-  value literal: "`" body "`"
-  value cooked: js_string(literal)
-  value cooked == null || cooked != ""
+  value cooked: ts_runtime_quasi(q)
+  value type_of(cooked) != "str" || cooked != ""
 }
 fn ts_constant_compute(n, boolean) =
   if n is (ts_constant_literal, ts_arrow, ts_function, ts_class, ts_object, ts_hole) then true

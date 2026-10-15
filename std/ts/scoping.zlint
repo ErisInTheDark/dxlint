@@ -85,7 +85,7 @@ in ts_function rule prefer-arrow-callback {
   # Cheap checks first: the barrier scan walks the whole body.
   let callback arrow_callback_receiver
   when callback != null && !(allowNamedFunctions && name != null)
-  when !contains([] modifier, "*") && (name.uses.nonempty ?? 0) + (name.self_uses.nonempty ?? 0) + (name.writes.nonempty ?? 0) == 0 && !uses_arguments
+  when !contains([] modifier, "*") && (name.uses.nonempty ?? 0) + (name.self_uses.nonempty ?? 0) + (name.writes.nonempty ?? 0) == 0 && !function_uses_arguments(node)
   when !allowUnboundThis || body.scoping_receiver_read != true || callback
   when !any(children.arrow_callback_barrier, b => b == true)
   warn "Unexpected function expression."
@@ -343,17 +343,23 @@ in ts_return rule no-useless-return {
     byte_slice(owner.text, 0, offset - owner.offset) byte_slice(owner.text, end_offset - owner.offset)
 }
 
-fn scoping_return_void(t, asynchronous) = t.kind == "void"
-  || t.kind == "union" && any(t.parts, part => scoping_return_void(part, asynchronous))
-  || asynchronous && any(t.declarations, declaration => !declaration.inherited && contains(["Promise", "PromiseLike"], declaration.name))
-    && { value t.arguments; first; scoping_return_void true }
-in ts_node let scoping_return_type_structure type_structure([], ["kind", "parts", "declarations", "arguments"], false)
+fn scoping_return_void(subject, asynchronous, seen) = {
+  value arms: value_parts(subject)
+  value arms != null && any(arms, arm => {
+    value part: if count(arm.parts) == 1 then first(arm.parts) else null
+    value part != null && !contains(seen, arm.handle)
+      && (contains(part.traits, "void")
+        || asynchronous && part.carrier_known && part.carrier.description.kind == "named"
+          && contains(["Promise", "PromiseLike"], part.carrier.description.name)
+          && count(part.carrier.arguments) > 0
+          && scoping_return_void(first(part.carrier.arguments), true, seen [arm.handle]))
+  })
+}
 in ts_program let scoping_return_void_annotation false
 in ts_function, ts_arrow, ts_method let scoping_return_void_annotation
   return_type != null && {
     value asynchronous: contains([] modifier, "async")
-    value return_type.scoping_return_type_structure
-    scoping_return_void asynchronous
+    value scoping_return_void(return_type.node, asynchronous, [])
   }
 in ts_program, ts_function, ts_arrow, ts_method let scoping_return_entry if is ts_program then node else body.node
 in ts_node let scoping_return_syntax count(descendants(ts_return)) > 0

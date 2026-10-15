@@ -1,0 +1,2 @@
+import .ts
+rule no-loss-of-precision

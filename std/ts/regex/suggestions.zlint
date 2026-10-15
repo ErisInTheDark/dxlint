@@ -1,4 +1,5 @@
 import .ts/layout/literals
+import .ts/constants
 import .ts/literal-text
 
 define {
@@ -63,7 +64,7 @@ fn regexp_unnamed_captures(n) = {
     value arguments: n.argument.nodes
     value first: first(arguments)
     value flags_argument: regexp_at(arguments, 1)
-    value flags: if type_of(flags_argument.static_string) == "str" then flags_argument.static_string else ""
+    value flags: if type_of(ts_runtime_string(flags_argument)) == "str" then ts_runtime_string(flags_argument) else ""
     value if n.callee.global_value == "RegExp" then regexp_computed_input(first, flags) else null
   }
   value if input == null then [] else {
@@ -85,7 +86,7 @@ fn regexp_unicode_info(n) = if n is ts_regex then { flags: n.regexp_input.flags 
     value first: first(arguments)
     value pattern: unparenthesised_node(first)
     value flag_argument: regexp_at(arguments, 1)
-    value flags: if flag_argument == null then "" else flag_argument.static_string
+    value flags: if flag_argument == null then "" else ts_runtime_string(flag_argument)
     value if pattern is ts_spread || type_of(flags) != "str" then null else { flags: flags }
   }
 in regexp_site let regexp_unicode_info regexp_unicode_info(node)

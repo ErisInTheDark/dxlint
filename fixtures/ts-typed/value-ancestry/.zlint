@@ -1,0 +1,16 @@
+import .ts
+
+in ts_declarator rule builtin-ancestry-contract {
+  let label name.text
+  when contains(["real", "intersection", "project", "shadow", "scalar", "broken", "factory", "factoryInstance", "derivedFactory"], label)
+  let arms value_parts(type.node ?? init.node)
+  let value_side contains(["factory", "factoryInstance", "derivedFactory"], label)
+  let results if arms == null || count(arms) == 0 then [null]
+    else flat_map(arms, arm => map(arm.parts, part =>
+      if value_side then ts_value_builtin_value_ancestor(part, node, ["LibraryFactory"])
+      else ts_value_builtin_ancestor(part, node, [if label == "project" then "ProjectOnly" else "Promise"])))
+  let expected if label == "broken" then null
+    else contains(["real", "intersection", "factory", "derivedFactory"], label)
+  when any(results, result => result != expected)
+  warn "Builtin ancestry must preserve the contract for {label}."
+}

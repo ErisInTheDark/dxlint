@@ -78,33 +78,9 @@ pub const FACTS: &[Fact] = &[
     },
     Fact {
         shape: Fact::SCALAR.shape,
-        name: "type_literal_values",
-        doc: "native values and types: literal union/intersection constituents as type/value records; bigint values retain literal text",
-        get: |f, n| f.with_file(|file, node| type_properties::literal_values(&file.type_of(node)), n),
-    },
-    Fact {
-        shape: Fact::SCALAR.shape,
         name: "callable",
         doc: "native expressions: the type supplies call signatures (every union arm, or an intersection arm)",
         get: |f, n| f.with_file(|file, node| Value::Bool(file.typing().checker.callable_type(&file.type_of(node))), n),
-    },
-    Fact {
-        shape: Fact::SCALAR.shape,
-        name: "builtin_type",
-        doc: "native expressions: builtin_type(name) asks whether the type is the named standard-library type or derives from it",
-        get: |f, n| f.with_file(|file, node| {
-            let args = crate::expr::facts::args();
-            args.first().map_or(Value::Null, |name| Value::Bool(file.typing().checker.is_builtin_type_or_base(&file.type_of(node), &name.to_string())))
-        }, n),
-    },
-    Fact {
-        shape: Fact::SCALAR.shape,
-        name: "builtin_constructor",
-        doc: "native expressions: builtin_constructor(name) asks whether the value is a standard-library constructor or derives from it",
-        get: |f, n| f.with_file(|file, node| {
-            let args = crate::expr::facts::args();
-            args.first().map_or(Value::Null, |name| Value::Bool(file.typing().checker.is_builtin_constructor_or_base(&file.type_of(node), &name.to_string())))
-        }, n),
     },
     Fact {
         shape: Fact::SCALAR.shape,
@@ -198,18 +174,6 @@ pub const FACTS: &[Fact] = &[
     },
     Fact {
         shape: Fact::SCALAR.shape,
-        name: "nonasync_for_of",
-        doc: "native for-of: awaited loop lacks an async iterator",
-        get: |f, n| f.with_file(awaitability::for_of, n),
-    },
-    Fact {
-        shape: Fact::SCALAR.shape,
-        name: "nonasync_using",
-        doc: "native initialisers: awaited using lacks an async dispose symbol",
-        get: |f, n| f.with_file(awaitability::using, n),
-    },
-    Fact {
-        shape: Fact::SCALAR.shape,
         name: "nonawaitable_type",
         doc: "native expressions: constrained type has no possibly awaitable union arm",
         get: |f, n| f.with_file(awaitability::nonawaitable, n),
@@ -219,30 +183,6 @@ pub const FACTS: &[Fact] = &[
         name: "nonawaitable_iterable",
         doc: "native expressions: an iterable has a definitely nonawaitable element type",
         get: |f, n| f.with_file(awaitability::iterable, n),
-    },
-    Fact {
-        shape: Fact::SCALAR.shape,
-        name: "unsafe_type",
-        doc: "native expressions: any or unresolved annotation provenance, distinct from unknown",
-        get: |f, n| f.with_file(unsafe_types::kind, n),
-    },
-    Fact {
-        shape: Fact::SCALAR.shape,
-        name: "unsafe_call_type",
-        doc: "native call targets: any, unresolved annotation or unspecialised Function",
-        get: |f, n| f.with_file(unsafe_types::call, n),
-    },
-    Fact {
-        shape: Fact::SCALAR.shape,
-        name: "unsafe_this_type",
-        doc: "native expressions: unsafe category of the root this expression",
-        get: |f, n| f.with_file(unsafe_types::this_kind, n),
-    },
-    Fact {
-        shape: Fact::SCALAR.shape,
-        name: "unsafe_member_key",
-        doc: "native computed keys: unsafe type, unparenthesised text and report offset",
-        get: |f, n| f.with_file(unsafe_types::key, n),
     },
     Fact {
         shape: Fact::SCALAR.shape,
@@ -256,24 +196,6 @@ pub const FACTS: &[Fact] = &[
         doc: "native expressions: the constrained interpolation type for diagnostic messages",
         get: |f, n| f.with_file(template::display, n),
     },
-    Fact {
-        shape: Fact::SCALAR.shape,
-        name: "array_type",
-        doc: "native layers: every union arm (or an intersection arm) is an array or tuple",
-        get: |f, n| f.with_file(array_type, n),
-    },
-    Fact {
-        shape: Fact::SCALAR.shape,
-        name: "string_array_type",
-        doc: "native layers: an array or tuple whose every element is a string",
-        get: |f, n| f.with_file(string_array_type, n),
-    },
-    Fact {
-        shape: Fact::SCALAR.shape,
-        name: "void_argument_kind",
-        doc: "on a void unary expression: the effective argument is a call, assignment or other expression",
-        get: |f, n| f.with_file(void_argument_kind, n),
-    },
 ];
 
 fn is_array(t: &Ty, ck: &Checker<'_>) -> bool {
@@ -286,59 +208,4 @@ fn is_array(t: &Ty, ck: &Checker<'_>) -> bool {
         Ty::Inter(parts) => parts.iter().any(|t| is_array(t, ck)),
         _ => false,
     }
-}
-
-fn string_only(t: &Ty) -> bool {
-    match t {
-        Ty::Prim("string") | Ty::Lit(_, "string") => true,
-        Ty::Union(parts) => !parts.is_empty() && parts.iter().all(string_only),
-        _ => false,
-    }
-}
-
-fn is_string_array(t: &Ty, ck: &Checker<'_>) -> bool {
-    match t {
-        Ty::Array(element) => string_only(&element.element),
-        Ty::Tuple(elements) => elements.iter().all(string_only),
-        Ty::Named(sym, args) if ck.is_builtin_symbol(sym, "Array") || ck.is_builtin_symbol(sym, "ReadonlyArray") => {
-            args.first().is_some_and(string_only)
-        }
-        _ => false,
-    }
-}
-
-fn array_type(file: &NativeFile<'_>, node: u32) -> Value<'static> {
-    Value::Bool(is_array(&file.constrained_type_of(node), &file.typing().checker))
-}
-
-fn string_array_type(file: &NativeFile<'_>, node: u32) -> Value<'static> {
-    Value::Bool(is_string_array(&file.constrained_type_of(node), &file.typing().checker))
-}
-
-fn void_argument_kind(file: &NativeFile<'_>, node: u32) -> Value<'static> {
-    let s = &file.syntax;
-    if !s.is(node, Kind::Unary) || s.word(node, Field::Op) != Some("void") {
-        return Value::Null;
-    }
-    let Some(mut expr) = s.get(node, Field::Arg) else {
-        return Value::Null;
-    };
-    loop {
-        match s.kind(expr) {
-            Some(Kind::Paren | Kind::As | Kind::Satisfies | Kind::NonNull | Kind::TypeAssertion) => {
-                let Some(inner) = s.get(expr, Field::Expr) else { break };
-                expr = inner;
-            }
-            Some(Kind::Sequence) => {
-                let Some(last) = s.all(expr, Field::Expr).last() else { break };
-                expr = last;
-            }
-            _ => break,
-        }
-    }
-    Value::from(match s.kind(expr) {
-        Some(Kind::Call | Kind::New) => "call",
-        Some(Kind::Assign) => "assignment",
-        _ => "other",
-    })
 }

@@ -12,9 +12,12 @@ in ts_binary, ts_parenthesized let inside_addition parent is ts_binary && parent
 in ts_parenthesized forward additive, string_addition, nonstring_addition from expression
 
 fn concatenation_starts_curly(n) = {
-  value bare: unparenthesised_node(n)
-  value if bare is ts_binary then concatenation_starts_curly(bare.left.node)
-    else if bare is ts_template then count(bare.expression) > 0 && first([] bare.quasi.text) == "`${{"
+  value bare: {
+    value unparenthesised_node(n)
+    walk (current) if current is ts_binary then unparenthesised_node(current.left.node) else null
+    last
+  }
+  value if bare is ts_template then count(bare.expression) > 0 && first([] bare.quasi.text) == "`${{"
     else bare not ts_string
 }
 fn concatenation_ends_curly(n) = {
@@ -24,9 +27,9 @@ fn concatenation_ends_curly(n) = {
     else bare not ts_string
 }
 fn concatenation_legacy_escape(n) = {
-  value bare: unparenthesised_node(n)
-  value if bare.additive == true then concatenation_legacy_escape(bare.left.node) || concatenation_legacy_escape(bare.right.node)
-    else bare is ts_string && re_test(bare.text, /(^|[^\\])(?:\\\\)*\\(?:[1-9]|0[0-9])/)
+  value unparenthesised_node(n)
+  walk (bare) if bare.additive == true then [unparenthesised_node(bare.left.node), unparenthesised_node(bare.right.node)] else []
+  any (bare) bare is ts_string && re_test(bare.text, /(^|[^\\])(?:\\\\)*\\(?:[1-9]|0[0-9])/)
 }
 fn concatenation_gap(source, start, end) = {
   value overlapping(ts_token, start, end)

@@ -1,3 +1,8 @@
 import .ts
-in ts_expression_statement.expression rule resolved { when count(type_literal_values) == 2 && all(type_literal_values, literal => contains(['ABC', 'DEF'], literal.value))
+in ts_expression_statement.expression rule resolved {
+  let arms value_parts(node)
+  let literals flat_map(arms ?? [], arm => flat_map(arm.parts, part =>
+    if part.identity_known && part.identity.kind == "value" && type_of(part.identity.value) == "str"
+      then [part.identity.value] else []))
+  when arms != null && count(literals) == 2 && all(literals, literal => contains(['ABC', 'DEF'], literal))
 warn 'resolved' }

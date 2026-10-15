@@ -237,8 +237,16 @@ in ts_binary, ts_case rule no-unnecessary-condition:overlap {
   }
 }
 
-fn strict_boolean_parts(d) = if d.kind == "union" then { value d.parts; fold ([]) (parts, part) parts strict_boolean_parts(part) } else [d]
-fn strict_boolean_resolved(d) = !contains(["unresolved", "recursive"], d.kind) && all(d.parts, part => strict_boolean_resolved(part))
+fn strict_boolean_parts(d) = if d == null then [d] else {
+  value d
+  walk (part) if part.kind == "union" then part.parts else []
+  filter (part) part.kind != "union"
+}
+fn strict_boolean_resolved(d) = {
+  value d
+  walk (part) part.parts
+  all (part) !contains(["unresolved", "recursive"], part.kind)
+}
 fn strict_boolean_primitive(d) =
   if d.kind == "intersection" then if any(d.parts, part => part.kind == "boolean") then "boolean" else "object"
   else if contains(d.flags, "enum") then if contains(d.flags, "string") then "string" else "number"

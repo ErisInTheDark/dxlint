@@ -7,12 +7,18 @@ fn void_expression_like(n) =
   if n is (ts_call, ts_tagged_template) then n.result could undefined && n.result always undefined
   else n could undefined && n always undefined
 fn void_expression_fixable(n) = {
-  value expression: unparenthesised_node(n)
-  value if expression is ts_conditional then
-    void_expression_fixable(expression.consequent.node) && void_expression_fixable(expression.alternate.node)
-    else if expression is ts_logical then
-      void_expression_fixable(expression.left.node) && void_expression_fixable(expression.right.node)
-    else void_expression_like(expression)
+  value n
+  walk (current) {
+    value expression: unparenthesised_node(current)
+    value if expression is ts_conditional then [expression.consequent.node, expression.alternate.node]
+      else if expression is ts_logical then [expression.left.node, expression.right.node] else null
+  }
+  all (current) {
+    value expression: unparenthesised_node(current)
+    value if expression is ts_conditional then expression.consequent != null && expression.alternate != null
+      else if expression is ts_logical then expression.left != null && expression.right != null
+      else void_expression_like(expression)
+  }
 }
 fn void_expression_annotation_void(n) = {
   value arms: value_parts(n)
@@ -29,15 +35,20 @@ fn void_expression_void_returning(n) = n != null && (
   else (n is ts_arrow || n is ts_function && !expression_fix_declaration(n))
     && value_has_expected(n) && n.expected could callable && n.expected.result could void)
 fn void_expression_ancestor(n, arrows, operators) = {
-  value p: n.parent.node
-  value if p == null then null
-    else if p is ts_parenthesized then void_expression_ancestor(p, arrows, operators)
-    else if p is ts_expression_statement then null
-    else if p is ts_sequence && n.index < count(p.expression) - 1 then null
-    else if p is ts_logical && p.right.offset == n.offset
-      || p is ts_conditional && (p.consequent.offset == n.offset || p.alternate.offset == n.offset)
-      then void_expression_ancestor(p, arrows, operators)
-    else if p is ts_arrow && arrows || p is ts_unary && p.operator == "void" && operators then null
+  value terminal: {
+    value n
+    walk (current) {
+      value p: current.parent.node
+      value if p is ts_parenthesized || p is ts_logical && p.right.offset == current.offset
+        || p is ts_conditional && (p.consequent.offset == current.offset || p.alternate.offset == current.offset)
+        then p else null
+    }
+    last
+  }
+  value p: terminal.parent.node
+  value if p is ts_expression_statement
+    || p is ts_sequence && terminal.index < count(p.expression) - 1
+    || p is ts_arrow && arrows || p is ts_unary && p.operator == "void" && operators then null
     else p
 }
 fn void_expression_final_return(n) = n.parent is ts_block

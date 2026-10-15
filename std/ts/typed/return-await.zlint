@@ -12,8 +12,11 @@ fn return_await_leaves(n) = {
   map (current) unparenthesised_node(current)
   filter (current) current not ts_conditional
 }
-fn return_await_scope(n) = if n == null || n is (ts_block, ts_program, ts_function, ts_arrow, ts_method, ts_for, ts_for_in, ts_for_of, ts_switch)
-  then n else return_await_scope(n.parent.node)
+fn return_await_scope(n) = {
+  value n
+  walk (current) current.parent.node
+  find (current) current is (ts_block, ts_program, ts_function, ts_arrow, ts_method, ts_for, ts_for_in, ts_for_of, ts_switch)
+}
 fn return_await_handling(n, owner, resources) = {
   value ancestors: walk(n, current => if current == owner then null else current.parent.node)
   value any(ancestors, child => child.parent is ts_try
@@ -28,7 +31,7 @@ fn return_await_certainty(n) = {
   value complete: parts != null && len(parts) > 0
     && all(parts, arm => len(arm) > 0 && all(arm, part => !contains(part.uncertain_traits, "thenable")
       && !contains(part.traits, "any") && !contains(part.traits, "unknown")))
-  value if complete && n could thenable then "always" else if n always nonthenable then "never" else "may"
+  value if complete && n could thenable then "always" else if ts_value_nonthenable(n) == true then "never" else "may"
 }
 fn return_await_result(n, owner, resources) = {
   value awaited: n is ts_await

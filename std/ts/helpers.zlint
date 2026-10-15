@@ -6,6 +6,20 @@ fn is_identifier(x) = re_test(x, /^[A-Za-z_$][\w$]*$/)
 fn unparenthesised_node(n) = { value n; walk (current) if current is ts_parenthesized then current.expression.node else null; last }
 fn outer_parenthesised_node(n) = { value n; walk (current) if current.parent is ts_parenthesized then current.parent.node else null; last }
 
+fn function_uses_this(n) = {
+  value n.children.nodes
+  walk (current) if current is ts_function then []
+    else if current is ts_method then filter(current.children.nodes, child => child is (ts_method.key, ts_method.decorator))
+    else current.children.nodes
+  any (current) current is ts_this
+}
+
+fn function_uses_arguments(n) = {
+  value n.body.node
+  walk (current) current.children.nodes
+  any (reference) reference is ts_identifier && ts_arguments_owner(reference) == n
+}
+
 fn function_head_site(n) = {
   value outer: outer_parenthesised_node(n)
   value member: if n is ts_method then n else if outer.parent is (ts_property, ts_class_property) then outer.parent.node else null

@@ -13,7 +13,7 @@ fn enum_root_bad(pair) =
       any (allowance) { value first(allowance).enums; len } == 0 && last(allowance) == true
     }
   }
-fn enum_relation_bad(pair) = enum_root_bad(pair) || any(pair.children, child => enum_relation_bad(child))
+fn enum_relation_bad(pair) = { value pair; walk (relation) relation.children; any (relation) enum_root_bad(relation) }
 fn enum_context_bad(context) = context.complete && enum_relation_bad(context.relation) && !enum_safe_bitwise(context.expression)
 fn enum_names_text(contexts) = {
   value contexts
@@ -23,11 +23,14 @@ fn enum_names_text(contexts) = {
   map (name) "'" name "'"
   join ", "
 }
-fn enum_safe_operand(expression) = enum_safe_bitwise(expression) || !enum_root_bad(expression.relation)
-fn enum_safe_bitwise(expression) =
-  if expression.kind == "binary" && contains(["&", "|", "^"], expression.operator)
-  then len(expression.operands) == 2 && all(expression.operands, operand => enum_safe_operand(operand))
-  else expression.kind == "unary" && expression.operator == "~" && len(expression.operands) == 1 && { value expression.operands; first; enum_safe_operand }
+fn enum_bitwise_shape(expression) =
+  expression.kind == "binary" && contains(["&", "|", "^"], expression.operator) && len(expression.operands) == 2
+  || expression.kind == "unary" && expression.operator == "~" && len(expression.operands) == 1
+fn enum_safe_bitwise(expression) = enum_bitwise_shape(expression) && {
+  value expression.operands
+  walk (operand) if enum_root_bad(operand.relation) && enum_bitwise_shape(operand) then operand.operands else []
+  all (operand) !enum_root_bad(operand.relation) || enum_bitwise_shape(operand)
+}
 
 group enum_transfer ts_declarator, ts_parameter, ts_class_property, ts_assignment, ts_assignment_pattern, ts_property, ts_as, ts_type_assertion, ts_update
 in enum_transfer let enum_mutation is ts_update || is ts_assignment && !contains(["=", "&&=", "&=", "??=", "^=", "|=", "||="], node.operator)

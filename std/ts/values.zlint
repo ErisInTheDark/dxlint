@@ -108,6 +108,22 @@ fn ts_value_array_shape(n) = {
   value parts: value_constituents(n)
   value ts_value_array_parts(parts, n)
 }
+fn ts_value_array_like(n) = {
+  value arms: value_parts(n)
+  value arms != null && count(arms) > 0 && all(arms, arm => any(arm.parts, part => {
+    value shape: ts_value_array_part(part, n)
+    value shape.known && (shape.array || shape.tuple)
+  }))
+}
+fn ts_value_string_array(n) = {
+  value arms: value_parts(n)
+  value ts_value_array_like(n) && all(arms, arm => {
+    value empty: any(arm.parts, part => part.product_known && part.product != null && count(part.product.elements) == 0)
+    value element: value_lookup(arm.handle, 0)
+    value count(arm.parts) == 1 && (empty || element.value_known && count(element.value) > 0
+      && all(element.value, item => count(item) == 1 && contains(first(item).traits, "string")))
+  })
+}
 fn ts_value_const_context(n) = {
   value chain: walk(n, item => if item.parent is (ts_parenthesized, ts_array, ts_object, ts_spread, ts_property) then item.parent.node else null)
   value outer: last(chain).parent.node
@@ -198,6 +214,11 @@ fn ts_value_then_headers(signatures) = {
 }
 fn ts_value_then_contract(member) = if member == null then { known: true, thenable: false }
   else { value signatures: call_parameters(member); value ts_value_then_headers(signatures) }
+fn ts_value_nonthenable(n) = if n always nonthenable then true else {
+  value parts: value_parts(n)
+  value shape: ts_value_then_headers(member_call_parameters(n, "then"))
+  value if parts == null || len(parts) == 0 || !shape.known then null else !shape.thenable
+}
 fn ts_value_intersection_parts(types) = {
   value never: filter(types, item => { value parts: value_constituents(item); value parts != null && len(parts) == 0 })
   value dynamic: filter(types, item => {
@@ -502,10 +523,6 @@ in ts_interface, ts_type_literal, ts_class {
   }
   fits thenable in members when ts_value_then_shape.thenable
 }
-in ts_type_literal {
-  fits nonthenable in members when ts_value_closed_type_members(member.nodes)
-    && ts_value_then_shape.known && !ts_value_then_shape.thenable
-}
 in ts_property {
   declares member key keyed ts_value_key(it) in nearest members hoisted
   when ts_value_const_context(node) { unwraps value ?? key }
@@ -525,7 +542,7 @@ in ts_member {
   let ts_value_member_key ts_value_key(property.node)
   when object always any { unwraps object }
   when !(object always any) {
-    when in_optional_chain != true { unwraps from object at ts_value_member_key }
+    when in_optional_chain != true { unwraps (object \ nullable, undefined).[ts_value_member_key] }
     when in_optional_chain == true { unwraps (from (excludes nullable, undefined from object) at ts_value_member_key) | trait undefined, nullable, falsy, nonthenable }
   }
 }
@@ -545,8 +562,8 @@ in ts_index {
   when !(object always any) {
     when in_optional_chain == true { unwraps (from (excludes nullable, undefined from object) at index) | trait undefined, nullable, falsy, nonthenable }
     when in_optional_chain != true {
-      when !ts_value_index_nullish { unwraps from object at index }
-      when ts_value_index_nullish { unwraps (from object at index) | trait undefined, nullable, falsy, nonthenable }
+      when !ts_value_index_nullish { unwraps (object \ nullable, undefined).[index] }
+      when ts_value_index_nullish { unwraps (object \ nullable, undefined).[index] | trait undefined, nullable, falsy, nonthenable }
     }
   }
 }
@@ -578,6 +595,7 @@ in ts_class {
   }
 }
 in ts_method, ts_class_property {
+  flag static when ts_value_static(modifier.nodes)
   when ts_value_static(modifier.nodes) { declares member key keyed ts_value_key(it) in nearest statics hoisted }
   when !ts_value_static(modifier.nodes) { declares member key keyed ts_value_key(it) in nearest members hoisted }
 }
@@ -590,6 +608,24 @@ in ts_parameter {
 in ts_property { flag readonly when ts_value_const_context(node) }
 in ts_property_signature, ts_index_signature, ts_class_property, ts_parameter {
   flag readonly when any([] modifier, modifier => modifier == "readonly")
+}
+in ts_method, ts_method_signature, ts_property_signature, ts_class_property, ts_parameter {
+  flag private_access when any([] modifier, modifier => modifier == "private")
+  flag protected_access when any([] modifier, modifier => modifier == "protected")
+}
+in ts_method, ts_method_signature { let ts_value_receiver_function node }
+in ts_property { let ts_value_receiver_function value.node }
+in ts_class_property { let ts_value_receiver_function init.node }
+in ts_property, ts_class_property {
+  flag function_initializer when ts_value_receiver_function is ts_function
+}
+in ts_method, ts_method_signature, ts_property, ts_class_property {
+  let ts_value_written_receiver if ts_value_receiver_function is (ts_method, ts_method_signature, ts_function)
+    then find(ts_value_receiver_function.parameter.nodes, parameter => parameter.name is ts_this || parameter.name == "this")
+    else null
+  flag explicit_receiver when ts_value_written_receiver != null
+  flag void_receiver when ts_value_written_receiver.type.node is ts_type_keyword
+    && ts_value_written_receiver.type.text == "void"
 }
 in ts_method, ts_method_signature {
   flag method when kind != "get" && kind != "set"
@@ -718,8 +754,49 @@ in ts_template_type {
 }
 in ts_infer { unwraps type_parameter }
 in ts_import_type, ts_mapped_type { unwraps unknown }
+fn ts_value_intrinsic_text(name, text) = if name == "Uppercase" then upper(text)
+  else if name == "Lowercase" then lower(text)
+  else {
+    value head: slice(text, 0, 1)
+    value if utf16_len(head) > 1 then text
+      else (if name == "Capitalize" then upper(head) else lower(head)) slice(text, 1)
+  }
+fn ts_value_intrinsic_literal(n) = {
+  value arms: value_parts(n)
+  value parts: if count(arms ?? []) == 1 then first(arms).parts else []
+  value part: if count(parts) == 1 then first(parts) else null
+  value if part.identity_known && part.identity.kind == "value" && type_of(part.identity.value) == "str"
+    then part.identity.value else null
+}
 in ts_type_keyword {
   let ts_value_never []
+  let ts_value_string_intrinsic text == "intrinsic" && parent is ts_type_alias
+    && count(parent.type_parameter) == 1
+    && contains(["Uppercase", "Lowercase", "Capitalize", "Uncapitalize"], parent.name.text)
+  let ts_value_intrinsic_formal first(parent.type_parameter.nodes)
+  let ts_value_intrinsic_source ts_value_intrinsic_literal(ts_value_intrinsic_formal)
+  let ts_value_intrinsic_result if type_of(ts_value_intrinsic_source) == "str"
+    then ts_value_intrinsic_text(parent.name.text, ts_value_intrinsic_source) else null
+  when ts_value_string_intrinsic {
+    when ts_value_intrinsic_formal always any || ts_value_intrinsic_formal always error {
+      unwraps ts_value_intrinsic_formal
+    }
+    when !(ts_value_intrinsic_formal always any || ts_value_intrinsic_formal always error) {
+      unwraps select ts_value_intrinsic_formal against trait string then self else trait unknown distribute ts_value_intrinsic_formal
+    }
+    fits string, nonthenable
+    when type_of(ts_value_intrinsic_result) == "str" {
+      fits literal
+      fits truthy when ts_value_intrinsic_result != ""
+      fits falsy when ts_value_intrinsic_result == ""
+      identity ts_value_intrinsic_result
+      widens (trait string, truthy, nonthenable) | (trait string, falsy, nonthenable)
+    }
+    when type_of(ts_value_intrinsic_result) != "str" {
+      fits truthy when ts_value_intrinsic_formal always truthy
+      fits falsy when ts_value_intrinsic_formal always falsy
+    }
+  }
   when text == "string" { unwraps (trait string, truthy, nonthenable) | (trait string, falsy, nonthenable) }
   when text == "number" { unwraps (trait number, truthy, nonthenable) | (trait number, falsy, nonthenable) }
   when text == "boolean" { unwraps (trait boolean, truthy, nonthenable) | (trait boolean, falsy, nonthenable) }

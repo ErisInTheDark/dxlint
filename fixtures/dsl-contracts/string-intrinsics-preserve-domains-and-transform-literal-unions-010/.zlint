@@ -1,3 +1,5 @@
 import .ts
-in ts_expression_statement.expression rule preserved { when { value (type_flags.nonempty ?? []); contains 'any' } || { value (type_flags.nonempty ?? []); contains 'never' }
+in ts_expression_statement.expression rule preserved {
+  let arms value_parts(node)
+  when arms != null && (count(arms) == 0 || ts_value_category(map(arms, arm => arm.parts)) == "any")
 warn 'preserved' }

@@ -1,0 +1,9 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "noLib": true,
+    "lib": [],
+    "types": []
+  },
+  "files": ["input.ts", "lib.d.ts"]
+}

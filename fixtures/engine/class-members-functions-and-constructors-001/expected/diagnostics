@@ -1,6 +1,0 @@
-file.ts:10:1-10:30 f#0 p:true:false
-file.ts:11:1-11:41 f#0 q:false:true
-file.ts:12:1-12:27 f#0 r:false:false
-file.ts:2:3-2:17 m#0 a:1/0
-file.ts:3:3-3:17 m#0 b:1/1
-file.ts:4:3-4:10 m#0 #c:0/0

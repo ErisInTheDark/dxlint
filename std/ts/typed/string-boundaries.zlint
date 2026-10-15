@@ -2,6 +2,7 @@
 import .ts/methods
 import .ts/expression-fixes
 import .ts/values/inspection
+import .ts/constants
 
 define {
 
@@ -12,7 +13,7 @@ fn string_boundary_length_member(n, subject) = {
 }
 fn string_boundary_length(n, subject) = {
   value bare: unparenthesised_node(n)
-  value subject.static_string != null && bare.static_number != null && bare.static_number == utf16_len(subject.static_string)
+  value ts_runtime_string(subject) != null && ts_runtime_number(bare) != null && ts_runtime_number(bare) == utf16_len(ts_runtime_string(subject))
     || string_boundary_length_member(bare, subject)
 }
 fn string_boundary_tail(n, receiver, needle) = {
@@ -21,7 +22,7 @@ fn string_boundary_tail(n, receiver, needle) = {
 }
 fn string_boundary_last_character(n, receiver) = {
   value bare: unparenthesised_node(n)
-  value bare is ts_binary && bare.operator == "-" && string_boundary_length_member(bare.left.node, receiver) && bare.right.static_number == 1
+  value bare is ts_binary && bare.operator == "-" && string_boundary_length_member(bare.left.node, receiver) && ts_runtime_number(bare.right.node) == 1
 }
 fn string_boundary_negative_length(n, needle) = {
   value bare: unparenthesised_node(n)
@@ -39,7 +40,7 @@ fn string_boundary_access(n) = {
   value if method not (ts_member, ts_index) then null else {
     receiver: method.object.node,
     optional: method.optional != null || bare.optional != null,
-    method: if bare is ts_index then "index" else method.static_name.nonempty ?? method.index.static_string,
+    method: if bare is ts_index then "index" else method.static_name.nonempty ?? ts_runtime_string(method.index.node),
     args: if bare is ts_call then bare.argument.nodes else [bare.index.node]
   }
 }
@@ -49,18 +50,18 @@ fn string_boundary_comparison(n, needle) = {
   value first: first(arguments)
   value last: last(arguments)
   value if access == null || !string_boundary_receiver(access.receiver, access.optional) then null
-  else if access.method == "indexOf" && len(arguments) == 1 && needle.static_number == 0 then {
+  else if access.method == "indexOf" && len(arguments) == 1 && ts_runtime_number(needle) == 0 then {
     kind: "start", receiver: access.receiver, needle: first, optional: access.optional, safe: true
   }
   else if access.method == "lastIndexOf" && len(arguments) == 1 && string_boundary_tail(needle, access.receiver, first) then {
     kind: "end", receiver: access.receiver, needle: first, optional: access.optional, safe: true
   }
-  else if contains(["index", "charAt"], access.method) && len(arguments) == 1 && (first.static_number == 0 || string_boundary_last_character(first, access.receiver)) then {
-    kind: if first.static_number == 0 then "start" else "end",
+  else if contains(["index", "charAt"], access.method) && len(arguments) == 1 && (ts_runtime_number(first) == 0 || string_boundary_last_character(first, access.receiver)) then {
+    kind: if ts_runtime_number(first) == 0 then "start" else "end",
     receiver: access.receiver, needle: unparenthesised_node(needle), optional: access.optional,
-    safe: needle.static_string != null && utf16_len(needle.static_string) == 1
+    safe: ts_runtime_string(needle) != null && utf16_len(ts_runtime_string(needle)) == 1
   }
-  else if contains(["slice", "substring"], access.method) && len(arguments) == 2 && first.static_number == 0 && string_boundary_length(last, needle) then {
+  else if contains(["slice", "substring"], access.method) && len(arguments) == 2 && ts_runtime_number(first) == 0 && string_boundary_length(last, needle) then {
     kind: "start", receiver: access.receiver, needle: unparenthesised_node(needle), optional: access.optional, safe: true
   }
   else if contains(["slice", "substring"], access.method) && (len(arguments) == 1 && (string_boundary_negative_length(first, needle) || string_boundary_tail(first, access.receiver, needle))
@@ -126,7 +127,7 @@ in ts_binary rule prefer-string-starts-ends-with {
   when info != null
   report at if match != null then unparenthesised_node(left.node) else node
   warn if info.kind == "end" then "Use the 'String#endsWith' method instead." else "Use 'String#startsWith' method instead."
-  let safe info.safe && (match != null || len(operator) == 3 || ts_value_string_like(info.needle) || info.needle.static_string != null || comparison != null && contains(["indexOf", "lastIndexOf"], access.method))
+  let safe info.safe && (match != null || len(operator) == 3 || ts_value_string_like(info.needle) || ts_runtime_string(info.needle) != null || comparison != null && contains(["indexOf", "lastIndexOf"], access.method))
   let negative if match != null then starts_with(operator, "=") else starts_with(operator, "!")
   let replacement if safe then string_boundary_replacement(node, info, negative) else null
   fix at node if replacement != null as replacement

@@ -13,8 +13,11 @@ fn arithmetic_type_name(t) =
 
 fn arithmetic_union_parts(t) = if t.kind == "union" then { value t.parts; fold ([]) (parts, part) parts arithmetic_union_parts(part) } else [t]
 fn arithmetic_has_type(t, kinds) = { value t; arithmetic_union_parts; any (part) contains(kinds, part.kind) }
-fn arithmetic_object_type(t) = if contains(["union", "intersection"], t.kind) then all(t.parts, part => arithmetic_object_type(part))
-  else contains(["object", "array", "tuple", "function"], t.kind)
+fn arithmetic_object_type(t) = t != null && {
+  value t
+  walk (part) if contains(["union", "intersection"], part.kind) then part.parts else []
+  all (part) contains(["union", "intersection", "object", "array", "tuple", "function"], part.kind)
+}
 fn arithmetic_regexp(t) = t.kind == "object" && contains(t.names, "RegExp")
 fn arithmetic_string_like(options) = ([]
   (if options.allowAny then ["`any`"] else [])

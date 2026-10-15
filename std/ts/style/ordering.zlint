@@ -1,5 +1,7 @@
 # .ts/style/ordering: member rank, optionality and name order.
 
+import .ts/constants
+
 define {
 
 group ordering_container ts_class, ts_interface, ts_type_literal
@@ -27,7 +29,7 @@ in ts_method, ts_method_signature, ts_class_property, ts_property_signature let 
 in ts_method let ordering_skip body == null && !contains([] modifier, "abstract")
 in ts_class_property let ordering_initialiser init != null
 in ts_member let ordering_this_dependency if object is ts_this then re_replace(property, /^#+/, "") else null
-in ts_index let ordering_this_dependency if object is ts_this then index.static_string else null
+in ts_index let ordering_this_dependency if object is ts_this then ts_runtime_string(index.node) else null
 in style_tree_node let ordering_dependencies if is (ts_function, ts_arrow, ts_method, ts_class) then [] else {
   value [] ordering_this_dependency { value [] children.ordering_dependencies; fold ([]) (names, child) names child }
   unique

@@ -38,9 +38,6 @@ pub trait Facts {
     /// `local`, `import` or `global` for a referencing identifier.
     fn resolved(&self, node: u32) -> Option<&'static str>;
     fn member_uses(&self, node: u32) -> Option<MemberUses>;
-    /// [`super::bind::USES_THIS`] and friends, on a function-like node.
-    fn function_flags(&self, node: u32) -> Option<u8>;
-    fn precision_lost(&self, node: u32) -> Option<bool>;
     /// On a property, member or literal: its statically known name / value
     /// as text.
     fn static_name(&self, node: u32) -> Option<String>;
@@ -48,7 +45,7 @@ pub trait Facts {
     fn literal_value(&self, node: u32) -> Option<(&'static str, String)>;
 }
 
-pub use super::bind::{USES_ARGUMENTS, USES_THIS};
+
 pub use super::class_members::MemberUses;
 
 impl Facts for NativeFile<'_> {
@@ -104,14 +101,6 @@ impl Facts for NativeFile<'_> {
         super::class_members::member_uses(self, node)
     }
 
-    fn function_flags(&self, node: u32) -> Option<u8> {
-        matches!(self.syntax.kind(node), Some(Kind::Function | Kind::Method | Kind::Arrow)).then(|| self.bindings().functions.get(&node).copied().unwrap_or(0))
-    }
-
-    fn precision_lost(&self, node: u32) -> Option<bool> {
-        self.syntax.is(node, Kind::Number).then(|| precision_lost(self.syntax.text(node)))
-    }
-
     fn literal_value(&self, node: u32) -> Option<(&'static str, String)> {
         super::statics::literal_value(&self.syntax, node)
     }
@@ -120,101 +109,6 @@ impl Facts for NativeFile<'_> {
         super::statics::property_name(&self.syntax, node).or_else(|| super::statics::literal_text(&self.syntax, node))
     }
 
-}
-
-/// eslint's no-loss-of-precision: the literal does not survive conversion
-/// to a double (`9007199254740993`, `1.0000000000000001`, and digits
-/// written past what a double holds: `1230000000000000000000000.0`).
-fn precision_lost(text: &str) -> bool {
-    let raw: String = text.chars().filter(|&c| c != '_').collect();
-    let upper = raw.to_ascii_uppercase();
-    let legacy_octal = raw.len() > 1 && raw.starts_with('0') && raw[1..].chars().all(|c| ('0'..='7').contains(&c));
-    let base = match upper.get(..2) {
-        Some("0X") => Some((16, 2)),
-        Some("0O") => Some((8, 2)),
-        Some("0B") => Some((2, 2)),
-        _ if legacy_octal => Some((8, 1)),
-        _ => None,
-    };
-    let Some(value) = super::statics::number(&raw) else { return false };
-    if let Some((radix, skip)) = base {
-        // The written digits must end with the stored value's digits.
-        if value >= 2f64.powi(128) {
-            return true;
-        }
-        let stored = to_radix(value as u128, radix);
-        return !(upper[skip..].trim_start_matches('0').ends_with(&stored) || stored == "0" && upper[skip..].chars().all(|c| c == '0'));
-    }
-    // A `.` right before the exponent or the end changes nothing.
-    let lower = raw.to_ascii_lowercase();
-    let lower = match lower.find('.') {
-        Some(i) if lower[i + 1..].is_empty() || lower[i + 1..].starts_with('e') => format!("{}{}", &lower[..i], &lower[i + 1..]),
-        _ => lower,
-    };
-    let (coefficient, magnitude) = scientific(&lower, false);
-    if value == 0.0 {
-        return !coefficient.chars().all(|c| c == '0');
-    }
-    let precision = coefficient.len();
-    if precision > 100 {
-        return true;
-    }
-    let stored = format!("{:.*e}", precision - 1, value);
-    let (stored_coefficient, stored_magnitude) = scientific(&stored, true);
-    magnitude != stored_magnitude || coefficient != stored_coefficient
-}
-
-/// eslint's `convertNumberToScientificNotation`: significant digits and
-/// the power of ten of the first.
-fn scientific(number: &str, as_float: bool) -> (String, i64) {
-    let (coefficient, exponent) = match number.split_once('e') {
-        Some((c, e)) => (c, e.trim_start_matches('+').parse::<i64>().unwrap_or(0)),
-        None => (number, 0),
-    };
-    let leading = |s: &str| -> String {
-        let t = s.trim_start_matches('0');
-        if t.is_empty() {
-            s.to_string()
-        } else {
-            t.to_string()
-        }
-    };
-    let (digits, magnitude) = if as_float || number.contains('.') {
-        let trimmed = leading(coefficient);
-        match trimmed.find('.') {
-            Some(0) => {
-                let significant = leading(&trimmed[1..]);
-                let m = significant.len() as i64 - trimmed.len() as i64;
-                (significant, m)
-            }
-            None => (trimmed.clone(), trimmed.len() as i64 - 1),
-            Some(i) => (trimmed.replacen('.', "", 1), i as i64 - 1),
-        }
-    } else {
-        let trimmed = leading(coefficient);
-        let significant = {
-            let t = trimmed.trim_end_matches('0');
-            if t.is_empty() {
-                trimmed.clone()
-            } else {
-                t.to_string()
-            }
-        };
-        (significant, trimmed.len() as i64 - 1)
-    };
-    (digits, magnitude + exponent)
-}
-
-fn to_radix(mut v: u128, radix: u32) -> String {
-    if v == 0 {
-        return "0".into();
-    }
-    let mut out = Vec::new();
-    while v > 0 {
-        out.push(std::char::from_digit((v % radix as u128) as u32, radix).unwrap_or('0').to_ascii_uppercase());
-        v /= radix as u128;
-    }
-    out.iter().rev().collect()
 }
 
 pub struct NativeFile<'t> {

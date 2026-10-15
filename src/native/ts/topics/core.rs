@@ -3,7 +3,6 @@
 use crate::expr::facts::{opt, words, Shape};
 use crate::expr::Value;
 
-use super::super::facts as facts_bits;
 use super::Fact;
 
 /// A code token record (`first_token`, `last_token`, `paired_token`).
@@ -106,38 +105,6 @@ pub const FACTS: &[Fact] = &[
         name: "member_constructor_indirect_writes",
         doc: "native layers: on an instance member: constructor reassignments through a receiver other than direct `this`",
         get: |f, n| opt(f.member_uses(n), |u| Value::from(u.ctor_indirect_writes as usize)),
-    },
-    Fact {
-        shape: Fact::SCALAR.shape,
-        name: "uses_this",
-        doc: "native layers: on a function or method: its own body uses `this` (arrow functions inside count, nested functions do not)",
-        get: |f, n| opt(f.function_flags(n), |b| Value::Bool(b & facts_bits::USES_THIS != 0)),
-    },
-    Fact {
-        shape: Fact::SCALAR.shape,
-        name: "uses_arguments",
-        doc: "native layers: on a function or method: its own body uses `arguments`",
-        get: |f, n| opt(f.function_flags(n), |b| Value::Bool(b & facts_bits::USES_ARGUMENTS != 0)),
-    },
-    Fact {
-        shape: Fact::SCALAR.shape,
-        name: "precision_lost",
-        doc: "native layers: on a number literal: its value is not exactly representable as a double",
-        get: |f, n| opt(f.precision_lost(n), Value::Bool),
-    },
-    Fact {
-        shape: Fact::SCALAR.shape,
-        name: "identifier_name",
-        doc: "native layers: on an identifier or private name, the name as JavaScript reads it (`\\u0066oo` is `foo`)",
-        get: |f, n| f.with_file(|file, n| {
-            let s = &file.syntax;
-            match s.kind(n) {
-                Some(crate::native::ts::kinds::Kind::Ident | crate::native::ts::kinds::Kind::PrivateName) => {
-                    Value::from(crate::native::ts::statics::identifier_name(s.text(n)))
-                }
-                _ => Value::Null,
-            }
-        }, n),
     },
     Fact {
         shape: TOKEN,

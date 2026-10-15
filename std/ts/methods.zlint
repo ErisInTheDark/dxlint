@@ -1,4 +1,5 @@
 # String and collection method policies.
+import .ts/constants
 
 define {
 
@@ -7,32 +8,47 @@ in ts_node let collection_type type_structure([], ["kind", "parts"])
 fn collection_value_node(n) = {
   value n
   walk (current) if current is (ts_parenthesized, ts_as, ts_satisfies, ts_non_null, ts_type_assertion) then current.expression.node
-  else if current is ts_identifier && current.declaration.writes == 0 && contains(["const", "let", "var"], current.declaration.declaration_kind) && current.declaration.parent is ts_declarator then current.declaration.parent.init.node
+  else if current is ts_identifier then ts_runtime_binding_init(current)
   else null
   last
 }
 
 fn collection_value(n) =
-  if n.literal_value != null then n.literal_value
-  else if n is ts_identifier && n.resolved == "global" && contains(["readonly", "writable"], n.global) && contains(["NaN", "undefined", "Infinity"], n.text) then {type: if n.text == "undefined" then "undefined" else "number", value: n.text}
-  else if n.static_number != null && n.collection_type.kind == "number" then {type: "number", value: n.static_number}
-  else if n.static_string != null && { value n.type_flags.nonempty ?? []; contains "string" } then {type: "string", value: n.static_string}
-  else null
+  if n is ts_identifier && n.resolved == "global" && contains(["readonly", "writable"], n.global) && contains(["NaN", "undefined", "Infinity"], n.text) then {type: if n.text == "undefined" then "undefined" else "number", value: n.text}
+  else ts_runtime_constant(n)
 
 fn collection_static_value(n) = { value n; collection_value_node; collection_value }
 fn collection_method(n, name) = n is ts_member && n.property == name || n is ts_index && collection_static_value(n.index.node).type == "string" && collection_static_value(n.index.node).value == name
 
-fn collection_nonnull_parts(t) =
-  if t.kind == "union" then { value t.parts; fold ([]) (parts, part) parts collection_nonnull_parts(part) }
-  else if contains(["null", "undefined"], t.kind) then [] else [t]
-fn collection_array_part(t) = contains(["array", "tuple"], t.kind) || contains(["union", "intersection"], t.kind) && len(t.parts) > 0 && all(t.parts, part => collection_array_part(part))
-fn collection_arrayish(t) = { value t; collection_nonnull_parts; len } > 0 && { value t; collection_nonnull_parts; all (part) collection_array_part(part) }
+fn collection_nonnull_parts(t) = {
+  value t
+  walk (part) if part.kind == "union" then part.parts else []
+  filter (part) !contains(["union", "null", "undefined"], part.kind)
+}
+fn collection_array_part(t) = t != null && {
+  value t
+  walk (part) if contains(["union", "intersection"], part.kind) then part.parts else []
+  all (part) if contains(["union", "intersection"], part.kind) then len(part.parts) > 0
+    else contains(["array", "tuple"], part.kind)
+}
+fn collection_arrayish(n) = {
+  value parts: collection_nonnull_parts(n.collection_type)
+  value len(parts) > 0 && all(parts, part => collection_array_part(part))
+}
 
-fn collection_filter(n) =
-  if n is ts_parenthesized then collection_filter(n.expression.node)
-  else if n is ts_sequence then { value n.expression.nodes; last; collection_filter }
-  else if n is ts_conditional then collection_filter(n.consequent.node) && collection_filter(n.alternate.node)
-  else n is ts_call && n.optional == null && { value n.callee.node; unparenthesised_node; collection_method "filter" } && { value unparenthesised_node(n.callee.node).object.collection_type; collection_arrayish }
+fn collection_filter(n) = n != null && {
+  value n
+  walk (item) if item is ts_parenthesized then item.expression.node
+    else if item is ts_sequence then last(item.expression.nodes)
+    else if item is ts_conditional then [item.consequent.node, item.alternate.node]
+    else null
+  all (item) if item is ts_parenthesized then item.expression.node != null
+    else if item is ts_sequence then count(item.expression.nodes) > 0
+    else if item is ts_conditional then item.consequent.node != null && item.alternate.node != null
+    else item is ts_call && item.optional == null
+      && { value item.callee.node; unparenthesised_node; collection_method "filter" }
+      && collection_arrayish(unparenthesised_node(item.callee.node).object.node)
+}
 
 fn collection_index_zero(v) = v != null && (contains(["string", "bigint"], v.type) && v.value == "0" || v.type == "number" && js_compare(v, 0) == 0)
 fn collection_at_number_zero(n) = n != null && (js_compare(n, n) == null || n > -1 && n < 1)

@@ -102,7 +102,16 @@ in ts_conditional let statement_effect { kind: "conditional", left: consequent.s
 in ts_tagged_template let statement_effect { kind: "tagged" }
 in ts_jsx_element, ts_jsx_fragment let statement_effect { kind: "jsx" }
 in ts_parenthesized, ts_as, ts_type_assertion, ts_non_null, ts_instantiation forward statement_effect from expression
-fn expression_allowed(shape, short, ternary, tagged, jsx) = if type_of(shape) == "bool" then shape else if shape.kind == "logical" then short && expression_allowed(shape.right, short, ternary, tagged, jsx) else if shape.kind == "conditional" then ternary && expression_allowed(shape.left, short, ternary, tagged, jsx) && expression_allowed(shape.right, short, ternary, tagged, jsx) else if shape.kind == "tagged" then tagged else if shape.kind == "jsx" then !jsx else true
+fn expression_allowed(shape, short, ternary, tagged, jsx) = {
+  value shape
+  walk (part) if part.kind == "logical" && short then part.right
+    else if part.kind == "conditional" && ternary then [part.left, part.right] else []
+  all (part) if type_of(part) == "bool" then part
+    else if part.kind == "logical" then short
+    else if part.kind == "conditional" then ternary
+    else if part.kind == "tagged" then tagged
+    else if part.kind == "jsx" then !jsx else true
+}
 in ts_expression_statement rule no-unused-expressions {
   option allowShortCircuit boolean = false "Allow effectful short circuit expressions."
   option allowTernary boolean = false "Allow ternaries with effectful branches."

@@ -1,3 +1,5 @@
+import .ts/constants
+
 define {
 
 fn regexp_nonglobal(n) = {
@@ -5,10 +7,10 @@ fn regexp_nonglobal(n) = {
   value input: bare.regexp_input
   value flags_argument: regexp_at(bare.argument.nodes, 1)
   value if input != null then type_of(input.flags) == "str" && !contains(input.flags, "g")
-    else if type_of(bare.static_string) == "str" then true
+    else if type_of(ts_runtime_string(bare)) == "str" then true
     else if bare is (ts_call, ts_new) && bare.callee is ts_identifier && bare.callee.text == "RegExp" then
-      flags_argument == null || type_of(flags_argument.static_string) == "str" && !contains(flags_argument.static_string, "g")
-      || type_of(flags_argument.static_number) == "num" || flags_argument is ts_identifier && flags_argument.text == "undefined" && flags_argument.declaration == null
+      flags_argument == null || type_of(ts_runtime_string(flags_argument)) == "str" && !contains(ts_runtime_string(flags_argument), "g")
+      || type_of(ts_runtime_number(flags_argument)) == "num" || flags_argument is ts_identifier && flags_argument.text == "undefined" && flags_argument.declaration == null
     else false
 }
 fn regexp_exec_argument(n) = {

@@ -29,3 +29,4 @@ class Holder {
 class Quoted { "constructor"() {} }
 class Escaped { \u0063onstructor() {} }
 function outer() { function inner() { return 1; } return 2; }
+function \u{10400}() {}

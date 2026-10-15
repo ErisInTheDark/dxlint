@@ -194,7 +194,7 @@ define {
     value operand: unparenthesised_node(n)
     value annotation: if operand is ts_identifier then name_binding(operand).node.parent.type.node else null
     value operand is (ts_number, ts_string, ts_boolean, ts_bigint, ts_null)
-      || annotation is ts_type_keyword && annotation always nonthenable
+      || annotation is ts_type_keyword && ts_value_nonthenable(annotation) == true
   }
   in ts_non_null { in expression expects it.expected }
   in ts_satisfies { in expression expects type }

@@ -1,0 +1,53 @@
+define {
+
+fn problem_number_significand(text, as_float) = {
+  value trimmed: trim_start(text, "0")
+  value digits: if trimmed == "" then text else trimmed
+  value parts: split(digits, ".")
+  value if as_float || count(parts) > 1 then
+    if first(parts) == "" then {
+      value fraction: last(parts)
+      value significant: trim_start(fraction, "0")
+      value coefficient: if significant == "" then fraction else significant
+      value { coefficient: coefficient, magnitude: len(coefficient) - len(digits) }
+    } else {
+      value { coefficient: replace(digits, ".", ""), magnitude: len(first(parts)) - 1 }
+    }
+  else {
+    value significant: trim_end(digits, "0")
+    value { coefficient: if significant == "" then digits else significant, magnitude: len(digits) - 1 }
+  }
+}
+
+fn problem_number_scientific(text, as_float) = {
+  value parts: split(text, "e")
+  value number: problem_number_significand(first(parts), as_float)
+  value adjustment: if count(parts) == 1 then 0 else js_number(last(parts))
+  value { coefficient: number.coefficient, magnitude: number.magnitude + adjustment }
+}
+
+fn problem_number_precision(text) = {
+  value raw: lower(replace(text, "_", ""))
+  value legacy_octal: re_test(raw, /^0[0-7]+$/)
+  value number: js_number(if legacy_octal then "0o" slice(raw, 1) else raw)
+  value if number == null || number == 0 then false
+  else if re_test(raw, /^0[xbo]/) || legacy_octal then {
+    value radix: if starts_with(raw, "0x") then 16 else if starts_with(raw, "0b") then 2 else 8
+    value stored: integer_radix(number, radix)
+    value stored == null || !ends_with(raw, stored)
+  } else {
+    value intended: problem_number_scientific(raw, false)
+    value precision: len(intended.coefficient)
+    value precision > 100 || {
+      value stored: problem_number_scientific(js_number_to_precision(number, precision), true)
+      value intended.coefficient != stored.coefficient || intended.magnitude != stored.magnitude
+    }
+  }
+}
+
+in ts_number rule no-loss-of-precision {
+  when problem_number_precision(text)
+  warn "This number literal will lose precision at runtime."
+}
+
+}

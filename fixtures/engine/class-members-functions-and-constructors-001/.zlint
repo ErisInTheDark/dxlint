@@ -1,3 +1,0 @@
-import .ts
-in ts_class_property rule m info "{key}:{member_writes}/{member_constructor_writes}"
-in ts_function rule f info "{name}:{uses_this}:{uses_arguments}"

@@ -422,6 +422,8 @@ fix at end_offset as ";"
 | `report node\|change\|end` | where diagnostics point: the whole node (default), only the part the fix changes, or the node's end |
 | `report at expr` | a byte offset selects a zero-width point; a `{start, end}` record or node selects its span. Without a report clause, diagnostics cover the matched node. Report positions do not change fix regions |
 | `@each name in list` | one diagnostic per item of a list from the rule's options (`@each entry in paths`): `when`, the message, `fix` and `report at` see the item as `name` (`let`s stay per node). The list is known when the config loads; rules never loop over code |
+| `each name in list { clauses }` | one diagnostic per item: `let`s and `when`s inside the braces run per item and see `name`; those outside run once per node and may not read it. A `let` inside means its expression wherever it is read |
+| `@macro name ...` | a macro visible only inside this rule body (or `each` block) |
 
 A macro at the start of a body line is pasted as clauses.
 
@@ -561,6 +563,7 @@ Item stages may omit the second parameter. `i` is the original input index, incl
 | `is layer name`, `is .lang` | is the node in that named layer; is the file in that language |
 | `/regex/` elsewhere | the regex source as text, for the `re_*` functions |
 | `if c then a else b` | conditional |
+| `when { c then a; d then b; else then e }` | the first true arm's value (arms on their own lines or split by `;`); null when none holds and there is no `else` |
 
 **Spacing.** Binary operators stand apart from both operands: `a - 1`,
 `x == 2`, `text ~ /re/`; `a -1` is an error. Unary `-` and `!` stay tight
@@ -676,6 +679,8 @@ the neighbour itself with `is` (`previous is ts_comma`).
 | `js_to_string(value)` | JavaScript `String(value)` of a primitive or `literal_value` record: numbers as JavaScript prints them (`1e+21`, `0.000001`, `-0` → `0`), bigints without `n`; null for other values |
 | `js_number_binary(operator, left, right)` | a JavaScript numeric binary operator (`+ - * / % ** & \| ^ << >> >>>`) on two numbers with JavaScript's results (NaN, Infinity, ToInt32 for bitwise); null for other operators or non-number operands |
 | `js_number_unary(operator, value)` | a JavaScript numeric unary operator (`- + ~`) on a number; null otherwise |
+| `js_number_to_precision(value, digits)` | JavaScript `value.toPrecision(digits)` for whole `digits` 1..100 (`(2.5, 1)` → `3`, `(1e-7, 2)` → `1.0e-7`); null otherwise |
+| `integer_radix(value, radix)` | a whole finite number in `radix` 2..36, lowercase, exact for every double (`(255, 16)` → `ff`); null for fractions, infinities and other radixes |
 | `js_char_at(text, index)` | JavaScript `text[index]`: the UTF-16 unit at `index` as text (lone surrogate → U+FFFD); null when out of range or not a whole number |
 | `json_string(text)` | the text as a JSON string literal, quotes included (`JSON.stringify` of a string), for messages that print strings like JavaScript does |
 | `js_string(text)` | decodes a quoted JavaScript string literal, including escapes and line continuations; null for invalid syntax. Lone surrogates become U+FFFD (distinct lone surrogates can therefore coincide) |
@@ -916,7 +921,6 @@ is wrong, messages) is written in the rule. A fact taking arguments is called (`
 | `resolved` | on a referencing identifier: `local`, `import` or `global` (declared nowhere in the file) |
 | `type` | the expression's type as text (`Promise<void>`, `never`, `NodeJS.Timeout`), null when unknown |
 | `type_flags` | what the type is made of: `any`, `never`, `string`, `number`, `boolean`, `bigint`, `symbol`, `literal`, `enum`, `array`, `tuple`, `promise`, `function`, `object`, `null`, `undefined`, `nullable`, `union`, and `unknown` for parts zlint cannot read |
-| `type_literal_values` | literal union/intersection constituents as type/value records; excludes nonliteral constituents; bigint values retain literal text |
 | `type_domains(constrained?)` | truthy, falsy, nullish and non-nullish possibilities, flags, opacity and scalar literal; constraints apply by default (`true`); `type_domains(false)` retains open types. Default `kind` matches `type_structure`; `parts` retains union/intersection constituent domains; `primitive` names the primitive backing of a primitive, literal or enum member |
 | `evaluated_type_domains` | the same domains before optional-chain short-circuiting, preserving intrinsic member and return nullability |
 | `access_resolution` | native member/index lookup: `from_index` signature origin, `optional` declaration and `evaluated` value domains before optional-chain short-circuiting |
@@ -926,7 +930,6 @@ is wrong, messages) is written in the rule. A fact taking arguments is called (`
 | `error_value` | constrained value category (`error`, `any`, `unknown`, `undefined`, `other`), caught-binding provenance (`rethrown`), and unparenthesised byte `offset` |
 | `argument_transfers` | calls, constructions and tagged templates: any/generic argument and spread transfer rows `{offset, mode, error, sender, receiver}`; modes `argument`, `spread`, `array`, `tuple`; `error` marks unresolved provenance, sender/receiver are raw printed types or null |
 | `return_transfer` | returns and expression arrow bodies: transfer record `{mode, error, sender, receiver}` or null; modes `value`, `array`, `promise`, `generic`; `error` marks unresolved provenance, sender/receiver are raw printed types or null |
-| `builtin_type(name)`, `builtin_constructor(name)` | standard-library type identity through instance heritage, or constructor value identity through class heritage; names alone do not identify user-defined types |
 | `type_members` | member names of that type, inherited ones included (`then`, `[Symbol.dispose]`) |
 | `property_info` | on static member or index access: `{declared, visibility}` (`public`, `private`, `protected` or null), preserving declaration presence even when its value type is unresolved |
 | `index_key_types` | constrained index-signature key domains as `{text, string_like}` records, inherited domains included |
@@ -986,17 +989,15 @@ is wrong, messages) is written in the rule. A fact taking arguments is called (`
 | `type_structure(names, fields?, constrained?, member_path?)` | constrained recursive `{kind, parts, names, generic_names, aliases, members}`: array/tuple elements or union/intersection parts; optional tuple slots include undefined. Explicit `unknown`, open `parameter` and `unresolved` are distinct. `names` includes printed base types; `generic_names` contains root generic declaration names. `aliases` contains retained root-annotation alias names, not aliases propagated through inferred values or calls. Queried members contain winning `{owner, kind, signature, key_symbol}` declarations; owner is `{name, kind, from}` or null, and `key_symbol` verifies standard-library Symbol computed-key identity. The second argument selects the recursive fields returned (default: the six above); opt-in fields: `declarations` (`{name, kind, from, inherited}`), `callable`, `constructor` (declared construct signatures or class values), `symbol_constructor` (a named type's constructible value side), `class_value`, `property_names` (without signature markers or apparent function prototype members), `iterable` (null when unresolved), `arguments` (resolved generic type arguments, each with the selected fields; not callable parameters), `member_types` (selected names → `{name, type}` records; resolved inherited/generic members; nested descriptors keep selected fields), `call_signatures` (all visible declared call contracts → `{parameters: [type descriptors], rest}`; declared count, no call-argument inference; constrained mode resolves bounds, raw mode keeps open parameters; `[]` means known non-callable, null means opaque/work limit; parameter and receiver descriptors omit `members`, `member_types`, `call_signatures`, `member_metadata`, `call_signature_metadata`), `member_metadata` (selected names → winning declarations `{owner, kind, is_static, initializer_kind, provenance, signatures}`; `initializer_kind` is the raw function/arrow/other/null syntax), `call_signature_metadata` (visible declaration headers `{receiver}`; receiver null (no explicit `this` parameter) or `{name, annotation: {kind, keyword} | null, type}`; null metadata means opaque/work limit, `[]` known non-callable) and, on the root, `property_writes` (property names assigned through the binding). The fourth argument `member_path` follows the selected member names before reflection (finite; opaque on depth/work exhaustion). The third argument (default `true`) constrains; `false` keeps open type parameters and named wrappers (`Readonly<T>`) unpeeled: `type_structure([], ["kind", "parts", "declarations", "arguments"], false)`. Example selected member and callable structure: `type_structure(["then"], ["kind", "parts", "member_types", "call_signatures", "callable"])` |
 | `type_parameter_defaults` | on a call, `new`, type reference or class with type arguments: each type parameter's default, printed |
 | `type_argument_redundant` | on the last type argument: `default` when it is its parameter's default, `inferred` when the arguments infer it anyway (types assignable both ways count as the same, as for typescript-eslint) |
-| `member_writes`, `member_constructor_writes` | on a class property, method or parameter property: writes outside the constructor (`=`, `++`, `delete`, destructuring, `this.x.y = v`), and writes in it |
-| `uses_this`, `uses_arguments` | on a function or method: what its own body does (arrows inside count, nested functions do not) |
 | `regex_problems` | on a regex literal or the pattern string of `RegExp(...)`: one problem per line: `empty_class`, `spaces:N`, `backref:<kind>:<backref>:<group>`, `misleading:<kind>` |
 | `regex_error` | on the pattern string of `RegExp(...)`: the syntax error (or bad flags) as ESLint words it |
-| `precision_lost` | on a number literal: not exactly representable as a double |
+| `member_writes`, `member_constructor_writes` | on a class property, method or parameter property: writes outside the constructor (`=`, `++`, `delete`, destructuring, `this.x.y = v`), and writes in it |
 | `identifier_name` | on an identifier or private name: the name as JavaScript reads it (`foo` is `foo`) |
 | `first_token`, `last_token` | the node's first / last code token: `{text, kind, start, end}`; test it with `is` (`first_token is ts_identifier`) |
 | `paired_token` | on a node starting with `(`, `[` or `{` (a bracket token node, or `(a)`), or else ending with `)`, `]` or `}`: the matching bracket, as `first_token` |
 | `token_texts` | the node's code tokens, in order (comments and spacing dropped): equal lists mean the same tokens |
 
-`callable_contracts(parent, node, ["[Symbol.dispose]"])` asks only about that member, without traversing unrelated fields. `[Symbol.<name>]` path selectors require real Symbol identity on both sides, never printed-string properties. Symbol keys require the actual unshadowed library `Symbol` constructor and a declared symbol-valued member; aliases and arbitrary computed keys remain unknown. Ordinary object-property contexts still match string keys to string keys.
+`callable_contracts(parent, node, ["[Symbol.dispose]"])` asks only about that member, without traversing unrelated fields. `[Symbol.<name>]` path selectors require real Symbol identity on both sides, never printed-string properties. Symbol keys retain canonical library identity through proven constructor aliases and unique-symbol member types; arbitrary computed keys remain unknown. Ordinary object-property contexts still match string keys to string keys.
 
 Explicit instantiation (`fn<T>` or `typeof fn<T>`) binds each declared function signature independently; later calls do not infer those parameters again. Constructor instantiation, callable-object instantiation and functions with inferred body-return overrides remain unsupported and produce unknown types.
 
@@ -1260,6 +1261,7 @@ and `final-newline`.
 | `.ts/typed/readonly-parameters` | deep readonly parameter types and options; `allow` needs alias/provenance metadata; mapped and conditional views pending; imported by `.ts/typed` |
 | `.ts/typed/rejection-handlers` | inline rejection handler `unknown` policy, including branch, sequence and rest-element selection; imported by `.ts/typed` |
 | `.ts/typed/unsafe-members` | no-unsafe-member-access dotted/computed access and key checks, using value-handle traits; imported by `.ts/typed` |
+| `.ts/typed/unsafe-calls` | no-unsafe-call call, construction and template-tag checks, using value-handle traits and library Function signatures; imported by `.ts/typed` |
 | `.ts/typed/type-conversions` | primitive conversion policy for calls and operators, including enum and integer proofs, imported by `.ts/typed` |
 | `.ts/typed/redundant-constituents` | redundant union/intersection top, bottom and primitive/literal constituents, imported by `.ts/typed` |
 | `.ts/typed/string-boundaries` | string prefix/suffix tests (`startsWith`/`endsWith`) and source-preserving fixes, imported by `.ts/typed` |
@@ -1309,6 +1311,7 @@ and `final-newline`.
 | `.ts/typed/unbound-method` | receiver-preserving method extraction, including destructuring and ignoreStatic; imported by `.ts/typed`, diagnostic-only |
 | `.ts/typed/type-arguments` | redundant explicit type arguments (`no-unnecessary-type-arguments`) equal to their defaults, with angle-preserving removal fixes; reduce assertions moved to call type parameters (`prefer-reduce-type-parameter`); imported by `.ts/typed` |
 | `.ts/scoping/member-uses` | private-member use policy over lexical names, contextual receivers and declared write targets; imported by `.ts/problems` |
+| `.ts/problems/numeric-precision` | numeric-literal precision policy over generic number formatting; imported by `.ts/problems` |
 | `.ts/typed/strict-void-return` | non-void values flowing into void-returning callback contexts, with `allowReturnAny`; imported by `.ts/typed`, diagnostic-only |
 | `.ts/typed/regexp-exec` | non-global string matching policy and fixes (`prefer-regexp-exec`); imported by `.ts/typed` |
 | `.ts/typed/for-in-arrays` | array-like `for-in` policy (`no-for-in-array`); imported by `.ts/typed` |

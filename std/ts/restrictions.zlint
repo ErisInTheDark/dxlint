@@ -64,7 +64,11 @@ fn restriction_import_parent(path) = {
   value slice(split, 0, result)
   join "/"
 }
-fn restriction_import_parents(path) = if contains(path, "/") && restriction_import_parent(path) != "" then [restriction_import_parent(path)] { value path; restriction_import_parent; restriction_import_parents } else []
+fn restriction_import_parents(path) = {
+  value path
+  walk (current) if contains(current, "/") && restriction_import_parent(current) != "" then restriction_import_parent(current) else null
+  drop 1
+}
 fn restriction_import_source(value) = if type_of(value) == "str" then trim(value) else null
 in ts_import_specifier, ts_export_specifier let restriction_import_all_members_type kind == "type" && (previous == null || previous.restriction_import_all_members_type == true)
 in ts_call let restriction_import_argument first([] argument.static_name)

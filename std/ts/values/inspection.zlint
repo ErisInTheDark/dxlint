@@ -50,7 +50,6 @@ fn ts_value_print(parts) = if parts == null then "unknown" else if len(parts) ==
   value { value arms; unique; join " | " }
 }
 
-# Ancestry of one part: every inherited base part, and whether all bases were known.
 fn ts_value_ancestry_links(handle) = {
   value bases: value_bases(handle)
   value projected: map(bases ?? [], base => value_parts(base))
@@ -64,20 +63,25 @@ fn ts_value_ancestry(part) = {
   value complete: count(reached) > 0 && all(reached, handle => ts_value_ancestry_links(handle).complete)
   value {parts: parts, complete: complete}
 }
-# Whether a part inherits from a library global type named in `names`: null when unprovable.
-fn ts_value_builtin_ancestor(part, n, names) = {
-  value ancestry: ts_value_ancestry(part)
-  value states: flat_map(ancestry.parts, item => map(names, name => {
-    value carrier: item.carrier
+fn ts_value_builtin_part(part, n, names) = {
+  value states: map(names, name => {
+    value carrier: part.carrier
     value globals: global_declarations(n, name, "type")
     value site: {file: carrier.file, node: carrier.node}
     value matched: carrier != null && globals != null && contains(globals, site)
     value origin: if matched then declaration_origin(n, site) else null
-    value if !item.carrier_known || globals == null then null
+    value if !part.carrier_known || globals == null then null
       else if !matched then false
       else if origin == null then null
       else origin.kind == "library"
-  }))
+  })
+  value if any(states, state => state == true) then true
+    else if any(states, state => state == null) then null
+    else false
+}
+fn ts_value_builtin_ancestor(part, n, names) = {
+  value ancestry: ts_value_ancestry(part)
+  value states: map(ancestry.parts, item => ts_value_builtin_part(item, n, names))
   value if any(states, state => state == true) then true
     else if !ancestry.complete || any(states, state => state == null) then null
     else false
@@ -98,7 +102,6 @@ fn ts_value_builtin_values(n, names) = {
     complete: all(globals, rows => rows != null) && all(projections, projection => projection.complete)
   }
 }
-# Whether a part's ancestry reaches the value side of a library global (a constructor): null when unprovable.
 fn ts_value_builtin_value_ancestor(part, n, names) = {
   value ancestry: ts_value_ancestry(part)
   value canonical: ts_value_builtin_values(n, names)
@@ -115,6 +118,29 @@ fn ts_value_builtin_value_ancestor(part, n, names) = {
   value if any(states, state => state == true) then true
     else if !ancestry.complete || !canonical.complete || any(states, state => state == null) then null
     else false
+}
+fn ts_value_builtin_type(n, names) = {
+  value arms: value_parts(n)
+  value if arms == null then null else if count(arms) != 1 then false else {
+    value states: map(first(arms).parts, part => ts_value_builtin_ancestor(part, n, names))
+    value if any(states, state => state == true) then true
+      else if any(states, state => state == null) then null
+      else false
+  }
+}
+fn ts_value_builtin_constructor(n, names) = {
+  value arms: value_parts(n)
+  value if arms == null then null else if count(arms) == 0 then false else {
+    value states: map(arms, arm => {
+      value parts: map(arm.parts, part => ts_value_builtin_value_ancestor(part, n, names))
+      value if any(parts, part => part == true) then true
+        else if any(parts, part => part == null) then null
+        else false
+    })
+    value if any(states, state => state == false) then false
+      else if any(states, state => state == null) then null
+      else true
+  }
 }
 
 }

@@ -1,4 +1,5 @@
 import .ts/typed/string-boundaries
+import .ts/constants
 
 define {
 
@@ -75,7 +76,7 @@ fn includes_quote(text) = "'" {
 } "'"
 
 in ts_binary rule prefer-includes {
-  let negative includes_negative(operator.text, right.static_number)
+  let negative includes_negative(operator.text, ts_runtime_number(right.node))
   when negative != null
   let info includes_index_call(left.node)
   when info != null

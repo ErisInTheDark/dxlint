@@ -1,0 +1,26 @@
+stringValue(1 + 2, "3");
+stringValue(`sum=${1 + 2}`, "sum=3");
+numberValue((1 + 2) as 3, 3);
+numberValue((1, 2), 2);
+numberValue(8 / 2, 4);
+numberValue(2 ** 3, 8);
+numberValue(~4294967296, -1);
+stringValue("ab"[1], "b");
+stringValue("\u{1f600}"[0], "\ufffd");
+let stable = "yes";
+const alias = stable;
+stringValue(alias, "yes");
+let changed = "before";
+changed = "after";
+unknownValue(changed);
+let closed = "before";
+function mutate() { closed = "after"; }
+unknownValue(closed);
+declare const annotated: "pretend";
+unknownValue(annotated);
+const cycleA = cycleB;
+const cycleB = cycleA;
+unknownValue(cycleA);
+unknownValue(1n + 2n);
+unknownValue(1n + 2);
+stringValue(-12n, "-12");

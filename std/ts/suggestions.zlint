@@ -46,10 +46,10 @@ in ts_return let return_value_braced { value result: "{{"; value starts_with(arg
 in ts_block let single_return count([] body) == 1 && first(body.nodes) is ts_return
 in ts_block let return_value_object first([] body.return_value_object) == true
 in ts_block let return_value_braced first([] body.return_value_braced) == true
-in ts_function let function_this uses_this
-in ts_member let bind_property_offset property.offset
-in ts_index let bind_property_offset index.offset
-in ts_member, ts_index let bind_target if static_name != "bind" then null else if (object.unwrapped_node.nonempty ?? object.node) is ts_arrow || (object.unwrapped_node.nonempty ?? object.node) is ts_function && object.function_this != true then bind_property_offset else null
+in ts_function let function_this function_uses_this(node)
+in ts_member let bind_property_site property.node
+in ts_index let bind_property_site index.node
+in ts_member, ts_index let bind_target if static_name != "bind" then null else if (object.unwrapped_node.nonempty ?? object.node) is ts_arrow || (object.unwrapped_node.nonempty ?? object.node) is ts_function && object.function_this != true then bind_property_site else null
 in ts_parenthesized forward function_this, bind_target from expression
 
 in ts_throw let thrown_identifier if (argument.unwrapped_node.nonempty ?? argument.node) is ts_identifier then argument.unwrapped_text.nonempty ?? argument else null

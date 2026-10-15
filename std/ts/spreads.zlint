@@ -2,7 +2,11 @@
 
 define {
 
-fn spread_parts(t) = if contains(["union", "intersection"], t.kind) then { value t.parts; fold ([]) (parts, part) parts spread_parts(part) } else [t]
+fn spread_parts(t) = if t == null then [t] else {
+  value t
+  walk (part) if contains(["union", "intersection"], part.kind) then part.parts else []
+  filter (part) !contains(["union", "intersection"], part.kind)
+}
 fn spread_builtin(t, names) = any(t.declarations, d => d.from == "lib" && contains(names, d.name))
 fn spread_string(t) = { value t; spread_parts; any (part) part.kind == "string" }
 fn spread_expando(n) = n.declaration.parent is ts_function || n.declaration.parent is ts_declarator && n.declaration.parent.type == null && unparenthesised_node(n.declaration.parent.init.node) is (ts_function, ts_arrow)

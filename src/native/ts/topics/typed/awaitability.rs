@@ -74,38 +74,3 @@ fn invalid_iterable(ty: &Ty, ck: &Checker<'_>) -> bool {
         _ => false,
     }
 }
-
-pub(super) fn for_of(file: &NativeFile<'_>, node: u32) -> Value<'static> {
-    let s = &file.syntax;
-    if !s.is(node, Kind::ForOf) || !s.has_word(node, Field::Modifier, "await") {
-        return Value::Bool(false);
-    }
-    let Some(right) = s.get(node, Field::Right) else { return Value::Bool(false) };
-    Value::Bool(!matches!(file.type_of(right), Ty::Any) && !has_async_symbol(file, right, "asyncIterator"))
-}
-
-pub(super) fn using(file: &NativeFile<'_>, node: u32) -> Value<'static> {
-    let s = &file.syntax;
-    let result = s.parent(node).filter(|&parent| s.is(parent, Kind::Declarator)).and_then(|decl| s.parent(decl))
-        .is_some_and(|var| s.word(var, Field::Kind) == Some("await using"));
-    Value::Bool(result && !matches!(file.type_of(node), Ty::Any) && !has_async_symbol(file, node, "asyncDispose"))
-}
-
-pub(super) fn has_async_symbol(file: &NativeFile<'_>, node: u32, name: &str) -> bool {
-    let ty = file.type_of(node);
-    let mut members = Vec::new();
-    file.typing().checker.member_names(&ty, &mut members);
-    let key = format!("[Symbol.{name}]");
-    if members.iter().any(|member| member.chars().filter(|c| !c.is_whitespace()).eq(key.chars())) {
-        return true;
-    }
-    let s = &file.syntax;
-    let node = s.unparen(node);
-    s.is(node, Kind::Object) && s.all(node, Field::Property).any(|property| {
-        s.get(property, Field::Key).filter(|&key| s.is(key, Kind::Computed))
-            .and_then(|key| s.get(key, Field::Expr)).is_some_and(|expr| {
-                s.is(expr, Kind::Member) && s.word(expr, Field::Property) == Some(name)
-                    && s.get(expr, Field::Object).is_some_and(|object| file.global_value(object).as_deref() == Some("Symbol"))
-            })
-    })
-}

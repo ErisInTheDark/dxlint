@@ -1,0 +1,12 @@
+declare const words: string[] | readonly string[];
+words.toSorted();
+declare const mixed: string[] | number[];
+mixed.sort();
+declare const tuple: [string, string];
+tuple.sort();
+declare const empty: [];
+empty.sort();
+declare const numeric: readonly number[];
+numeric.toSorted();
+declare const structural: { [key: number]: number; length: number; sort(): void };
+structural.sort();

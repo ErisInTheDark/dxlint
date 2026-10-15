@@ -1,0 +1,3 @@
+import .ts
+rule no-extra-bind
+rule prefer-arrow-callback
