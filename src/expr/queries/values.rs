@@ -440,11 +440,16 @@ fn results(semantic: &Semantic<'_>, at: Leaf, _: &[Value<'static>]) -> Known<Val
 fn member_parameters(semantic: &Semantic<'_>, at: Leaf, args: &[Value<'static>]) -> Known<Value<'static>> {
     let Some(argument) = args.first() else { return Known::Unknown };
     let Known::Yes(key) = query_key(semantic, at, argument) else { return Known::Unknown };
-    let values = semantic.values();
     let Known::Yes(receiver) = own_value(semantic, at) else { return Known::Unknown };
+    member_parameters_in(semantic, &receiver, &key)
+}
+
+/// The parameters of each call signature of `receiver`'s member `key`.
+pub(super) fn member_parameters_in(semantic: &Semantic<'_>, receiver: &NodeValue, key: &Key) -> Known<Value<'static>> {
+    let values = semantic.values();
     // A member a closed shape proves absent has no signatures at all.
-    if values.has_member(&receiver, &key) == Known::Yes(false) { return Known::Yes(Value::list(Vec::new())) }
-    let member = values.member(&receiver, &key);
+    if values.has_member(receiver, key) == Known::Yes(false) { return Known::Yes(Value::list(Vec::new())) }
+    let member = values.member(receiver, key);
     signature_values(semantic, &member, SignatureFields::Parameters)
 }
 

@@ -57,12 +57,17 @@ pub(super) fn selection(call: Leaf, values: &Values<'_>) -> Known<Option<Selecti
             selected.choices.push(candidate.chosen.clone());
             continue;
         }
-        let first = group.into_iter().find(|candidate| !matches!(candidate,
+        let mut open = group.into_iter().filter(|candidate| !matches!(candidate,
             Known::Yes(candidate) if candidate.compatible == Known::Yes(false)));
+        let first = open.next();
+        // The only candidate not ruled out is the signature the call
+        // resolves to, even when an argument (an untyped callback) can't be
+        // checked against it yet: TypeScript types such arguments from it.
+        let alone = open.next().is_none();
         match first {
             Some(Known::Yes(candidate)) => {
                 selected.choices.push(candidate.chosen);
-                selected.uncertain = true;
+                selected.uncertain |= !alone;
             }
             _ => return Known::Unknown,
         }

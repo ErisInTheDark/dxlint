@@ -8,7 +8,7 @@ use crate::grammar::names::question::{Handle, Known, NodeValue};
 use crate::grammar::names::semantic::Semantic;
 use crate::grammar::names::values::Key;
 
-use super::values::{lookup_in, member_key, project, project_path, project_with, source_value};
+use super::values::{lookup_in, member_key, member_parameters_in, project, project_path, project_with, source_value};
 use super::QueryFunction;
 
 const FIELD: &str = "value_handle";
@@ -23,6 +23,14 @@ pub(super) static FUNCTIONS: &[QueryFunction] = &[
     QueryFunction { name: "site_text", arity: 2, call: site_text },
     QueryFunction { name: "declaration_origin", arity: 2, call: declaration_origin },
     QueryFunction { name: "declaration_value", arity: 2, call: declaration_value },
+    QueryFunction { name: "value_sources", arity: 1, call: |semantic, at, _| sources(semantic, at) },
+    QueryFunction { name: "site_sources", arity: 2, call: |semantic, _, args| {
+        use crate::grammar::names::question::{FrameId, Leaf, NodeRef, Target};
+        match args.first().and_then(site_of) {
+            Some((file, node)) => sources(semantic, Leaf { target: Target::Node(NodeRef { file, node }), frame: FrameId::ROOT }),
+            None => Known::Yes(Value::Null),
+        }
+    } },
 ];
 
 /// A query reading a handle subject instead of a node.
@@ -42,6 +50,26 @@ static HANDLES: &[HandleFunction] = &[
     HandleFunction { name: "value_lookup", call: |semantic, value, args| match args.first().and_then(member_key) {
         Some(key) => lookup_in(semantic, value, &key),
         None => Known::Unknown,
+    } },
+    HandleFunction { name: "member_call_parameters", call: |semantic, value, args| match args.first().and_then(member_key) {
+        Some(key) => member_parameters_in(semantic, &value, &key),
+        None => Known::Unknown,
+    } },
+    HandleFunction { name: "value_has_member", call: |semantic, value, args| match args.first().and_then(member_key) {
+        Some(key) => match semantic.values().has_member(&value, &key) {
+            Known::Yes(found) => Known::Yes(Value::Bool(found)),
+            Known::Unknown => Known::Unknown,
+        },
+        None => Known::Unknown,
+    } },
+    // `value_accepts(allowing, given, _, _)`: handles are already values,
+    // so the read modes of the node form do not apply.
+    HandleFunction { name: "value_accepts", call: |semantic, value, args| {
+        let Some(given) = args.first().and_then(handle_of).and_then(|handle| semantic.question.handle_value(handle)) else { return Known::Unknown };
+        match semantic.calls().accepts(&value, &given) {
+            Known::Yes(accepted) => Known::Yes(Value::Bool(accepted)),
+            Known::Unknown => Known::Unknown,
+        }
     } },
 ];
 
@@ -276,6 +304,92 @@ fn declaration_value(semantic: &Semantic<'_>, _: crate::grammar::names::question
     match semantic.values().values(Leaf { target: Target::Node(NodeRef { file, node }), frame: FrameId::ROOT }) {
         NodeValue::Unknown => Known::Unknown,
         value => Known::Yes(handle(semantic, value)),
+    }
+}
+
+/// One step of where a value comes from, read off the language's value
+/// recipe: `{combine, sites}`. A reference's site is the declaration it
+/// resolves to; union and intersection recipes list their parts
+/// (`combine` is `union` / `intersection`, else `one`). Sites are `{file,
+/// node, kind, name}`, `name` being the declared name when the site
+/// declares one. `sites` is empty when the node holds its own value; the
+/// whole answer is null when the recipe can't be followed (computed
+/// values, products, calls).
+fn sources(semantic: &Semantic<'_>, at: crate::grammar::names::question::Leaf) -> Known<Value<'static>> {
+    use crate::grammar::names::question::Target;
+    use crate::grammar::names::values::compile::Value as Recipe;
+    let values = semantic.values();
+    let mut recipe = match values.unwrap_recipe(at) {
+        Known::Yes(Some(recipe)) => recipe,
+        Known::Yes(None) => return Known::Yes(sources_record("one", Vec::new())),
+        Known::Unknown => return Known::Unknown,
+    };
+    while let Recipe::Excludes { from: Some(inner), .. } = recipe { recipe = inner }
+    let own = || Known::Yes(Vec::new());
+    let (combine, leaves) = match recipe {
+        Recipe::Current | Recipe::Excludes { from: None, .. } | Recipe::Traits(_) | Recipe::Text(_) => ("one", own()),
+        Recipe::Union(parts) | Recipe::Intersection(parts) => {
+            let mut all = Vec::new();
+            for part in parts {
+                match values.sites(at, part) {
+                    Known::Yes(found) => all.extend(found),
+                    Known::Unknown => return Known::Yes(Value::Null),
+                }
+            }
+            (if matches!(recipe, Recipe::Union(_)) { "union" } else { "intersection" }, Known::Yes(all))
+        }
+        Recipe::Spread { intersection, value: None, .. } => (if *intersection { "intersection" } else { "union" }, values.sites(at, recipe)),
+        Recipe::Path(_) | Recipe::Either(..) | Recipe::From(..) | Recipe::Scope { .. } => ("one", values.sites(at, recipe)),
+        _ => return Known::Yes(Value::Null),
+    };
+    let Known::Yes(leaves) = leaves else { return Known::Yes(Value::Null) };
+    let Known::Yes(at) = semantic.leaf(at) else { return Known::Unknown };
+    let mut sites = Vec::new();
+    for leaf in leaves {
+        if !semantic.question.budget.step() { return Known::Unknown }
+        if leaf.target == at.target { continue }
+        let Target::Node(node) = leaf.target else { return Known::Yes(Value::Null) };
+        let Some(site) = site_record(semantic, node) else { return Known::Unknown };
+        if !sites.contains(&site) { sites.push(site) }
+    }
+    Known::Yes(sources_record(combine, sites))
+}
+
+fn sources_record(combine: &str, sites: Vec<Value<'static>>) -> Value<'static> {
+    Value::record(vec![("combine".into(), Value::from(combine.to_string())), ("sites".into(), Value::list(sites))])
+}
+
+/// `{file, node, kind, name}` for a node of any program file.
+fn site_record(semantic: &Semantic<'_>, node: crate::grammar::names::question::NodeRef) -> Option<Value<'static>> {
+    let tree = semantic.world.tree(node.file)?;
+    let matcher = semantic.world.grammar().matchers.get(tree.nodes.get(node.node as usize)?.matcher as usize)?;
+    Some(Value::record(vec![
+        ("file".into(), Value::Num(f64::from(node.file))),
+        ("node".into(), Value::Num(f64::from(node.node))),
+        ("kind".into(), Value::from(matcher.name.clone())),
+        ("name".into(), declared_name(semantic, node)),
+    ]))
+}
+
+/// The name a node declares: itself when it is a declared name, else the
+/// first name whose declaring node it is. Null for none or computed names.
+fn declared_name(semantic: &Semantic<'_>, node: crate::grammar::names::question::NodeRef) -> Value<'static> {
+    let Some(names) = semantic.world.names(node.file) else { return Value::Null };
+    let name = if names.declared.contains_key(&node.node) {
+        Some(node.node)
+    } else {
+        names.declared.iter().filter(|(_, &(_, owner, ..))| owner == node.node).map(|(&name, _)| name).min()
+    };
+    let Some(name) = name else { return Value::Null };
+    match names.keys.get(&name) {
+        Some(Some(key)) => Value::from(key.to_string()),
+        Some(None) => Value::Null,
+        None => {
+            let text = semantic.world.tree(node.file).and_then(|tree| tree.nodes.get(name as usize))
+                .zip(semantic.world.text(node.file))
+                .and_then(|(data, text)| text.get(data.start as usize..data.end as usize));
+            text.map_or(Value::Null, |text| Value::from(semantic.world.name_key(node.file, text).into_owned()))
+        }
     }
 }
 

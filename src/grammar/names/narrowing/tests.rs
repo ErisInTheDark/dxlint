@@ -509,6 +509,10 @@ mod places {
         let (world, mut tables) = predicate_call();
         tables.kinds[9].unwraps.clear();
         tables.kinds[9].fits.push((1 << 1, 0, Some(0)));
+        // Two overloads neither ruled out: a lone one would be the
+        // resolved signature, and its guard would hold.
+        let overload = tables.kinds[8].calls.signatures[0].clone();
+        tables.kinds[8].calls.signatures.push(overload);
         let question = QueryContext::default();
         let semantic = Semantic::new(&world, &tables, &question);
         let Known::Yes(Some(selection)) = semantic.calls().selection(leaf(20)) else { panic!("uncertain signature retained") };

@@ -26,6 +26,11 @@ pub trait Native {
     /// Byte `at` lies strictly inside one token or comment (a line of a
     /// multi-line string or block comment starts there).
     fn inside_token(&self, at: usize) -> bool;
+    /// The file's code tokens as the parser read them (comments left out;
+    /// strings, templates and regexes whole), for `token(...)`.
+    fn tokens(&self) -> Option<std::rc::Rc<Tokens>> {
+        None
+    }
     /// What a name's text means for name resolution (escapes decoded).
     fn name_key<'s>(&self, text: &'s str) -> std::borrow::Cow<'s, str> {
         std::borrow::Cow::Borrowed(text)
@@ -33,6 +38,61 @@ pub trait Native {
     /// The engine's resolved names for this file ([`crate::grammar::names`]),
     /// given before the first fact read that needs them.
     fn set_names(&self, _names: Arc<crate::grammar::names::Resolved>) {}
+}
+
+/// A file's code tokens: byte spans in source order.
+pub struct Tokens(pub Box<[(u32, u32)]>);
+
+impl Tokens {
+    /// Tokens wholly inside `start..end`.
+    pub fn within(&self, start: u32, end: u32) -> &[(u32, u32)] {
+        let from = self.0.partition_point(|&(token, _)| token < start);
+        let to = self.0.partition_point(|&(_, token)| token <= end).max(from);
+        &self.0[from..to]
+    }
+
+    /// The last token ending at or before `at`.
+    pub fn before(&self, at: u32) -> Option<usize> {
+        self.0.partition_point(|&(_, end)| end <= at).checked_sub(1)
+    }
+
+    /// The first token starting at or after `at`.
+    pub fn after(&self, at: u32) -> Option<usize> {
+        let index = self.0.partition_point(|&(start, _)| start < at);
+        (index < self.0.len()).then_some(index)
+    }
+
+    /// The token matching the bracket-like token at `index` (an opener
+    /// pairs forward, a closer backward), by `pairs` of opener and closer
+    /// texts. A closer with no open partner is skipped; one closing an
+    /// outer opener drops the unclosed openers inside it.
+    pub fn partner(&self, index: usize, source: &str, pairs: &[(&str, &str)]) -> Option<usize> {
+        let text = |at: usize| {
+            let (start, end) = self.0[at];
+            source.get(start as usize..end as usize).unwrap_or("")
+        };
+        let own = text(index);
+        let forward = pairs.iter().any(|&(open, _)| open == own);
+        if !forward && !pairs.iter().any(|&(_, close)| close == own) { return None }
+        // Walking backward, closers open and openers close.
+        let pairs: Vec<(&str, &str)> = if forward { pairs.to_vec() } else { pairs.iter().map(|&(open, close)| (close, open)).collect() };
+        let mut stack = vec![own];
+        let mut closes = |at: usize| {
+            let found = text(at);
+            if pairs.iter().any(|&(open, _)| open == found) {
+                stack.push(found);
+            } else if let Some(depth) = stack.iter().rposition(|&open| pairs.contains(&(open, found))) {
+                stack.truncate(depth);
+                return stack.is_empty();
+            }
+            false
+        };
+        if forward {
+            (index + 1..self.0.len()).find(|&at| closes(at))
+        } else {
+            (0..index).rev().find(|&at| closes(at))
+        }
+    }
 }
 
 /// Which node kinds may fill a field of one node kind.

@@ -234,6 +234,7 @@ pub enum VExpr {
     Containing(NodeSel),
     /// `node_at(offset)`: the innermost default-layer node holding it.
     NodeAt(Box<VExpr>),
+    Token(crate::expr::TokenRead, Box<VExpr>, Option<Box<VExpr>>),
     /// `opener.x` / `closer.x`: on the first (last) child of these layers.
     OwnChild(bool, Box<[u32]>, Box<VExpr>),
     /// `matcher.x`: on the closest ancestor of that matcher.
@@ -696,6 +697,10 @@ fn lower_in<'a>(e: &'a CExpr, g: &Scope<'a, '_>, args: &[Lowered], bound: u16) -
         }
         CExpr::Containing(sel) => VExpr::Containing(sel.clone()),
         CExpr::NodeAt(offset) => VExpr::NodeAt(boxed(offset)?),
+        CExpr::Token(read, inner, pairs) => VExpr::Token(*read, boxed(inner)?, match pairs {
+            Some(pairs) => Some(boxed(pairs)?),
+            None => None,
+        }),
         CExpr::OwnChild(last, kinds, inner) => VExpr::OwnChild(*last, kinds.clone().into(), boxed(inner)?),
         CExpr::OnAncestor(matcher, inner) => VExpr::OnAncestor(*matcher, boxed(inner)?),
         CExpr::KindName(inner) => VExpr::KindName(boxed(inner)?),
@@ -796,6 +801,8 @@ pub trait Host {
     }
     /// The file's language, for `is .lang`.
     fn lang(&self) -> usize { 0 }
+    /// The front end's code tokens for `token(...)`; none without one.
+    fn tokens(&self) -> Option<std::rc::Rc<crate::engine::frontend::Tokens>> { None }
     /// A native link's target nodes from a node, and whether it is a list.
     fn link(&self, _node: u32, _link: usize) -> Option<(Vec<u32>, bool)> { None }
     /// Whether `text` passes a pattern test ([`CExpr::Test`]/[`CExpr::TestDfa`]).
@@ -1941,6 +1948,55 @@ fn ev_rare<H: Host>(h: &Runtime<'_, H>, node: u32, e: &VExpr, f: &mut Vec<V>) ->
                 tree.innermost_at(h.grammar(), at, u32::MAX).filter(|&id| !tree.is_root(id)).map_or(V::Null, V::Node)
             }
         },
+        VExpr::Token(read, inner, pairs) => {
+            use crate::expr::TokenRead;
+            let V::Node(id) = eval!(node, inner)? else { return Some(V::Null) };
+            let pairs = match pairs {
+                Some(pairs) => Some(eval!(node, pairs)?),
+                None => None,
+            };
+            let Some(tokens) = h.host.tokens() else { return Some(V::Null) };
+            let (start, end) = (tree.node(id).start, tree.node(id).end);
+            let text = |(from, to): (u32, u32)| source.get(from as usize..to as usize).unwrap_or("");
+            let record = |index: usize| {
+                let span = tokens.0[index];
+                let exact = tree.innermost_at(h.grammar(), span.0, u32::MAX)
+                    .filter(|&found| !tree.is_root(found) && tree.node(found).start == span.0 && tree.node(found).end == span.1);
+                h.pack(&Value::record(vec![
+                    ("text".into(), Value::from(text(span))),
+                    ("start".into(), Value::Num(f64::from(span.0))),
+                    ("end".into(), Value::Num(f64::from(span.1))),
+                    ("node".into(), exact.map_or(Value::Null, |found| Value::Node(found, crate::expr::value::Text::Borrowed(text(span))))),
+                ]))
+            };
+            let found = match read {
+                TokenRead::First => tokens.after(start).filter(|&i| tokens.0[i].1 <= end),
+                TokenRead::Last => tokens.before(end).filter(|&i| tokens.0[i].0 >= start),
+                TokenRead::Before => tokens.before(start),
+                TokenRead::After => tokens.after(end),
+                TokenRead::List => {
+                    let texts: Vec<Value> = tokens.within(start, end).iter().map(|&span| Value::from(text(span))).collect();
+                    return h.pack(&Value::list(texts));
+                }
+                TokenRead::Pair => {
+                    let pairs = h.unpack(pairs?);
+                    let Value::List(pairs) = &pairs else { return Some(V::Null) };
+                    let pairs: Vec<(String, String)> = pairs.iter().filter_map(|pair| match pair {
+                        Value::List(ends) if ends.len() == 2 => Some((ends[0].text().into_owned(), ends[1].text().into_owned())),
+                        _ => None,
+                    }).collect();
+                    let pairs: Vec<(&str, &str)> = pairs.iter().map(|(open, close)| (open.as_str(), close.as_str())).collect();
+                    let opener = tokens.after(start).filter(|&i| tokens.0[i].0 == start);
+                    let closer = tokens.before(end).filter(|&i| tokens.0[i].1 == end);
+                    opener.and_then(|i| tokens.partner(i, source, &pairs))
+                        .or_else(|| closer.and_then(|i| tokens.partner(i, source, &pairs)))
+                }
+            };
+            match found {
+                Some(index) => record(index)?,
+                None => V::Null,
+            }
+        }
         VExpr::OwnChild(last, kinds, inner) => {
             let fits = |edge: &&crate::grammar::Edge| kinds.iter().any(|&k| h.grammar().is_a(tree.node(edge.node).matcher, k));
             let children = &tree.node(node).children;

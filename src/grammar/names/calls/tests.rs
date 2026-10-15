@@ -1008,8 +1008,11 @@ fn indirect_and_uncertain_parameter_bindings_never_project_whole_arguments() {
     tables.kinds.push(KindNames { fits: vec![(2, 0, Some(0))], ..KindNames::default() });
     world.tree.nodes[10].matcher = 7;
     tables.kinds[4].calls.signatures.remove(0);
+    // Two overloads neither ruled out (a lone one would be resolved).
+    let overload = tables.kinds[4].calls.signatures[0].clone();
+    tables.kinds[4].calls.signatures.push(overload);
     let semantic = Semantic::new(&world, &tables, &question);
-    let Known::Yes(Some(selected)) = semantic.calls().selection(leaf(5)) else { panic!("uncertain candidate retained") };
+    let Known::Yes(Some(selected)) = semantic.calls().selection(leaf(5)) else { panic!("uncertain candidate selected") };
     assert!(selected.uncertain);
     let binding = Leaf { frame: selected.choices[0].header.site.frame, ..leaf(11) };
     assert_eq!(semantic.calls().argument_sites(binding), Known::Unknown);
@@ -1029,9 +1032,9 @@ fn selection_prefers_proof_over_unknown_and_never_invents_invalid_call_results()
 
     world.tree.nodes[7].matcher = 1;
     let semantic = Semantic::new(&world, &tables, &question);
-    let Known::Yes(Some(selected)) = semantic.calls().selection(leaf(5)) else { panic!("uncertain candidate retained") };
+    let Known::Yes(Some(selected)) = semantic.calls().selection(leaf(5)) else { panic!("unproven candidate retained") };
     assert_eq!(selected.choices[0].header.signature, 0);
-    assert!(selected.uncertain);
+    assert!(!selected.uncertain, "the only candidate not ruled out is the resolved signature");
 
     world.tree.nodes[6].matcher = 0;
     world.tree.nodes[10].matcher = 3;

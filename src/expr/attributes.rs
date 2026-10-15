@@ -477,6 +477,10 @@ impl vm::Host for Ctx<'_> {
         Some(self.position_at(offset))
     }
 
+    fn tokens(&self) -> Option<std::rc::Rc<crate::engine::frontend::Tokens>> {
+        self.native?.tokens()
+    }
+
     fn overlapping(&self, node: u32, sel: &super::NodeSel, range: Option<(f64, f64)>) -> Option<Vec<u32>> {
         Some(Ctx { node, ..*self }.overlapping_ids(sel, range))
     }
@@ -715,7 +719,6 @@ mod tests {
         let project = Project::default();
         let native = NativeFile::new(Syntax::new(&tree, source, front), std::path::Path::new("/root/test.ts"), &project);
         let reads: Vec<_> = [
-            ("static_name", "ts_member"),
             ("token_neighbours", "ts_member"),
             ("list_layout", "ts_call"),
         ].into_iter().map(|(name, kind)| {
@@ -724,7 +727,7 @@ mod tests {
             (fact, g.matcher(kind).unwrap())
         }).collect();
         let argument = front.labels[crate::native::ts::kinds::Field::Arg as usize];
-        let field_fact = super::super::facts::fact("resolved").unwrap();
+        let field_fact = super::super::facts::fact("first_token").unwrap();
         vm::lower(&CExpr::Fact(field_fact, super::super::FactOf::Field(argument)), &g.functions, &mut attrs.values);
         let memo = AttrMemo::default();
         let lines = crate::line_index::LineIndex::new(source);

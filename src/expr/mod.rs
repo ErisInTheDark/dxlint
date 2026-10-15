@@ -134,6 +134,9 @@ pub enum CExpr {
     KindName(Box<CExpr>),
     /// `node_at(offset)`: the innermost default-layer node holding it.
     NodeAt(Box<CExpr>),
+    /// `token(n, edge)`, `token_list(n)`, `token_pair(n, pairs)`: the
+    /// front end's code tokens around a node (pairs: the second expression).
+    Token(TokenRead, Box<CExpr>, Option<Box<CExpr>>),
     /// The first value when it is a node, else the second (an `is`
     /// subject: `next_token` is a node read, or the fact's tag).
     Coalesce(Box<CExpr>, Box<CExpr>),
@@ -169,7 +172,11 @@ macro_rules! child_visitor {
                 | CExpr::Relative(_, inner) | CExpr::Is(inner, _) | CExpr::Trait(inner, _, _) | CExpr::Semantic(inner, _) | CExpr::Key(inner, _)
                 | CExpr::OnField(_, inner) | CExpr::OwnChild(_, _, inner) | CExpr::OnParent(inner)
                 | CExpr::Position(inner) | CExpr::KindName(inner) | CExpr::NodeAt(inner)
-                | CExpr::FieldElse(_, inner) | CExpr::OnAncestor(_, inner) => f(inner),
+                | CExpr::FieldElse(_, inner) | CExpr::OnAncestor(_, inner) | CExpr::Token(_, inner, None) => f(inner),
+                CExpr::Token(_, inner, Some(pairs)) => {
+                    f(inner);
+                    f(pairs);
+                }
                 CExpr::Binary(_, a, b) | CExpr::Bind(a, _, b) | CExpr::Nullish(a, b) | CExpr::Walk(a, _, b) | CExpr::Coalesce(a, b) => {
                     f(a);
                     f(b);
@@ -230,11 +237,25 @@ pub enum IsTest {
     Lang(usize),
 }
 
+/// What [`CExpr::Token`] reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum TokenRead {
+    First,
+    Last,
+    Before,
+    After,
+    List,
+    Pair,
+}
+
 /// Expression forms that are not plain functions, for `zlint functions`.
 pub const SPECIAL_FORMS: &[(&str, &str)] = &[
     ("dbg(value, label?)", "the value unchanged; prints `file:line:col layer label = value` to stderr for each node it is evaluated on"),
     ("position(offset)", "`{line, column, js_line, js_column}` of a byte offset in the file, 1-based: `line`/`column` like the builtins; `js_line` also counts U+2028/U+2029 as line breaks and `js_column` counts UTF-16 units, as JavaScript tools do; `js_line_start` is the byte offset that JS line starts at"),
     ("node_at(offset)", "the innermost node (default layer) holding a byte offset, null outside any: `node_at(token_neighbours.after.start).indent_level`"),
+    ("token(node, edge)", "a code token the front end read (comments left out; strings, templates and regexes whole) as `{text, start, end}`: edge `first` / `last` wholly inside the node, `before` ending at or before its start, `after` starting at or after its end; null when none"),
+    ("token_list(node)", "the texts of the code tokens wholly inside the node, in order"),
+    ("token_pair(node, pairs)", "the token matching the node's bracket token, as `{text, start, end}`: the token starting at the node if it opens one of `pairs` (`[[\"(\", \")\"], ...]`), else the one ending it if it closes one; unmatched closers are skipped, a closer of an outer opener drops unclosed inner ones; null when none"),
     ("kind_name(node)", "a node's kind as text (`ts_call`; `.lang` for the file), for messages: test kinds with `is`"),
     ("containing(layer)", "the innermost node of a layer or group, in any named layer, whose span holds the node's (null if none); `kind.field` selects what fills that field, as `descendants` and `overlapping` also do"),
     ("descendants(layer)", "the nodes of a layer or group (specialisations too) inside the node, in source order"),
@@ -295,7 +316,7 @@ pub(crate) const MAX_CALL_DEPTH: u32 = 256;
 /// Whether `name(...)` already means something built in: a function, a
 /// special form or a fact.
 pub fn is_builtin_call(name: &str) -> bool {
-    functions::lookup(name).is_some() || queries::lookup_function(name).is_some() || Each::named(name).is_some() || matches!(name, "reduce" | "dbg" | "position" | "walk" | "descendants" | "overlapping" | "containing" | "kind_name" | "node_at") || facts::fact(name).is_some()
+    functions::lookup(name).is_some() || queries::lookup_function(name).is_some() || Each::named(name).is_some() || matches!(name, "reduce" | "dbg" | "position" | "walk" | "descendants" | "overlapping" | "containing" | "kind_name" | "node_at" | "token" | "token_list" | "token_pair") || facts::fact(name).is_some()
 }
 
 /// A value as `dbg` prints it: strings quoted, lists bracketed.
@@ -1022,6 +1043,45 @@ impl Scope<'_> {
                 };
                 self.note(name.span, Resolved::Function("node_at"));
                 CExpr::NodeAt(Box::new(self.compile(offset, errors)?))
+            }
+            // `token(n, edge)`, `token_list(n)`, `token_pair(n, pairs)`.
+            ExprKind::Call(name, args) if matches!(name.text.as_str(), "token" | "token_list" | "token_pair") && self.grammar.function(&name.text).is_none() => {
+                let (read, node, pairs) = match (name.text.as_str(), args.as_slice()) {
+                    ("token", [node, edge]) => {
+                        let read = match &edge.kind {
+                            ExprKind::Str(edge) => match edge.as_str() {
+                                "first" => Some(TokenRead::First),
+                                "last" => Some(TokenRead::Last),
+                                "before" => Some(TokenRead::Before),
+                                "after" => Some(TokenRead::After),
+                                _ => None,
+                            },
+                            _ => None,
+                        };
+                        let Some(read) = read else {
+                            errors.push(ConfigError::new(edge.span, "`token`'s edge is one of \"first\", \"last\", \"before\", \"after\"").note("usage: token(n, \"first\").text"));
+                            return None;
+                        };
+                        (read, node, None)
+                    }
+                    ("token_list", [node]) => (TokenRead::List, node, None),
+                    ("token_pair", [node, pairs]) => (TokenRead::Pair, node, Some(pairs)),
+                    _ => {
+                        errors.push(ConfigError::new(e.span, format!("wrong arguments for `{}`", name.text)).note("usage: token(n, \"first\"), token_list(n), token_pair(n, [[\"(\", \")\"]])"));
+                        return None;
+                    }
+                };
+                self.note(name.span, Resolved::Function(match read {
+                    TokenRead::List => "token_list",
+                    TokenRead::Pair => "token_pair",
+                    _ => "token",
+                }));
+                let node = Box::new(self.compile(node, errors)?);
+                let pairs = match pairs {
+                    Some(pairs) => Some(Box::new(self.compile(pairs, errors)?)),
+                    None => None,
+                };
+                CExpr::Token(read, node, pairs)
             }
             // A config `fn`.
             ExprKind::Call(name, args) if self.grammar.function(&name.text).is_some() => {

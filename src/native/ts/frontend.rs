@@ -140,6 +140,10 @@ impl Native for NativeFile<'_> {
         after.checked_sub(1).map(|i| &tokens.0[i]).is_some_and(|token| token.end as usize > at && matches!(token.tok, Tok::Template | Tok::Str | Tok::P("/*")))
     }
 
+    fn tokens(&self) -> Option<std::rc::Rc<frontend::Tokens>> {
+        Some(self.cached(|file| frontend::Tokens(file.cached(super::tokens::lex).0.iter().map(|token| (token.start, token.end)).collect())))
+    }
+
     fn name_key<'s>(&self, text: &'s str) -> std::borrow::Cow<'s, str> {
         super::bind::decoded_name(text)
     }
