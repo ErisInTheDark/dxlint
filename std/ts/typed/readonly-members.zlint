@@ -57,7 +57,7 @@ fn readonly_primitive_annotation(initializer) = {
 }
 in ts_node let readonly_name_bindings type_structure([], ["name_bindings"])
 fn readonly_initializer_annotation(initializer) = {
-  value type_name: initializer.type
+  value type_name: initializer.type()
   value bindings: initializer.readonly_name_bindings.name_bindings
   value type_parts: split(type_name, ".")
   value if ts_value_has_trait(initializer, "any") == true then "any"

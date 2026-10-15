@@ -36,8 +36,7 @@ fn typed_default_member(handle, child) = {
     value key: if array then index_of(child.parent.element.nodes, child)
       else ts_value_key(child.key.node)
     value elements: part.product.elements
-    value boundary: find(elements, element => element.optional || element.repeated)
-    value required: if boundary == null then count(elements) else index_of(elements, boundary)
+    value required: count(filter(elements, element => !element.optional && !element.repeated))
     value member: if key != null then value_lookup(arm.handle, key) else null
     value when {
       array && carrier.description.kind == "tuple" then

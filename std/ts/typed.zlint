@@ -412,7 +412,7 @@ in ts_template.expression rule restrict-template-expressions {
 in ts_unary rule no-unsafe-unary-minus {
   when operator == "-" && !ts_value_opaque(argument.node)
     && !any(["any", "unknown", "number", "bigint", "enum"], trait => ts_value_has_trait(argument.node, trait) == true)
-  warn "Argument of unary negation should be assignable to number | bigint but is { { value argument.type.nonempty ?? '?'; re_replace /^\"[\s\S]*\"$/ 'string' } } instead."
+  warn "Argument of unary negation should be assignable to number | bigint but is { { value argument.type().nonempty ?? '?'; re_replace /^\"[\s\S]*\"$/ 'string' } } instead."
 }
 
 in ts_member, ts_index let object_array_type ts_value_array_like(object.node)
@@ -462,7 +462,7 @@ in ts_unary rule no-meaningless-void-operator {
   let call underlying is (ts_call, ts_new)
   when if call then ts_value_trait(value_constituents(argument.node), "undefined")
     || checkNever && value_parts(argument.node) == [] else value_has_member(argument.node, "then", null) != true
-  warn if call then "void operator shouldn't be used on {argument.type}; it should convey that a return value is being ignored" else "void operator is useless here; it should only discard a call's return value"
+  warn if call then "void operator shouldn't be used on {argument.type()}; it should convey that a return value is being ignored" else "void operator is useless here; it should only discard a call's return value"
   let operand argument.node
   let parens expression_fix_parens(source, node, operand)
   let replacement expression_fix_wrap(operand.text, parens > 0)

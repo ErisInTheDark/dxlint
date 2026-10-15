@@ -39,7 +39,10 @@ fn unbound_pattern_sources(n) = {
       {node: current.node.parent.parent.node, path: [current.node.parent.static_name] current.path}
     else null
   flat_map (current) if current.node is (ts_declarator.name, ts_parameter.name) then {
-    value unbound_source(current.node.parent.init.node, current.path, current.node.parent is ts_declarator) unbound_source(current.node, current.path, false)
+    value owner: current.node.parent
+    value annotated: owner.type.node ?? owner.node
+    value declared: unbound_source(owner.init.node, current.path, owner is ts_declarator)
+    value declared unbound_source(annotated, current.path, false)
   } else if current.node is ts_assignment.left then unbound_source(current.node.parent.right.node, current.path, true)
     else if current.node is ts_assignment_pattern.left then unbound_source(current.node.parent.right.node, current.path, false)
     else []
