@@ -420,11 +420,13 @@ mod tests {
     #[test]
     fn allocating_fact_queries_share_payload_without_caching_free_results() {
         use crate::expr::{facts, Value};
-        let fact = facts::fact("token_texts").expect("list fact");
+        let fact = facts::fact("list_layout").expect("list fact");
         let mut config = super::super::Values::default();
         config.register_fact(fact).expect("declared shape");
         let vm = FileVm::default();
-        let value = Value::list(vec![Value::from("owned text")]);
+        let keys = ["offset", "end", "comments", "prev", "next", "spaced", "broken", "kind", "brackets", "count", "single",
+            "node_single", "first_broken", "empty_comments", "mode"];
+        let value = Value::list(vec![Value::record(keys.iter().map(|&key| (key.into(), Value::from("owned text"))).collect::<Vec<_>>())]);
         let key = (7, fact, None, None);
         assert!(vm.fact_value(&value, &config, "", key, true).is_some());
         let bytes = vm.values.borrow().used_bytes();
@@ -440,7 +442,7 @@ mod tests {
         assert!(vm.fact_value(&wrapped, &config, "", wrapper, false).is_some(), "field wrapper retains its own list shape");
         // A value the fact never declared still packs (as it comes), as its
         // own query rather than the first fact's result.
-        let another = (7, facts::fact("first_token").expect("record fact"), None, None);
+        let another = (7, facts::fact("implicit_coercion").expect("record fact"), None, None);
         let bytes = vm.values.borrow().used_bytes();
         assert!(vm.fact_value(&value, &config, "", another, false).is_some(), "an undeclared shape still packs");
         assert!(vm.values.borrow().used_bytes() > bytes, "different fact must not reuse the first result");

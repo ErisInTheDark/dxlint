@@ -14,10 +14,8 @@ use super::facts::Facts;
 
 pub mod conditions;
 pub mod core;
-pub mod layout;
 pub mod structure;
 pub mod suggestions;
-pub mod syntax;
 pub mod symbols;
 pub mod type_relations;
 pub mod typed;
@@ -44,28 +42,15 @@ pub struct FactFields {
     pub get: fn(&dyn Facts, u32, Option<usize>) -> Value<'static>,
 }
 
-/// A link: nodes a node leads to (see [`crate::expr::facts::LinkInfo`]).
-pub struct Link {
-    pub name: &'static str,
-    pub doc: &'static str,
-    pub many: bool,
-    pub get: fn(&dyn Facts, u32) -> Vec<u32>,
-}
-
 const FACT_GROUPS: &[&[Fact]] = &[
-    core::FACTS, syntax::FACTS, layout::FACTS, structure::FACTS, typed::FACTS, conditions::FACTS,
+    core::FACTS, structure::FACTS, typed::FACTS, conditions::FACTS,
     type_relations::FACTS, suggestions::FACTS, symbols::FACTS,
 ];
 
-const FACT_FIELD_GROUPS: &[&[FactFields]] = &[syntax::FACT_FIELDS];
-
-const LINK_GROUPS: &[&[Link]] = &[layout::LINKS];
+const FACT_FIELD_GROUPS: &[&[FactFields]] = &[];
 
 /// Every fact, numbered as the engine reads them.
 pub static FACTS: LazyLock<Vec<&'static Fact>> = LazyLock::new(|| FACT_GROUPS.iter().flat_map(|group| group.iter()).collect());
 
 /// Every projection, numbered as the engine reads them.
 pub static PROJECTIONS: LazyLock<Vec<&'static FactFields>> = LazyLock::new(|| FACT_FIELD_GROUPS.iter().flat_map(|group| group.iter()).collect());
-
-/// Every link, numbered as the engine reads them.
-pub static LINKS: LazyLock<Vec<&'static Link>> = LazyLock::new(|| LINK_GROUPS.iter().flat_map(|group| group.iter()).collect());

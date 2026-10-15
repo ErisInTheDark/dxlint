@@ -150,10 +150,6 @@ impl ConfigFile<'_> {
                     .chain(self.of_kind(Kind::Attr)
                         .filter(|(_, attr)| !self.symbols.symbols[id].fields.contains(&attr.name))
                         .map(|(id, attr)| item(id, attr)))
-                    .chain(crate::expr::facts::LINKS.iter()
-                        .filter(|link| !self.symbols.symbols[id].fields.iter().any(|field| field == link.name)
-                            && self.symbols.get(Kind::Attr, link.name).is_none())
-                        .map(|link| json!({ "label": link.name, "kind": 5, "detail": link.doc })))
                     .collect(),
                 // `field.`, `parent.`, `children.`...: what a node has.
                 None => [Kind::Attr, Kind::Fact, Kind::Builtin].iter().flat_map(|&k| self.of_kind(k)).map(|(i, s)| item(i, s)).collect(),

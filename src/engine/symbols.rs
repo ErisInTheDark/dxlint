@@ -309,9 +309,6 @@ impl Symbols {
         for f in facts::FACTS.iter() {
             self.add(Kind::Fact, f.name, f.doc.to_string(), format!("{}.", f.doc));
         }
-        for link in facts::LINKS.iter() {
-            self.add(Kind::Fact, link.name, link.doc.to_string(), format!("{}.", link.doc));
-        }
         for f in functions::FUNCTIONS {
             self.add(Kind::Function, f.name, f.signature.to_string(), format!("`{}`\n\n{}.", f.signature, f.doc));
         }
@@ -480,8 +477,7 @@ impl Symbols {
                         let actual_field = self.get(Kind::Layer, &layer.text)
                             .is_some_and(|id| self.symbols[id].fields.contains(&field.text));
                         let kind = if actual_field { Kind::Field }
-                            else if self.get(Kind::Attr, &field.text).is_some() { Kind::Attr }
-                            else if facts::link(&field.text).is_some() { Kind::Fact } else { Kind::Field };
+                            else if self.get(Kind::Attr, &field.text).is_some() { Kind::Attr } else { Kind::Field };
                         self.use_of(field.span, kind, &field.text);
                     }
                     Target::Lang(n) if n.text != "*" => self.use_of(n.span, Kind::Lang, &n.text),

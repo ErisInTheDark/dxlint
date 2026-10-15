@@ -62,7 +62,6 @@ pub enum Target {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NodeSelection {
-    Link(usize),
     Attribute(u16),
 }
 
@@ -750,8 +749,6 @@ impl Linter {
             for (selection, rules) in selections {
                 if !rules.iter().any(|&fi| run.active[fi]) { continue; }
                 let nodes = match selection {
-                    NodeSelection::Link(link) => Ok(tree_ctx.native_facts()
-                        .map_or_else(Vec::new, |native| crate::expr::facts::follow(native, *link, owner))),
                     NodeSelection::Attribute(attr) => {
                         memo.enter_node(owner);
                         let ctx = Ctx { node: owner, world: Some(&world), ..tree_ctx };

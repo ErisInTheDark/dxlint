@@ -2,7 +2,7 @@
 //! registry entry each, read like built-in variables. On layers without a
 //! native front end they are null.
 //!
-//! Each front end declares its own ([`Frontend::facts`], [`Frontend::links`],
+//! Each front end declares its own ([`Frontend::facts`],
 //! [`Frontend::projections`]); the registry numbers them all, and a read asks
 //! the file's [`Native`] by the front end's own number.
 
@@ -26,15 +26,6 @@ pub enum Shape {
     List(&'static Shape),
 }
 
-/// A link: a relation from a node to other nodes of the same tree
-/// (`declaration`, `references`). Rules read it as a node (or a list of
-/// them, with `many`), then read anything on it: `declaration.line`.
-pub struct LinkInfo {
-    pub name: &'static str,
-    pub doc: &'static str,
-    pub many: bool,
-}
-
 /// Optional projections of a record-or-null fact. Reading one field (or
 /// presence) need not build the whole record; it must agree with it.
 pub struct ProjectionInfo {
@@ -48,14 +39,6 @@ pub struct Fact {
     pub name: &'static str,
     pub doc: &'static str,
     pub shape: Shape,
-    front: &'static str,
-    local: usize,
-}
-
-pub struct Link {
-    pub name: &'static str,
-    pub doc: &'static str,
-    pub many: bool,
     front: &'static str,
     local: usize,
 }
@@ -82,10 +65,6 @@ fn declared<T, R>(list: impl Fn(&'static dyn Frontend) -> Vec<T>, entry: impl Fn
 pub static FACTS: LazyLock<Vec<Fact>> =
     LazyLock::new(|| declared(|front| front.facts(), |f, front, local| Fact { name: f.name, doc: f.doc, shape: f.shape, front, local }));
 
-/// Every link of every front end.
-pub static LINKS: LazyLock<Vec<Link>> =
-    LazyLock::new(|| declared(|front| front.links(), |l, front, local| Link { name: l.name, doc: l.doc, many: l.many, front, local }));
-
 /// Compile-time field identities; values live only in the expression memo.
 pub static FIELD_READS: LazyLock<Vec<FieldRead>> = LazyLock::new(|| {
     declared(|front| front.projections(), |p, front, local| (p, front, local))
@@ -104,11 +83,6 @@ pub fn fact(name: &str) -> Option<usize> {
     FACTS.iter().position(|f| f.name == name)
 }
 
-/// A link's index in [`LINKS`].
-pub fn link(name: &str) -> Option<usize> {
-    LINKS.iter().position(|l| l.name == name)
-}
-
 pub fn field_read(fact: usize, key: Option<&str>) -> Option<usize> {
     FIELD_READS.iter().position(|read| read.fact == fact && read.key == key)
 }
@@ -123,12 +97,6 @@ pub fn read(native: &dyn Native, fact: usize, node: u32) -> Value<'static> {
 pub fn read_field(native: &dyn Native, read: usize, node: u32) -> Value<'static> {
     let read = &FIELD_READS[read];
     if read.front == native.frontend() { native.projection(read.local, node, read.field) } else { Value::Null }
-}
-
-/// The nodes link `link` leads to from `node`.
-pub fn follow(native: &dyn Native, link: usize, node: u32) -> Vec<u32> {
-    let link = &LINKS[link];
-    if link.front == native.frontend() { native.link(link.local, node) } else { Vec::new() }
 }
 
 thread_local! {

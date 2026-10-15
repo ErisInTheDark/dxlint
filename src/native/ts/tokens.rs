@@ -203,21 +203,6 @@ fn token_record_kind(file: &NativeFile<'_>, t: &Token, kind: Option<K>) -> Value
     ])
 }
 
-pub(crate) fn neighbour_kind(file: &NativeFile<'_>, node: u32, before: bool) -> Value<'static> {
-    let code = file.cached(lex);
-    code.neighbour(file.syntax.tree.node(node), before)
-        .and_then(|token| token_layer(file, token))
-        .map_or(Value::Null, |kind| Value::from(kind.name()))
-}
-
-pub(crate) fn gap_bounds(file: &NativeFile<'_>, node: u32, before: bool) -> Option<(usize, usize)> {
-    let code = file.cached(lex);
-    let span = file.syntax.tree.node(node);
-    let token = code.neighbour(span, before)?;
-    let (from, to) = if before { (token.end, span.start) } else { (span.end, token.start) };
-    Some((from as usize, to as usize))
-}
-
 fn neighbour_record(src: &str, token: Option<&Token>, span: &Node, before: bool) -> Value<'static> {
     let Some(token) = token else { return Value::Null };
     let (from, to) = if before { (token.end, span.start) } else { (span.end, token.start) };
@@ -353,25 +338,6 @@ pub(crate) fn paired(file: &NativeFile<'_>, node: u32) -> Value<'static> {
         (lexed.0[last].end == n.end).then(|| at(lexed.0[last].start)).flatten()
     });
     partner.map_or(Value::Null, |i| token_record(file, &lexed.0[i]))
-}
-
-/// Fields shared by the eager gap record and its projections.
-pub(crate) const GAP_FIELDS: &[&str] = &["text", "start", "end", "spaced", "line_break", "blank_lines", "blank_gaps", "comments"];
-
-pub(crate) fn gap_field(src: &str, from: usize, to: usize, key: &str) -> Value<'static> {
-    let to = to.max(from);
-    let text = &src[from..to];
-    match key {
-        "text" => Value::text_copy(text),
-        "start" => Value::from(from),
-        "end" => Value::from(to),
-        "spaced" => Value::Bool(gap_has_space(text)),
-        "line_break" => Value::Bool(breaks_line(text)),
-        "comments" => Value::Bool(!text.trim().is_empty()),
-        "blank_lines" => Value::from(gap_blank_lines(text)),
-        "blank_gaps" => Value::from(gap_whitespace(text).1),
-        _ => Value::Null,
-    }
 }
 
 /// A gap between tokens, including whitespace outside comments.
@@ -779,9 +745,7 @@ mod lexical_tests {
                 for node in 0..tree.nodes.len() as u32 {
                     assert_eq!(edge(&seeded, node, true), edge(&lazy, node, true));
                     assert_eq!(paired(&seeded, node), paired(&lazy, node));
-                    for fact in super::super::topics::syntax::FACTS {
-                        assert_eq!((fact.get)(&seeded, node), (fact.get)(&lazy, node));
-                    }
+                    assert_eq!(neighbours(&seeded, node), neighbours(&lazy, node));
                 }
             }
         }

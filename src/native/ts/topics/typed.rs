@@ -23,7 +23,6 @@ mod transfers;
 mod arguments;
 mod enums;
 pub(super) mod specifiers;
-mod errors;
 mod promises;
 mod empty_types;
 mod defaults;
@@ -52,12 +51,6 @@ pub const FACTS: &[Fact] = &[
         name: "type_flow",
         doc: "native expressions: type_flow(site, source) gives source and expected type relations for declared, contextual and heritage contracts; incomplete records indicate traversal limits",
         get: |f, n| f.with_file(enum_types::flow, n),
-    },
-    Fact {
-        shape: Fact::SCALAR.shape,
-        name: "property_info",
-        doc: "native expressions: static member or index access declaration presence and winning declaration visibility, even when its value type is unresolved",
-        get: |f, n| f.with_file(properties::property_info, n),
     },
     Fact {
         shape: Fact::SCALAR.shape,
@@ -113,12 +106,6 @@ pub const FACTS: &[Fact] = &[
     },
     Fact {
         shape: Fact::SCALAR.shape,
-        name: "error_value",
-        doc: "native values: error/any/unknown/undefined category and caught-binding provenance",
-        get: |f, n| f.with_file(errors::value, n),
-    },
-    Fact {
-        shape: Fact::SCALAR.shape,
         name: "type_specifier_groups",
         doc: "native values: allowed-type candidates per union arm, with named file/lib/package provenance",
         get: |f, n| f.with_file(specifiers::groups, n),
@@ -164,18 +151,6 @@ pub const FACTS: &[Fact] = &[
         name: "accessor_type_mismatch",
         doc: "native getter return annotations: incompatible with the paired setter parameter",
         get: |f, n| f.with_file(accessors::mismatch, n),
-    },
-    Fact {
-        shape: Fact::SCALAR.shape,
-        name: "nonawaitable_type",
-        doc: "native expressions: constrained type has no possibly awaitable union arm",
-        get: |f, n| f.with_file(awaitability::nonawaitable, n),
-    },
-    Fact {
-        shape: Fact::SCALAR.shape,
-        name: "nonawaitable_iterable",
-        doc: "native expressions: an iterable has a definitely nonawaitable element type",
-        get: |f, n| f.with_file(awaitability::iterable, n),
     },
     Fact {
         shape: Fact::SCALAR.shape,

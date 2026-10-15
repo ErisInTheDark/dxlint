@@ -103,8 +103,6 @@ pub enum CExpr {
     /// (`a.b.fact(args)`): the fact reads its arguments through
     /// [`facts::args`].
     FactCall(usize, Vec<CExpr>, Option<Box<CExpr>>),
-    /// A link (`declaration`, `references`): the node(s) it leads to.
-    Link(usize),
     /// `base.key`: on a record its key; on a node (or nodes) the compiled
     /// read, when `key` names one.
     Member(Box<CExpr>, value::Key, Option<Box<CExpr>>),
@@ -212,7 +210,7 @@ macro_rules! child_visitor {
                 CExpr::Const(_) | CExpr::Opt(_) | CExpr::Field(_) | CExpr::Ancestor(_, _)
                 | CExpr::Builtin(_) | CExpr::Fact(_, _) | CExpr::FactField(_, _) | CExpr::Attr(_)
                 | CExpr::FieldAttr(_, _) | CExpr::ParentField(_) | CExpr::ParentAttr(_)
-                | CExpr::Local(_) | CExpr::Param(_) | CExpr::Link(_)
+                | CExpr::Local(_) | CExpr::Param(_)
                 | CExpr::Descendants(_) | CExpr::Containing(_) => {}
             }
         }
@@ -600,7 +598,6 @@ impl<'a> Scope<'a> {
             ("attribute", self.attrs.get(name).is_some()),
             ("builtin", Builtin::named(name).is_some()),
             ("fact", facts::fact(name).is_some()),
-            ("node link", facts::link(name).is_some()),
         ].into_iter().find_map(|(kind, present)| present.then_some(kind))
     }
 
@@ -630,7 +627,7 @@ impl<'a> Scope<'a> {
     /// `x` read on some node, when it names something nodes have: the node's
     /// field of that label when it has one, else the rule's own `let` (also
     /// the one being defined: `let depth previous.depth + 1`), an attribute,
-    /// a fact, a link or a builtin.
+    /// a fact or a builtin.
     fn node_part(&self, part: &crate::config::ast::Name) -> Option<CExpr> {
         let rule = || self.rule.unwrap_or_default().to_string();
         let local = self.locals.iter().position(|l| *l == part.text)
@@ -640,9 +637,6 @@ impl<'a> Scope<'a> {
             // `let` only stands in on nodes without one.
             self.note(part.span, Resolved::Local(rule(), part.text.clone()));
             CExpr::Local(i as u16)
-        } else if let Some(i) = facts::link(&part.text) {
-            self.note(part.span, Resolved::Fact(facts::LINKS[i].name));
-            CExpr::Link(i)
         } else if let Some(i) = self.attrs.get(&part.text) {
             self.note(part.span, Resolved::Attr(part.text.clone()));
             CExpr::Attr(i)
@@ -1371,9 +1365,6 @@ impl Scope<'_> {
         } else if let Some(i) = facts::fact(&first.text) {
             self.note(first.span, Resolved::Fact(facts::FACTS[i].name));
             Some(CExpr::Fact(i, FactOf::Node))
-        } else if let Some(i) = facts::link(&first.text) {
-            self.note(first.span, Resolved::Fact(facts::LINKS[i].name));
-            Some(CExpr::Link(i))
         } else {
             None
         };
@@ -1420,10 +1411,6 @@ impl Scope<'_> {
                 if let Some(i) = facts::fact(&name.text) {
                     self.note(name.span, Resolved::Fact(facts::FACTS[i].name));
                     return Some(CExpr::Fact(i, FactOf::Node));
-                }
-                if let Some(i) = facts::link(&name.text) {
-                    self.note(name.span, Resolved::Fact(facts::LINKS[i].name));
-                    return Some(CExpr::Link(i));
                 }
                 if let Some(m) = self.grammar.matcher(&name.text) {
                     self.note(name.span, Resolved::Layer(name.text.clone()));

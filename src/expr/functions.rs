@@ -500,11 +500,14 @@ pub static FUNCTIONS: &[Function] = &[
     },
     Function {
         name: "get",
-        signature: "get(record, key)",
-        doc: "a record's value for a computed key (null when missing)",
+        signature: "get(record_or_list, key)",
+        doc: "a record's value for a computed key, or a list's item at a 0-based index (null when missing)",
         min: 2,
         max: 2,
-        call: |a| Ok(a[0].key(&a[1].text())),
+        call: |a| Ok(match (&a[0], &a[1]) {
+            (Value::List(items), Value::Num(at)) if *at >= 0.0 && at.fract() == 0.0 => items.get(*at as usize).cloned().unwrap_or(Value::Null),
+            (record, key) => record.key(&key.text()),
+        }),
     },
     Function {
         name: "values",

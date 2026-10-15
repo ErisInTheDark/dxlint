@@ -477,22 +477,30 @@ fn signature_values(semantic: &Semantic<'_>, value: &NodeValue, fields: Signatur
                 ]));
                 continue;
             }
-            let (parameters, parameters_known) = match calls.parameters(header) {
+            let flag = |answer: Known<bool>| match answer {
+                Known::Yes(flag) => Value::Bool(flag),
+                Known::Unknown => Value::Null,
+            };
+            let (parameters, parameters_known, rest, optional) = match calls.parameters(header) {
                 Known::Yes(parameters) => {
+                    let rest = Value::list(parameters.iter().map(|&parameter| flag(calls.is_rest(parameter))).collect());
+                    let optional = Value::list(parameters.iter().map(|&parameter| flag(values.optional(parameter))).collect());
                     let projected = parameters.into_iter().map(|parameter| project(semantic, values.values(parameter)).known())
                         .collect::<Option<Vec<_>>>();
                     match projected {
-                        Some(parameters) => (Value::list(parameters), true),
-                        None => (Value::Null, false),
+                        Some(parameters) => (Value::list(parameters), true, rest, optional),
+                        None => (Value::Null, false, rest, optional),
                     }
                 }
-                Known::Unknown => (Value::Null, false),
+                Known::Unknown => (Value::Null, false, Value::Null, Value::Null),
             };
             if matches!(fields, SignatureFields::Parameters) {
                 if semantic.question.budget.exhausted() { return Known::Unknown }
                 signatures.push(Value::record(vec![
                     ("parameters".into(), parameters),
                     ("parameters_known".into(), Value::Bool(parameters_known)),
+                    ("parameter_rest".into(), rest),
+                    ("parameter_optional".into(), optional),
                 ]));
                 continue;
             }
@@ -510,6 +518,8 @@ fn signature_values(semantic: &Semantic<'_>, value: &NodeValue, fields: Signatur
             signatures.push(Value::record(vec![
                 ("parameters".into(), parameters),
                 ("parameters_known".into(), Value::Bool(parameters_known)),
+                ("parameter_rest".into(), rest),
+                ("parameter_optional".into(), optional),
                 ("result_known".into(), Value::Bool(result.is_some())),
                 ("result".into(), result.unwrap_or(Value::Null)),
                 ("receiver".into(), receiver),

@@ -250,8 +250,6 @@ pub enum VExpr {
     IsTests(Box<VExpr>, Box<[IsTest]>),
     Trait(Box<VExpr>, crate::grammar::names::Value, &'static crate::expr::queries::Query, u64),
     QueryCall(&'static crate::expr::queries::QueryFunction, Box<[VExpr]>),
-    /// A native link (`declaration`, `references`): its node(s).
-    Link(usize),
     /// A pattern test (`x ~ pattern`): the [`CExpr::Test`] or
     /// [`CExpr::TestDfa`] node, its matcher shared.
     Pattern(Box<VExpr>, Box<CExpr>),
@@ -641,7 +639,6 @@ fn lower_in<'a>(e: &'a CExpr, g: &Scope<'a, '_>, args: &[Lowered], bound: u16) -
         }
         CExpr::Semantic(..) => return Err(e),
         CExpr::QueryCall(query, call_args) => VExpr::QueryCall(query, all(call_args)),
-        CExpr::Link(link) => VExpr::Link(*link),
         CExpr::Test(value, _) | CExpr::TestDfa(value, _) => VExpr::Pattern(boxed(value)?, Box::new(e.clone())),
         CExpr::Ancestor(matcher, field) => VExpr::Ancestor(*matcher, *field),
         CExpr::Binary(op @ (BinOp::Eq | BinOp::Ne), a, b) if matches!((&**a, &**b), (CExpr::Field(_), CExpr::Const(Value::Null)) | (CExpr::Const(Value::Null), CExpr::Field(_))) => {
@@ -803,8 +800,6 @@ pub trait Host {
     fn lang(&self) -> usize { 0 }
     /// The front end's code tokens for `token(...)`; none without one.
     fn tokens(&self) -> Option<std::rc::Rc<crate::engine::frontend::Tokens>> { None }
-    /// A native link's target nodes from a node, and whether it is a list.
-    fn link(&self, _node: u32, _link: usize) -> Option<(Vec<u32>, bool)> { None }
     /// Whether `text` passes a pattern test ([`CExpr::Test`]/[`CExpr::TestDfa`]).
     fn pattern(&self, _test: &CExpr, _text: &str) -> Option<bool> { None }
 }
@@ -1730,14 +1725,6 @@ fn ev_rare<H: Host>(h: &Runtime<'_, H>, node: u32, e: &VExpr, f: &mut Vec<V>) ->
                 (IsTest::Layer(layer), Some(id)) => tree.layer_of(id) == Some(*layer),
             }))
         }
-        VExpr::Link(link) => {
-            let (targets, many) = h.link(node, *link)?;
-            if many {
-                h.list(&targets.into_iter().map(V::Node).collect::<Vec<_>>())?
-            } else {
-                targets.first().map_or(V::Null, |&id| V::Node(id))
-            }
-        }
         VExpr::Pattern(value, test) => {
             let value = eval!(node, value)?;
             let text = h.unpack(value).text().into_owned();
@@ -1937,8 +1924,15 @@ fn ev_rare<H: Host>(h: &Runtime<'_, H>, node: u32, e: &VExpr, f: &mut Vec<V>) ->
         VExpr::Get(record, key) => {
             let record = eval!(node, record)?;
             let key = eval!(node, key)?;
-            let key = h.unpack(key).text().into_owned();
-            h.key(record, &key)
+            match (record, key) {
+                (V::List(handle), V::Num(at)) => with_view(h.host, &h.scratch.borrow(), |view| {
+                    (at >= 0.0 && at.fract() == 0.0 && (at as usize) < view.len(handle)).then(|| view.item(handle, at as usize))
+                }).unwrap_or(V::Null),
+                _ => {
+                    let key = h.unpack(key).text().into_owned();
+                    h.key(record, &key)
+                }
+            }
         }
         VExpr::Containing(sel) => h.containing(node, sel)?.map_or(V::Null, V::Node),
         VExpr::NodeAt(offset) => match eval!(node, offset)? {

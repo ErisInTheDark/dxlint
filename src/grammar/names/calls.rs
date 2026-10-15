@@ -208,6 +208,11 @@ impl Calls<'_> {
         select::selection(call, &self.semantic.values())
     }
 
+    /// Whether a signature's parameter gathers the remaining arguments.
+    pub fn is_rest(&self, parameter: Leaf) -> Known<bool> {
+        rest(parameter, &self.semantic.values())
+    }
+
     pub fn argument_sites(&self, formal_binding: Leaf) -> Known<Option<Vec<Leaf>>> {
         let Some(_nest) = self.question.budget.nest() else { return Known::Unknown };
         let Known::Yes(formal_binding) = self.semantic.leaf(formal_binding) else { return Known::Unknown };

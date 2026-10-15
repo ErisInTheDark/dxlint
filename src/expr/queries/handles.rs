@@ -20,6 +20,16 @@ pub(super) static FUNCTIONS: &[QueryFunction] = &[
     QueryFunction { name: "value_constructors", arity: 1, call: |semantic, at, args| constructors(semantic, semantic.values().values(at), args) },
     QueryFunction { name: "value_bases", arity: 1, call: |semantic, at, args| bases(semantic, semantic.values().values(at), args) },
     QueryFunction { name: "call_selection", arity: 1, call: selection },
+    QueryFunction { name: "call_binding", arity: 1, call: |semantic, at, _| binding(semantic, at, None) },
+    QueryFunction { name: "call_binding_at", arity: 2, call: |semantic, at, args| {
+        let Some(Value::List(names)) = args.first() else { return Known::Yes(Value::Null) };
+        let labels = &semantic.world.grammar().labels;
+        let path: Option<Vec<u16>> = names.iter().map(|name| labels.get(&name.text())).collect();
+        match path {
+            Some(path) => binding(semantic, at, Some(&path)),
+            None => Known::Yes(Value::Null),
+        }
+    } },
     QueryFunction { name: "site_text", arity: 2, call: site_text },
     QueryFunction { name: "declaration_origin", arity: 2, call: declaration_origin },
     QueryFunction { name: "declaration_value", arity: 2, call: declaration_value },
@@ -277,6 +287,64 @@ fn selection(semantic: &Semantic<'_>, at: crate::grammar::names::question::Leaf,
         Known::Yes(None) => Known::Yes(Value::Null),
         Known::Unknown => Known::Unknown,
     }
+}
+
+/// The call's selected signatures in their bound frames (generic
+/// parameters instantiated for this call): `{uncertain, choices: [{site,
+/// result, parameters: [{site, rest, value, arguments}]}]}`, `result` and `value`
+/// as handles, `arguments` the `{file, node}` sites each parameter receives
+/// (several for a rest parameter). Null when not an invocation. With a
+/// `path` of field names (`call_binding_at`), each choice also has `at`:
+/// the value at that path from the signature's node, read in the bound
+/// frame (`["return_type", "type"]`: a type guard's instantiated target).
+fn binding(semantic: &Semantic<'_>, at: crate::grammar::names::question::Leaf, path: Option<&[u16]>) -> Known<Value<'static>> {
+    let selection = match semantic.calls().selection(at) {
+        Known::Yes(Some(selection)) => selection,
+        Known::Yes(None) => return Known::Yes(Value::Null),
+        Known::Unknown => return Known::Unknown,
+    };
+    let mut choices = Vec::new();
+    for choice in &selection.choices {
+        let result = match semantic.calls().header_result(choice.header) {
+            Known::Yes(result) => handle(semantic, result),
+            Known::Unknown => Value::Null,
+        };
+        let mut parameters = Vec::new();
+        for (parameter, actuals) in &choice.mapping {
+            if !semantic.question.budget.step() { return Known::Unknown }
+            let rest = match semantic.calls().is_rest(*parameter) {
+                Known::Yes(rest) => Value::Bool(rest),
+                Known::Unknown => Value::Null,
+            };
+            parameters.push(Value::record(vec![
+                ("site".into(), site_value(*parameter)),
+                ("rest".into(), rest),
+                ("value".into(), handle(semantic, semantic.values().values(*parameter))),
+                ("arguments".into(), Value::list(actuals.iter().map(|&actual| site_value(actual)).collect())),
+            ]));
+        }
+        let mut fields = vec![
+            ("site".into(), site_value(choice.header.site)),
+            ("result".into(), result),
+            ("parameters".into(), Value::list(parameters)),
+        ];
+        if let Some(path) = path {
+            let reached = match semantic.values().follow(choice.header.site, path) {
+                Known::Yes(leaves) => {
+                    let values = semantic.values();
+                    let reached: Vec<_> = leaves.into_iter().map(|leaf| values.values(leaf)).collect();
+                    handle(semantic, values.combine(reached, false))
+                }
+                Known::Unknown => Value::Null,
+            };
+            fields.push(("at".into(), reached));
+        }
+        choices.push(Value::record(fields));
+    }
+    Known::Yes(Value::record(vec![
+        ("uncertain".into(), Value::Bool(selection.uncertain)),
+        ("choices".into(), Value::list(choices)),
+    ]))
 }
 
 /// A `{file, node}` site's source, in any file of the program: `{text,

@@ -3,7 +3,6 @@
 use super::*;
 use crate::native::ts::kinds::{Field as F, Kind as K};
 use crate::native::ts::summary::sig;
-use crate::native::ts::statics;
 
 fn name_groups(ty: &Ty, ck: &Checker<'_>, depth: usize) -> Vec<Vec<String>> {
     if depth >= 64 { return vec![Vec::new()] }
@@ -52,19 +51,4 @@ pub(super) fn return_info(file: &NativeFile<'_>, node: u32) -> Value<'static> {
             ("groups".into(), Value::list(name_groups(ty, ck, 0).into_iter().map(|group| Value::list(group.into_iter().map(Value::from).collect())).collect())),
         ])).collect())),
     ])
-}
-
-pub(super) fn rejection_handler(file: &NativeFile<'_>, call: u32) -> Option<(u32, &'static str)> {
-    let s = &file.syntax;
-    let callee = s.get(call, F::Callee)?;
-    let object = s.get(callee, F::Object)?;
-    let property = statics::property_name(s, callee).or_else(|| s.get(callee, F::Index).and_then(|index| file.static_string(index)));
-    let (index, method) = match property.as_deref() {
-        Some("catch") => (0, "catch"),
-        Some("then") => (1, "then"),
-        _ => return None,
-    };
-    let arguments: Vec<_> = s.all(call, F::Arg).take(index + 1).collect();
-    if arguments.len() != index + 1 || arguments.iter().any(|&arg| s.is(arg, K::Spread)) { return None }
-    file.typing().checker.is_thenable(&file.type_of(object)).then_some((arguments[index], method))
 }

@@ -14,7 +14,7 @@ use super::syntax::Syntax;
 use super::tokens::Lexed;
 use super::topics;
 use crate::engine::frontend::{self, FieldShape, FileInput, Frontend, Native, Parsed};
-use crate::expr::facts::{FactInfo, LinkInfo, ProjectionInfo};
+use crate::expr::facts::{FactInfo, ProjectionInfo};
 use crate::expr::Value;
 
 pub struct Ts;
@@ -100,10 +100,6 @@ impl Frontend for Ts {
         topics::PROJECTIONS.iter().map(|p| ProjectionInfo { name: p.name, fields: p.fields }).collect()
     }
 
-    fn links(&self) -> Vec<LinkInfo> {
-        topics::LINKS.iter().map(|l| LinkInfo { name: l.name, doc: l.doc, many: l.many }).collect()
-    }
-
     fn project(&self) -> Box<dyn frontend::Project> {
         Box::new(Project::default())
     }
@@ -126,10 +122,6 @@ impl Native for NativeFile<'_> {
 
     fn projection(&self, projection: usize, node: u32, field: Option<usize>) -> Value<'static> {
         (topics::PROJECTIONS[projection].get)(self, node, field)
-    }
-
-    fn link(&self, link: usize, node: u32) -> Vec<u32> {
-        (topics::LINKS[link].get)(self, node)
     }
 
     fn inside_token(&self, at: usize) -> bool {

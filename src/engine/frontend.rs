@@ -8,7 +8,7 @@ use std::any::Any;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::expr::facts::{FactInfo, LinkInfo, ProjectionInfo};
+use crate::expr::facts::{FactInfo, ProjectionInfo};
 use crate::expr::Value;
 use crate::grammar::{NativeFront, Node, Tree};
 use super::reads::{Dep, Discovery, Reads};
@@ -22,7 +22,6 @@ pub trait Native {
     fn fact(&self, fact: usize, node: u32) -> Value<'static>;
     /// One field of a projection's fact (`Some`), or whether it is there.
     fn projection(&self, projection: usize, node: u32, field: Option<usize>) -> Value<'static>;
-    fn link(&self, link: usize, node: u32) -> Vec<u32>;
     /// Byte `at` lies strictly inside one token or comment (a line of a
     /// multi-line string or block comment starts there).
     fn inside_token(&self, at: usize) -> bool;
@@ -160,9 +159,6 @@ pub trait Frontend: Sync {
         Vec::new()
     }
     fn projections(&self) -> Vec<ProjectionInfo> {
-        Vec::new()
-    }
-    fn links(&self) -> Vec<LinkInfo> {
         Vec::new()
     }
 

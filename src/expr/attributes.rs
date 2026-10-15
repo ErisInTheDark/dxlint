@@ -530,11 +530,6 @@ impl vm::Host for Ctx<'_> {
         self.lang
     }
 
-    fn link(&self, node: u32, link: usize) -> Option<(Vec<u32>, bool)> {
-        let targets = self.native_facts().map_or_else(Vec::new, |native| super::facts::follow(native, link, node));
-        Some((targets, super::facts::LINKS[link].many))
-    }
-
     fn pattern(&self, test: &CExpr, text: &str) -> Option<bool> {
         Some(self.test_value(test, &Value::from(text)))
     }
@@ -719,7 +714,6 @@ mod tests {
         let project = Project::default();
         let native = NativeFile::new(Syntax::new(&tree, source, front), std::path::Path::new("/root/test.ts"), &project);
         let reads: Vec<_> = [
-            ("token_neighbours", "ts_member"),
             ("list_layout", "ts_call"),
         ].into_iter().map(|(name, kind)| {
             let fact = super::super::facts::fact(name).unwrap();
@@ -727,7 +721,7 @@ mod tests {
             (fact, g.matcher(kind).unwrap())
         }).collect();
         let argument = front.labels[crate::native::ts::kinds::Field::Arg as usize];
-        let field_fact = super::super::facts::fact("first_token").unwrap();
+        let field_fact = super::super::facts::fact("reference_key").unwrap();
         vm::lower(&CExpr::Fact(field_fact, super::super::FactOf::Field(argument)), &g.functions, &mut attrs.values);
         let memo = AttrMemo::default();
         let lines = crate::line_index::LineIndex::new(source);
@@ -763,7 +757,7 @@ mod tests {
         }
         let call = tree.order.iter().copied().find(|&node| tree.node(node).matcher == g.matcher("ts_call").unwrap()).unwrap();
         let on = Ctx { node: call, ..ctx };
-        for fact in [field_fact, super::super::facts::fact("token_texts").unwrap()] {
+        for fact in [field_fact, super::super::facts::fact("reference_key_strict").unwrap()] {
             let of = super::super::FactOf::Field(argument);
             let expected = on.fact_value(fact, None, of);
             assert!(matches!(&expected, Value::List(items) if items.len() == 2), "field reads keep one fact result per argument");

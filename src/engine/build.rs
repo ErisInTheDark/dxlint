@@ -1028,7 +1028,6 @@ fn rule(def: &RuleDef, g: &Grammar, schemas: &Schemas, attrs: &AttrNames, uses: 
     let ReadRequirements { layers: layer_reads, all_tokens: helper_tokens, own_tokens, requires_native, .. } = reads.resolve(helpers);
     let requires_native = requires_native || targets.iter().any(|target| match target {
         Target::Matcher(m) | Target::Field(m, _) | Target::Nodes(m, NodeSelection::Attribute(_)) => is_native_layer(g, *m),
-        Target::Nodes(_, NodeSelection::Link(_)) => true,
         Target::Lang(_) => false,
     });
     let needs_tokens = |m| is_token_layer(g, m) || g.native_hosts[m as usize].iter().any(|&host| is_token_layer(g, host));
@@ -1176,15 +1175,14 @@ fn resolve_target(target: &AstTarget, g: &Grammar, attrs: Option<&AttrNames>, er
             };
             let labels = g.matchers[m as usize].labels();
             let label = g.labels.get(&field.text).filter(|_| labels.contains(&field.text));
-            match (label, attrs.and_then(|attrs| attrs.get(&field.text)), crate::expr::facts::link(&field.text)) {
-                (Some(label), _, _) => (vec![Target::Field(m, label)], format!("{}.{}", layer.text, field.text)),
-                (None, Some(attr), _) => (vec![Target::Nodes(m, NodeSelection::Attribute(attr))], format!("{}.{}", layer.text, field.text)),
-                (None, None, Some(link)) => (vec![Target::Nodes(m, NodeSelection::Link(link))], format!("{}.{}", layer.text, field.text)),
-                (None, None, None) => {
-                    let names = labels.iter().map(String::as_str).chain(crate::expr::facts::LINKS.iter().map(|link| link.name))
+            match (label, attrs.and_then(|attrs| attrs.get(&field.text))) {
+                (Some(label), _) => (vec![Target::Field(m, label)], format!("{}.{}", layer.text, field.text)),
+                (None, Some(attr)) => (vec![Target::Nodes(m, NodeSelection::Attribute(attr))], format!("{}.{}", layer.text, field.text)),
+                (None, None) => {
+                    let names = labels.iter().map(String::as_str)
                         .chain(attrs.into_iter().flat_map(|attrs| attrs.iter().map(String::as_str)));
                     errors.push(
-                        ConfigError::new(field.span, format!("matcher `{}` has no field `{}`, attribute or link of that name", layer.text, field.text))
+                        ConfigError::new(field.span, format!("matcher `{}` has no field or attribute `{}`", layer.text, field.text))
                             .suggest(&field.text, names),
                     );
                     return None;

@@ -237,8 +237,6 @@ fn strict_implies_its_family_unless_an_option_says_otherwise() {
     assert!(project.strict_option(file, "strictNullChecks"), "implied by the base's strict");
     assert!(!project.strict_option(file, "noImplicitThis"), "the nearer setting wins");
     assert!(!project.strict_option(file, "exactOptionalPropertyTypes"), "not in strict's family");
-    let flags = project.compiler_flags(file);
-    assert!(flags.contains(&("strictNullChecks".into(), true)) && flags.contains(&("noImplicitThis".into(), false)));
 }
 
 #[test]
@@ -549,7 +547,7 @@ fn inspect_names_the_layers_fields_and_facts_at_a_position() {
     let identifier = md.find("`ts_identifier` — `callee` of `ts_call`").expect(&md);
     let call = md.find("`ts_call` — `expression` of `ts_expression_statement`").expect(&md);
     assert!(identifier < call, "{md}");
-    assert!(md.contains("`first_token` ="), "{md}");
+    assert!(md.contains("`reference_key` ="), "{md}");
 }
 
 #[test]
@@ -579,7 +577,7 @@ fn config_errors_explain_themselves() {
     assert!(all.contains("can only match empty text"), "{all}");
     assert!(all.contains("left recursion"), "{all}");
     assert!(all.contains("unknown matcher `nope`"), "{all}");
-    assert!(all.contains("no field `missing`"), "{all}");
+    assert!(all.contains("no field or attribute `missing`"), "{all}");
     assert!(all.contains("no rule `nobody`"), "{all}");
 }
 
