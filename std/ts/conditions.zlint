@@ -63,22 +63,24 @@ fn condition_array_origin(n) = {
   }
 }
 fn condition_member_access(n, arms) = {
-  value key: if n is ts_member then ts_value_key(n.property.node) else value_key(n.index.node)
+  value keys: if n is ts_member then [ts_value_key(n.property.node)] else value_keys(n.index.node)
   value receivers: filter(arms ?? [], arm => !all(arm.parts, part =>
     contains(part.traits, "null") || contains(part.traits, "undefined")))
-  value lookups: map(receivers, arm => value_lookup(arm.handle, key))
-  value complete: arms != null && key != null && all(lookups, lookup => lookup != null)
-  value projected: map(lookups, lookup => value_parts(lookup.member))
+  value lookups: flat_map(receivers, arm => map(keys ?? [], key =>
+    {key: key, result: value_lookup(arm.handle, key)}))
+  value complete: arms != null && keys != null && count(keys) > 0
+    && all(keys, key => key != null) && all(lookups, lookup => lookup.result != null)
+  value projected: map(lookups, lookup => value_parts(lookup.result.member))
   value {
     arms: if complete && all(projected, parts => parts != null)
       then flat_map(projected, parts => parts) else null,
     from_index: if !complete then null else any(lookups, lookup =>
-      any(lookup.alternatives, alternative =>
+      any(lookup.result.alternatives, alternative =>
         !any(alternative.sources, source => source.kind == "named")
         && any(alternative.sources, source => contains(["indexer", "repeated"], source.kind)
-          || source.kind == "ordinal" && key.domain == "ordinal"))),
+          || source.kind == "ordinal" && lookup.key.domain == "ordinal"))),
     optional: if !complete then null else any(lookups, lookup =>
-      any(lookup.alternatives, alternative => alternative.required == false
+      any(lookup.result.alternatives, alternative => alternative.required == false
         && any(alternative.sources, source => source.kind == "named"))),
   }
 }
