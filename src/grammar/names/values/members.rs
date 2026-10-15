@@ -216,14 +216,19 @@ impl Values<'_> {
         for alternative in alternatives {
             if alternative.is_empty() { return Known::Unknown }
             let mut row = Vec::new();
+            let mut unknown = false;
             for &leaf in alternative {
                 if !self.question.budget.step() { return Known::Unknown }
                 match self.leaf_member(leaf, key) {
                     Known::Yes(Some(member)) => Self::merge_member(&mut row, member),
                     Known::Yes(None) => {}
-                    Known::Unknown => return Known::Unknown,
+                    Known::Unknown => unknown = true,
                 }
             }
+            // An alternative's leaves all hold at once: a member one of them
+            // is known to have is there even when another leaf is opaque.
+            // Its absence needs every leaf known.
+            if unknown && row.is_empty() { return Known::Unknown }
             rows.push(row.pop());
         }
         Known::Yes(rows)
