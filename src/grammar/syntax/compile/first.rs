@@ -32,30 +32,59 @@ impl First {
     }
 }
 
-/// How a run rules out an expression before entering it: the token ids the
-/// current goal's token may have, then probes needing their own goal, text
-/// or pattern. Absent when the expression may start anywhere.
+/// How a run rules out an expression before entering it: what the token at
+/// the position may be, in the current goal and in each goal a start fixes.
+/// Absent when the expression may start anywhere.
 pub(crate) struct Start {
-    tokens: Box<[u64]>,
-    pub probes: Vec<Probe>,
+    pub current: GoalStart,
+    /// Goals named by starting tokens, each read once per check (the current
+    /// goal's own head when it is the same goal).
+    pub goals: Vec<(u16, GoalStart)>,
 }
 
-impl Start {
+/// One goal's starting tokens: plain token ids, then token expressions
+/// needing their text or a pattern.
+pub(crate) struct GoalStart {
+    tokens: Box<[u64]>,
+    pub residual: Vec<usize>,
+}
+
+impl GoalStart {
+    fn new(program: &Program) -> Self {
+        Self { tokens: vec![0; program.tokens.len().div_ceil(64)].into(), residual: Vec::new() }
+    }
+
     pub fn has(&self, token: u16) -> bool {
         self.tokens[token as usize / 64] & (1 << (token % 64)) != 0
+    }
+
+    fn add(&mut self, program: &Program, expression: usize) {
+        match &program.expressions[expression] {
+            Op::Token(terminal) if terminal.text.is_none() => {
+                for token in &terminal.tokens { self.tokens[*token as usize / 64] |= 1 << (token % 64); }
+            }
+            _ => if !self.residual.contains(&expression) { self.residual.push(expression) },
+        }
     }
 }
 
 pub(super) fn starts(program: &Program, first: &[Option<First>]) -> Vec<Option<Start>> {
     first.iter().map(|first| {
         let first = first.as_ref().filter(|first| !first.nullable && first.skip_safe)?;
-        let mut start = Start { tokens: vec![0; program.tokens.len().div_ceil(64)].into(), probes: Vec::new() };
+        let mut start = Start { current: GoalStart::new(program), goals: Vec::new() };
         for probe in &first.probes {
-            match &program.expressions[probe.expression] {
-                Op::Token(terminal) if probe.goal.is_none() && terminal.text.is_none() => {
-                    for token in &terminal.tokens { start.tokens[*token as usize / 64] |= 1 << (token % 64); }
+            match probe.goal {
+                None => start.current.add(program, probe.expression),
+                Some(goal) => {
+                    let index = match start.goals.iter().position(|(own, _)| *own == goal) {
+                        Some(index) => index,
+                        None => {
+                            start.goals.push((goal, GoalStart::new(program)));
+                            start.goals.len() - 1
+                        }
+                    };
+                    start.goals[index].1.add(program, probe.expression);
                 }
-                _ => start.probes.push(*probe),
             }
         }
         Some(start)

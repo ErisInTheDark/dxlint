@@ -415,7 +415,13 @@ impl<'a> Run<'a> {
             _ => head,
         };
         let Some(token) = &lexed.token else { return false };
-        match &self.program.expressions[probe.expression] {
+        let token = token.clone();
+        self.token_matches(probe.expression, &token)
+    }
+
+    /// Whether `token` is what the token or token-pattern `expression` reads.
+    fn token_matches(&mut self, expression: usize, token: &TokenSpan) -> bool {
+        match &self.program.expressions[expression] {
             Op::Token(terminal) => terminal.tokens.contains(&token.token)
                 && terminal.text.as_deref().is_none_or(|text| text == &self.text[token.start as usize..token.end as usize]),
             Op::TokenPattern { predicate, .. } => {
@@ -436,8 +442,22 @@ impl<'a> Run<'a> {
     fn starts_at(&mut self, expression: usize, pos: u32, context: Context, head: &Lexed) -> bool {
         let program = self.program;
         let Some(start) = &program.starts[expression] else { return true; };
-        if head.token.as_ref().is_some_and(|token| start.has(token.token)) { return true; }
-        start.probes.iter().any(|probe| self.probe_matches_at(*probe, pos, context, head))
+        if let Some(token) = &head.token {
+            if start.current.has(token.token) { return true; }
+            if start.current.residual.iter().any(|&expression| self.token_matches(expression, token)) { return true; }
+        }
+        for (goal, starts) in &start.goals {
+            let other;
+            let lexed = if *goal == context.goal { head } else {
+                self.scratch.counts.other_goal_reads += 1;
+                other = self.lex(*goal, pos);
+                &other
+            };
+            let Some(token) = &lexed.token else { continue };
+            if starts.has(token.token) { return true; }
+            if starts.residual.iter().any(|&expression| self.token_matches(expression, token)) { return true; }
+        }
+        false
     }
 
     fn field_path(&self, fields: Fields, path: &[u16]) -> Option<&Draft> {
