@@ -10,9 +10,16 @@ impl Parser<'_> {
         let sites = self.name_path("product element sites")?;
         let value = if self.word("using") { Some(Box::new(self.unwrap_value()?)) } else { None };
         let optional = if self.word("optional") { Some(self.name_path("an optional element flag")?) } else { None };
-        let repeated = if self.word("repeated") { Some(self.name_path("a repeated element flag")?) } else { None };
+        let (mut repeated, mut values) = (None, None);
+        while self.word("repeated") {
+            if self.word("values") {
+                values = Some(self.name_path("a repeated value flag")?);
+            } else {
+                repeated = Some(self.name_path("a repeated element flag")?);
+            }
+        }
         let readonly = if self.word("readonly") { Some(self.name_path("a readonly product flag")?) } else { None };
-        Some(Unwrap::Product { shape, sites, value, optional, repeated, readonly })
+        Some(Unwrap::Product { shape, sites, value, optional, repeated, values, readonly })
     }
 
     pub(super) fn product_shape_item(&mut self, context: Option<&Context>) {

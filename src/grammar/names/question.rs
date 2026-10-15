@@ -141,13 +141,20 @@ pub struct ProductElement {
     pub site: Leaf,
     pub value: NodeValue,
     pub optional: bool,
+    /// A spread collection: its ordinal members repeat here.
     pub repeated: bool,
+    /// A directly repeated element: the value itself repeats here
+    /// (`[1, 2]` as an array of its elements), never spliced or unpacked.
+    pub values: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Product {
     pub shape: ProductShapeId,
     pub source: Leaf,
+    /// Built by a recipe with directly repeated elements (an array, even
+    /// when empty or only spreads): one carrier argument, the item union.
+    pub array: bool,
     pub elements: Vec<ProductElement>,
     pub readonly: bool,
 }

@@ -143,11 +143,11 @@ fn value_names(value: &Unwrap, out: &mut HashSet<String>) {
             for value in [check, pattern, yes, no] { value_names(value, out) }
             if let Some(path) = distribute { path_names(path, out) }
         }
-        Unwrap::Product { shape, sites, value, optional, repeated, readonly } => {
+        Unwrap::Product { shape, sites, value, optional, repeated, values, readonly } => {
             out.insert(shape.text.clone());
             path_names(sites, out);
             if let Some(value) = value { value_names(value, out) }
-            for path in [optional, repeated, readonly].into_iter().flatten() { path_names(path, out) }
+            for path in [optional, repeated, values, readonly].into_iter().flatten() { path_names(path, out) }
         }
         Unwrap::Instance { name, class, arguments } => {
             out.insert(name.text.clone());

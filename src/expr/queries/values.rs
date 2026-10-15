@@ -95,6 +95,7 @@ pub(super) fn project_with(
                     ("elements".into(), Value::list(product.elements.into_iter().map(|element| Value::record(vec![
                         ("optional".into(), Value::Bool(element.optional)),
                         ("repeated".into(), Value::Bool(element.repeated)),
+                        ("values".into(), Value::Bool(element.values)),
                     ])).collect())),
                 ]), true),
                 Known::Yes(None) => (Value::Null, true),

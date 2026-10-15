@@ -161,7 +161,7 @@ fn pack(parameters: &[Leaf], source: Leaf, rest_site: Leaf, run: &mut super::acc
         let Known::Yes(optional) = values.optional(site) else { return NodeValue::Unknown };
         let Known::Yes(repeated) = rest(site, values) else { return NodeValue::Unknown };
         elements.push(crate::grammar::names::values::products::ProductElement {
-            site, value: run.recipe(site, &super::Value::Current), optional, repeated,
+            site, value: run.recipe(site, &super::Value::Current), optional, repeated, values: false,
         });
     }
     values.product(shape, source, elements, false)

@@ -59,6 +59,10 @@ impl Values<'_> {
     }
 
     pub fn product(&self, shape: ProductShapeId, source: Leaf, elements: Vec<ProductElement>, readonly: bool) -> NodeValue {
+        self.product_of(shape, source, elements, readonly, false)
+    }
+
+    fn product_of(&self, shape: ProductShapeId, source: Leaf, elements: Vec<ProductElement>, readonly: bool, array: bool) -> NodeValue {
         let Known::Yes(source) = self.semantic.leaf(source) else { return NodeValue::Unknown };
         if !matches!(source.target, Target::Node(_) | Target::Scope(_))
             || !self.tables.products.get(shape.0 as usize).is_some_and(Option::is_some) {
@@ -89,7 +93,7 @@ impl Values<'_> {
             }
             ordered.push(element);
         }
-        let id = self.question.intern_product(Product { shape, source, elements: ordered, readonly });
+        let id = self.question.intern_product(Product { shape, source, array, elements: ordered, readonly });
         NodeValue::leaf(Leaf { target: Target::Product(id), frame: source.frame })
     }
 
@@ -100,9 +104,10 @@ impl Values<'_> {
         for site in sites {
             let Known::Yes(optional) = self.product_flag(site, recipe.optional.as_deref()) else { return NodeValue::Unknown };
             let Known::Yes(repeated) = self.product_flag(site, recipe.repeated.as_deref()) else { return NodeValue::Unknown };
-            elements.push(ProductElement { site, value: evaluate(site), optional, repeated });
+            let Known::Yes(values) = self.product_flag(site, recipe.values.as_deref()) else { return NodeValue::Unknown };
+            elements.push(ProductElement { site, value: evaluate(site), optional, repeated: repeated && !values, values });
         }
-        self.product(recipe.shape, at, elements, readonly)
+        self.product_of(recipe.shape, at, elements, readonly, recipe.values.is_some())
     }
 
     pub fn pack_shape(&self, at: Leaf) -> Known<Option<ProductShapeId>> {
@@ -158,6 +163,9 @@ impl Values<'_> {
         let Some(shape) = self.product_shape(product) else { return Known::Unknown };
         let recipe = if product.readonly { shape.readonly_inherits.as_ref().or(shape.inherits.as_ref()) } else { shape.inherits.as_ref() };
         match recipe {
+            // Like apparent members: a program without that global (no
+            // library) has no inherited layer, not an unknown one.
+            Some(super::Value::Instance { name, classes, .. }) if self.global_absent(at, name, *classes) => Known::Yes(None),
             Some(recipe) => {
                 let value = self.evaluate(at, recipe);
                 if value == NodeValue::Unknown { Known::Unknown } else { Known::Yes(Some(value)) }
@@ -188,11 +196,15 @@ impl Values<'_> {
             }
             _ => return Known::Unknown,
         };
-        Known::Yes(Some(Carrier {
-            declaration,
-            description: shape.description.clone(),
-            arguments: product.elements.into_iter().map(|element| element.value).collect(),
-        }))
+        // An array's one carrier argument is the union of its items (spreads
+        // unpacked, optional items widened); tuples keep one per element.
+        let arguments = if product.array {
+            let Known::Yes(items) = self.product_items(at) else { return Known::Unknown };
+            vec![self.combine(items, false)]
+        } else {
+            product.elements.into_iter().map(|element| element.value).collect()
+        };
+        Known::Yes(Some(Carrier { declaration, description: shape.description.clone(), arguments }))
     }
 
     fn product_element(&self, product: &Product, element: &ProductElement) -> NodeValue {
@@ -210,7 +222,7 @@ impl Values<'_> {
         for element in &product.elements {
             if !self.question.budget.step() { return Known::Unknown }
             let value = self.product_element(&product, element);
-            items.push(if element.repeated {
+            items.push(if element.repeated && !element.values {
                 self.member(&value, &Key::Domain(crate::config::ast::values::KeyDomain::Ordinal))
             } else { value });
         }
@@ -225,8 +237,8 @@ impl Values<'_> {
         let mut selected_required = false;
         let mut selected_repeated = false;
         if let Some(index) = wanted.and_then(Key::ordinal) {
-            if let Some(start) = product.elements.iter().position(|element| element.repeated) {
-                if index as usize >= start && product.elements[start + 1..].iter().any(|element| !element.repeated) {
+            if let Some(start) = product.elements.iter().position(|element| element.repeated || element.values) {
+                if index as usize >= start && product.elements[start + 1..].iter().any(|element| !element.repeated && !element.values) {
                     return Known::Unknown;
                 }
             }
@@ -234,18 +246,19 @@ impl Values<'_> {
         for (position, element) in product.elements.iter().enumerate() {
             if !self.question.budget.step() { return Known::Unknown }
             let Ok(position) = u32::try_from(position) else { return Known::Unknown };
-            repeated |= element.repeated;
+            repeated |= element.repeated || element.values;
             let uncertain_position = repeated;
             let key = if uncertain_position {
                 Key::Domain(crate::config::ast::values::KeyDomain::Ordinal)
             } else { Key::Ordinal(position) };
             if let Some(wanted) = wanted {
                 if let Some(index) = wanted.ordinal() {
-                    if (!uncertain_position && index != position) || (uncertain_position && index < position) { continue }
+                    // Any array item may sit at any index; tuple positions are fixed.
+                    if !product.array && ((!uncertain_position && index != position) || (uncertain_position && index < position)) { continue }
                 } else if !Self::product_key(&key, wanted) { continue }
             }
             let value = self.product_element(&product, element);
-            let value = if element.repeated {
+            let value = if element.repeated && !element.values {
                 self.member(&value, &Key::Domain(crate::config::ast::values::KeyDomain::Ordinal))
             } else { value };
             if wanted.is_some() || uncertain_position {
@@ -257,9 +270,9 @@ impl Values<'_> {
             let source = MemberSource {
                 site: element.site,
                 value: Some(Value::Captured(Box::new(value))),
-                origin: MemberOrigin::Ordinal { repeated: element.repeated },
+                origin: MemberOrigin::Ordinal { repeated: element.repeated || element.values },
             };
-            members.push(Member { key, sources: vec![source], required: Known::Yes(!element.optional && !element.repeated) });
+            members.push(Member { key, sources: vec![source], required: Known::Yes(!element.optional && !element.repeated && !element.values) });
         }
         if let Some(wanted) = wanted {
             if !selected.is_empty() || matches!(wanted, Key::Domain(crate::config::ast::values::KeyDomain::Ordinal)) {

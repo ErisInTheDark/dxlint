@@ -19,6 +19,7 @@ apparent bigint inherits instance "BigInt"
 apparent symbol inherits instance "Symbol"
 apparent callable inherits instance "Function"
 product ts_tuple items fits object, truthy, tuple as { kind: "tuple" } inherits instance "Array" of ...items readonly inherits instance "ReadonlyArray" of ...items optional trait undefined, nullable, falsy, nonthenable
+product ts_array items fits object, truthy, array as { kind: "array" } inherits instance "Array" of ...items readonly inherits instance "ReadonlyArray" of ...items
 
 in ts_program { fits object, truthy in module }
 in ts_namespace {
@@ -89,10 +90,11 @@ fn ts_value_array_part(part, n) = {
   value carrier: part.carrier
   value name: carrier.description.name
   value tuple: part.carrier_known && carrier.description.kind == "tuple"
+  value intrinsic: part.carrier_known && carrier.description.kind == "array"
   value named: part.carrier_known && carrier.description.kind == "named"
     && (name == "Array" || name == "ReadonlyArray")
   value declarations: if named then global_declarations(n, name, "type") else null
-  value array: named && declarations != null
+  value array: intrinsic || named && declarations != null
     && any(declarations, declaration => declaration.file == carrier.file && declaration.node == carrier.node)
   value scalar: any(["null", "undefined", "string", "number", "boolean", "bigint", "symbol"],
     trait => contains(part.traits, trait))
@@ -164,12 +166,22 @@ fn ts_value_literal_branch(n, part) = {
   value part != null && branch != null && part.identity_known && branch.identity_known
     && part.identity != null && part.identity == branch.identity
 }
-fn ts_value_logical_choice(n) = if n.operator == "||" && n.left always falsy then n.right.node
-  else if n.operator == "||" && n.left always truthy then n.left.node
-  else if n.operator == "&&" && n.left always falsy then n.left.node
-  else if n.operator == "&&" && n.left always truthy then n.right.node
-  else if n.operator == "??" && n.left always nullable then n.right.node
-  else if n.operator == "??" && !(n.left could nullable) then n.left.node else null
+fn ts_value_logical_choice(n) = {
+  value left: {
+    value n.left.node
+    walk (current) if current is (ts_parenthesized, ts_as, ts_satisfies, ts_non_null, ts_type_assertion)
+      then current.expression.node else null
+    last
+  }
+  value if left is ts_new && n.operator == "&&" then n.right.node
+    else if left is ts_new && contains(["||", "??"], n.operator) then n.left.node
+    else if n.operator == "||" && n.left always falsy then n.right.node
+    else if n.operator == "||" && n.left always truthy then n.left.node
+    else if n.operator == "&&" && n.left always falsy then n.left.node
+    else if n.operator == "&&" && n.left always truthy then n.right.node
+    else if n.operator == "??" && n.left always nullable then n.right.node
+    else if n.operator == "??" && !(n.left could nullable) then n.left.node else null
+}
 fn ts_value_fresh_step(bare, part) = {
   value if bare is (ts_number, ts_string, ts_boolean, ts_bigint) then {valid: true, children: []}
   else if bare is ts_unary && (bare.operator == "-" || bare.operator == "+") then {valid: true, children: [bare.argument.node]}
@@ -352,6 +364,7 @@ in ts_parameter, ts_rest {
 in ts_rest { when parent is ts_tuple_type { unwraps type } }
 in ts_tuple_member, ts_rest { let ts_value_tuple_optional optional != null }
 in ts_rest, ts_spread { let ts_value_tuple_repeated true }
+in ts_node let ts_value_array_element node not ts_spread
 in ts_assignment_pattern { unwraps left ?? right }
 in ts_pattern_property, ts_object_pattern, ts_array_pattern, ts_import, ts_import_specifier,
     ts_import_equals, ts_meta_property, ts_import_call {
@@ -439,16 +452,13 @@ in ts_sequence {
   unwraps ts_value_last_expression
 }
 
-in ts_tagged_template { unwraps it.result }
-in ts_new {
-  fits object, truthy
-  unwraps self & it.result
-}
+in ts_new, ts_tagged_template { unwraps it.result }
 in ts_call {
+  let ts_value_call_nullish in_optional_chain == true && callee could nullable
   when callee always any { unwraps callee }
   when !(callee always any) {
-    when in_optional_chain == true { unwraps it.result | trait undefined, nullable, falsy, nonthenable }
-    when in_optional_chain != true { unwraps it.result }
+    when ts_value_call_nullish { unwraps it.result | trait undefined, nullable, falsy, nonthenable }
+    when !ts_value_call_nullish { unwraps it.result }
   }
 }
 in ts_call, ts_new { arguments type_argument }
@@ -503,7 +513,7 @@ in ts_array {
   let ts_value_tuple_readonly ts_value_const_context(node)
   let ts_value_is_tuple ts_value_tuple_context(node)
   when !ts_value_is_tuple {
-    unwraps instance "Array" of ...element using (ts_value_preserved_element ?? it.widened)
+    unwraps product ts_array of element using (ts_value_preserved_element ?? it.widened) repeated values ts_value_array_element repeated ts_value_tuple_repeated
   }
   when ts_value_is_tuple {
     unwraps product ts_tuple of element using (ts_value_preserved_element ?? it.widened) optional ts_value_tuple_optional repeated ts_value_tuple_repeated readonly ts_value_tuple_readonly
@@ -762,8 +772,8 @@ in ts_literal_type {
 }
 in ts_parenthesized_type { unwraps type }
 in ts_array_type {
-  when parent is ts_type_operator && parent.operator == "readonly" { unwraps instance "ReadonlyArray" of type }
-  when !(parent is ts_type_operator && parent.operator == "readonly") { unwraps instance "Array" of type }
+  let ts_value_array_readonly parent is ts_type_operator && parent.operator == "readonly"
+  unwraps product ts_array of type repeated values ts_value_array_element readonly ts_value_array_readonly
 }
 in ts_tuple_type {
   let ts_value_tuple_readonly parent is ts_type_operator && parent.operator == "readonly"

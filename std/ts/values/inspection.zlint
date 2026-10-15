@@ -44,6 +44,7 @@ fn ts_value_print_part(part) = {
   value scalar: find(["any", "unknown", "void", "null", "undefined", "string", "number", "boolean", "bigint", "symbol", "object"], trait => contains(part.traits, trait))
   value literal: part.identity.kind == "value" && part.identity_known
   value if carrier.description.kind == "tuple" then (if part.product.readonly then "readonly " else "") "[" joined "]"
+    else if carrier.description.kind == "array" then (if part.product.readonly then "ReadonlyArray" else "Array") "<" joined ">"
     else if carrier.description.kind == "named" then carrier.description.name (if len(args) == 0 then "" else "<" joined ">")
     else if literal && scalar == "string" then ts_value_string(part.identity.value)
     else if literal && scalar == "bigint" then part.identity.value.value "n"

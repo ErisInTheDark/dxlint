@@ -86,6 +86,8 @@ pub enum Unwrap {
         value: Option<Box<Unwrap>>,
         optional: Option<Vec<Name>>,
         repeated: Option<Vec<Name>>,
+        /// `repeated values <flag>`: the element itself repeats.
+        values: Option<Vec<Name>>,
         readonly: Option<Vec<Name>>,
     },
 }

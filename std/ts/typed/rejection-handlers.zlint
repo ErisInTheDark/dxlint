@@ -28,7 +28,7 @@ fn rejection_inline(handler) = {
 }
 fn rejection_rest_type(type, source) = if type == null then null else {
   value shape: ts_value_array_parts(type, source)
-  value carrier: find(first(type), part => part.carrier.description.kind == "tuple"
+  value carrier: find(first(type), part => contains(["tuple", "array"], part.carrier.description.kind)
     || part.carrier.description.kind == "named" && contains(["Array", "ReadonlyArray"], part.carrier.description.name)).carrier
   value when {
     ts_value_trait(type, "any") || ts_value_trait(type, "unknown") then []

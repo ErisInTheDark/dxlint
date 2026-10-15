@@ -13,6 +13,7 @@ pub struct ProductRecipe {
     pub value: Option<Box<Value>>,
     pub optional: Option<Vec<u16>>,
     pub repeated: Option<Vec<u16>>,
+    pub values: Option<Vec<u16>>,
     pub readonly: Option<Vec<u16>>,
 }
 
@@ -144,7 +145,7 @@ pub(in crate::grammar::names) fn lower_value(
             },
             dynamic_both: *dynamic_both,
         })),
-        Unwrap::Product { shape, sites, value, optional, repeated, readonly } => {
+        Unwrap::Product { shape, sites, value, optional, repeated, values, readonly } => {
             let Some(index) = vocabulary.products.iter().position(|name| *name == shape.text) else {
                 errors.push(ConfigError::new(shape.span, format!("unknown product shape `{}`", shape.text)));
                 return None;
@@ -155,6 +156,7 @@ pub(in crate::grammar::names) fn lower_value(
             };
             let optional = flag(optional)?;
             let repeated = flag(repeated)?;
+            let values = flag(values)?;
             let readonly = flag(readonly)?;
             Value::Product(ProductRecipe {
                 shape: ProductShapeId(index as u32),
@@ -163,7 +165,7 @@ pub(in crate::grammar::names) fn lower_value(
                     Some(value) => Some(Box::new(lower(value, vocabulary, errors)?)),
                     None => None,
                 },
-                optional, repeated, readonly,
+                optional, repeated, values, readonly,
             })
         }
     })

@@ -787,7 +787,7 @@ fn product_index_domains_join_slots_and_known_prefixes_ignore_unreadable_rest() 
     let values = semantic.values();
     let first = NodeValue::leaf(Leaf { frame, ..leaf(0) });
     let second = NodeValue::leaf(Leaf { frame, ..leaf(1) });
-    let element = |site, value, repeated| ProductElement { site, value, optional: false, repeated };
+    let element = |site, value, repeated| ProductElement { site, value, optional: false, repeated, values: false };
     let product = values.product(ProductShapeId(0), leaf(2), vec![
         element(leaf(0), first.clone(), false),
         element(leaf(1), second.clone(), false),
@@ -824,7 +824,7 @@ fn product_optional_elements_keep_whole_values_and_nested_rest_order() {
         Leaf { frame, ..leaf(0) }, Leaf { target: Target::Traits(16), frame },
     ], vec![Leaf { frame, ..leaf(1) }]]);
     let second = NodeValue::leaf(Leaf { frame, ..leaf(1) });
-    let element = |site, value, optional, repeated| ProductElement { site, value, optional, repeated };
+    let element = |site, value, optional, repeated| ProductElement { site, value, optional, repeated, values: false };
     let nested = values.product(ProductShapeId(0), leaf(2), vec![
         element(leaf(0), first.clone(), true, false),
         element(leaf(1), second.clone(), false, false),
@@ -868,6 +868,7 @@ fn product_producer_flags_distinguish_missing_from_unreadable_values() {
             shape: ProductShapeId(0), sites: Vec::new(), value: None,
             optional: Some(vec![super::super::ATTR_STEP]),
             repeated: None,
+            values: None,
             readonly: Some(vec![super::super::ATTR_STEP]),
         };
         let payload = NodeValue::leaf(Leaf { frame, ..leaf(1) });
@@ -902,8 +903,8 @@ fn variadic_product_inventory_keeps_rest_and_suffix_values_as_alternatives() {
     let semantic = Semantic::new(&world, &tables, &question);
     let values = semantic.values();
     let product = values.product(ProductShapeId(0), leaf(2), vec![
-        ProductElement { site: leaf(1), value: NodeValue::leaf(leaf(1)), optional: false, repeated: true },
-        ProductElement { site: leaf(0), value: NodeValue::leaf(leaf(0)), optional: false, repeated: false },
+        ProductElement { site: leaf(1), value: NodeValue::leaf(leaf(1)), optional: false, repeated: true, values: false },
+        ProductElement { site: leaf(0), value: NodeValue::leaf(leaf(0)), optional: false, repeated: false, values: false },
     ], false);
     let expected = values.combine([values.evaluate(leaf(1), &Value::Traits(2)), NodeValue::leaf(leaf(0))], false);
     assert_eq!(values.member(&product, &Key::Domain(KeyDomain::Ordinal)), expected);
@@ -931,7 +932,7 @@ fn product_flags_check_every_selected_source_before_proving_absence() {
     let semantic = Semantic::new(&world, &tables, &question);
     let recipe = super::compile::ProductRecipe {
         shape: ProductShapeId(0), sites: Vec::new(), value: None,
-        optional: Some(vec![7, 8]), repeated: None, readonly: None,
+        optional: Some(vec![7, 8]), repeated: None, values: None, readonly: None,
     };
     assert_eq!(semantic.values().produce_product(leaf(0), &recipe, NodeValue::leaf), NodeValue::Unknown);
 }

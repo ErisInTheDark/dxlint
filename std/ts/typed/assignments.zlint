@@ -15,7 +15,7 @@ fn assignment_array(parts, source) = {
   value shape: ts_value_array_parts(parts, source)
   value shape.known && shape.array
 }
-fn assignment_unsafe(sender, receiver) = {
+fn assignment_unsafe(sender, receiver, n) = {
   value {sender: sender, receiver: receiver}
   walk (pair) if ts_value_trait(pair.sender, "any") || pair.sender == null || pair.receiver == null
     || len(pair.sender) != 1 || len(pair.receiver) != 1 then [] else {
@@ -23,7 +23,7 @@ fn assignment_unsafe(sender, receiver) = {
       flat_map (source) {
         value first(pair.receiver)
         flat_map (target) {
-          value assignment_carrier_arguments(source, target)
+          value assignment_carrier_arguments(source, target, n)
           map (arguments) {sender: first(arguments), receiver: last(arguments)}
         }
       }
@@ -31,13 +31,14 @@ fn assignment_unsafe(sender, receiver) = {
   any (pair) ts_value_trait(pair.sender, "any") && pair.receiver != null && len(pair.receiver) > 0
     && !ts_value_trait(pair.receiver, "any") && !ts_value_trait(pair.receiver, "unknown")
 }
-fn assignment_carrier_arguments(source, target) = {
+fn assignment_carrier_arguments(source, target, n) = {
   value a: source.carrier
   value b: target.carrier
   value tuples: a.description.kind == "tuple" && b.description.kind == "tuple"
     && source.product_known && target.product_known && source.product != null
     && source.product == target.product
-  value same: tuples || a.description.kind == "named" && b.description.kind == "named"
+  value arrays: ts_value_array_part(source, n).array && ts_value_array_part(target, n).array
+  value same: arrays || tuples || a.description.kind == "named" && b.description.kind == "named"
     && a.file == b.file && a.node == b.node
   value arguments: zip(a.arguments ?? [], b.arguments ?? [])
   value if source.carrier_known && target.carrier_known && a != null && b != null
@@ -118,7 +119,7 @@ fn assignment_transfers_value(n) = {
   value if source == null || target == null || n is ts_assignment && n.operator != "="
     || n is ts_property && (n.parent.flow_destructuring_target || source is ts_assignment_pattern) then []
     else if category != null && !known_unknown then [assignment_finding(report, "any", sender, null)]
-    else if compare && !assignment_empty_map(source) && assignment_unsafe(sender, receiver)
+    else if compare && !assignment_empty_map(source) && assignment_unsafe(sender, receiver, n)
       then [assignment_finding(report, "generic", sender, receiver)]
     else assignment_destructure(target, source, [])
 }

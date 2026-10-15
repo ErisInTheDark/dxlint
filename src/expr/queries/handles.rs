@@ -171,6 +171,7 @@ fn children(semantic: &Semantic<'_>, value: NodeValue, args: &[Value<'static>]) 
                                 ("key".into(), Value::Num(index as f64)),
                                 ("optional".into(), Value::Bool(element.optional)),
                                 ("repeated".into(), Value::Bool(element.repeated)),
+                                ("values".into(), Value::Bool(element.values)),
                                 ("sources".into(), Value::list(Vec::new())),
                             ])),
                             ("argument".into(), Value::Null),

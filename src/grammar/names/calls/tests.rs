@@ -501,12 +501,12 @@ fn product_patterns_capture_recipe_holes_without_replacing_them_with_defaults() 
     let semantic = Semantic::new(&world, &tables, &question);
     let elements: Vec<_> = [6, 7].into_iter().map(|node| {
         let site = Leaf { frame, ..leaf(node) };
-        ProductElement { site, value: NodeValue::leaf(site), optional: false, repeated: false }
+        ProductElement { site, value: NodeValue::leaf(site), optional: false, repeated: false, values: false }
     }).collect();
     let actual = semantic.values().product(ProductShapeId(0), leaf(4), elements.clone(), false);
     let pattern = super::Value::Product(crate::grammar::names::values::compile::ProductRecipe {
         shape: ProductShapeId(0), sites: vec![10], value: Some(Box::new(super::Value::Path(vec![22]))),
-        optional: None, repeated: None, readonly: None,
+        optional: None, repeated: None, values: None, readonly: None,
     });
     let Known::Yes(result) = semantic.calls().match_value(leaf(5), &pattern, &actual, &[leaf(11), leaf(12)])
         else { panic!("known product inference") };
