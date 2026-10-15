@@ -1,0 +1,27 @@
+import .ts
+
+in ts_program rule type-specifier-contract {
+  let directory program_directory(node)
+  let local {name: "Local", from: "file", path: directory "/local.ts"}
+  let remote {name: "Remote", from: "package", package: "@types/scope__remote", path: directory "/node_modules/@types/scope__remote/index.d.ts"}
+  let library {name: "Library", from: "lib", path: "/typescript/lib.d.ts"}
+  let failures filter([
+    {name: "file origin", pass: type_is_allowed([{from: "file", name: "Local"}], [[local]], node)},
+    {name: "file exact normalised path", pass: type_is_allowed([{from: "file", name: "Local", path: "./nested/../local.ts"}], [[local]], node)},
+    {name: "file wrong path", pass: !type_is_allowed([{from: "file", name: "Local", path: "other.ts"}], [[local]], node)},
+    {name: "file directory boundary", pass: !type_is_allowed([{from: "file", name: "Local"}], [[{name: "Local", from: "file", path: directory "-other/local.ts"}]], node)},
+    {name: "package scoped types", pass: type_is_allowed([{from: "package", name: "Remote", package: "@scope/remote"}], [[remote]], node)},
+    {name: "package wrong origin", pass: !type_is_allowed([{from: "package", name: "Local", package: "@scope/remote"}], [[local]], node)},
+    {name: "library declaration", pass: type_is_allowed([{from: "lib", name: ["Local", "Library"]}], [[library]], node)},
+    {name: "primitive is library type", pass: type_is_allowed([{from: "lib", name: "string"}], [[{name: "string", from: "lib"}]], node)},
+    {name: "string name", pass: type_is_allowed(["Local"], [[local]], node)},
+    {name: "intersection constituent", pass: type_is_allowed(["Local"], [[local, library]], node)},
+    {name: "one entry covers union", pass: type_is_allowed([{from: "file", name: ["Local", "Other"]}], [[local], [{name: "Other", from: "file", path: directory "/other.ts"}]], node)},
+    {name: "separate entries do not cover union", pass: !type_is_allowed(["Local", "Library"], [[local], [library]], node)},
+    {name: "missing groups are not allowed", pass: !type_is_allowed(["Local"], [], node)},
+    {name: "unknown arm is not allowed", pass: !type_is_allowed(["Local"], [[local], []], node)},
+  ], result => !result.pass)
+  when count(failures) > 0
+  warn join(map(failures, result => result.name), ", ")
+}
+rule type-specifier-contract

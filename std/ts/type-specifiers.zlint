@@ -1,5 +1,41 @@
-# Shared allowed type/value names.
-
 define {
-fn type_is_allowed(names, groups) = any(names, name => all(groups, group => any(group, gate => gate.name == name)))
+
+schema type_specifier_file { from: "file"; name: string | string[]; path?: string }
+schema type_specifier_lib { from: "lib"; name: string | string[] }
+schema type_specifier_package { from: "package"; name: string | string[]; package: string }
+
+fn type_specifier_path(path) = {
+  value slashes: replace(path, "\\", "/")
+  value rooted: starts_with(slashes, "/")
+  value parts: fold(split(slashes, "/"), [], (parts, part) =>
+    if part == "" || part == "." then parts
+    else if part == ".." then
+      if count(parts) > 0 && !ends_with(last(parts), ":") then slice(parts, 0, count(parts) - 1)
+      else parts
+    else concat(parts, [part]))
+  value (if rooted then "/" else "") join(parts, "/")
+}
+fn type_specifier_matches(entry, gate, directory) =
+  gate.name != null && (if type_of(entry) == "str" then gate.name == entry else {
+    value matches_origin: when {
+      entry.from == "lib" then gate.from == "lib"
+      entry.from == "package" then gate.from == "package"
+        && (gate.package == entry.package
+          || gate.package == "@types/" replace(replace(entry.package, "@", ""), "/", "__"))
+      entry.from == "file" then gate.path != null && directory != null && {
+        value base: type_specifier_path(directory)
+        value path: type_specifier_path(gate.path)
+        value if entry.path == null then starts_with(path,
+          base (if ends_with(base, "/") then "" else "/"))
+          else path == type_specifier_path(base "/" entry.path)
+      }
+      else then false
+    }
+    value contains(if type_of(entry.name) == "str" then [entry.name] else entry.name, gate.name) && matches_origin
+  })
+fn type_is_allowed(entries, groups, node) = {
+  value directory: if any(entries, entry => entry.from == "file") then program_directory(node) else null
+  value count(groups) > 0 && any(entries, entry =>
+    all(groups, group => any(group, gate => type_specifier_matches(entry, gate, directory))))
+}
 }

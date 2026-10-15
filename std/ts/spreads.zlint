@@ -1,5 +1,7 @@
 # Spread policy over constrained constituent types and declaration provenance.
 
+import .ts/type-specifiers
+
 define {
 
 fn spread_parts(t) = if t == null then [t] else {
@@ -22,12 +24,12 @@ fn spread_object_category(n, t) =
 in ts_node let spread_type type_structure([], ["kind", "parts", "declarations", "callable", "constructor", "symbol_constructor", "class_value", "property_names", "iterable", "property_writes"])
 in ts_spread, ts_jsx_spread_attribute let no_misused_spread_checked true
 in ts_spread, ts_jsx_spread_attribute rule no-misused-spread {
-  option allow string[] = [] "types safe to spread"
+  option allow (string | type_specifier_file | type_specifier_lib | type_specifier_package)[] = [] "types safe to spread"
   let object_spread node is ts_jsx_spread_attribute || parent is ts_object
   let sequence_spread parent is (ts_array, ts_call)
   when object_spread || sequence_spread
   let subject argument.node
-  when !type_is_allowed(allow, subject.type_specifier_groups)
+  when !type_is_allowed(allow, subject.type_specifier_groups, node)
   let category if object_spread then spread_object_category(subject, subject.spread_type) else if spread_string(subject.spread_type) then "string" else null
   when category != null
   when no_misused_spread_checked

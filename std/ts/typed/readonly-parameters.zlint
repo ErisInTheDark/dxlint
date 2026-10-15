@@ -1,8 +1,6 @@
-define {
+import .ts/type-specifiers
 
-schema readonly_parameter_file_allow { from: "file"; name: string | string[]; path?: string }
-schema readonly_parameter_lib_allow { from: "lib"; name: string | string[] }
-schema readonly_parameter_package_allow { from: "package"; name: string | string[]; package: string }
+define {
 
 fn readonly_parameter_all(values) = if contains(values, false) then false
   else if contains(values, null) then null else true
@@ -13,37 +11,14 @@ fn readonly_parameter_array(part) = contains(["Array", "ReadonlyArray"], part.ca
 fn readonly_parameter_scalar(part) =
   !any(part.traits, trait => contains(["object", "structural", "callable", "constructible"], trait))
   && any(part.traits, trait => contains(["any", "unknown", "undefined", "null", "boolean", "number", "string", "bigint", "symbol", "void"], trait))
-fn readonly_parameter_path(path) = {
-  value slashes: replace(path, "\\", "/")
-  value rooted: starts_with(slashes, "/")
-  value parts: fold(split(slashes, "/"), [], (parts, part) =>
-    if part == "" || part == "." then parts
-    else if part == ".." then
-      if count(parts) > 0 && !ends_with(last(parts), ":") then slice(parts, 0, count(parts) - 1)
-      else parts
-    else concat(parts, [part]))
-  value (if rooted then "/" else "") join(parts, "/")
-}
 fn readonly_parameter_allowed(part, settings) = {
   value carrier: part.carrier
   value name: carrier.description.name
   value origin: if part.carrier_known && name != null && count(settings.allow) > 0
     then declaration_origin(settings.node, {file: carrier.file, node: carrier.node}) else null
-  value name != null && any(settings.allow, entry => {
-    value matches_origin: when {
-      entry.from == "lib" then origin.kind == "library"
-      entry.from == "package" then origin.kind == "package"
-        && (origin.package == entry.package
-          || origin.package == "@types/" replace(replace(entry.package, "@", ""), "/", "__"))
-      entry.from == "file" then origin != null && settings.directory != null
-        && (if entry.path == null then starts_with(origin.path,
-            settings.directory (if ends_with(settings.directory, "/") then "" else "/"))
-          else origin.path == readonly_parameter_path(settings.directory "/" entry.path))
-      else then false
-    }
-    value if type_of(entry) == "str" then name == entry
-      else contains(if type_of(entry.name) == "str" then [entry.name] else entry.name, name) && matches_origin
-  })
+  value gate: {name: name, from: if origin.kind == "library" then "lib" else origin.kind,
+    path: origin.path, package: origin.package}
+  value any(settings.allow, entry => type_specifier_matches(entry, gate, settings.directory))
 }
 fn readonly_parameter_branded(arm) = {
   value parts: filter(arm.parts, part => !readonly_parameter_marker(part))
@@ -113,7 +88,7 @@ fn readonly_parameter_walk(source, methods, allow) = {
 }
 
 in ts_parameter rule prefer-readonly-parameter-types {
-  option allow (string | readonly_parameter_file_allow | readonly_parameter_lib_allow | readonly_parameter_package_allow)[] = [] "Allowed type names and declaration origins"
+  option allow (string | type_specifier_file | type_specifier_lib | type_specifier_package)[] = [] "Allowed type names and declaration origins"
   option checkParameterProperties boolean = true "Check constructor parameter properties"
   option ignoreInferredTypes boolean = false "Check only parameters with written types"
   option treatMethodsAsReadonly boolean = false "Ignore method writability"

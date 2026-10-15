@@ -91,7 +91,7 @@ in promise_function_async_function rule promise-function-async {
 
 in ts_node let only_throw_error_checked true
 in ts_throw.argument rule only-throw-error {
-  option allow string[] = [] "Additional allowed thrown types"
+  option allow (string | type_specifier_file | type_specifier_lib | type_specifier_package)[] = [] "Additional allowed thrown types"
   option allowRethrowing boolean = true "Allow rethrowing catch and Promise rejection parameters"
   option allowThrowingAny boolean = true "Allow any values"
   option allowThrowingUnknown boolean = true "Allow unknown values"
@@ -100,7 +100,7 @@ in ts_throw.argument rule only-throw-error {
   when !allowThrowingAny || ts_error_value.kind != "any"
   when !allowThrowingUnknown || ts_error_value.kind != "unknown"
   when only_throw_error_checked
-  when !type_is_allowed(allow, type_specifier_groups)
+  when !type_is_allowed(allow, type_specifier_groups, node)
   report at unparenthesised_node(node)
   warn if ts_error_value.kind == "undefined" then "Do not throw undefined." else "Expected an error object to be thrown."
 }
@@ -125,13 +125,13 @@ in ts_node let rejection_reason
 in ts_call let prefer_promise_reject_errors_checked true
 in ts_call rule prefer-promise-reject-errors {
   option allowEmptyReject boolean = false "Allow rejection without a reason"
-  option allow string[] = [] "Additional allowed rejection types"
+  option allow (string | type_specifier_file | type_specifier_lib | type_specifier_package)[] = [] "Additional allowed rejection types"
   option allowThrowingAny boolean = false "Allow any values"
   option allowThrowingUnknown boolean = false "Allow unknown values"
   when rejection_call
   let reason first([] argument.rejection_reason)
   when reason != null || !allowEmptyReject
-  when reason == null || (if re_test(file, /\.[cm]?tsx?$/) then reason.kind != "error" && !(allowThrowingAny && reason.kind == "any") && !(allowThrowingUnknown && reason.kind == "unknown") && !type_is_allowed(allow, reason.groups) else !reason.possible)
+  when reason == null || (if re_test(file, /\.[cm]?tsx?$/) then reason.kind != "error" && !(allowThrowingAny && reason.kind == "any") && !(allowThrowingUnknown && reason.kind == "unknown") && !type_is_allowed(allow, reason.groups, node) else !reason.possible)
   when prefer_promise_reject_errors_checked
   warn "Expected the Promise rejection reason to be an Error."
 }

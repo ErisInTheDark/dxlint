@@ -33,8 +33,11 @@ fn deprecation_reason(metadata, computed, called) =
   else if deprecation_tag(metadata.selected_signature.doc) != null then deprecation_tag(metadata.selected_signature.doc)
   else if called then { value metadata.alias_target_declarations; filter (declaration) !contains(["function", "method"], declaration.kind); deprecation_declarations }
   else null
-fn deprecation_allowed(names, metadata) =
-  any(metadata.declarations metadata.alias_target_declarations, declaration => any(declaration.provenance, gate => contains(names, gate.name)))
+fn deprecation_allowed(entries, metadata, node) = {
+  value directory: if any(entries, entry => entry.from == "file") then program_directory(node) else null
+  value any(metadata.declarations metadata.alias_target_declarations, declaration =>
+    any(declaration.provenance, gate => any(entries, entry => type_specifier_matches(entry, gate, directory))))
+}
 
 in ts_node let deprecation_called
   if is (ts_call.callee, ts_new.callee, ts_tagged_template.tag) then true
@@ -54,7 +57,7 @@ in ts_node let deprecation_metadata if deprecation_shorthand then declaration.sy
 in ts_node let no_deprecated_checked true
 
 in ts_identifier, ts_private_name, ts_super, ts_jsx_attribute.name, ts_index rule no-deprecated {
-  option allow string[] = [] "Allowed deprecated symbols"
+  option allow (string | type_specifier_file | type_specifier_lib | type_specifier_package)[] = [] "Allowed deprecated symbols"
   when !deprecation_excluded
   when deprecation_export_name == null || deprecation_export_name is ts_identifier
   let metadata deprecation_metadata
@@ -62,7 +65,7 @@ in ts_identifier, ts_private_name, ts_super, ts_jsx_attribute.name, ts_index rul
   let tag deprecation_reason(metadata, computed, deprecation_called)
   when tag != null
   when no_deprecated_checked
-  when if computed then !type_is_allowed(allow, object.type_specifier_groups) else !deprecation_allowed(allow, metadata)
+  when if computed then !type_is_allowed(allow, object.type_specifier_groups, node) else !deprecation_allowed(allow, metadata, node)
   report at if computed then deprecation_key else deprecation_export_name ?? node
   warn "`" (deprecation_export_name.identifier_name ?? metadata.name) "` is deprecated." (if tag.reason == "" then "" else " " tag.reason)
 }
