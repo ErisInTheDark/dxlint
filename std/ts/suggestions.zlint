@@ -532,6 +532,12 @@ in ts_unary, ts_binary, ts_assignment, ts_template rule no-implicit-coercion {
   when coercion_info.kind == "boolean" && boolean || coercion_info.kind == "number" && number || coercion_info.kind == "string" && string || coercion_info.kind == "template" && disallowTemplateShorthand
   when coercion_info.kind == "template" || !contains(allow, coercion_info.operator)
   warn "Unexpected implicit coercion encountered. Use `{coercion_info.recommendation}` instead."
+  let program ts_module_program(node)
+  let coercion_boolean_fixable coercion_info.operator == "!!" && ts_global_visible(node, "Boolean") == false
+    && contains(["readonly", "writable"], ts_global_setting(program, "Boolean"))
+    && !contains(program.ts_global_written, "Boolean")
+    && expression_fix_retains_comments(node, coercion_info.recommendation)
+  fix if coercion_boolean_fixable as expression_fix_edges(node, coercion_info.recommendation)
 }
 
 in ts_parameter rule default-param-last {

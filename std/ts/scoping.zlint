@@ -359,18 +359,12 @@ in ts_return rule no-useless-return {
 }
 
 fn scoping_return_void(subject, asynchronous) = {
-  value value_parts(subject)
-  walk (arm) {
-    value part: if count(arm.parts) == 1 then first(arm.parts) else null
-    value if part != null && !contains(part.traits, "void")
-      && asynchronous && part.carrier_known && part.carrier.description.kind == "named"
+  value arms: walk(value_parts(subject) ?? [], arm => if asynchronous then
+    flat_map(arm.parts, part => if part.carrier_known && part.carrier.description.kind == "named"
       && contains(["Promise", "PromiseLike"], part.carrier.description.name)
-      && count(part.carrier.arguments) > 0 then value_parts(first(part.carrier.arguments)) else null
-  }
-  any (arm) {
-    value part: if count(arm.parts) == 1 then first(arm.parts) else null
-    value part != null && contains(part.traits, "void")
-  }
+      && count(part.carrier.arguments) > 0 then value_parts(first(part.carrier.arguments)) ?? [] else [])
+    else [])
+  value any(arms, arm => any(arm.parts, part => contains(part.traits, "void")))
 }
 in ts_program let scoping_return_void_annotation false
 in ts_function, ts_arrow, ts_method let scoping_return_void_annotation

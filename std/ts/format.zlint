@@ -72,7 +72,6 @@ fn format_lexical_binding(binding, declarator, container) = {
   value initializer: declarator.init.structure_unwrapped
   value recursive: initializer is (ts_function, ts_arrow) && !format_lexical_loop(declarator)
   value !contains(["let", "arguments"], binding.identifier_name)
-  && binding.ambient != true
   && count(binding.declarations) == 1
   && binding.scope.format_script_global != true
   && !binding.scope.format_lexical_dynamic
@@ -103,7 +102,6 @@ in ts_variable_declaration.kind rule no-var warn "Unexpected var, use let or con
   let body if owner.parent is ts_export then owner.parent.parent.node else owner.parent.node
   let fixable owner.ecma_version >= 2015
     && (body is (ts_program, ts_block) || owner is (ts_for.init, ts_for_in.left, ts_for_of.left))
-    && !contains(owner.modifier, "declare")
     && (!format_lexical_loop(owner) || owner is (ts_for_in.left, ts_for_of.left) || owner.format_lexical_initialized)
     && owner.format_lexical_bindings
   fix if fixable as "let"
