@@ -14,6 +14,13 @@ pub(super) struct Tape {
     positions: Vec<u32>,
     /// Tokens read at a position in a goal its record cannot answer.
     alternates: FxHashMap<(u32, u16), Lexed>,
+    /// The record whose token starts at each offset (first one recorded).
+    starts: Vec<u32>,
+    /// Predicate answers about recorded tokens, two bits per (record,
+    /// predicate): `known` then `matched`, `words` words per record.
+    answers: Vec<u64>,
+    words: usize,
+    /// Predicate answers about other spans (alternate goals, partial spans).
     predicates: FxHashMap<(usize, u32, u32), bool>,
 }
 
@@ -22,7 +29,16 @@ impl Tape {
         self.records.clear();
         self.positions.clear();
         self.alternates.clear();
+        self.starts.clear();
+        self.answers.clear();
         self.predicates.clear();
+    }
+
+    /// The record whose token is exactly `start..end`.
+    fn record_of(&self, start: u32, end: u32) -> Option<usize> {
+        let id = *self.starts.get(start as usize)? as usize;
+        let token = self.records.get(id)?.lexed.token.as_ref()?;
+        (token.start == start && token.end == end).then_some(id)
     }
 
     pub(super) fn len(&self) -> usize { self.records.len() }
@@ -30,6 +46,8 @@ impl Tape {
 
 pub(super) fn prepare(run: &mut Run<'_>, goal: u16) {
     run.scratch.tokens.positions.resize(run.text.len() + 1, u32::MAX);
+    run.scratch.tokens.starts.resize(run.text.len() + 1, u32::MAX);
+    run.scratch.tokens.words = run.program.predicates.len().div_ceil(32);
     let mut pos = 0;
     loop {
         run.scratch.counts.prepare_reads += 1;
@@ -55,7 +73,11 @@ pub(super) fn read(run: &mut Run<'_>, goal: u16, pos: u32) -> Lexed {
     if recorded_at(tape, pos) {
         tape.alternates.insert((pos, goal), lexed.clone());
     } else {
-        tape.positions[pos as usize] = tape.records.len() as u32;
+        let id = tape.records.len() as u32;
+        tape.positions[pos as usize] = id;
+        if let Some(start) = lexed.token.as_ref().map(|token| token.start as usize) {
+            if tape.starts.get(start) == Some(&u32::MAX) { tape.starts[start] = id; }
+        }
         tape.records.push(Record { pos, goal, lexed: lexed.clone() });
     }
     lexed
@@ -83,10 +105,26 @@ fn compatible(run: &Run<'_>, record: &Record, goal: u16) -> bool {
 }
 
 pub(super) fn predicate(run: &mut Run<'_>, predicate: usize, start: u32, end: u32) -> bool {
-    let key = (predicate, start, end);
-    if let Some(found) = run.scratch.tokens.predicates.get(&key) { return *found; }
+    let tape = &run.scratch.tokens;
+    let record = tape.record_of(start, end);
+    // Two bits per predicate: 32 predicates per word.
+    let slot = record.map(|id| (id * tape.words + predicate / 32, 2 * (predicate % 32)));
+    match slot {
+        Some((word, bit)) => {
+            let answer = tape.answers.get(word).map_or(0, |word| word >> bit);
+            if answer & 1 != 0 { return answer & 2 != 0; }
+        }
+        None => if let Some(found) = tape.predicates.get(&(predicate, start, end)) { return *found; },
+    }
     let text = &run.text.as_bytes()[start as usize..end as usize];
     let found = run.program.predicates[predicate].anchored(&mut run.caches.regex.predicates[predicate], text, 0) == Some(text.len());
-    run.scratch.tokens.predicates.insert(key, found);
+    let tape = &mut run.scratch.tokens;
+    match slot {
+        Some((word, bit)) => {
+            if tape.answers.len() <= word { tape.answers.resize((word / tape.words.max(1) + 1) * tape.words.max(1), 0); }
+            tape.answers[word] |= (1 | u64::from(found) << 1) << bit;
+        }
+        None => { tape.predicates.insert((predicate, start, end), found); }
+    }
     found
 }
