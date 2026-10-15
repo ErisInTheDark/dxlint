@@ -333,6 +333,11 @@ impl Values<'_> {
             Target::Scope(_) | Target::Product(_) => None,
         };
         let Some(recipe) = recipe else { return Known::Yes(None) };
+        // Apparent members are a layer under the value's own: a program
+        // without that global (no library) simply has no such layer.
+        if let super::Value::Instance { name, classes, .. } = recipe {
+            if self.global_absent(at, name, *classes) { return Known::Yes(None) }
+        }
         let inherited = self.evaluate(at, recipe);
         if inherited == NodeValue::Unknown { Known::Unknown } else { Known::Yes(Some(inherited)) }
     }

@@ -559,22 +559,33 @@ impl Values<'_> {
         answer
     }
 
-    fn instance(&self, at: Leaf, name: &str, classes: u64, arguments: &[Value]) -> NodeValue {
-        let Some(_nested) = self.question.budget.nest() else { return NodeValue::Unknown };
-        let importer = match at.target {
+    /// The file whose globals `at` sees.
+    fn importer(&self, at: Leaf) -> Option<u32> {
+        Some(match at.target {
             // Trait-only values belong to no file: globals as the linted file sees them.
             Target::Traits(_) => 0,
             Target::Node(node) => node.file,
             Target::Scope(scope) => scope.file,
             Target::Product(_) => {
-                let Known::Yes(Some(product)) = self.product_info(at) else { return NodeValue::Unknown };
+                let Known::Yes(Some(product)) = self.product_info(at) else { return None };
                 match product.source.target {
                     Target::Node(node) => node.file,
                     Target::Scope(scope) => scope.file,
-                    _ => return NodeValue::Unknown,
+                    _ => return None,
                 }
             }
-        };
+        })
+    }
+
+    /// The program declares no global `name` of `classes` (no library loaded
+    /// it), as opposed to not knowing.
+    pub(super) fn global_absent(&self, at: Leaf, name: &str, classes: u64) -> bool {
+        self.importer(at).is_some_and(|importer| matches!(self.semantic.modules().global(importer, name, classes), Known::Yes(targets) if targets.is_empty()))
+    }
+
+    fn instance(&self, at: Leaf, name: &str, classes: u64, arguments: &[Value]) -> NodeValue {
+        let Some(_nested) = self.question.budget.nest() else { return NodeValue::Unknown };
+        let Some(importer) = self.importer(at) else { return NodeValue::Unknown };
         let Known::Yes(targets) = self.semantic.modules().global(importer, name, classes) else {
             return NodeValue::Unknown;
         };
