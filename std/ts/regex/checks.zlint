@@ -192,7 +192,8 @@ fn regexp_entry_error(nodes, input, entry) = if entry.kind == "regexp_group" the
     message: if entry.text == ")" then "Unmatched ')'" else "Nothing to repeat", offset: entry.start
   } else null
 fn regexp_error(nodes, input) = {
-  value entries: filter(nodes, entry => entry.kind != "TEXT")
+  value root: find(nodes, entry => entry.parent == null)
+  value entries: filter(regexp_ordered(nodes, root.id), entry => entry.kind != "TEXT")
   value errors: map(entries, entry => regexp_entry_error(nodes, input, entry))
   value structural: { value errors; filter (error) error != null; sort_by (error) error.offset; first }
   value if structural != null then structural else {
@@ -223,7 +224,7 @@ fn regexp_mode_error(n, input, flags) = {
   value unicode: contains(flags, "u")
   value sets: contains(flags, "v")
   value parsed: regexp_parse(n, mapped, unicode, sets)
-  value nodes: if parsed.ok then regexp_ordered(parsed.nodes, parsed.root) else []
+  value nodes: if parsed.ok then parsed.nodes else []
   value error: if parsed.ok then regexp_error(nodes, mapped) else null
   value if unicode && sets then "Regex 'u' and 'v' flags cannot be used together"
     else if error == null then null else "Invalid regular expression: /" input.text "/" (if unicode then "u" else "") (if sets then "v" else "") ": " error.message

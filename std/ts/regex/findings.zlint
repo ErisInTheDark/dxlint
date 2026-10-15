@@ -62,21 +62,27 @@ fn regexp_backreference_problem(nodes, reference, group) = {
   value group_path: regexp_ancestors(nodes, group)
   value common: filter(group_path, parent => any(reference_path, other => parent.id == other.id))
   value cut: filter(group_path, parent => !any(common, other => parent.id == other.id))
-  value look: { value common; filter (parent) parent.kind == "lookaround"; first }
-  value backward: look != null && look.behind
+  value look: {
+    value common
+    filter (parent) parent.kind == "regexp_group"
+      && any(["(?=", "(?!", "(?<=", "(?<!"], open => starts_with(parent.text, open))
+    first
+  }
+  value backward: look != null && (starts_with(look.text, "(?<=") || starts_with(look.text, "(?<!"))
   value if any(reference_path, parent => parent.id == group.id) then "nested"
-    else if last(cut).kind == "alternative" then "disjunctive"
+    else if last(cut).kind == "regexp_alternative" then "disjunctive"
     else if !backward && reference.end <= group.start then "forward"
     else if backward && group.end <= reference.start then "backward"
-    else if any(cut, parent => parent.kind == "lookaround" && parent.negative) then "intoNegativeLookaround"
+    else if any(cut, parent => parent.kind == "regexp_group"
+      && (starts_with(parent.text, "(?!") || starts_with(parent.text, "(?<!"))) then "intoNegativeLookaround"
     else null
 }
-fn regexp_backreferences(raw_nodes, nodes, input) = {
-  value references: filter(raw_nodes, entry => regexp_kind(raw_nodes, input, entry) == "backreference")
+fn regexp_backreferences(nodes, input) = {
+  value references: filter(nodes, entry => entry.kind == "regexp_escape"
+    && re_test(entry.text, /^\\(?:[1-9]|k)/) && regexp_kind(nodes, input, entry) == "backreference")
   value reports: map(references, reference => {
-    value targets: regexp_backreference_targets(raw_nodes, input, reference)
-    value groups: map(targets, group => regexp_record(nodes, group.id))
-    value entry: regexp_record(nodes, reference.id)
+    value groups: regexp_backreference_targets(nodes, input, reference)
+    value entry: reference
     value problems: map(groups, group => { kind: regexp_backreference_problem(nodes, entry, group), group: group })
     value same: filter(problems, problem => problem.kind != "disjunctive")
     value selected: if len(same) == 0 then problems else same
@@ -84,7 +90,7 @@ fn regexp_backreferences(raw_nodes, nodes, input) = {
     value suffix: if other == 0 then "" else if other == 1 then " and another group" else " and other " str(other) " groups"
     value first: first(selected)
     value if len(problems) == 0 || any(problems, problem => problem.kind == null) then [] else
-      [regexp_finding(input, "backref", first.kind, [entry.raw, first.group.raw, suffix], entry.start, entry.end)]
+      [regexp_finding(input, "backref", first.kind, [entry.text, first.group.text, suffix], entry.start, entry.end)]
   })
   value flat(reports)
 }
@@ -181,8 +187,8 @@ in regexp_site let regexp_empty_class_findings if node is ts_regex && regexp_tre
   then regexp_empty_classes(regexp_view_nodes, regexp_input) else []
 in regexp_site let regexp_space_findings if regexp_tree.ok && regexp_error == null
   then regexp_spaces(regexp_view_nodes, regexp_input) else []
-in regexp_site let regexp_backreference_findings if regexp_tree.ok && regexp_error == null
-  then regexp_backreferences(regexp_nodes, regexp_view_nodes, regexp_input) else []
+in regexp_site let regexp_backreference_findings if re_test(regexp_input.text, /\\(?:[1-9]|k)/)
+  && regexp_tree.ok && regexp_error == null then regexp_backreferences(regexp_nodes, regexp_input) else []
 in regexp_site let regexp_misleading_findings if regexp_tree.ok && regexp_error == null && !regexp_checked_by_call(node)
   then regexp_misleading(regexp_view_nodes, regexp_input, false) else []
 in regexp_site let regexp_misleading_escaped_findings if regexp_tree.ok && regexp_error == null && !regexp_checked_by_call(node)

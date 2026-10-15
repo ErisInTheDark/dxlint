@@ -71,7 +71,7 @@ fn regexp_unnamed_captures(n) = {
     value unicode: contains(input.flags, "u")
     value sets: contains(input.flags, "v")
     value parsed: regexp_parse(n, input, unicode, sets)
-    value nodes: if parsed.ok then regexp_ordered(parsed.nodes, parsed.root) else []
+    value nodes: if parsed.ok then parsed.nodes else []
     value valid: parsed.ok == true && regexp_error(nodes, input) == null
     value groups: if !valid then [] else regexp_groups(nodes)
     value unnamed: filter(groups, group => regexp_group_name(nodes, group) == null)

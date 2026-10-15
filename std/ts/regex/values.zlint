@@ -6,7 +6,7 @@ define {
 
 group regexp_site ts_regex, ts_call, ts_new
 
-fn regexp_record(nodes, id) = { value nodes; filter (entry) entry.id == id; first }
+fn regexp_record(nodes, id) = get(nodes, id)
 fn regexp_field(nodes, entry, name) = {
   value ids: get(entry.fields, name) ?? []
   value map(ids, id => regexp_record(nodes, id))
@@ -17,17 +17,17 @@ fn regexp_ancestors(nodes, entry) = {
   drop 1
 }
 
-fn regexp_quote(text) = '"' {
-  value text
-  re_replace /\\/ "\\\\"
-  re_replace /"/ '\\"'
-  re_replace /\n/ "\\n"
-  re_replace /\r/ "\\r"
-} '"'
 fn regexp_units(text) = {
-  value quoted: regexp_quote(text)
-  value decoded: js_string_parts(quoted)
+  value decoded: js_string_parts(json_string(text))
   value decoded.units
+}
+fn regexp_positions(characters, offset) = {
+  value { offset: offset, index: 0, unit: 0 }
+  walk (state) if state.index >= len(characters) then null else {
+    value width: byte_len(get(characters, state.index))
+    value { offset: state.offset + width, index: state.index + 1, unit: state.unit + (if width == 4 then 2 else 1) }
+  }
+  take len(characters)
 }
 fn regexp_literal_input(n, override_flags) = {
   value pieces: split(n.text, "/")
@@ -36,39 +36,37 @@ fn regexp_literal_input(n, override_flags) = {
   value end: byte_len(n.text) - byte_len(written_flags) - 1
   value pattern: byte_slice(n.text, 1, end)
   value characters: split(pattern, "")
-  value initial: { offset: n.offset + 1, spans: [], units: [] }
-  value items: concat([initial], characters)
-  value mapped: reduce(items, (state, character) => {
-    value next: state.offset + byte_len(character)
-    value units: regexp_units(character)
-    value located: map(units, unit => { value: unit.value, offset: state.offset, end_offset: next })
-    value {
-      offset: next,
-      spans: concat(state.spans, [{ offset: state.offset, end_offset: next }]),
-      units: concat(state.units, located)
-    }
+  value decoded: js_string_parts(json_string(pattern))
+  value positions: regexp_positions(characters, n.offset + 1)
+  value spans: map(positions, position => {
+    offset: position.offset, end_offset: position.offset + byte_len(get(characters, position.index))
   })
+  value units: flat(map(positions, position => {
+    value span: get(spans, position.index)
+    value count: if span.end_offset - span.offset == 4 then 2 else 1
+    value map(slice(decoded.units, position.unit, position.unit + count), unit => {
+      value: unit.value, offset: span.offset, end_offset: span.end_offset
+    })
+  }))
   value {
-    text: pattern, source: pattern, flags: flags, spans: mapped.spans, units: mapped.units,
+    text: pattern, source: pattern, flags: flags, spans: spans, units: units,
     offset: n.offset + 1, end_offset: n.offset + end, written: "regex", pattern_node: n
   }
 }
 fn regexp_string_input(n, flags) = {
   value decoded: js_string_parts(n.text)
   value mapped: if decoded == null then null else {
-    value initial: { index: 0, text: "", spans: [] }
     value characters: split(decoded.text, "")
-    value items: concat([initial], characters)
-    value reduce(items, (state, character) => {
-      value span: regexp_at(decoded.spans, state.index)
-      value units: filter(decoded.units, unit => unit.offset >= span.offset && unit.end_offset <= span.end_offset)
-      value unit: first(units)
-      value hex: regexp_hex(unit.value)
-      value text: if len(units) == 1 && unit.value >= 55296 && unit.value <= 57343 then "\\u" pad_start(hex, 4, "0") else character
-      value scalars: split(text, "")
-      value spans: map(scalars, character => span)
-      value { index: state.index + 1, text: state.text text, spans: concat(state.spans, spans) }
+    value positions: regexp_positions(characters, 0)
+    value segments: map(positions, position => {
+      value character: get(characters, position.index)
+      value span: get(decoded.spans, position.index)
+      value unit: get(decoded.units, position.unit)
+      value text: if byte_len(character) != 4 && unit.value >= 55296 && unit.value <= 57343
+        then "\\u" pad_start(regexp_hex(unit.value), 4, "0") else character
+      value { text: text, spans: map(split(text, ""), character => span) }
     })
+    value { text: join(map(segments, segment => segment.text), ""), spans: flat(map(segments, segment => segment.spans)) }
   }
   value if decoded == null then null else {
     text: mapped.text, source: mapped.text, flags: flags,
@@ -106,12 +104,14 @@ fn regexp_parse(n, input, unicode, sets) = if input == null then null else {
     text: input.text, spans: input.spans, offset: input.offset, end_offset: input.end_offset,
     flags: { unicode: unicode || sets, sets: sets, named: false }
   })
-  value groups: regexp_groups(initial.nodes)
-  value named: any(groups, group => regexp_group_name(initial.nodes, group) != null)
-  value if unicode || sets || !named then initial else syntax_tree(n, "regexp_syntax", {
-    text: input.text, spans: input.spans, offset: input.offset, end_offset: input.end_offset,
-    flags: { unicode: false, sets: false, named: true }
-  })
+  value if unicode || sets then initial else {
+    value groups: regexp_groups(initial.nodes)
+    value named: any(groups, group => regexp_group_name(initial.nodes, group) != null)
+    value if !named then initial else syntax_tree(n, "regexp_syntax", {
+      text: input.text, spans: input.spans, offset: input.offset, end_offset: input.end_offset,
+      flags: { unicode: false, sets: false, named: true }
+    })
+  }
 }
 in regexp_site let regexp_input regexp_input(node)
 in regexp_site let regexp_tree {
@@ -129,13 +129,10 @@ fn regexp_traversal(nodes, id, after_children) = {
   map (item) item.entry
 }
 fn regexp_ordered(nodes, id) = regexp_traversal(nodes, id, [])
-in regexp_site let regexp_nodes {
-  value nodes: get(regexp_tree, "nodes")
-  value if regexp_tree.ok then regexp_ordered(nodes, regexp_tree.root) else null
-}
+in regexp_site let regexp_nodes if regexp_tree.ok then get(regexp_tree, "nodes") else null
 in regexp_site let regexp_view_nodes if regexp_tree.ok then regexp_view(regexp_nodes, regexp_input) else null
 
-fn regexp_at(values, index) = if index < 0 then null else { value values; drop index; first }
+fn regexp_at(values, index) = if index < 0 then null else get(values, index)
 fn regexp_field_text(nodes, entry, name) = {
   value fields: regexp_field(nodes, entry, name)
   value first(fields).text
@@ -145,7 +142,11 @@ fn regexp_group_kind(nodes, entry) = {
   value if open == "(" || starts_with(open, "(?<") && !starts_with(open, "(?<=") && !starts_with(open, "(?<!") then "capturing_group"
     else if contains(["(?=", "(?!", "(?<=", "(?<!"], open) then "lookaround" else "group"
 }
-fn regexp_groups(nodes) = filter(nodes, entry => entry.kind == "regexp_group" && regexp_group_kind(nodes, entry) == "capturing_group")
+fn regexp_groups(nodes) = {
+  value nodes
+  filter (entry) entry.kind == "regexp_group" && regexp_group_kind(nodes, entry) == "capturing_group"
+  sort_by (entry) entry.start
+}
 fn regexp_group_name(nodes, entry) = {
   value open: regexp_field_text(nodes, entry, "open")
   value if open == "(" then null else slice(open, 3, -1)
@@ -158,16 +159,17 @@ fn regexp_unicode(input) = contains(input.flags, "u") || contains(input.flags, "
 fn regexp_escape_kind(nodes, input, entry) = {
   value raw: entry.text
   value in_class: regexp_in_class(nodes, entry)
-  value groups: regexp_groups(nodes)
-  value named: any(groups, group => regexp_group_name(nodes, group) != null)
   value unicode: regexp_unicode(input)
   value if !in_class && contains(["\\b", "\\B"], raw) then "assertion"
     else if re_test(raw, /^\\[dDsSwW]$/) || unicode && re_test(raw, /^\\[pP]/) then "character_set"
     else if !in_class && re_test(raw, /^\\[1-9][0-9]*$/) then {
       value number: { value raw; slice 1; num }
-      value if unicode || number <= len(groups) then "backreference" else "character"
+      value if unicode || number <= len(regexp_groups(nodes)) then "backreference" else "character"
     }
-    else if !in_class && starts_with(raw, "\\k") && (unicode || named) then "backreference"
+    else if !in_class && starts_with(raw, "\\k") && (unicode || {
+      value groups: regexp_groups(nodes)
+      value any(groups, group => regexp_group_name(nodes, group) != null)
+    }) then "backreference"
     else "character"
 }
 fn regexp_character_units(input, entry) = {
@@ -353,7 +355,7 @@ fn regexp_view_entry(nodes, input, entry) = if contains(["TEXT", "regexp_set_ope
     }
 }
 fn regexp_view(nodes, input) = {
-  value root: first(nodes)
+  value root: find(nodes, entry => entry.parent == null)
   value ordered: regexp_traversal(nodes, root.id, ["regexp_range", "regexp_quantifier"])
   value entries: filter(ordered, entry => entry.kind != "TEXT")
   value parts: map(entries, entry => regexp_view_entry(nodes, input, entry))
