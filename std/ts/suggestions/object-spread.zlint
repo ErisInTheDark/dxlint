@@ -83,9 +83,9 @@ fn object_spread_fix(source, n) = {
 
 in ts_call rule prefer-object-spread {
   when ts_global_method_candidate(node, "assign")
-  when global_method_callee == "Object.assign"
   let first_argument { value argument.nodes; first; unparenthesised_node }
   when first_argument is ts_object
+  when global_method_callee == "Object.assign"
   when !any(argument.nodes, arg => unparenthesised_node(arg) is ts_spread)
   when count(argument) == 1 || !any([] argument.assign_source_accessor, a => a == true) && !{ value [] argument.assign_source_proto; slice 1; any (p) p == true }
   let replacement object_spread_fix(source, node)

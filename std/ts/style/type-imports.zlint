@@ -9,7 +9,8 @@ define {
 fn word_list(xs) = if count(xs) == 1 then first(xs) else { value xs; slice 0 -1; join ', ' } " and " last(xs)
 in ts_program let import_decorator_metadata ts_compiler_option(node, "experimentalDecorators") == true && ts_compiler_option(node, "emitDecoratorMetadata") == true && { value descendants(ts_decorator); count } > 0
 in ts_identifier {
-  let import_use if ts_usage_jsx_used(name_binding(node), scoping_program) then "value"
+  let import_use if value_uses != null && value_uses > 0 then "value"
+    else if scoping_program.ts_usage_jsx_present && ts_usage_jsx_used(name_binding(node), scoping_program) then "value"
     else if uses == null then null else if uses == 0 then "unused" else if value_uses == 0 then "type" else "value"
   let type_only_name if import_use == "type" then '"' text '"' else null
 }

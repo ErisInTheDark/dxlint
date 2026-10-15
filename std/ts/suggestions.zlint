@@ -109,6 +109,7 @@ fn unchanged_call_receiver(receiver, tokens, null_receiver) = receiver != null &
 # The global `eval`, called or referenced (`(0, eval)`, `globalThis.eval`).
 @macro suggestion_eval_policy {
   option allowIndirect boolean = false "allow indirect eval references and calls"
+  when if is ts_identifier then text == "eval" else static_name == "eval"
   let eval_info eval_usage
   when eval_info != null && (!allowIndirect || eval_info.direct && !eval_info.optional)
   report at eval_info.offset
@@ -856,6 +857,7 @@ in ts_string rule no-multi-str {
 
 in ts_string, ts_template, ts_regex rule no-useless-escape {
   option allowRegexCharacters string[] = [] "allow otherwise unnecessary regex escapes"
+  when contains(text, "\\")
   each escape_info in regexp_useless_escapes {
     when !escape_info.regex || !contains(allowRegexCharacters, escape_info.character)
     report at escape_info.offset

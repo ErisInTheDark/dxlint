@@ -20,13 +20,16 @@ fn boolean_cast_next(n) = if boolean_cast_direct(n) then null
 fn boolean_cast_mode(n) = if boolean_cast_direct(n) || n.parent is ts_parenthesized then 0
   else if n.parent is ts_logical && contains(["&&", "||"], n.parent.operator) then 1 else 2
 fn boolean_cast_info(n) = {
-  value argument: unparenthesised_node(n.argument.node)
+  value argument: if n is ts_unary && n.operator == "!" then unparenthesised_node(n.argument.node) else null
   value negation: n is ts_unary && n.operator == "!" && argument is ts_unary && argument.operator == "!"
-  value chain: walk([n], current => boolean_cast_next(current))
-  value direct: any(chain, current => boolean_cast_direct(current))
-  value modes: map(chain, current => boolean_cast_mode(current))
-  value if (!negation && !(n is ts_call && boolean_cast_call(n))) || !direct then null
-    else {negation: negation, mode: max(modes)}
+  value if !negation && !(n is ts_call && boolean_cast_call(n)) then null else {
+    value chain: walk([n], current => boolean_cast_next(current))
+    value direct: any(chain, current => boolean_cast_direct(current))
+    value if !direct then null else {
+      value modes: map(chain, current => boolean_cast_mode(current))
+      value {negation: negation, mode: max(modes)}
+    }
+  }
 }
 
 fn boolean_cast_operand(n, negation) = {

@@ -55,7 +55,7 @@ in ts_if let curly_chain_expectations {
     (if branch.alternate not ts_if then branch.alternate.nodes else []))
   value map(bodies, body => body.curly_body_expectations)
 }
-fn curly_body_info(n) = {
+fn curly_body_info(n, mode, consistent) = {
   value owner: n.parent.node
   value alternate: n is ts_if.alternate
   value name: when {
@@ -67,16 +67,22 @@ fn curly_body_info(n) = {
     owner is ts_do_while then "do"
     else then null
   }
-  value chain: walk([owner], current => if current is ts_if.alternate then current.parent.node else null)
-  value top: last(chain)
-  value expected: n.curly_body_expectations
-  value all: if owner is ts_if then top.curly_chain_expectations else [expected]
-  value if name == null || alternate && n is ts_if then null else {
-    block: expected.block, name: name, condition: !alternate && owner is (ts_if, ts_while, ts_for),
-    multi: expected.multi, multiline: expected.multiline, nested: expected.nested,
-    multi_consistent: any(all, item => item.multi == 1 || item.multi == -1 && item.block),
-    multiline_consistent: any(all, item => item.multiline == 1 || item.multiline == -1 && item.block),
-    nested_consistent: any(all, item => item.nested == 1 || item.nested == -1 && item.block)
+  value if name == null || alternate && n is ts_if then null
+  else if mode == "all" then {
+    block: n is ts_block, name: name, condition: !alternate && owner is (ts_if, ts_while, ts_for)
+  } else {
+    value expected: n.curly_body_expectations
+    value all: if !consistent then [] else if owner is ts_if then {
+      value chain: walk([owner], current => if current is ts_if.alternate then current.parent.node else null)
+      value last(chain).curly_chain_expectations
+    } else [expected]
+    value {
+      block: expected.block, name: name, condition: !alternate && owner is (ts_if, ts_while, ts_for),
+      multi: expected.multi, multiline: expected.multiline, nested: expected.nested,
+      multi_consistent: any(all, item => item.multi == 1 || item.multi == -1 && item.block),
+      multiline_consistent: any(all, item => item.multiline == 1 || item.multiline == -1 && item.block),
+      nested_consistent: any(all, item => item.nested == 1 || item.nested == -1 && item.block)
+    }
   }
 }
 
@@ -101,10 +107,10 @@ fn curly_replacement(source, n, block) = if !block then "{{" n.text "}}" else {
 @macro suggestion_curly_policy {
   option mode ("all" | "multi" | "multi-line" | "multi-or-nest") = "all" "control body brace policy"
   option style ("consistent" | null) = null "consistent braces throughout if chains"
-  let curly_info curly_body_info(node)
+  let curly_info curly_body_info(node, mode, style == "consistent")
   when curly_info != null
   let body_expected if mode == "all" then 1 else if mode == "multi" then curly_info.multi else if mode == "multi-line" then curly_info.multiline else curly_info.nested
-  let chain_required if mode == "multi" then curly_info.multi_consistent else if mode == "multi-line" then curly_info.multiline_consistent else curly_info.nested_consistent
+  let chain_required if mode == "all" || style != "consistent" then false else if mode == "multi" then curly_info.multi_consistent else if mode == "multi-line" then curly_info.multiline_consistent else curly_info.nested_consistent
   let curly_expected if style == "consistent" && mode != "all" then if chain_required then 1 else 0 else body_expected
   when curly_expected != -1 && (curly_expected == 1 && !curly_info.block || curly_expected == 0 && curly_info.block)
   fix at node if curly_fix_allowed(node, curly_info.block) as curly_replacement(source, node, curly_info.block)
