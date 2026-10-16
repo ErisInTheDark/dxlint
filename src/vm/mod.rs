@@ -1248,12 +1248,21 @@ fn walk_seq<H: Host>(h: &Runtime<'_, H>, node: u32, s: &Seq, f: &mut Vec<V>, eac
                 }
             }
         }
+        // Consumers run with this stage's slots unbound (they may share slot
+        // numbers with outer bindings), so each item's results are gathered
+        // inside the binding and handed on after it.
         Seq::FlatMap(of, body, bind) => {
             let mut index = 0.0;
+            let mut items = Vec::new();
             return walk_seq(h, node, of, f, &mut |v, f| {
                 let values = [v, V::Num(index)];
                 index += 1.0;
-                with_bound(f, bind.slot, &values[..bind.width()], |f| walk_seq(h, node, body, f, &mut *each))
+                items.clear();
+                with_bound(f, bind.slot, &values[..bind.width()], |f| walk_seq(h, node, body, f, &mut |item, _| { items.push(item); Some(true) }))?;
+                for &item in &items {
+                    if !each(item, f)? { return Some(false) }
+                }
+                Some(true)
             });
         }
         Seq::Zip(of, other, body, slot) => {
@@ -1304,7 +1313,11 @@ fn walk_seq<H: Host>(h: &Runtime<'_, H>, node: u32, s: &Seq, f: &mut Vec<V>, eac
         }
         Seq::Let(value, slot, body) => {
             let v = ev(h, node, value, f)?;
-            return with_bound(f, *slot, &[v], |f| walk_seq(h, node, body, f, each));
+            let mut items = Vec::new();
+            with_bound(f, *slot, &[v], |f| walk_seq(h, node, body, f, &mut |item, _| { items.push(item); Some(true) }))?;
+            for item in items {
+                if !each(item, f)? { return Some(false) }
+            }
         }
         Seq::Overlapping(sel, range) => {
             let range = match range.as_deref() {
@@ -1336,13 +1349,13 @@ fn walk_seq<H: Host>(h: &Runtime<'_, H>, node: u32, s: &Seq, f: &mut Vec<V>, eac
                 }
             }
         }
-        // The whole walk runs before any reached item is used.
+        // Each reached item is used before the walk goes past it, so a
+        // consumer that has its answer (`any`, `first`...) stops the walk.
         Seq::Walk(roots, next, slot) => {
             let mut queue = std::collections::VecDeque::new();
             walk_seq(h, node, roots, f, &mut |v, _| { queue.push_back(v); Some(true) })?;
             let mut seen_nodes = crate::fx_hash::FxHashSet::default();
             let mut seen_values: Vec<V> = Vec::new();
-            let mut reached = Vec::new();
             while let Some(v) = queue.pop_front() {
                 let fresh = match v {
                     V::Null => false,
@@ -1353,13 +1366,10 @@ fn walk_seq<H: Host>(h: &Runtime<'_, H>, node: u32, s: &Seq, f: &mut Vec<V>, eac
                 if !fresh {
                     continue;
                 }
-                with_bound(f, *slot, &[v], |f| walk_seq(h, node, next, f, &mut |more, _| { queue.push_back(more); Some(true) }))?;
-                reached.push(v);
-            }
-            for v in reached {
                 if !each(v, f)? {
                     return Some(false);
                 }
+                with_bound(f, *slot, &[v], |f| walk_seq(h, node, next, f, &mut |more, _| { queue.push_back(more); Some(true) }))?;
             }
         }
     }
@@ -1778,9 +1788,8 @@ fn ev_rare<H: Host>(h: &Runtime<'_, H>, node: u32, e: &VExpr, f: &mut Vec<V>) ->
             if let Seq::Descendants(sel) = &**s {
                 return Some(h.descendants(node, sel).next().map_or(V::Null, V::Node));
             }
-            // Other sequences drain so late errors still propagate.
             let mut first = None;
-            walk_seq(h, node, s, f, &mut |v, _| { first.get_or_insert(v); Some(true) })?;
+            walk_seq(h, node, s, f, &mut |v, _| { first.get_or_insert(v); Some(false) })?;
             first.unwrap_or(V::Null)
         }
         VExpr::Last(s) => {
@@ -1797,36 +1806,37 @@ fn ev_rare<H: Host>(h: &Runtime<'_, H>, node: u32, e: &VExpr, f: &mut Vec<V>) ->
                 }
                 return Some(V::Bool(false));
             }
-            // Non-raw inputs evaluate before any test.
-            let mut items = Vec::new();
-            walk_seq(h, node, s, f, &mut |v, _| { items.push(v); Some(true) })?;
-            let holds = |at: usize, f: &mut Vec<V>| -> Option<bool> {
-                Some(h.truthy(call_bound(h, node, test, f, *bind, items[at], at as f64)?))
-            };
-            match kind {
-                EachKind::Find | EachKind::FindLast => {
-                    let mut found = V::Null;
-                    let order: Box<dyn Iterator<Item = usize>> =
-                        if *kind == EachKind::Find { Box::new(0..items.len()) } else { Box::new((0..items.len()).rev()) };
-                    for at in order {
-                        if holds(at, f)? { found = items[at]; break; }
-                    }
-                    found
+            if *kind == EachKind::FindLast {
+                let mut items = Vec::new();
+                walk_seq(h, node, s, f, &mut |v, _| { items.push(v); Some(true) })?;
+                let mut found = V::Null;
+                for at in (0..items.len()).rev() {
+                    if h.truthy(call_bound(h, node, test, f, *bind, items[at], at as f64)?) { found = items[at]; break; }
                 }
-                EachKind::All => {
-                    let mut all = true;
-                    for at in 0..items.len() {
-                        if !holds(at, f)? { all = false; break; }
-                    }
-                    V::Bool(all)
-                }
-                EachKind::Any => {
-                    let mut any = false;
-                    for at in 0..items.len() {
-                        if holds(at, f)? { any = true; break; }
-                    }
-                    V::Bool(any)
-                }
+                found
+            } else {
+                // Items are tested as they come; the first deciding one ends
+                // the sequence (later items are never computed).
+                let mut at = 0usize;
+                let mut decided = None;
+                walk_seq(h, node, s, f, &mut |v, f| {
+                    // A stage that keeps going after a stop must not undo the answer.
+                    if decided.is_some() { return Some(false) }
+                    let holds = h.truthy(call_bound(h, node, test, f, *bind, v, at as f64)?);
+                    at += 1;
+                    decided = match kind {
+                        EachKind::Any if holds => Some(V::Bool(true)),
+                        EachKind::All if !holds => Some(V::Bool(false)),
+                        EachKind::Find if holds => Some(v),
+                        _ => None,
+                    };
+                    Some(decided.is_none())
+                })?;
+                decided.unwrap_or(match kind {
+                    EachKind::All => V::Bool(true),
+                    EachKind::Any => V::Bool(false),
+                    _ => V::Null,
+                })
             }
         }
         VExpr::Fold { of, init, body, slot } => {
@@ -2420,14 +2430,18 @@ mod tests {
             Box::new(VExpr::Call(functions::lookup("num").unwrap(), vec![VExpr::Const(V::Str("bad"))].into())),
             Box::new(VExpr::Const(V::Num(1.0))),
         )), bind));
-        assert!(eval(&host, 3, &VExpr::First(mapped())).is_none());
-        assert!(eval(&host, 3, &any(mapped())).is_none());
+        // A decided answer never computes later items (their errors
+        // included); consumers that need every item still fail on them.
+        assert_eq!(eval(&host, 3, &VExpr::First(mapped())).unwrap().value, V::Num(1.0));
+        assert_eq!(eval(&host, 3, &any(mapped())).unwrap().value, V::Bool(true));
+        assert!(eval(&host, 3, &VExpr::Count(mapped())).is_none());
         let walked = || Box::new(Seq::Walk(source(), Box::new(Seq::Value(Box::new(VExpr::If(
             Box::new(VExpr::Binary(BinOp::Eq, Box::new(VExpr::Bound(0)), Box::new(VExpr::Const(V::Node(1))))),
             Box::new(error()), Box::new(VExpr::Const(V::Null)),
         )))), 0));
-        assert!(eval(&host, 3, &VExpr::First(walked())).is_none());
-        assert!(eval(&host, 3, &any(walked())).is_none());
+        assert_eq!(eval(&host, 3, &VExpr::First(walked())).unwrap().value, V::Node(0));
+        assert_eq!(eval(&host, 3, &any(walked())).unwrap().value, V::Bool(true));
+        assert!(eval(&host, 3, &VExpr::Count(walked())).is_none());
     }
 
 }

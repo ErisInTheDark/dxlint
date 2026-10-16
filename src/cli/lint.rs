@@ -259,14 +259,14 @@ pub(super) fn prepared(output: &mut Output<'_>, args: LintArgs, project: &mut Pr
                     let tx = tx.clone();
                     let (queue, next, working) = (&queue, &next, &working);
                     let run = &run;
-                    w.spawn(move || {
+                    std::thread::Builder::new().stack_size(crate::engine::WORKER_STACK).spawn_scoped(w, move || {
                         while let Some((_, path)) = queue.get(next.fetch_add(1, std::sync::atomic::Ordering::Relaxed)) {
                             if tx.send(lint_file(linter, run, cache, path, fix)).is_err() {
                                 break;
                             }
                         }
                         working.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-                    });
+                    }).expect("lint worker thread");
                 }
             });
             drop(tx);

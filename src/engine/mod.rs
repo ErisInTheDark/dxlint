@@ -206,6 +206,11 @@ pub struct InertRule {
     pub default_severity: Severity,
 }
 
+/// Stack for threads that run rules: rule programs nest sequence consumers
+/// inside their producers and semantic questions recurse through types,
+/// deeper than the default 2 MiB thread stack on large typed projects.
+pub const WORKER_STACK: usize = 64 << 20;
+
 pub struct Linter {
     invalidation: std::sync::atomic::AtomicU64,
     units: std::sync::Mutex<crate::fx_hash::FxHashMap<PathBuf, std::sync::Arc<units::Unit>>>,
@@ -611,14 +616,14 @@ impl Linter {
                                     let state = parsed.state.clone();
                                     let run = Run { active: mask, ..run };
                                     // Reads are tracked per thread: pass them on.
-                                    s.spawn(move || {
+                                    std::thread::Builder::new().stack_size(WORKER_STACK).spawn_scoped(s, move || {
                                         reads::track(|| {
                                             let facts = self.native_facts(index, tree, &run, (path, rel), state);
                                             let mut part = Vec::new();
                                             self.check_tree(tree, &run, programs, Some(&*facts), &mut part);
                                             part
                                         })
-                                    })
+                                    }).expect("rule group thread")
                                 })
                                 .collect();
                             for h in handles {
