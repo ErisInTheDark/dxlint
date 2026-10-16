@@ -144,9 +144,10 @@ pub(crate) struct State {
 }
 
 impl State {
-    pub(super) fn finish(&self, epoch: Epoch, failed: bool) -> u64 {
-        self.acceptance.finish(epoch, failed) + self.headers.finish(epoch, failed)
-            + self.candidates.finish(epoch, failed) + self.values.finish(epoch, failed)
+    pub(super) fn finish(&self, epoch: Epoch, failed: bool, cut: u64) -> u64 {
+        use super::memo::Settled;
+        self.acceptance.finish(epoch, failed, cut, Settled::settled) + self.headers.finish(epoch, failed, cut, |_| false)
+            + self.candidates.finish(epoch, failed, cut, |_| false) + self.values.finish(epoch, failed, cut, |_| false)
     }
 }
 

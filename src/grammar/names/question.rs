@@ -47,6 +47,10 @@ pub struct Budget {
     left: Cell<u32>,
     depth: Cell<u32>,
     limited: Cell<bool>,
+    /// The memo write order when the question first hit a limit
+    /// (`u64::MAX` while it hasn't): answers memoised before it are
+    /// complete.
+    cut: Cell<u64>,
 }
 
 /// Holds one level of [`Budget::nest`]; leaving it returns the level.
@@ -66,7 +70,11 @@ impl Budget {
     pub const DEPTH: u32 = 256;
 
     pub fn new(units: u32) -> Budget {
-        Budget { left: Cell::new(units), depth: Cell::new(0), limited: Cell::new(false) }
+        Budget { left: Cell::new(units), depth: Cell::new(0), limited: Cell::new(false), cut: Cell::new(u64::MAX) }
+    }
+
+    fn limit(&self) {
+        if !self.limited.replace(true) { self.cut.set(super::memo::write_order()) }
     }
 
     /// Enters one more level of engine-to-engine calls; `None` (answer
@@ -74,7 +82,7 @@ impl Budget {
     /// into another engine's question, never per step.
     pub fn nest(&self) -> Option<Nested<'_>> {
         let depth = self.depth.get();
-        if depth >= Self::DEPTH { self.limited.set(true); return None }
+        if depth >= Self::DEPTH { self.limit(); return None }
         self.depth.set(depth + 1);
         Some(Nested(&self.depth))
     }
@@ -82,12 +90,17 @@ impl Budget {
     /// Spends one unit; `false` when the budget is gone.
     pub fn step(&self) -> bool {
         match self.left.get() {
-            0 => { self.limited.set(true); false }
+            0 => { self.limit(); false }
             n => {
                 self.left.set(n - 1);
                 true
             }
         }
+    }
+
+    /// See [`Budget::cut`] (the field).
+    pub(crate) fn cut(&self) -> u64 {
+        if self.limited() && self.cut.get() == u64::MAX { 0 } else { self.cut.get() }
     }
 
     pub fn exhausted(&self) -> bool {
@@ -102,6 +115,7 @@ impl Budget {
         assert_eq!(self.depth.get(), 0);
         self.left.set(Self::DEFAULT);
         self.limited.set(false);
+        self.cut.set(u64::MAX);
     }
 
     pub(crate) fn limited(&self) -> bool {

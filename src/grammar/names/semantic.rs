@@ -32,7 +32,9 @@ impl std::ops::Deref for Semantic<'_> {
 }
 
 /// One file's semantic answers and frame arena, with a fresh budget per
-/// root question. Limit-cut answers never survive into the next root.
+/// root question. Answers a root's limit cut short never survive into the
+/// next root; answers it completed before the cut do (frames are interned,
+/// so their keys mean the same in every root).
 #[derive(Default)]
 pub(crate) struct Session {
     question: QueryContext,
@@ -57,7 +59,8 @@ impl Session {
             );
         }
         let failed = self.question.budget.limited();
-        let discarded = semantic.values.finish(epoch, failed) + semantic.calls.finish(epoch, failed);
+        let cut = self.question.budget.cut();
+        let discarded = semantic.values.finish(epoch, failed, cut) + semantic.calls.finish(epoch, failed, cut);
         if failed {
             if let Some(profile) = world.profile() {
                 crate::engine::Profile::add(&profile.semantic_budget_limits, 1);
@@ -333,7 +336,7 @@ mod tests {
                     Some(vec![super::super::question::NodeValue::never()]));
                 semantic.values().fits(Leaf { frame, ..at }, trait_id)
             }), Known::Unknown);
-            assert_eq!(crate::engine::Profile::get(&profile.semantic_memo_discards), discarded + 2);
+            assert_eq!(crate::engine::Profile::get(&profile.semantic_memo_discards), discarded + 1, "only the answer cut short is dropped");
             world.cut.set(0);
             assert_eq!(session.run(&world, &linter.grammar.names, |semantic| semantic.values().fits(at, trait_id)), Known::Yes(true));
             assert_eq!(world.conditions.get(), before + 2, "another root's limit discarded a completed answer");
@@ -342,13 +345,13 @@ mod tests {
                     Some(vec![super::super::question::NodeValue::leaf(at)]));
                 semantic.values().fits(Leaf { frame, ..at }, trait_id)
             }), Known::Yes(false));
-            assert_eq!(world.conditions.get(), before + 3, "failed root retained its completed writes");
+            assert_eq!(world.conditions.get(), before + 2, "a root cut short dropped an answer it completed before the cut");
             assert_eq!(session.run(&world, &linter.grammar.names, |semantic| {
                 let frame = semantic.question.bind(FrameId::ROOT, NodeRef::here(node), None,
                     Some(vec![super::super::question::NodeValue::never()]));
                 semantic.values().fits(Leaf { frame, ..at }, trait_id)
             }), Known::Yes(true));
-            assert_eq!(world.conditions.get(), before + 4);
+            assert_eq!(world.conditions.get(), before + 3, "the answer cut short is computed again");
         }
         let before = world.conditions.get();
         world.revision.set(1);

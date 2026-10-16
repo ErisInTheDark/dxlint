@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::hash::Hash;
 
 use crate::fx_hash::FxHashMap;
@@ -12,10 +12,46 @@ impl Epoch {
     }
 }
 
+thread_local! {
+    /// Orders every memo write on this thread, so a root cut short by its
+    /// budget can tell writes made before the cut (complete answers) from
+    /// writes made after it.
+    static WRITES: Cell<u64> = const { Cell::new(0) };
+}
+
+/// The order number the next memo write gets.
+pub(super) fn write_order() -> u64 {
+    WRITES.with(Cell::get)
+}
+
+fn next_write() -> u64 {
+    WRITES.with(|writes| {
+        let order = writes.get();
+        writes.set(order + 1);
+        order
+    })
+}
+
+/// Whether a memoised answer is complete: kept from a root its budget cut
+/// short when written before the cut. Unknown answers (including cycle
+/// placeholders) are never kept.
+pub(super) trait Settled {
+    fn settled(&self) -> bool;
+}
+
+impl<T> Settled for super::question::Known<T> {
+    fn settled(&self) -> bool { matches!(self, super::question::Known::Yes(_)) }
+}
+
+impl Settled for super::question::NodeValue {
+    fn settled(&self) -> bool { !matches!(self, super::question::NodeValue::Unknown) }
+}
+
 #[derive(Clone)]
 struct Entry<V> {
     epoch: Epoch,
     value: V,
+    order: u64,
 }
 
 struct Writes<K, V> {
@@ -52,7 +88,7 @@ impl<K: Clone + Eq + Hash, V: Clone> Memo<K, V> {
         if entries.get(&key).is_none_or(|entry| entry.epoch != epoch) {
             writes.undo.push((key.clone(), entries.get(&key).cloned()));
         }
-        entries.insert(key, Entry { epoch, value });
+        entries.insert(key, Entry { epoch, value, order: next_write() });
     }
 
     /// Forgets `key` (undone like an insert if the root fails).
@@ -68,16 +104,23 @@ impl<K: Clone + Eq + Hash, V: Clone> Memo<K, V> {
         }
     }
 
-    pub(super) fn finish(&self, epoch: Epoch, failed: bool) -> u64 {
+    /// Ends a root. A root cut short by its budget at write order `cut`
+    /// undoes its writes, except answers last written before the cut that
+    /// `keep` accepts: they were complete before the budget ran out, and
+    /// dropping them made every later root redo the same work.
+    pub(super) fn finish(&self, epoch: Epoch, failed: bool, cut: u64, keep: impl Fn(&V) -> bool) -> u64 {
         let mut writes = self.writes.borrow_mut();
         if writes.epoch != epoch { return 0 }
         if !failed {
             writes.undo.clear();
             return 0;
         }
-        let discarded = writes.undo.len() as u64;
+        let mut discarded = 0;
         let mut entries = self.entries.borrow_mut();
         while let Some((key, previous)) = writes.undo.pop() {
+            let complete = entries.get(&key).is_some_and(|entry| entry.epoch == epoch && entry.order < cut && keep(&entry.value));
+            if complete { continue }
+            discarded += 1;
             match previous {
                 Some(entry) => { entries.insert(key, entry); }
                 None => { entries.remove(&key); }
@@ -98,22 +141,40 @@ mod tests {
         let committed = Epoch::default();
         memo.insert(committed, "changed", Known::Yes(true));
         memo.insert(committed, "untouched", Known::Yes(false));
-        memo.finish(committed, false);
+        memo.finish(committed, false, u64::MAX, Settled::settled);
 
         let failed = committed.next();
+        let cut = write_order();
         for key in ["changed", "new"] {
             memo.insert(failed, key, Known::Unknown);
             memo.insert(failed, key, Known::Yes(false));
         }
-        assert_eq!(memo.finish(failed, true), 2);
+        assert_eq!(memo.finish(failed, true, cut, Settled::settled), 2);
         assert_eq!(memo.get(&"changed"), Some(Known::Yes(true)));
         assert_eq!(memo.get(&"untouched"), Some(Known::Yes(false)));
         assert_eq!(memo.get(&"new"), None);
 
         let retry = failed.next();
         memo.insert(retry, "new", Known::Yes(true));
-        memo.finish(retry, false);
-        assert_eq!(memo.finish(retry.next(), true), 0);
+        memo.finish(retry, false, u64::MAX, Settled::settled);
+        assert_eq!(memo.finish(retry.next(), true, write_order(), Settled::settled), 0);
         assert_eq!(memo.get(&"new"), Some(Known::Yes(true)));
+    }
+
+    #[test]
+    fn a_root_cut_short_keeps_complete_answers_written_before_the_cut() {
+        let memo = Memo::default();
+        let root = Epoch::default().next();
+        memo.insert(root, "finished", Known::Yes(true));
+        memo.insert(root, "gave up", Known::<bool>::Unknown);
+        memo.insert(root, "rewritten", Known::Yes(false));
+        let cut = write_order();
+        memo.insert(root, "rewritten", Known::Yes(true));
+        memo.insert(root, "after", Known::Yes(true));
+        assert_eq!(memo.finish(root, true, cut, Settled::settled), 3);
+        assert_eq!(memo.get(&"finished"), Some(Known::Yes(true)));
+        assert_eq!(memo.get(&"gave up"), None);
+        assert_eq!(memo.get(&"rewritten"), None);
+        assert_eq!(memo.get(&"after"), None);
     }
 }

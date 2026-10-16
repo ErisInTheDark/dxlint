@@ -183,13 +183,14 @@ pub(crate) struct State {
 }
 
 impl State {
-    pub(super) fn finish(&self, epoch: Epoch, failed: bool) -> u64 {
-        self.values.finish(epoch, failed) + self.widened.finish(epoch, failed)
-            + self.traits.finish(epoch, failed) + self.optional.finish(epoch, failed)
-            + self.identities.finish(epoch, failed) + self.members.finish(epoch, failed)
-            + self.member_keys.finish(epoch, failed) + self.key_paths.finish(epoch, failed)
-            + self.member_closed.finish(epoch, failed) + self.bound_arguments.finish(epoch, failed)
-            + self.carriers.finish(epoch, failed)
+    pub(super) fn finish(&self, epoch: Epoch, failed: bool, cut: u64) -> u64 {
+        use super::memo::Settled;
+        self.values.finish(epoch, failed, cut, Settled::settled) + self.widened.finish(epoch, failed, cut, Settled::settled)
+            + self.traits.finish(epoch, failed, cut, Settled::settled) + self.optional.finish(epoch, failed, cut, Settled::settled)
+            + self.identities.finish(epoch, failed, cut, Settled::settled) + self.members.finish(epoch, failed, cut, Settled::settled)
+            + self.member_keys.finish(epoch, failed, cut, Settled::settled) + self.key_paths.finish(epoch, failed, cut, |_| false)
+            + self.member_closed.finish(epoch, failed, cut, Settled::settled) + self.bound_arguments.finish(epoch, failed, cut, Settled::settled)
+            + self.carriers.finish(epoch, failed, cut, Settled::settled)
     }
 }
 
