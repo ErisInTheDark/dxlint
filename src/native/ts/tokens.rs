@@ -2,7 +2,7 @@
 //! Native literal spans retain their syntax's boundaries: JSX strings,
 //! for example, treat backslashes as text rather than escapes.
 
-use super::facts::NativeFile;
+use super::file::TsFile;
 use super::kinds::{Field as F, Kind as K, ALL_KINDS};
 use super::lexer::{Lexer, Tok, Token};
 use super::Parsed;
@@ -20,7 +20,7 @@ pub type TokenMask = [bool; ALL_KINDS.len()];
 #[cfg(test)]
 pub const ALL_TOKENS: TokenMask = [true; ALL_KINDS.len()];
 
-pub(crate) fn lex_comments(file: &NativeFile<'_>) -> LexedComments {
+pub(crate) fn lex_comments(file: &TsFile<'_>) -> LexedComments {
     let lexed = file.cached(lex);
     let mut tokens = lexed.0.to_vec();
     tokens.extend(file.comments().iter().filter(|comment| {
@@ -36,7 +36,7 @@ pub(crate) fn lex_comments(file: &NativeFile<'_>) -> LexedComments {
     LexedComments(tokens)
 }
 
-pub(crate) fn lex(file: &NativeFile<'_>) -> Lexed {
+pub(crate) fn lex(file: &TsFile<'_>) -> Lexed {
     let syntax = &file.syntax;
     let mut opaque = HashMap::default();
     for id in 0..syntax.tree.nodes.len() as u32 {
@@ -187,18 +187,6 @@ fn lex_around(src: &str, opaque: &HashMap<u32, (u32, Tok)>) -> Vec<Token> {
     tokens
 }
 
-impl NativeFile<'_> {
-    /// Parser-aware tokens inside a node; trivia outside literals is dropped.
-    pub fn tokens(&self, node: u32) -> Vec<&str> {
-        let span = self.syntax.tree.node(node);
-        let code = self.cached(lex);
-        let from = code.0.partition_point(|token| token.start < span.start);
-        code.0[from..].iter().take_while(|token| token.end <= span.end)
-            .map(|token| &self.syntax.src[token.start as usize..token.end as usize])
-            .collect()
-    }
-}
-
 #[cfg(test)]
 mod lexical_tests {
     use super::*;
@@ -229,28 +217,6 @@ mod lexical_tests {
                 }).count();
                 assert_eq!(attached, 1, "code token missing or duplicated: {:?}", &src[token.start as usize..token.end as usize]);
             }
-        }
-    }
-
-    #[test]
-    fn token_equality_preserves_literal_contents_but_ignores_code_trivia() {
-        for (left, right, equal) in [
-            ("`${0} `", "`${0}`", false),
-            ("`${0} `", "`${0 /* comment */} `", true),
-            ("`a ${`b ${x} `} z`", "`a ${`b ${x}`} z`", false),
-            ("a + b", "a /* comment */ + b", true),
-            ("/a b/", "/ab/", false),
-            ("'a b'", "'ab'", false),
-        ] {
-            let source = format!("const left = {left}; const right = {right};");
-            with_native_file(&source, |file, _| {
-                let find = |text| (0..file.syntax.tree.nodes.len() as u32)
-                    .find(|&node| file.syntax.kind(node).is_some() && file.syntax.text(node) == text)
-                    .expect("expression");
-                let (a, b) = (find(left), find(right));
-                assert_eq!(file.equal_tokens(a, b), equal, "{left} vs {right}");
-                assert_eq!(file.equal_tokens(b, a), equal, "{right} vs {left}");
-            });
         }
     }
 
@@ -344,11 +310,10 @@ mod lexical_tests {
     fn attached_stream_is_reused_without_changing_indexed_queries() {
         use crate::engine::tests::native_linter;
         use crate::grammar::Tree;
-        use crate::native::ts::{modules::Project, syntax::Syntax};
+        use crate::native::ts::syntax::Syntax;
         use std::path::Path;
 
         let linter = native_linter("");
-        let project = Project::default();
         let front = linter.grammar.natives.first().expect("native ts");
         let mut selected = [false; ALL_KINDS.len()];
         selected[K::Comma as usize] = true;
@@ -371,10 +336,8 @@ mod lexical_tests {
                 } else {
                     Tree::from_native(nodes, parsed.root)
                 };
-                let path = Path::new("/root/a.tsx");
-                let lazy = NativeFile::new(Syntax::new(&tree, src, front), path, &project);
-                let seeded = NativeFile::new(Syntax::new(&tree, src, front), path, &project)
-                    .with_tokens(parsed.tokens);
+                let lazy = TsFile::new(Syntax::new(&tree, src, front));
+                let seeded = TsFile::new(Syntax::new(&tree, src, front)).with_tokens(parsed.tokens);
                 let code = if attached {
                     seeded.cached::<Lexed>(|_| panic!("attached stream must not be lexed again"))
                 } else {
@@ -392,8 +355,7 @@ mod lexical_tests {
     fn raw_jsx_strings_preserve_following_delimiters() {
         use crate::engine::tests::native_front;
         use crate::grammar::Tree;
-        use crate::native::ts::{modules::Project, syntax::Syntax};
-        use std::path::Path;
+        use crate::native::ts::syntax::Syntax;
 
         let src = "const view = <Box a=\"\\\" b={ value }> \n/* raw, text */ \\ </Box>; function after() { return 1; }";
         let front = native_front();
@@ -408,8 +370,7 @@ mod lexical_tests {
             parsed.nodes.iter().any(|node| node.start == at && raw_kind(node) == Some(kind))
         }).collect();
         let tree = Tree::from_native(parsed.nodes, parsed.root);
-        let project = Project::default();
-        let file = NativeFile::new(Syntax::new(&tree, src, &front), Path::new("/root/a.tsx"), &project);
+        let file = TsFile::new(Syntax::new(&tree, src, &front));
         let code = file.cached(lex);
         for &(at, _, tok) in &boundaries {
             assert!(code.0.iter().any(|token| token.start == at && token.tok == tok), "missing code token at {at}");

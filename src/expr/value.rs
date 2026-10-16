@@ -3,28 +3,6 @@ use std::cmp::Ordering;
 use std::fmt;
 use std::sync::Arc;
 
-/// `String(n)` in JavaScript.
-pub(crate) fn js_number_text(n: f64) -> String {
-    if n.is_nan() {
-        return "NaN".into();
-    }
-    if n.is_infinite() {
-        return if n > 0.0 { "Infinity" } else { "-Infinity" }.into();
-    }
-    if n == 0.0 {
-        return "0".into();
-    }
-    let abs = n.abs();
-    if (1e-6..1e21).contains(&abs) {
-        return format!("{n}");
-    }
-    // Exponent form: shortest digits, `e+21` / `e-7`.
-    let s = format!("{n:e}");
-    let (mantissa, exp) = s.split_once('e').unwrap_or((&s, "0"));
-    let exp: i32 = exp.parse().unwrap_or(0);
-    format!("{mantissa}e{}{}", if exp < 0 { "-" } else { "+" }, exp.abs())
-}
-
 /// A runtime value in formatter expressions. Text borrows from the linted
 /// file where it can (`'s`), so reading `text` or a field never allocates.
 /// Lists and records are shared: copying one (reading a `let`, a parameter,
@@ -41,18 +19,6 @@ pub enum Value<'s> {
     /// A node of the file's tree (from a link such as `declaration`): reads
     /// as its text, and `.x` reads `x` on it.
     Node(u32, Text<'s>),
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn javascript_numbers_use_runtime_string_conversion() {
-        use super::js_number_text;
-        assert_eq!(js_number_text(1.0), "1");
-        assert_eq!(js_number_text(0.1), "0.1");
-        assert_eq!(js_number_text(1e21), "1e+21");
-        assert_eq!(js_number_text(1e-7), "1e-7");
-    }
 }
 
 /// Text of a value: borrowed from the linted file, or shared, so copying a

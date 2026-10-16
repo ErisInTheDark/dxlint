@@ -1,21 +1,16 @@
 //! The TypeScript/JavaScript front end as the engine sees it
-//! ([`crate::engine::frontend::Frontend`]).
+//! ([`crate::engine::frontend::Frontend`]): syntax and tokens only.
 
 use std::any::Any;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock};
 
-use super::environment::Environment;
-use super::facts::NativeFile;
+use super::file::TsFile;
 use super::kinds::{field_shape, Kind, ALL_FIELDS, ALL_KINDS, KINDS};
-use super::modules::{Project, Stale};
-use super::reads::{Dep, Discovery, Reads};
 use super::syntax::Syntax;
 use super::tokens::Lexed;
-use super::topics;
 use crate::engine::frontend::{self, FieldShape, FileInput, Frontend, Native, Parsed};
-use crate::expr::facts::FactInfo;
-use crate::expr::Value;
+use crate::engine::reads::{Dep, Reads};
 
 pub struct Ts;
 
@@ -78,83 +73,39 @@ impl Frontend for Ts {
         let mut own = super::Parsed { nodes: std::mem::take(&mut parsed.nodes), root: parsed.root, tokens: None };
         super::tokens::attach_selected(text, &mut own, &mask);
         parsed.nodes = own.nodes;
-        // The token stream the attachment scanned, reused by the file's facts.
+        // The token stream the attachment scanned, reused by the file.
         parsed.state = own.tokens.map(|tokens| Arc::new(tokens) as Arc<dyn Any + Send + Sync>);
     }
 
     fn file<'t>(&'t self, input: FileInput<'t, '_>) -> Box<dyn Native + 't> {
-        let project = input.project.as_any().downcast_ref::<Project>().expect("a ts project");
         let tokens = input.state.as_deref().and_then(|state| state.downcast_ref::<Lexed>()).cloned();
-        Box::new(
-            NativeFile::new(Syntax::new(input.tree, input.text, input.front), input.path, project)
-                .with_environment(Environment::from_values(input.options.iter().copied()))
-                .with_tokens(tokens),
-        )
-    }
-
-    fn facts(&self) -> Vec<FactInfo> {
-        topics::FACTS.iter().map(|f| FactInfo { name: f.name, doc: f.doc, shape: f.shape }).collect()
+        Box::new(TsFile::new(Syntax::new(input.tree, input.text, input.front)).with_tokens(tokens))
     }
 
     fn project(&self) -> Box<dyn frontend::Project> {
-        Box::new(Project::default())
-    }
-
-    fn discoveries(&self) -> &'static [&'static Discovery] {
-        &DISCOVERIES
+        Box::new(NoProject)
     }
 }
 
-static DISCOVERIES: [&Discovery; 1] = [&super::reads::GLOBAL_FILES];
+/// The front end keeps no cross-file state: the engine owns programs.
+struct NoProject;
 
-impl Native for NativeFile<'_> {
-    fn frontend(&self) -> &'static str {
-        TS.name()
-    }
-
-    fn fact(&self, fact: usize, node: u32) -> Value<'static> {
-        (topics::FACTS[fact].get)(self, node)
-    }
-
-    fn inside_token(&self, at: usize) -> bool {
-        use super::lexer::Tok;
-        let tokens = self.cached(super::tokens::lex_comments);
-        let after = tokens.0.partition_point(|token| (token.start as usize) < at);
-        // JSX text is content laid out by its own lines, not one token.
-        after.checked_sub(1).map(|i| &tokens.0[i]).is_some_and(|token| token.end as usize > at && matches!(token.tok, Tok::Template | Tok::Str | Tok::P("/*")))
-    }
-
-    fn tokens(&self) -> Option<std::rc::Rc<frontend::Tokens>> {
-        Some(self.cached(|file| frontend::Tokens(file.cached(super::tokens::lex).0.iter().map(|token| (token.start, token.end)).collect())))
-    }
-
-    fn name_key<'s>(&self, text: &'s str) -> std::borrow::Cow<'s, str> {
-        super::bind::decoded_name(text)
-    }
-
-    fn set_names(&self, names: std::sync::Arc<crate::grammar::names::Resolved>) {
-        NativeFile::set_names(self, names);
-    }
-}
-
-impl frontend::Project for Project {
+impl frontend::Project for NoProject {
     fn as_any(&self) -> &dyn Any {
         self
     }
 
-    fn set_discovery_jobs(&mut self, jobs: usize) {
-        Project::set_discovery_jobs(self, jobs);
+    fn set_discovery_jobs(&mut self, _jobs: usize) {}
+
+    fn holds(&self, _dep: &Dep) -> bool {
+        false
     }
 
-    fn holds(&self, dep: &Dep) -> bool {
-        Project::holds(self, dep)
+    fn invalidate(&self, _changed: &[PathBuf]) -> Box<dyn Any + Send + Sync> {
+        Box::new(())
     }
 
-    fn invalidate(&self, changed: &[PathBuf]) -> Box<dyn Any + Send + Sync> {
-        Box::new(Project::invalidate(self, changed))
-    }
-
-    fn is_stale(&self, stale: &(dyn Any + Send + Sync), reads: &Reads) -> bool {
-        stale.downcast_ref::<Stale>().is_some_and(|stale| Project::is_stale(self, stale, reads))
+    fn is_stale(&self, _stale: &(dyn Any + Send + Sync), _reads: &Reads) -> bool {
+        false
     }
 }

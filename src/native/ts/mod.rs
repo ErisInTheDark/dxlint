@@ -1,31 +1,15 @@
 //! The TypeScript/JavaScript front end: a hand-written parser whose nodes
-//! become `ts_*` layers.
+//! become `ts_*` layers, and the token streams rules scan. Every semantic
+//! (names, types, modules) lives in `std/ts` on the engine's queries.
 
-mod bind;
-mod check;
 mod comments;
-mod docs;
-mod equality;
-pub(crate) mod environment;
-pub mod facts;
-mod flow;
+pub mod file;
 pub mod frontend;
-mod globals;
 pub mod kinds;
 mod lexer;
-pub mod modules;
 mod parse;
-mod paths;
-pub mod reads;
-mod returns;
-pub(crate) mod statics;
-mod summary;
 pub mod syntax;
 pub(crate) mod tokens;
-pub mod topics;
-mod types;
-mod values;
-mod view;
 #[cfg(test)]
 mod tests;
 

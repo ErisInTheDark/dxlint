@@ -148,11 +148,6 @@ pub(crate) fn native_linter(rules: &str) -> Linter {
     built.linter.expect("no errors")
 }
 
-pub(crate) fn native_linter_parts(rules: &str) -> (crate::grammar::Grammar, crate::expr::Attributes) {
-    let linter = native_linter(rules);
-    (linter.grammar, linter.attrs)
-}
-
 /// Native-only trees keep the parser's kind and field ids.
 pub(crate) fn native_front() -> crate::grammar::NativeFront {
     crate::grammar::NativeFront {
@@ -177,8 +172,8 @@ pub(crate) fn ts_tree(text: &str, path: &Path) -> (crate::grammar::Tree, &'stati
     (crate::grammar::Tree::from_native(front.remap(parsed.nodes), parsed.root), front)
 }
 
-/// Gives `file` (on a [`ts_tree`]) its names, as linting does before facts.
-pub(crate) fn give_names(file: &crate::native::ts::facts::NativeFile, tree: &crate::grammar::Tree, text: &str) {
+/// Gives `file` (on a [`ts_tree`]) its names, as linting does.
+pub(crate) fn give_names(file: &crate::native::ts::file::TsFile, tree: &crate::grammar::Tree, text: &str) {
     let linter = ts_linter();
     let lang = linter.grammar.lang_for(Path::new("a.ts")).expect("ts files are linted");
     let (lines, memo, reindented) = (crate::line_index::LineIndex::new(text), Default::default(), Default::default());
@@ -189,54 +184,17 @@ pub(crate) fn give_names(file: &crate::native::ts::facts::NativeFile, tree: &cra
 /// (its names resolved, as linting does), with the node of each `/*@*/`
 /// marker (the node starting right after it, outermost first): native
 /// owners test their queries directly with this.
-pub(crate) fn with_native_file<T>(text: &str, f: impl FnOnce(&crate::native::ts::facts::NativeFile, &[u32]) -> T) -> T {
-    use crate::native::ts::{facts::NativeFile, modules::Project, syntax::Syntax};
+pub(crate) fn with_native_file<T>(text: &str, f: impl FnOnce(&crate::native::ts::file::TsFile, &[u32]) -> T) -> T {
+    use crate::native::ts::{file::TsFile, syntax::Syntax};
     let path = Path::new("/root/a.ts");
     let (tree, front) = ts_tree(text, path);
-    let project = Project::default();
-    let file = NativeFile::new(Syntax::new(&tree, text, front), path, &project);
+    let file = TsFile::new(Syntax::new(&tree, text, front));
     give_names(&file, &tree, text);
     let marks: Vec<u32> = text.match_indices("/*@*/").map(|(at, m)| {
         let start = at + m.len() + text[at + m.len()..].len() - text[at + m.len()..].trim_start().len();
         tree.order.iter().copied().find(|&n| tree.node(n).start as usize == start && n != tree.root).expect("a node at the marker")
     }).collect();
     f(&file, &marks)
-}
-
-#[test]
-fn each_tsconfig_sees_its_own_project_globals_whichever_asks_first() {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target").join("test-projects").join("globals-per-config");
-    let _ = std::fs::remove_dir_all(&dir);
-    for (path, text) in [
-        ("ui/tsconfig.json", "{}"),
-        ("ui/screen.ts", "export class Screen {}\ndeclare global { let screen: Screen; }\n"),
-        ("game/tsconfig.json", "{}"),
-        ("game/game.ts", "export const game = 1;\n"),
-    ] {
-        let path = dir.join(path);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(path, text).unwrap();
-    }
-    // Both configs share their libraries; the game one asks first.
-    let project = crate::native::ts::modules::Project::default();
-    let game = project.file_id(&dir.join("game").join("game.ts"));
-    let ui = project.file_id(&dir.join("ui").join("main.ts"));
-    assert!(!project.globals(game).names.contains_key("screen"));
-    assert!(project.globals(ui).names.contains_key("screen"));
-}
-
-#[test]
-fn strict_implies_its_family_unless_an_option_says_otherwise() {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target").join("test-projects").join("strict-option");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("base.json"), r#"{ "compilerOptions": { "strict": true, "noImplicitThis": true } }"#).unwrap();
-    std::fs::write(dir.join("tsconfig.json"), r#"{ "extends": "./base.json", "compilerOptions": { "noImplicitThis": false } }"#).unwrap();
-    let project = crate::native::ts::modules::Project::default();
-    let file = project.file_id(&dir.join("a.ts"));
-    assert!(project.strict_option(file, "strictNullChecks"), "implied by the base's strict");
-    assert!(!project.strict_option(file, "noImplicitThis"), "the nearer setting wins");
-    assert!(!project.strict_option(file, "exactOptionalPropertyTypes"), "not in strict's family");
 }
 
 #[test]
@@ -538,16 +496,15 @@ fn message_overrides_preserve_their_severity() {
 }
 
 #[test]
-fn inspect_names_the_layers_fields_and_facts_at_a_position() {
+fn inspect_names_the_layers_and_fields_at_a_position() {
     let l = native_linter("in ts_call rule c warn \"c\"");
     let text = "const n = 1;\nparseInt(\"2\");\n";
     let at = text.find("parseInt").unwrap() + 2;
     let md = l.inspect(Path::new("/root/file.ts"), text, at).expect("linted");
-    // Innermost first, each with the field it sits in, then the facts.
+    // Innermost first, each with the field it sits in.
     let identifier = md.find("`ts_identifier` — `callee` of `ts_call`").expect(&md);
     let call = md.find("`ts_call` — `expression` of `ts_expression_statement`").expect(&md);
     assert!(identifier < call, "{md}");
-    assert!(md.contains("`symbol_metadata` ="), "{md}");
 }
 
 #[test]

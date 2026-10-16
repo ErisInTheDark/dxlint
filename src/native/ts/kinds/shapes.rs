@@ -270,7 +270,7 @@ mod tests {
     fn project_fixture_edges_follow_field_shapes() {
         let paths = std::env::var_os("ZLINT_TS_SHAPE_FIXTURES").expect("ZLINT_TS_SHAPE_FIXTURES");
         for path in std::env::split_paths(&paths) {
-            let source = crate::native::ts::reads::read(&path).expect("shape fixture");
+            let source = crate::engine::reads::read(&path).expect("shape fixture");
             let jsx = crate::native::ts::reads(&path).expect("JS/TS fixture");
             let mut parsed = parse(&source, jsx).unwrap_or_else(|error| panic!("{}: {error:?}", path.display()));
             validate_shapes(&parsed);

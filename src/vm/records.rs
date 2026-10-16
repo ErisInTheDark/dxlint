@@ -420,39 +420,6 @@ mod tests {
     }
 
     #[test]
-    fn allocating_fact_queries_share_payload_without_caching_free_results() {
-        use crate::expr::{facts, Value};
-        let fact = facts::fact("symbol_metadata").expect("allocating fact");
-        let mut config = super::super::Values::default();
-        config.register_fact(fact).expect("declared shape");
-        let vm = FileVm::default();
-        let value = Value::list(vec![Value::from("owned text")]);
-        let key = (7, fact, None);
-        assert!(vm.fact_value(&value, &config, "", key, true).is_some());
-        let bytes = vm.values.borrow().used_bytes();
-        assert!(vm.fact_value(&value, &config, "", key, true).is_some());
-        assert_eq!(vm.values.borrow().used_bytes(), bytes, "repeat must share its packed payload");
-        let distinct = (8, fact, None);
-        assert!(vm.fact_value(&value, &config, "", distinct, true).is_some());
-        assert!(vm.values.borrow().used_bytes() > bytes, "different node is a separate query");
-        let wrapper = (7, fact, Some(3));
-        let wrapped = Value::list(vec![value.clone()]);
-        assert!(vm.fact_value(&wrapped, &config, "", wrapper, false).is_some(), "field wrapper retains its own list shape");
-        // A value the fact never declared still packs (as it comes), as its
-        // own query rather than the first fact's result.
-        let another = (7, facts::fact("type").expect("another fact"), None);
-        let bytes = vm.values.borrow().used_bytes();
-        assert!(vm.fact_value(&value, &config, "", another, false).is_some(), "an undeclared shape still packs");
-        assert!(vm.values.borrow().used_bytes() > bytes, "different fact must not reuse the first result");
-        let cached = vm.packed_facts.borrow().len();
-        for value in [Value::Null, Value::Bool(true), Value::Num(3.0)] {
-            let free = (20, fact, None);
-            assert!(vm.fact_value(&value, &config, "", free, false).is_some());
-        }
-        assert_eq!(vm.packed_facts.borrow().len(), cached, "free results must not grow a second fact memo");
-    }
-
-    #[test]
     fn sparse_reads_do_not_allocate_a_whole_wide_record() {
         let tree = tree([0]);
         let vm = FileVm::default();

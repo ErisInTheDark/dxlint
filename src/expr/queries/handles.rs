@@ -16,6 +16,20 @@ const FIELD: &str = "value_handle";
 pub(super) static FUNCTIONS: &[QueryFunction] = &[
     QueryFunction { name: "value_parts", arity: 1, call: |semantic, at, args| parts(semantic, semantic.values().values(at), args) },
     QueryFunction { name: "value_alternatives", arity: 1, call: |semantic, at, args| alternatives(semantic, semantic.values().values(at), args) },
+    QueryFunction { name: "node_site", arity: 1, call: |semantic, at, _| match semantic.leaf(at) {
+        Known::Yes(crate::grammar::names::question::Leaf { target: crate::grammar::names::question::Target::Node(node), .. }) => Known::Yes(Value::record(vec![
+            ("file".into(), Value::Num(f64::from(node.file))),
+            ("node".into(), Value::Num(f64::from(node.node))),
+        ])),
+        Known::Yes(_) => Known::Yes(Value::Null),
+        Known::Unknown => Known::Unknown,
+    } },
+    QueryFunction { name: "value_expected_handle", arity: 1, call: |semantic, at, _| match semantic.calls().expected(at) {
+        Known::Yes(Some(value)) => Known::Yes(handle(semantic, value)),
+        Known::Yes(None) => Known::Yes(Value::Null),
+        Known::Unknown => Known::Unknown,
+    } },
+    QueryFunction { name: "value_union", arity: 2, call: |semantic, at, args| union(semantic, semantic.values().values(at), args) },
     QueryFunction { name: "value_children", arity: 3, call: |semantic, at, args| children(semantic, semantic.values().values(at), args) },
     QueryFunction { name: "value_signatures", arity: 1, call: |semantic, at, args| signatures(semantic, semantic.values().values(at), args) },
     QueryFunction { name: "value_constructors", arity: 1, call: |semantic, at, args| constructors(semantic, semantic.values().values(at), args) },
@@ -53,6 +67,7 @@ pub struct HandleFunction {
 static HANDLES: &[HandleFunction] = &[
     HandleFunction { name: "value_parts", call: parts },
     HandleFunction { name: "value_alternatives", call: alternatives },
+    HandleFunction { name: "value_union", call: union },
     HandleFunction { name: "value_children", call: children },
     HandleFunction { name: "value_signatures", call: signatures },
     HandleFunction { name: "value_constructors", call: constructors },
@@ -100,6 +115,20 @@ pub fn handle_of(value: &Value<'_>) -> Option<Handle> {
 pub(super) fn handle(semantic: &Semantic<'_>, value: NodeValue) -> Value<'static> {
     let canonical = semantic.calls().without_incidental_frames(&value, true);
     Value::record(vec![(FIELD.into(), Value::Num(semantic.question.handle(canonical).number()))])
+}
+
+/// The union of the subject's value and each handle in `args[0]`, as one
+/// handle (no handles: the subject's own). Any unknown input is unknown.
+fn union(semantic: &Semantic<'_>, value: NodeValue, args: &[Value<'static>]) -> Known<Value<'static>> {
+    let Some(Value::List(others)) = args.first() else { return Known::Unknown };
+    let mut inputs = vec![value];
+    for other in others.iter() {
+        let Some(other) = handle_of(other).and_then(|handle| semantic.question.handle_value(handle)) else { return Known::Unknown };
+        inputs.push(other);
+    }
+    let combined = semantic.values().combine(inputs, false);
+    if combined == NodeValue::Unknown { return Known::Unknown }
+    Known::Yes(handle(semantic, combined))
 }
 
 /// Each alternative's handle, without describing it: `[]` is never.

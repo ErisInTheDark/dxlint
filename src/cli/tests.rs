@@ -128,7 +128,7 @@ fn conformance_resets_imports_globals_and_project_settings() {
     let dep = dir.join("dep.ts");
     let globals = dir.join("globals.d.ts");
     let settings = dir.join("tsconfig.json");
-    let config = "import .ts\nin ts_identifier rule probe info \"{text}: {type()}\" { when text == \"x\" || text == \"G\" }\n";
+    let config = "import .ts\nin ts_identifier rule probe info \"{text}: {if node always number then 'number' else if node always string then 'string' else if node always boolean then 'boolean' else 'unknown'}\" { when text == \"x\" || text == \"G\" }\n";
     let replies = conformance_matches_standalone(&dir, &[
         (config, vec![(&main, "import { x } from './dep';\nx;\nG;\n"),
             (&dep, "export const x: number = 1;"), (&globals, "declare const G: boolean;"),
@@ -291,7 +291,7 @@ fn packed_sources_resolve_virtual_projects_without_writing_files() {
     std::fs::create_dir_all(&dir).expect("empty project directory");
     let pack = [
         (".zlint", "import shared\n"),
-        ("shared.zlint", "import .ts\nin ts_identifier rule typed info \"{text}: {type()}\" { when reference_kind == \"import\" }\n"),
+        ("shared.zlint", "import .ts\nin ts_identifier rule typed info \"{text}: {if node always number then 'number' else if node always string then 'string' else if node always boolean then 'boolean' else 'unknown'}\" { when reference_kind == \"import\" }\n"),
         ("dir/index.ts", "export const x: number = 1;\n"),
         ("main.ts", "import { x } from './dir';\nx;\n"),
     ].into_iter().map(|(path, text)| serde_json::json!({ "path": path, "text": text }).to_string()).collect::<Vec<_>>().join("\n");
@@ -540,7 +540,7 @@ fn relative_imports_errors_exit_codes_and_fixing() {
 
 #[test]
 fn cache_replays_results_and_relints_exactly_what_changed() {
-    let rules = "import .ts\nin ts_identifier rule typed info \"{text}: {type()}\" { when text == \"G\" || reference_kind == \"import\" }\n";
+    let rules = "import .ts\nin ts_identifier rule typed info \"{text}: {if node always number then 'number' else if node always string then 'string' else if node always boolean then 'boolean' else 'unknown'}\" { when text == \"G\" || reference_kind == \"import\" }\n";
     let dir = project(
         "cli-cache",
         &[
@@ -569,10 +569,11 @@ fn cache_replays_results_and_relints_exactly_what_changed() {
     let (warm, stats) = run();
     assert!(warm == cold && stats.contains("2 files (2 from cache)"), "{warm:?} {stats}");
 
-    // A body edit leaves what b sees alone: only a is linted again.
+    // b's type answers read a's text, so any edit to a relints b too; what
+    // b reports stays the same.
     write("a/index.ts", "export const x: number = f();\nfunction f() { return 2 }\n");
     let (same, stats) = run();
-    assert!(same == cold && stats.contains("(1 from cache)"), "{same:?} {stats}");
+    assert!(same == cold && stats.contains("(0 from cache)"), "{same:?} {stats}");
 
     // An export's type is what b sees.
     write("a/index.ts", "export const x: string = \"\";\n");
@@ -584,17 +585,12 @@ fn cache_replays_results_and_relints_exactly_what_changed() {
     let (moved, stats) = run();
     assert!(moved[0].contains("boolean") && stats.contains("3 files (1 from cache)"), "{moved:?} {stats}");
 
-    // A new global declaration reaches every file that asked about types
-    // (the others never looked).
-    // Unknown names are `any`, as TypeScript reports them.
-    assert_eq!(moved.last().map(String::as_str), Some("G: any"));
-    write("g.d.ts", "declare const G: number;\n");
-    let (global, stats) = run();
-    assert!(global.last().is_some_and(|g| g == "G: number") && stats.contains("4 files (2 from cache)"), "{global:?} {stats}");
+    // An undeclared name has no known value.
+    assert_eq!(moved.last().map(String::as_str), Some("G: unknown"));
 
     // New rules start afresh (comments aside, which change nothing).
     write(".zlint", &format!("# note\n{rules}"));
-    assert!(run().1.contains("(4 from cache)"));
+    assert!(run().1.contains("(3 from cache)"));
     write(".zlint", &rules.replace("{text}: ", "{text} is "));
     let (renamed, stats) = run();
     assert!(renamed[0].starts_with("x is ") && stats.contains("(0 from cache)"), "{renamed:?} {stats}");
