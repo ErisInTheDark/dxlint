@@ -88,27 +88,29 @@ fn layout_assignment_pattern(n) = {
   value root: last(roots)
   value root.parent is (ts_assignment, ts_for_in, ts_for_of) && root.parent.left.node == root
 }
-fn layout_trailing_comma(n, list, include_missing) = {
+fn layout_trailing_comma(n, list) = {
   value item: last(list.items)
-  value after: token(item, "after")
-  value trailing: after.text == ","
-  value if !include_missing && !trailing then null else {
-    value terminal: token(item, "last")
+  value if item is ts_hole then null else {
+    value after: token(item, "after")
+    value trailing: after.text == ","
     value comma: if trailing then first(overlapping(ts_comma, after.start, after.end)) else null
     value closing: if trailing then token(comma, "after") else after
-    value allowed: item not ts_rest && !(item is ts_spread && layout_assignment_pattern(n))
-      && item.name not ts_rest
-    value if item is ts_hole || !contains(["}}", "]", ")", ">"], closing.text) then null else {
-      kind: list.kind,
-      offset: if trailing then after.start else terminal.end,
-      trailing: trailing,
-      multiline: position(if trailing then after.end else terminal.end).js_line != position(closing.end).js_line,
-      allowed: allowed,
-      tsx_single: list.kind == "generics" && count(list.items) == 1 && ends_with(n.file, ".tsx")
+    value if closing.text != "}}" && closing.text != "]" && closing.text != ")" && closing.text != ">" then null else {
+      value terminal_end: if trailing then after.end else token(item, "last").end
+      value allowed: item not ts_rest && !(item is ts_spread && layout_assignment_pattern(n))
+        && item.name not ts_rest
+      value {
+        kind: list.kind,
+        offset: if trailing then after.start else terminal_end,
+        trailing: trailing,
+        multiline: position(terminal_end).js_line != position(closing.end).js_line,
+        allowed: allowed,
+        tsx_single: list.kind == "generics" && count(list.items) == 1 && ends_with(n.file, ".tsx")
+      }
     }
   }
 }
-fn layout_trailing_lists(n) = {
+fn layout_trailing_commas(n) = {
   value ordinary: when {
     n is (ts_array, ts_array_pattern, ts_tuple_type) then n.element.nodes
     n is ts_object then n.property.nodes
@@ -125,16 +127,13 @@ fn layout_trailing_lists(n) = {
   value arguments: if n is (ts_class, ts_tagged_template, ts_call, ts_new, ts_instantiation,
     ts_jsx_opening, ts_type_reference, ts_type_query, ts_import_type) then n.type_argument.nodes else []
   value lists: [
-    {items: ordinary, kind: layout_list_kind(n, "")},
-    {items: parameters, kind: "generics"},
-    {items: arguments, kind: "type-arguments"}
+    if count(ordinary) > 0 then {items: ordinary, kind: layout_list_kind(n, "")} else null,
+    if count(parameters) > 0 then {items: parameters, kind: "generics"} else null,
+    if count(arguments) > 0 then {items: arguments, kind: "type-arguments"} else null
   ]
   value lists
-  filter (list) list.kind != null && count(list.items) > 0
-}
-fn layout_trailing_commas(n) = {
-  value layout_trailing_lists(n)
-  map (list) layout_trailing_comma(n, list, true)
+  filter (list) list != null
+  map (list) layout_trailing_comma(n, list)
   filter (site) site != null
 }
 fn layout_terminal_arrow_block(n, end) = {

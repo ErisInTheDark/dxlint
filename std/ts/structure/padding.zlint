@@ -4,34 +4,26 @@ import .ts/helpers
 
 define {
 
-fn padding_sized_tag_matches(item, selector, tag) = tag != null && (
-  selector == tag
-  || selector == "multiline-" tag && item.structure_padding_multiline
-  || selector == "singleline-" tag && !item.structure_padding_multiline
-)
-fn padding_named_selector_matches(item, selector) =
-  selector == "*"
-  || contains(item.structure_padding_names, selector)
-  || contains(["block-like", "multiline-block-like", "singleline-block-like"], selector)
-    && item.structure_padding_block_like && padding_sized_tag_matches(item, selector, "block-like")
-  || selector == "require" && item.structure_padding_require
-  || selector == "cjs-import" && item.structure_padding_cjs_import
-  || selector == "iife" && item.structure_padding_iife
-  || selector == "cjs-export" && item.structure_padding_cjs_export
-  || selector == "exports" && item.structure_padding_exports_tag
-fn padding_selector_matches(item, selector) =
-  if type_of(selector) == "str" then padding_named_selector_matches(item, selector)
-  else { value selector.selector; re_replace: re_replace /["']/ ""; value contains(item.structure_padding_selectors.nonempty ?? [item.structure_padding_type], re_replace) }
-    && ((selector.lineMode.nonempty ?? "any") == "any"
-      || selector.lineMode == "multiline" && item.structure_padding_multiline
-      || selector.lineMode == "singleline" && !item.structure_padding_multiline)
-fn padding_side_matches(item, selectors) = when {
-  type_of(selectors) == "str" then
-    selectors == "*" || padding_named_selector_matches(item.structure_padding_categories, selectors)
-  type_of(selectors) == "list" then
-    contains(selectors, "*")
-    || any(selectors, selector => padding_selector_matches(item.structure_padding_categories, selector))
-  else then padding_selector_matches(item.structure_padding_categories, selectors)
+fn padding_record_selector_matches(item, selector) =
+  { value selector.selector; re_replace: re_replace /["']/ ""; value contains(item.structure_padding_selectors.nonempty ?? [item.structure_padding_type], re_replace) }
+  && ((selector.lineMode.nonempty ?? "any") == "any"
+    || selector.lineMode == "multiline" && item.structure_padding_multiline
+    || selector.lineMode == "singleline" && !item.structure_padding_multiline)
+fn padding_side_matches(item, selectors) = {
+  value choices: if type_of(selectors) == "list" then selectors else [selectors]
+  value if contains(choices, "*") then true else if len(choices) == 0 then false else {
+    value categories: item.structure_padding_categories
+    value any(categories.structure_padding_names, name => contains(choices, name))
+      || contains(choices, "block-like") && categories.structure_padding_block_like
+      || contains(choices, "multiline-block-like") && categories.structure_padding_multiline && categories.structure_padding_block_like
+      || contains(choices, "singleline-block-like") && !categories.structure_padding_multiline && categories.structure_padding_block_like
+      || contains(choices, "require") && categories.structure_padding_require
+      || contains(choices, "cjs-import") && categories.structure_padding_cjs_import
+      || contains(choices, "iife") && categories.structure_padding_iife
+      || contains(choices, "cjs-export") && categories.structure_padding_cjs_export
+      || contains(choices, "exports") && categories.structure_padding_exports_tag
+      || any(choices, selector => type_of(selector) != "str" && padding_record_selector_matches(categories, selector))
+  }
 }
 
 group structure_padding_owner ts_program, ts_block, ts_static_block, ts_case, ts_switch, ts_interface, ts_type_literal

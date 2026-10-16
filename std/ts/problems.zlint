@@ -872,8 +872,11 @@ in problem_irregular_ws rule no-irregular-whitespace {
   warn "Irregular whitespace not allowed."
 }
 
-# At the `(`, `[`, template or `/` on the new line.
-in ts_call.token, ts_index.token, ts_tagged_template.quasi, ts_binary.operator rule no-unexpected-multiline {
+in ts_call let problem_multiline_opener if optional == null && count(argument) > 0 then
+  (if count(type_argument) == 0 then opener.ts_open_paren.node else opener.ts_open_angle.node)
+  else null
+in ts_index let problem_multiline_opener if optional == null then opener.ts_open_bracket.node else null
+in ts_call.problem_multiline_opener, ts_index.problem_multiline_opener, ts_tagged_template.quasi, ts_binary.operator rule no-unexpected-multiline {
   when is (ts_open_paren, ts_open_angle, ts_open_bracket, ts_template) || text == "/"
   when re_test(byte_slice(source, token(node, "before").end ?? offset, offset), /[\r\n\u{2028}\u{2029}]/)
   let multiline_kind if parent is ts_call && parent.optional == null && count(parent.argument) > 0
