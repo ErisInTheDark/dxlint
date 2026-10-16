@@ -178,7 +178,12 @@ pub struct Execution {
     writes: FxHashMap<NodeRef, Vec<StepId>>,
     binding_writes: FxHashMap<NodeRef, crate::fx_hash::FxHashSet<StepId>>,
     binding_reads: FxHashMap<NodeRef, ReadSet>,
+    /// Write events at their leave point, in step order: the writes that
+    /// can replace a narrowed value.
+    write_leaves: Vec<StepId>,
     reachable: OnceCell<Vec<bool>>,
+    /// The nodes whose guards may narrow reads here ([`Self::guard_owners`]).
+    guards: OnceCell<Vec<NodeRef>>,
     completion: Option<Completion>,
 }
 
@@ -214,7 +219,11 @@ impl Execution {
         let mut writes: FxHashMap<NodeRef, Vec<StepId>> = FxHashMap::default();
         let mut binding_writes: FxHashMap<NodeRef, crate::fx_hash::FxHashSet<StepId>> = FxHashMap::default();
         let mut binding_reads: FxHashMap<NodeRef, ReadSet> = FxHashMap::default();
+        let mut write_leaves = Vec::new();
         for (index, step) in steps.iter().enumerate() {
+            if let Point::Event(event) = &step.point {
+                if event.kind == EventKind::Write && event.phase == Phase::Leave { write_leaves.push(index as StepId) }
+            }
             match &step.point {
                 Point::Enter | Point::Leave => sites.entry(step.node).or_default().push(index as u32),
                 Point::Field(path) => fields.entry(step.node).or_default().entry(path.clone()).or_default().push(index as u32),
@@ -239,8 +248,36 @@ impl Execution {
                 _ => {}
             }
         }
-        Execution { entry, steps, edges, sites, fields, writes, binding_writes,
-            binding_reads, reachable: OnceCell::new(), completion: None }
+        Execution { entry, steps, edges, sites, fields, writes, binding_writes, binding_reads, write_leaves,
+            reachable: OnceCell::new(), guards: OnceCell::new(), completion: None }
+    }
+
+    pub fn write_leaves(&self) -> &[StepId] {
+        &self.write_leaves
+    }
+
+    /// The nodes whose guards may narrow reads in this execution, built once
+    /// by `build` (which knows the language) and shared by every read.
+    pub fn guard_owners(&self, build: impl FnOnce(&Execution) -> Vec<NodeRef>) -> &[NodeRef] {
+        self.guards.get_or_init(|| build(self))
+    }
+
+    /// Whether the entry reaches `step`.
+    pub fn reached(&self, step: StepId, budget: &Budget) -> Known<bool> {
+        let Known::Yes(seen) = self.reachable_steps(budget) else { return Known::Unknown };
+        seen.get(step as usize).copied().map_or(Known::Unknown, Known::Yes)
+    }
+
+    /// Whether every path from the entry to each of `steps` passes one of
+    /// `avoiding` (as [`Self::reaches`] from the entry being false for all),
+    /// in one walk that stops at the first step reached.
+    pub fn guarded(&self, steps: &[StepId], avoiding: &[StepId], budget: &Budget) -> Known<bool> {
+        if steps.iter().any(|&step| step as usize >= self.steps.len()) { return Known::Unknown }
+        match self.walk(self.entry, avoiding, |step| steps.contains(&step), budget) {
+            Known::Yes(Walk::Found) => Known::Yes(false),
+            Known::Yes(Walk::Seen(_)) => Known::Yes(true),
+            Known::Unknown => Known::Unknown,
+        }
     }
 
     fn with_completion(mut self, normal: Vec<StepId>, exits: Vec<(StepId, Exit)>) -> Self {
@@ -590,6 +627,17 @@ mod tests {
         assert_eq!(graph.reaches(0, 3, &[1], &Budget::default()), Known::Yes(true));
         assert_eq!(graph.reaches(0, 3, &[1, 2], &Budget::default()), Known::Yes(false));
         assert_eq!(graph.reaches(0, 3, &[3], &Budget::default()), Known::Yes(false));
+    }
+
+    #[test]
+    fn guard_reachability_matches_reaches_for_every_entry_set() {
+        let graph = graph(&[&[1, 2], &[3], &[3], &[]]);
+        assert_eq!(graph.guarded(&[3], &[1], &Budget::new(1)), Known::Unknown);
+        assert_eq!(graph.guarded(&[3], &[1], &Budget::default()), Known::Yes(false));
+        assert_eq!(graph.guarded(&[3], &[1, 2], &Budget::default()), Known::Yes(true));
+        assert_eq!(graph.guarded(&[2, 3], &[1], &Budget::default()), Known::Yes(false));
+        assert_eq!(graph.guarded(&[3], &[1, 2], &Budget::default()), Known::Yes(true));
+        assert_eq!(graph.guarded(&[9], &[1, 2], &Budget::default()), Known::Unknown);
     }
 
     #[test]

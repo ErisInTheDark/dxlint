@@ -55,7 +55,7 @@ impl Narrowing<'_> {
         let Known::Yes(execution) = effects.execution(entry) else { return base };
         let mut uses = Vec::new();
         for site in execution.sites(node, Phase::Enter) {
-            match execution.reaches(execution.entry(), site, &[], &self.semantic.question.budget) {
+            match execution.reached(site, &self.semantic.question.budget) {
                 Known::Yes(true) => uses.push(site),
                 Known::Yes(false) => {}
                 Known::Unknown => return base,
@@ -65,17 +65,11 @@ impl Narrowing<'_> {
         if !captured {
             base = self.assigned(subject, &execution, &uses, entry.frame, base);
         }
-        let mut owners = crate::fx_hash::FxHashSet::default();
-        for (_, step) in execution.steps() {
+        for &node in execution.guard_owners(|execution| self.guard_owners(execution)) {
             if !self.semantic.question.budget.step() { return NodeValue::Unknown }
-            if !matches!(step.point, Point::Enter) { continue }
-            let owner = Leaf { target: Target::Node(step.node), frame: entry.frame };
+            let owner = Leaf { target: Target::Node(node), frame: entry.frame };
             let Known::Yes(owner) = self.semantic.leaf(owner) else { continue };
-            let Target::Node(node) = owner.target else { continue };
-            let Some(kind) = self.semantic.world.tree(node.file)
-                .and_then(|tree| tree.nodes.get(node.node as usize))
-                .and_then(|data| self.semantic.tables.kinds.get(data.matcher as usize)) else { continue };
-            if kind.propagates.is_empty() || !owners.insert(node) { continue }
+            let Some(kind) = self.kind(node) else { continue };
             for (path, proof, when) in &kind.propagates {
                 if !self.semantic.question.budget.step() { return NodeValue::Unknown }
                 if when.is_some_and(|condition| self.semantic.world.condition(owner, condition, self.semantic) != Known::Yes(true)) {
@@ -83,7 +77,7 @@ impl Narrowing<'_> {
                 }
                 let entries = execution.field_entries(node, path);
                 if entries.is_empty() { continue }
-                if uses.iter().all(|&site| execution.reaches(execution.entry(), site, entries, &self.semantic.question.budget) == Known::Yes(false)) {
+                if execution.guarded(&uses, entries, &self.semantic.question.budget) == Known::Yes(true) {
                     let region = Region { execution: &execution, entries, uses: &uses, frame: entry.frame, captured };
                     base = self.apply_in(owner, proof, subject, base, Some(&region));
                 }
@@ -93,12 +87,35 @@ impl Narrowing<'_> {
         base
     }
 
+    /// Every node entered in `execution` whose kind propagates guards, once
+    /// each in step order (as its semantic node).
+    fn guard_owners(&self, execution: &Execution) -> Vec<NodeRef> {
+        let mut seen = crate::fx_hash::FxHashSet::default();
+        let mut owners = Vec::new();
+        for (_, step) in execution.steps() {
+            if !matches!(step.point, Point::Enter) { continue }
+            let Some(tree) = self.semantic.world.tree(step.node.file) else { continue };
+            let Some(canonical) = tree.semantic_node_with(step.node.node, &mut || true) else { continue };
+            let node = NodeRef { node: canonical, ..step.node };
+            if self.kind(node).is_some_and(|kind| !kind.propagates.is_empty()) && seen.insert(node) {
+                owners.push(node);
+            }
+        }
+        owners
+    }
+
+    fn kind(&self, node: NodeRef) -> Option<&super::KindNames> {
+        self.semantic.world.tree(node.file)
+            .and_then(|tree| tree.nodes.get(node.node as usize))
+            .and_then(|data| self.semantic.tables.kinds.get(data.matcher as usize))
+    }
+
     fn assigned(&self, subject: &Place, execution: &Execution, uses: &[StepId], frame: super::question::FrameId, base: NodeValue) -> NodeValue {
         let budget = &self.semantic.question.budget;
         let mut candidates = Vec::new();
-        for (id, step) in execution.steps() {
+        for &id in execution.write_leaves() {
             if !budget.step() { return NodeValue::Unknown }
-            let Some(event) = step.event() else { continue };
+            let Some(event) = execution.step(id).and_then(|step| step.event()) else { continue };
             if self.write_invalidates(event, subject, frame) { candidates.push(id) }
         }
         let Known::Yes(Some(last)) = execution.last_steps(uses, &candidates, budget) else { return base };
@@ -222,7 +239,7 @@ impl Region<'_> {
         let writes = |event: &Event| narrowing.write_invalidates(event, tested, self.frame);
         let budget = &narrowing.semantic.question.budget;
         for &entry in self.entries {
-            match self.execution.reaches(self.execution.entry(), entry, &[], budget) {
+            match self.execution.reached(entry, budget) {
                 Known::Yes(false) => continue,
                 Known::Unknown => return Known::Unknown,
                 Known::Yes(true) => {}
@@ -264,17 +281,17 @@ pub fn guarded(
     question: &QueryContext,
 ) -> Known<bool> {
     let budget = &question.budget;
-    match execution.reaches(execution.entry(), at, &[], budget) {
+    match execution.reached(at, budget) {
         Known::Yes(true) => {}
         other => return other,
     }
-    match execution.reaches(execution.entry(), at, entries, budget) {
-        Known::Yes(false) => {}
-        Known::Yes(true) => return Known::Yes(false),
+    match execution.guarded(&[at], entries, budget) {
+        Known::Yes(true) => {}
+        Known::Yes(false) => return Known::Yes(false),
         Known::Unknown => return Known::Unknown,
     }
     for &entry in entries {
-        match execution.reaches(execution.entry(), entry, &[], budget) {
+        match execution.reached(entry, budget) {
             Known::Yes(true) => {}
             Known::Yes(false) => continue,
             Known::Unknown => return Known::Unknown,
