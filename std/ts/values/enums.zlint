@@ -53,7 +53,9 @@ in ts_namespace {
 }
 in ts_enum_member {
   declares member name keyed ts_value_key(it) in nearest statics hoisted
-  let ts_value_enum_literal get(parent.ts_value_enum_literals, node_ordinal(node))
+  let ts_value_enum_literal if init != null then ts_value_enum_literal(init.node)
+    else if node_ordinal(node) == 0 then 0
+    else get(parent.ts_value_enum_literals, node_ordinal(node))
   let ts_value_enum_prior ts_value_enum_prior(node)
   let ts_value_enum_kind when {
     type_of(ts_value_enum_literal) == "num" then "number"

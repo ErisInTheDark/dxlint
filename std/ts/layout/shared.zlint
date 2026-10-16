@@ -103,7 +103,7 @@ fn layout_trailing_comma(n, list) = {
         kind: list.kind,
         offset: if trailing then after.start else terminal_end,
         trailing: trailing,
-        multiline: position(terminal_end).js_line != position(closing.end).js_line,
+        multiline: re_test(byte_slice(n.source, terminal_end, closing.end), /[\r\n\u{2028}\u{2029}]/),
         allowed: allowed,
         tsx_single: list.kind == "generics" && count(list.items) == 1 && ends_with(n.file, ".tsx")
       }

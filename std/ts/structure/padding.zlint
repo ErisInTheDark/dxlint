@@ -4,25 +4,42 @@ import .ts/helpers
 
 define {
 
+fn padding_prepare_selectors(selectors) = {
+  value choices: if type_of(selectors) == "list" then selectors else [selectors]
+  value if contains(choices, "*") then { wildcard: true } else {
+    wildcard: false, names: choices,
+    block_like: contains(choices, "block-like"),
+    multiline_block_like: contains(choices, "multiline-block-like"),
+    singleline_block_like: contains(choices, "singleline-block-like"),
+    require: contains(choices, "require"),
+    cjs_import: contains(choices, "cjs-import"),
+    iife: contains(choices, "iife"),
+    cjs_export: contains(choices, "cjs-export"),
+    exports: contains(choices, "exports"),
+    records: map(filter(choices, selector => type_of(selector) != "str"), selector => {
+      selector: re_replace(selector.selector, /["']/, ""),
+      lineMode: selector.lineMode.nonempty ?? "any",
+    }),
+  }
+}
 fn padding_record_selector_matches(item, selector) =
-  { value selector.selector; re_replace: re_replace /["']/ ""; value contains(item.structure_padding_selectors.nonempty ?? [item.structure_padding_type], re_replace) }
-  && ((selector.lineMode.nonempty ?? "any") == "any"
+  contains(item.structure_padding_selectors.nonempty ?? [item.structure_padding_type], selector.selector)
+  && (selector.lineMode == "any"
     || selector.lineMode == "multiline" && item.structure_padding_multiline
     || selector.lineMode == "singleline" && !item.structure_padding_multiline)
 fn padding_side_matches(item, selectors) = {
-  value choices: if type_of(selectors) == "list" then selectors else [selectors]
-  value if contains(choices, "*") then true else if len(choices) == 0 then false else {
+  value if selectors.wildcard then true else if len(selectors.names) == 0 then false else {
     value categories: item.structure_padding_categories
-    value any(categories.structure_padding_names, name => contains(choices, name))
-      || contains(choices, "block-like") && categories.structure_padding_block_like
-      || contains(choices, "multiline-block-like") && categories.structure_padding_multiline && categories.structure_padding_block_like
-      || contains(choices, "singleline-block-like") && !categories.structure_padding_multiline && categories.structure_padding_block_like
-      || contains(choices, "require") && categories.structure_padding_require
-      || contains(choices, "cjs-import") && categories.structure_padding_cjs_import
-      || contains(choices, "iife") && categories.structure_padding_iife
-      || contains(choices, "cjs-export") && categories.structure_padding_cjs_export
-      || contains(choices, "exports") && categories.structure_padding_exports_tag
-      || any(choices, selector => type_of(selector) != "str" && padding_record_selector_matches(categories, selector))
+    value any(categories.structure_padding_names, name => contains(selectors.names, name))
+      || selectors.block_like && categories.structure_padding_block_like
+      || selectors.multiline_block_like && categories.structure_padding_multiline && categories.structure_padding_block_like
+      || selectors.singleline_block_like && !categories.structure_padding_multiline && categories.structure_padding_block_like
+      || selectors.require && categories.structure_padding_require
+      || selectors.cjs_import && categories.structure_padding_cjs_import
+      || selectors.iife && categories.structure_padding_iife
+      || selectors.cjs_export && categories.structure_padding_cjs_export
+      || selectors.exports && categories.structure_padding_exports_tag
+      || any(selectors.records, selector => padding_record_selector_matches(categories, selector))
   }
 }
 
@@ -201,12 +218,17 @@ fn structure_padding_finding(source, pair, comments) = {
 in structure_padding_owner rule padding-line-between-statements {
   option options { blankLine: "any" | "always" | "never"; prev: string | { selector: string; lineMode?: "any" | "singleline" | "multiline" } | (string | { selector: string; lineMode?: "any" | "singleline" | "multiline" })[]; next: string | { selector: string; lineMode?: "any" | "singleline" | "multiline" } | (string | { selector: string; lineMode?: "any" | "singleline" | "multiline" })[] }[] = [] "ordered statement padding policies"
   when any(options, policy => policy.blankLine != "any")
+  let prepared_options map(options, config => {
+    blankLine: config.blankLine,
+    prev: padding_prepare_selectors(config.prev),
+    next: padding_prepare_selectors(config.next),
+  })
   let policies {
     value zip(structure_padding_items, slice(structure_padding_items, 1))
     map (pair) {
       prior: first(pair),
       following: last(pair),
-      policy: find_last(options, config =>
+      policy: find_last(prepared_options, config =>
         padding_side_matches(first(pair), config.prev) && padding_side_matches(last(pair), config.next)).blankLine ?? "any",
     }
     filter (pair) pair.policy != "any"
