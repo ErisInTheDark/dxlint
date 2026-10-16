@@ -280,8 +280,7 @@ in ts_static_block.body rule no-empty-static-block {
 
 # ---- writes to what cannot (or should not) change ------------------------
 @macro is_write (access == "write" || access == "read_write")
-in ts_identifier rule no-ex-assign {
-  when name_write_owner != null
+in ts_assignment.name_write_identifiers, ts_update.name_write_identifiers, ts_for_in.name_write_identifiers, ts_for_of.name_write_identifiers, ts_declarator.name_write_identifiers rule no-ex-assign {
   when reference_kind == "catch" && @is_write
   warn "Do not assign to the exception parameter."
 }
@@ -503,9 +502,8 @@ in ts_declarator rule no-unassigned-vars {
 }
 
 # Writes to the built-in globals.
-in ts_identifier rule no-global-assign {
+in ts_assignment.name_write_identifiers, ts_update.name_write_identifiers, ts_for_in.name_write_identifiers, ts_for_of.name_write_identifiers, ts_declarator.name_write_identifiers rule no-global-assign {
   option exceptions string[] = [] "read-only globals that may be modified"
-  when name_write_owner != null
   when global == "readonly" && @is_write && !contains(exceptions, identifier_name)
   warn "Read-only global '{text}' should not be modified."
 }
@@ -751,36 +749,39 @@ fn problem_optional_operand(n) =
   else if n is ts_spread && n.parent not ts_object || n is ts_yield && n.operator == "*" then n.argument.node
   else if n is ts_with then n.object.node
   else null
-fn problem_optional_short_circuits(n) = {
-  value root: unparenthesised_node(n)
-  value if root not (ts_logical, ts_sequence, ts_conditional, ts_await) && root.in_optional_chain != true then [] else {
-    value root
-    walk (bare) {
-      value children: if bare is ts_logical then if bare.operator == "&&" then [bare.left.node, bare.right.node] else [bare.right.node]
-        else if bare is ts_sequence then [last(bare.expression.nodes)]
-        else if bare is ts_conditional then [bare.consequent.node, bare.alternate.node]
-        else if bare is ts_await then [bare.argument.node] else []
-      value map(children, child => unparenthesised_node(child))
-    }
-    filter (bare) bare is (ts_member, ts_index, ts_call) && bare.in_optional_chain == true
-      && !(bare is (ts_member.object, ts_index.object, ts_call.callee, ts_non_null.expression))
-    sort_by (bare) bare.offset
-  }
+fn problem_optional_root(n) = {
+  value n
+  walk (current) if current is (ts_member.object, ts_index.object, ts_call.callee, ts_non_null.expression)
+    && current.parent.in_optional_chain == true then current.parent.node else null
+  last
 }
-group optional_chain_user ts_assignment, ts_assignment_pattern, ts_declarator, ts_parameter, ts_class, ts_call, ts_new, ts_member, ts_index, ts_tagged_template, ts_for_of, ts_spread, ts_binary, ts_unary, ts_with, ts_yield
-in optional_chain_user rule no-unsafe-optional-chaining {
-  option disallowArithmeticOperators boolean = false
-  let arithmetic_operands if !disallowArithmeticOperators then []
-    else if node is ts_binary && contains(["+", "-", "/", "*", "%", "**"], node.operator) then [node.left.node, node.right.node]
-    else if node is ts_unary && contains(["+", "-"], node.operator) then [node.argument.node]
-    else if node is ts_assignment && contains(["+=", "-=", "/=", "*=", "%=", "**="], node.operator) then [node.right.node]
-    else []
-  let operands [{ node: problem_optional_operand(node), arithmetic: false }] (map(arithmetic_operands, operand => { node: operand, arithmetic: true }))
-  each chain in flat_map(operands, operand => map(problem_optional_short_circuits(operand.node), chain => { node: chain, arithmetic: operand.arithmetic })) {
-    report at chain.node
-    warn if !chain.arithmetic then "Unsafe usage of optional chaining. If it short-circuits with 'undefined' the evaluation will throw TypeError."
-      else "Unsafe arithmetic operation on optional chaining. It can result in NaN."
+fn problem_optional_use(n) = {
+  value n
+  walk (current) {
+    value parent: current.parent.node
+    value if parent is ts_parenthesized || parent is ts_await
+      || parent is ts_logical && (parent.operator == "&&" || current is ts_logical.right)
+      || parent is ts_sequence && current == last(parent.expression.nodes)
+      || current is (ts_conditional.consequent, ts_conditional.alternate)
+      then parent else null
   }
+  last
+}
+in ts_member.optional, ts_index.optional, ts_call.optional rule no-unsafe-optional-chaining {
+  option disallowArithmeticOperators boolean = false
+  when (if parent is ts_call then parent.callee.in_optional_chain else parent.object.in_optional_chain) != true
+  let chain problem_optional_root(parent.node)
+  when chain is (ts_member, ts_index, ts_call)
+  let operand problem_optional_use(chain)
+  let user operand.parent.node
+  let arithmetic disallowArithmeticOperators
+    && (user is ts_binary && contains(["+", "-", "/", "*", "%", "**"], user.operator)
+      || user is ts_unary && contains(["+", "-"], user.operator)
+      || user is ts_assignment && contains(["+=", "-=", "/=", "*=", "%=", "**="], user.operator) && operand == user.right.node)
+  when arithmetic || problem_optional_operand(user) == operand
+  report at chain
+  warn if !arithmetic then "Unsafe usage of optional chaining. If it short-circuits with 'undefined' the evaluation will throw TypeError."
+    else "Unsafe arithmetic operation on optional chaining. It can result in NaN."
 }
 
 in ts_variable_declaration let declares_loop_variable parent is (ts_for_of, ts_for_in)
@@ -872,14 +873,14 @@ in problem_irregular_ws rule no-irregular-whitespace {
 }
 
 # At the `(`, `[`, template or `/` on the new line.
-in ts_open_paren, ts_open_angle, ts_open_bracket, ts_template, ts_punctuator rule no-unexpected-multiline {
+in ts_call.token, ts_index.token, ts_tagged_template.quasi, ts_binary.operator rule no-unexpected-multiline {
   when is (ts_open_paren, ts_open_angle, ts_open_bracket, ts_template) || text == "/"
   when re_test(byte_slice(source, token(node, "before").end ?? offset, offset), /[\r\n\u{2028}\u{2029}]/)
   let multiline_kind if parent is ts_call && parent.optional == null && count(parent.argument) > 0
       && (is ts_open_paren && count(parent.type_argument) == 0 || is ts_open_angle && count(parent.type_argument) > 0) then "function"
     else if is ts_open_bracket && parent is ts_index && parent.optional == null then "property"
     else if is ts_tagged_template.quasi then "taggedTemplate"
-    else if is ts_punctuator && text == "/" && parent is ts_binary.left && parent.operator == "/" && parent.parent.operator == "/" then {
+    else if is ts_binary.operator && text == "/" && parent is ts_binary.left && parent.operator == "/" && parent.parent.operator == "/" then {
       value flags: parent.parent.right.first_token
       value slash: parent.parent.right.token_neighbours.before
       value if flags is ts_identifier && flags.text ~ /^[dgimsuvy]+$/ && slash.text == "/" && slash.end == flags.start then "division" else null

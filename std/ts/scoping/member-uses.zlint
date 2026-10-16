@@ -4,15 +4,15 @@ group member_usage_access ts_member, ts_index, ts_pattern_property, ts_property
 in ts_class let member_usage_accesses descendants(member_usage_access)
 fn member_usage_class(n) = find(walk(n, item => item.parent.node), item => item is ts_class)
 fn member_usage_key(n) = if n is ts_parameter then n.name.node else n.key.node
-fn member_usage_members(owner) = {
-  value owner.member.nodes
+in ts_class let member_usage_members {
+  value member.nodes
   flat_map (member) if member is ts_method && member.calls_constructor then {
     value member.parameter.nodes
     filter (parameter) any(parameter.modifier.nodes,
       modifier => contains(["private", "protected", "public", "readonly", "override"], modifier.text))
   } else if member is (ts_method, ts_class_property) then [member] else []
 }
-fn member_usage_last(owner, name, static) = find_last(member_usage_members(owner),
+fn member_usage_last(owner, name, static) = find_last(owner.member_usage_members,
   member => ts_value_key(member_usage_key(member)) == name && ts_value_static(member.modifier.nodes) == static)
 fn member_usage_pattern_source(n) = {
   value pattern: n.parent.node

@@ -179,10 +179,23 @@ in ts_node let name_write_owner when {
     if parent.flow_destructuring_target == true then parent.name_write_owner else parent.node
   is ts_update.argument || is ts_unary.argument && parent.operator == "delete" && is (ts_member, ts_index)
     then parent.node
-  flow_destructuring_target == true then parent.name_write_owner
+  is (ts_array.element, ts_array_pattern.element, ts_object.property, ts_object_pattern.property,
+    ts_object_pattern.rest, ts_rest.argument, ts_spread.argument, ts_assignment_pattern.left,
+    ts_parenthesized.expression, ts_as.expression, ts_satisfies.expression, ts_non_null.expression,
+    ts_type_assertion.expression, ts_instantiation.expression, ts_property.value, ts_pattern_property.value,
+    ts_property.key, ts_pattern_property.key) && flow_destructuring_target == true then parent.name_write_owner
   is (ts_parenthesized.expression, ts_as.expression, ts_satisfies.expression,
     ts_non_null.expression, ts_type_assertion.expression, ts_instantiation.expression) then parent.name_write_owner
   else then null
+}
+group name_write_source ts_assignment, ts_update, ts_for_in, ts_for_of, ts_declarator
+in name_write_source let name_write_identifiers {
+  value owner: node
+  value if is (ts_assignment, ts_for_in, ts_for_of) then node.left.node
+    else if is ts_update then node.argument.node else node.name.node
+  walk (item) item.children.nodes
+  filter (item) item is ts_identifier && item.name_write_owner == owner
+  unique
 }
 in ts_identifier, ts_member, ts_index, ts_array, ts_object, ts_array_pattern, ts_object_pattern let write_site name_write_owner.offset
 in ts_identifier let access {
