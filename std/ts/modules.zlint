@@ -234,20 +234,21 @@ define {
       else null
   }
 }
-fn ts_module_reference(n) = re_replace(n.text, /^\/\/\/\s*<reference\s+(?:path|types|lib)\s*=\s*["']([^"']+)["'][\s\S]*$/, "$1")
-fn ts_module_path_reference(n) = {
-  value path: re_replace(ts_module_reference(n), /\\/, "/")
+in ts_reference_path, ts_reference_types, ts_reference_lib let ts_module_reference
+  re_replace(text, /^\/\/\/\s*<reference\s+(?:path|types|lib)\s*=\s*["']([^"']+)["'][\s\S]*$/, "$1")
+in ts_reference_path let ts_module_path_reference {
+  value path: re_replace(ts_module_reference, /\\/, "/")
   value if starts_with(path, "./") || starts_with(path, "../") || starts_with(path, "/")
     || re_test(path, /^[A-Za-z]:\//) then path else "./{path}"
 }
-fn ts_module_types_reference(n) = "@types/{ts_module_reference(n)}"
-fn ts_module_lib_reference(n) = "typescript/lib/lib.{ts_module_reference(n)}.d.ts"
+in ts_reference_types let ts_module_types_reference "@types/{ts_module_reference}"
+in ts_reference_lib let ts_module_lib_reference "typescript/lib/lib.{ts_module_reference}.d.ts"
 in ts_reference_path {
-  globals all value, type, query from module ts_module_path_reference(node)
+  globals all value, type, query from module ts_module_path_reference
 }
 in ts_reference_types {
-  globals all value, type, query from module ts_module_types_reference(node)
+  globals all value, type, query from module ts_module_types_reference
 }
 in ts_reference_lib {
-  globals all value, type, query from module ts_module_lib_reference(node)
+  globals all value, type, query from module ts_module_lib_reference
 }

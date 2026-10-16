@@ -42,7 +42,7 @@ else if !optional then false else {
 fn string_boundary_access(n) = {
   value bare: unparenthesised_node(n)
   value method: if bare is ts_call then unparenthesised_node(bare.callee.node) else bare
-  value if method not (ts_member, ts_index) then null else {
+  value if bare not (ts_call, ts_index) || method not (ts_member, ts_index) then null else {
     receiver: method.object.node,
     optional: method.optional != null || bare.optional != null,
     method: if bare is ts_index then "index" else method.static_name.nonempty ?? ts_runtime_string(method.index.node),
