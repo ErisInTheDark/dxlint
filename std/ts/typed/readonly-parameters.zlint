@@ -20,6 +20,15 @@ fn readonly_parameter_allowed(part, settings) = {
     path: origin.path, package: origin.package}
   value any(settings.allow, entry => type_specifier_matches(entry, gate, settings.directory))
 }
+fn readonly_parameter_annotation_allowed(annotation, allow) = if annotation == null || count(allow) == 0 then false else {
+  value sources: value_sources(annotation)
+  value alias: if count(sources.sites) == 1 then first(sources.sites) else null
+  value origin: if alias.kind == "ts_type_alias" then declaration_origin(annotation, alias) else null
+  value gate: {name: alias.name, from: if origin.kind == "library" then "lib" else origin.kind,
+    path: origin.path, package: origin.package}
+  value alias.kind == "ts_type_alias"
+    && any(allow, entry => type_specifier_matches(entry, gate, program_directory(annotation)))
+}
 fn readonly_parameter_branded(arm) = {
   value parts: filter(arm.parts, part => !readonly_parameter_marker(part))
   value count(parts) > 1
@@ -96,7 +105,8 @@ in ts_parameter rule prefer-readonly-parameter-types {
   when checkParameterProperties || !any([] modifier, modifier => contains(["private", "public", "protected", "readonly"], modifier))
   when !ignoreInferredTypes || type != null
   let readonly_parameter_source type.node ?? init.node ?? node
-  let readonly_parameter_result readonly_parameter_walk(readonly_parameter_source, treatMethodsAsReadonly, allow)
+  let readonly_parameter_result if readonly_parameter_annotation_allowed(type.node, allow) then true
+    else readonly_parameter_walk(readonly_parameter_source, treatMethodsAsReadonly, allow)
   when readonly_parameter_result == false
   report at { start: name.offset, end: end_offset }
   warn "Parameter should be a read only type."

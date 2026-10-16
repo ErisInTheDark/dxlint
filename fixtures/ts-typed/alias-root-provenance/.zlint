@@ -1,0 +1,13 @@
+import .ts
+ignore "**/tsconfig.json"
+rule prefer-readonly-parameter-types {
+  set allow [{from: "file", name: "MyArray"}]
+}
+in ts_parameter rule alias-root {
+  when parent.name == "wrapped"
+  let source value_sources(type.node)
+  let alias first(source.sites)
+  let origin declaration_origin(node, {file: alias.file, node: alias.node})
+  report at type.node
+  info "{ alias.name }/{ alias.kind }/{ origin.kind }"
+}
