@@ -393,6 +393,13 @@ pub fn profile(output: &mut Output<'_>, linter: &Linter, format: super::Format, 
         })
         .collect();
     attributes.sort_by_key(|a| std::cmp::Reverse(a.0));
+    let mut functions: Vec<(u64, u64, u64, &str)> = linter.grammar.functions.iter().enumerate()
+        .filter_map(|(i, function)| {
+            let calls = Profile::get(p.fn_calls.get(i)?);
+            (calls > 0).then(|| (Profile::get(&p.fn_self_nanos[i]), Profile::get(&p.fn_nanos[i]), calls, function.name.as_str()))
+        })
+        .collect();
+    functions.sort_by_key(|f| std::cmp::Reverse(f.0));
     if format == super::Format::Jsonl {
         for (index, rule) in linter.rules.iter().enumerate() {
             let row = serde_json::json!({
@@ -412,6 +419,10 @@ pub fn profile(output: &mut Output<'_>, linter: &Linter, format: super::Format, 
             let row = serde_json::json!({ "kind": "attribute-profile", "attribute": name, "self_ms": ms(*self_nanos), "ms": ms(*nanos), "reads": calls });
             output.out(format_args!("{row}"));
         }
+        for (self_nanos, nanos, calls, name) in &functions {
+            let row = serde_json::json!({ "kind": "function-profile", "function": name, "self_ms": ms(*self_nanos), "ms": ms(*nanos), "calls": calls });
+            output.out(format_args!("{row}"));
+        }
     } else {
         output.err(format_args!("\n  {BOLD}rules{BOLD:#} {DIM}by time{DIM:#}"));
         for (nanos, evals, name) in rules.iter().take(15) {
@@ -424,6 +435,10 @@ pub fn profile(output: &mut Output<'_>, linter: &Linter, format: super::Format, 
         output.err(format_args!("\n  {BOLD}lets{BOLD:#} {DIM}by self time (total includes lets and queries they read; reads include memo hits){DIM:#}"));
         for (self_nanos, nanos, calls, name) in attributes.iter().take(25) {
             output.err(format_args!("  {:>11.1} ms self {:>11.1} ms total {calls:>11} reads  {CYAN}{name}{CYAN:#}", ms(*self_nanos), ms(*nanos)));
+        }
+        output.err(format_args!("\n  {BOLD}fns{BOLD:#} {DIM}by self time (arguments excluded; total includes what they call){DIM:#}"));
+        for (self_nanos, nanos, calls, name) in functions.iter().take(25) {
+            output.err(format_args!("  {:>11.1} ms self {:>11.1} ms total {calls:>11} calls  {CYAN}{name}{CYAN:#}", ms(*self_nanos), ms(*nanos)));
         }
     }
     let mut facts: Vec<(u64, u64, &str)> = crate::expr::facts::FACTS

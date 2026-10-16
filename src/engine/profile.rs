@@ -144,6 +144,10 @@ pub struct Profile {
     pub attr_self_nanos: Vec<AtomicU64>,
     pub attr_calls: Vec<AtomicU64>,
     pub attr_entered: Vec<AtomicU64>,
+    /// Per `fn`: calls, total and self time (arguments excluded).
+    pub fn_nanos: Vec<AtomicU64>,
+    pub fn_self_nanos: Vec<AtomicU64>,
+    pub fn_calls: Vec<AtomicU64>,
     /// Nanoseconds searching for each overlay matcher, and the nodes found.
     pub overlay_nanos: Vec<AtomicU64>,
     pub overlay_nodes: Vec<AtomicU64>,
@@ -418,6 +422,23 @@ impl Profile {
         self.attr_calls = counters(attributes);
         self.attr_entered = counters(attributes);
         self
+    }
+
+    /// Sizes the per-`fn` counters.
+    pub fn with_functions(mut self, functions: usize) -> Self {
+        self.fn_nanos = counters(functions);
+        self.fn_self_nanos = counters(functions);
+        self.fn_calls = counters(functions);
+        self
+    }
+
+    pub(crate) fn begin_function(&self, function: usize) -> Option<ValueEvaluation<'_>> {
+        Some(ValueEvaluation {
+            nanos: self.fn_nanos.get(function)?,
+            self_nanos: self.fn_self_nanos.get(function)?,
+            calls: self.fn_calls.get(function)?,
+            region: Region::start(),
+        })
     }
 
     pub(crate) fn begin_attribute(&self, attr: usize) -> Option<ValueEvaluation<'_>> {

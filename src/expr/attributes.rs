@@ -532,6 +532,10 @@ impl vm::Host for Ctx<'_> {
         self.lang
     }
 
+    fn profile(&self) -> Option<&crate::engine::Profile> {
+        self.profile
+    }
+
     fn pattern(&self, test: &CExpr, text: &str) -> Option<bool> {
         Some(self.test_value(test, &Value::from(text)))
     }

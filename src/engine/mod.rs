@@ -427,7 +427,8 @@ impl Linter {
 
     /// Collect `--profile` counters from now on.
     pub fn enable_profile(&mut self) {
-        self.profile = Some(Profile::new(self.grammar.matchers.len(), self.rules.len()).with_attributes(self.attrs.count()));
+        self.profile = Some(Profile::new(self.grammar.matchers.len(), self.rules.len())
+            .with_attributes(self.attrs.count()).with_functions(self.grammar.functions.len()));
     }
 
     pub fn relative<'p>(&self, path: &'p Path) -> std::borrow::Cow<'p, Path> {

@@ -807,6 +807,8 @@ pub trait Host {
     fn tokens(&self) -> Option<std::rc::Rc<crate::engine::frontend::Tokens>> { None }
     /// Whether `text` passes a pattern test ([`CExpr::Test`]/[`CExpr::TestDfa`]).
     fn pattern(&self, _test: &CExpr, _text: &str) -> Option<bool> { None }
+    /// `--profile` counters, when collected.
+    fn profile(&self) -> Option<&crate::engine::Profile> { None }
 }
 
 /// `ZLINT_VM_STATS`: count delegated runs per site.
@@ -1040,7 +1042,9 @@ impl<'h, H: Host> Runtime<'h, H> {
                 result = self.fail(format!("`{}` calls itself too deeply", self.grammar().functions[i as usize].name));
             } else {
                 self.calls.set(self.calls.get() + 1);
+                let timed = self.host.profile().and_then(|profile| profile.begin_function(i as usize));
                 result = ev(self, node, body, &mut frame);
+                drop(timed);
                 self.calls.set(self.calls.get() - 1);
             }
         }
