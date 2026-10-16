@@ -42,6 +42,15 @@ schema trailing_comma_mode "always-multiline" | "always" | "never" | "only-multi
 fn layout_dangle_mode(kind, style, policies) = { value policies; get kind; nonempty } ?? style
 fn layout_dangle_enabled(kind, edition) = (kind != "functions" || edition >= 2017) && (kind != "dynamicImports" || edition >= 2025)
 fn layout_dangle_wrong(site, mode) = mode != "ignore" && (if mode == "always" || mode == "always-multiline" && site.multiline then site.trailing != site.allowed else site.trailing && !(mode == "only-multiline" && site.multiline) && !site.tsx_single)
+fn layout_dangle_sites(n, style, policies, edition) = if n is ts_import_attributes then n.layout_attribute_comma_sites else {
+  value layout_trailing_lists(n)
+  map (list) {
+    value mode: layout_dangle_mode(list.kind, style, policies)
+    value if mode == "ignore" || !layout_dangle_enabled(list.kind, edition) then null
+      else layout_trailing_comma(n, list, mode == "always" || mode == "always-multiline")
+  }
+  filter (site) site != null
+}
 in ts_import_attributes let layout_attribute_last { value descendants(ts_import_attribute); last }
 in ts_import_attributes let layout_attribute_comma { value descendants(ts_import_attribute_comma); filter (c) c.offset >= layout_attribute_last.end_offset; first }
 in ts_import_attributes let layout_attribute_comma_sites if layout_attribute_last == null then [] else [{
@@ -65,7 +74,7 @@ in ts_array, ts_array_pattern, ts_object, ts_object_pattern, ts_function, ts_arr
   option generics trailing_comma_mode | null = null "type parameter policy"
   option tuples trailing_comma_mode | null = null "tuple policy"
   let dangle_policies {arrays:arrays, objects:objects, functions:functions, imports:imports, exports:exports, importAttributes:importAttributes, dynamicImports:dynamicImports, enums:enums, generics:generics, tuples:tuples, "type-arguments":"never"}
-  each dangle_site in if is ts_import_attributes then layout_attribute_comma_sites else layout_trailing_commas(node) {
+  each dangle_site in layout_dangle_sites(node, style, dangle_policies, ecma_version) {
     when layout_dangle_enabled(dangle_site.kind, ecma_version)
     when { value dangle_site.kind; mode: layout_dangle_mode style dangle_policies; value layout_dangle_wrong(dangle_site, mode) }
     report at dangle_site.offset
