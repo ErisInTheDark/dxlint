@@ -255,8 +255,11 @@ impl FileVm {
     /// Evaluates (node, attribute) without a memo, as attributes read inside
     /// semantic questions are; a read while it is in progress (a cycle) is
     /// `None`, like [`FileVm::memo`]'s.
-    pub(crate) fn uncached(&self, node: u32, attr: u16, compute: impl FnOnce() -> Option<V>) -> Option<V> {
-        if self.uncached.borrow().contains(&(node, attr)) { return None }
+    pub(crate) fn uncached(&self, node: u32, attr: u16, on_cycle: impl FnOnce(), compute: impl FnOnce() -> Option<V>) -> Option<V> {
+        if self.uncached.borrow().contains(&(node, attr)) {
+            on_cycle();
+            return None;
+        }
         self.uncached.borrow_mut().push((node, attr));
         let value = compute();
         self.uncached.borrow_mut().pop();

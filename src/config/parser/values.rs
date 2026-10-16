@@ -121,10 +121,14 @@ impl Parser<'_> {
         let domain = self.peek().and_then(|token| KeyDomain::parse(&token.text));
         let keyed = domain.is_none() && self.word("keyed");
         if domain.is_some() { self.bump(); }
-        let repeated = domain.is_none() && !keyed && self.word("repeated");
+        let keys = domain.is_none() && !keyed && self.word("keys");
+        let repeated = domain.is_none() && !keyed && !keys && self.word("repeated");
         let path = self.name_path("an indexed value field")?;
         let mode = if let Some(domain) = domain {
             IndexedMode::Domain(domain)
+        } else if keys {
+            let bind = if self.word("bind") { Some(self.name_path("a bound formal field")?) } else { None };
+            IndexedMode::Keys { bind }
         } else if keyed {
             if !self.word("by") { self.error_here("expected `by <key value>`"); return None; }
             IndexedMode::Keyed(self.unwrap_primary()?)

@@ -151,6 +151,7 @@ pub enum IndexedMode {
     Slots { repeated: bool, strings: bool },
     Domain(crate::config::ast::values::KeyDomain),
     Keyed(Value),
+    Keys { bind: Option<Vec<u16>> },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -170,6 +171,9 @@ pub(crate) struct State {
     /// computed after such a read may only reflect the unfinished cycle, so
     /// it is not kept.
     cycle_reads: std::cell::Cell<u64>,
+    /// Entries of the `Known` memos being computed ([`Values::memoized`]),
+    /// by memo and key hash, innermost last.
+    pending: std::cell::RefCell<Vec<(usize, u64)>>,
     widened: Memo<Leaf, NodeValue>,
     traits: Memo<(Leaf, u16), Known<bool>>,
     optional: Memo<Leaf, Known<bool>>,
@@ -231,17 +235,64 @@ impl Values<'_> {
         Known::Yes(None)
     }
 
-    pub fn fits(&self, leaf: Leaf, trait_id: u16) -> Known<bool> {
-        let Known::Yes(leaf) = self.semantic.leaf(leaf) else { return Known::Unknown };
-        if let Some(answer) = self.semantic.values.traits.get(&(leaf, trait_id)) {
+    /// Records that a question read something still being decided further
+    /// up (a cycle outside the memos here: item conditions, attributes), so
+    /// unknown answers computed meanwhile are not kept.
+    pub fn note_cycle_read(&self) {
+        let state = &self.semantic.values;
+        state.cycle_reads.set(state.cycle_reads.get() + 1);
+    }
+
+    /// The cycle-read count, to tell later whether a computation read
+    /// anything still undecided ([`Self::cycled_since`]).
+    pub(super) fn cycle_mark(&self) -> u64 {
+        self.semantic.values.cycle_reads.get()
+    }
+
+    pub(super) fn cycled_since(&self, mark: u64) -> bool {
+        self.semantic.values.cycle_reads.get() > mark
+    }
+
+    /// A `Known` memo entry: while `compute` runs, the key reads as unknown
+    /// (cutting recursion) and such a read counts as a cycle read. An
+    /// unknown answer computed after a cycle read is not kept: it may only
+    /// reflect the unfinished cycle, and keeping it would make later answers
+    /// depend on which question happened to reach the cycle first.
+    pub(super) fn memoized<K, T>(&self, memo: &Memo<K, Known<T>>, key: K, compute: impl FnOnce() -> Known<T>) -> Known<T>
+    where K: Clone + Eq + std::hash::Hash, T: Clone {
+        use std::hash::BuildHasher;
+        let state = &self.semantic.values;
+        let tag = (memo as *const Memo<K, Known<T>> as usize, crate::fx_hash::FxBuild::default().hash_one(&key));
+        if let Some(answer) = memo.get(&key) {
+            if matches!(answer, Known::Unknown) && state.pending.borrow().contains(&tag) {
+                state.cycle_reads.set(state.cycle_reads.get() + 1);
+            }
             return answer;
         }
-        if trait_id >= 64 || !self.question.budget.step() {
+        memo.insert(self.semantic.epoch, key.clone(), Known::Unknown);
+        state.pending.borrow_mut().push(tag);
+        let started = state.cycle_reads.get();
+        let answer = compute();
+        state.pending.borrow_mut().pop();
+        if matches!(answer, Known::Unknown) && state.cycle_reads.get() > started {
+            memo.remove(self.semantic.epoch, &key);
+        } else {
+            memo.insert(self.semantic.epoch, key, answer.clone());
+        }
+        answer
+    }
+
+    pub fn fits(&self, leaf: Leaf, trait_id: u16) -> Known<bool> {
+        let Known::Yes(leaf) = self.semantic.leaf(leaf) else { return Known::Unknown };
+        let key = (leaf, trait_id);
+        if self.semantic.values.traits.get(&key).is_none() && (trait_id >= 64 || !self.question.budget.step()) {
             return Known::Unknown;
         }
-        // A pending question cuts recursion without a separate cycle set.
-        self.semantic.values.traits.insert(self.semantic.epoch, (leaf, trait_id), Known::Unknown);
-        let answer = match leaf.target {
+        self.memoized(&self.semantic.values.traits, key, || self.direct_trait(leaf, trait_id))
+    }
+
+    fn direct_trait(&self, leaf: Leaf, trait_id: u16) -> Known<bool> {
+        match leaf.target {
             Target::Traits(bits) => Known::Yes(bits & (1 << trait_id) != 0),
             Target::Product(_) => self.product_fits(leaf, trait_id),
             Target::Modified(_) => match self.modified_source(leaf) {
@@ -254,9 +305,7 @@ impl Values<'_> {
                 None => Known::Unknown,
             },
             Target::Node(node) => self.direct_fits(leaf, node, trait_id, true),
-        };
-        self.semantic.values.traits.insert(self.semantic.epoch, (leaf, trait_id), answer);
-        answer
+        }
     }
 
     /// Whether a node site's own kind declares `trait_id`, ignoring `open`
@@ -569,13 +618,7 @@ impl Values<'_> {
 
     pub fn bound_argument(&self, formal: Leaf) -> Known<Option<NodeValue>> {
         let Known::Yes(formal) = self.semantic.leaf(formal) else { return Known::Unknown };
-        if let Some(answer) = self.semantic.values.bound_arguments.get(&formal) {
-            return answer;
-        }
-        self.semantic.values.bound_arguments.insert(self.semantic.epoch, formal, Known::Unknown);
-        let answer = self.find_bound_argument(formal);
-        self.semantic.values.bound_arguments.insert(self.semantic.epoch, formal, answer.clone());
-        answer
+        self.memoized(&self.semantic.values.bound_arguments, formal, || self.find_bound_argument(formal))
     }
 
     /// The file whose globals `at` sees.

@@ -1,4 +1,4 @@
-use super::{IndexedMode, Key, Known, Leaf, Member, MemberOrigin, MemberSource, Values};
+use super::{IndexedMode, Key, Known, Leaf, Member, MemberOrigin, MemberSource, NodeValue, Target, Values};
 use crate::config::ast::values::KeyDomain;
 
 #[derive(Clone, Copy)]
@@ -41,7 +41,7 @@ impl Values<'_> {
         let mut members = Vec::new();
         let classes = view.map_or(kind.member_defaults, |(_, classes)| classes);
         for recipe in &kind.indexed {
-            if matches!(recipe.mode, IndexedMode::Keyed(_)) != named { continue }
+            if matches!(recipe.mode, IndexedMode::Keyed(_) | IndexedMode::Keys { .. }) != named { continue }
             if recipe.views != 0 && recipe.views & classes == 0 { continue }
             let wanted_position = match &recipe.mode {
                 IndexedMode::Slots { repeated, strings } => match wanted {
@@ -58,7 +58,7 @@ impl Values<'_> {
                     if wanted.is_some_and(|key| !Self::domain_accepts(*domain, key)) { continue }
                     None
                 },
-                IndexedMode::Keyed(_) => None,
+                IndexedMode::Keyed(_) | IndexedMode::Keys { .. } => None,
             };
             if !self.question.budget.step() { return Known::Unknown }
             match recipe.when.map_or(Known::Yes(true), |when| self.world.condition(at, when, self.semantic)) {
@@ -98,6 +98,13 @@ impl Values<'_> {
                     }
                     continue;
                 },
+                IndexedMode::Keys { bind } => {
+                    let Known::Yes(found) = self.keys_members(at, request, recipe.value.as_ref(), bind.as_deref(), sites) else {
+                        return Known::Unknown;
+                    };
+                    for member in found { Self::merge_member(&mut members, member) }
+                    continue;
+                },
             };
             if repeated {
                 if sites.len() != 1 { return Known::Unknown }
@@ -128,6 +135,73 @@ impl Values<'_> {
                         key: Key::Text(position.to_string().into()), sources: vec![source], required,
                     });
                 }
+            }
+        }
+        Known::Yes(members)
+    }
+
+    /// `indexed keys`: one member per key the sites' values hold, an indexer
+    /// per key domain; each member's value is read at `at` with formal `bind`
+    /// bound to the alternatives giving its key.
+    fn keys_members(&self, at: Leaf, request: MemberRequest<'_>, value: Option<&super::Value>, bind: Option<&[u16]>, sites: Vec<Leaf>) -> Known<Vec<Member>> {
+        let wanted = request.key();
+        // Members are read at the owner node itself (its optional/readonly
+        // metadata), not at a scope standing for it.
+        let Known::Yes((owner, _)) = self.member_context(at) else { return Known::Unknown };
+        let at = Leaf { target: Target::Node(owner), ..at };
+        let binding = match bind {
+            Some(bind) => {
+                let Known::Yes(formals) = self.follow(at, bind) else { return Known::Unknown };
+                let [formal] = formals.as_slice() else { return Known::Unknown };
+                let Known::Yes((owner, position, count)) = self.parameter_owner(at, *formal) else { return Known::Unknown };
+                let Known::Yes(classes) = self.question.owner_classes(at.frame, owner) else { return Known::Unknown };
+                Some((owner, position, count, classes))
+            }
+            None => None,
+        };
+        let mut members = Vec::new();
+        for site in sites {
+            if !self.question.budget.step() { return Known::Unknown }
+            let keys = self.values(site);
+            // No key at all (`never`) generates no members.
+            if keys == NodeValue::never() { continue }
+            let Known::Yes(keys) = self.value_key_rows(&keys) else { return Known::Unknown };
+            for (key, rows) in keys {
+                let origin = match &key {
+                    Key::Domain(domain) => {
+                        if wanted.is_some_and(|wanted| !Self::domain_accepts(*domain, wanted)) { continue }
+                        if matches!(request, MemberRequest::Coverage) { continue }
+                        MemberOrigin::Indexer(*domain)
+                    }
+                    key => {
+                        if wanted.is_some_and(|wanted| wanted != key) { continue }
+                        MemberOrigin::Named
+                    }
+                };
+                let source = match binding {
+                    Some((owner, position, count, classes)) => {
+                        let mut arguments = vec![None; count];
+                        arguments[position] = Some(NodeValue::Alternatives(rows));
+                        Leaf { frame: self.question.bind_overlay(at.frame, owner, arguments, classes), ..at }
+                    }
+                    None => at,
+                };
+                let (key, required) = match &origin {
+                    MemberOrigin::Indexer(domain) => {
+                        let Some(indexer) = request.indexer(*domain) else { return Known::Unknown };
+                        indexer
+                    }
+                    _ => {
+                        let required = match self.optional(source) {
+                            Known::Yes(optional) => Known::Yes(!optional),
+                            Known::Unknown => Known::Unknown,
+                        };
+                        (key, required)
+                    }
+                };
+                Self::merge_member(&mut members, Member {
+                    key, sources: vec![MemberSource { site: source, value: value.cloned(), origin, edits: None }], required,
+                });
             }
         }
         Known::Yes(members)

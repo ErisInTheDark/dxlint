@@ -61,37 +61,64 @@ impl Values<'_> {
         let NodeValue::Alternatives(rows) = value else { return Known::Unknown };
         let mut keys: Vec<Key> = Vec::new();
         for row in rows {
-            let mut literal = None;
-            let mut domain = None;
-            for &leaf in row {
-                if !self.question.budget.step() { return Known::Unknown }
-                let key = match self.identity(leaf) {
-                    Known::Yes(Some(Identity::Value(value))) => Self::expression_key(value),
-                    Known::Yes(Some(Identity::Declaration(node))) => {
-                        if self.key_domain(leaf) != Known::Yes(Some(KeyDomain::Symbol)) { return Known::Unknown }
-                        Some(Key::Symbol(node))
-                    },
-                    Known::Yes(None) => {
-                        match self.key_domain(leaf) {
-                            Known::Yes(Some(current)) => {
-                                if domain.is_some_and(|previous| previous != current) { return Known::Unknown }
-                                domain = Some(current);
-                            },
-                            Known::Yes(None) => {},
-                            Known::Unknown => return Known::Unknown,
-                        }
-                        None
-                    },
-                    Known::Unknown => return Known::Unknown,
-                };
-                if let Some(key) = key {
-                    if literal.as_ref().is_some_and(|previous| previous != &key) { return Known::Unknown }
-                    literal = Some(key);
-                }
-            }
-            let Some(key) = literal.or_else(|| domain.map(Key::Domain)) else { return Known::Unknown };
+            let Known::Yes(key) = self.row_key(row) else { return Known::Unknown };
             if !keys.contains(&key) { keys.push(key); }
         }
         if keys.is_empty() { Known::Unknown } else { Known::Yes(keys) }
+    }
+
+    /// [`Self::value_keys`] with the alternatives each key comes from.
+    pub(super) fn value_key_rows(&self, value: &NodeValue) -> Known<Vec<(Key, Vec<Vec<Leaf>>)>> {
+        let NodeValue::Alternatives(rows) = value else { return Known::Unknown };
+        let mut keys: Vec<(Key, Vec<Vec<Leaf>>)> = Vec::new();
+        for row in rows {
+            let Known::Yes(key) = self.row_key(row) else { return Known::Unknown };
+            match keys.iter_mut().find(|(known, _)| known == &key) {
+                Some((_, sources)) => sources.push(row.clone()),
+                None => keys.push((key, vec![row.clone()])),
+            }
+        }
+        if keys.is_empty() { Known::Unknown } else { Known::Yes(keys) }
+    }
+
+    /// The key one alternative stands for: its literal, else its domain.
+    /// The leaves of an alternative hold at once, so one literal among them
+    /// decides the key even where other leaves (an enum's origin, a brand)
+    /// cannot say theirs.
+    fn row_key(&self, row: &[Leaf]) -> Known<Key> {
+        let mut literal = None;
+        let mut domain = None;
+        let mut unknown = false;
+        for &leaf in row {
+            if !self.question.budget.step() { return Known::Unknown }
+            let key = match self.identity(leaf) {
+                Known::Yes(Some(Identity::Value(value))) => Self::expression_key(value),
+                Known::Yes(Some(Identity::Declaration(node))) => match self.key_domain(leaf) {
+                    Known::Yes(Some(KeyDomain::Symbol)) => Some(Key::Symbol(node)),
+                    _ => { unknown = true; None }
+                },
+                Known::Yes(None) => {
+                    match self.key_domain(leaf) {
+                        Known::Yes(Some(current)) => {
+                            if domain.is_some_and(|previous| previous != current) { unknown = true }
+                            domain = Some(current);
+                        },
+                        Known::Yes(None) => {},
+                        Known::Unknown => unknown = true,
+                    }
+                    None
+                },
+                Known::Unknown => { unknown = true; None }
+            };
+            if let Some(key) = key {
+                if literal.as_ref().is_some_and(|previous| previous != &key) { return Known::Unknown }
+                literal = Some(key);
+            }
+        }
+        match (literal, domain) {
+            (Some(literal), _) => Known::Yes(literal),
+            (None, Some(domain)) if !unknown => Known::Yes(Key::Domain(domain)),
+            _ => Known::Unknown,
+        }
     }
 }

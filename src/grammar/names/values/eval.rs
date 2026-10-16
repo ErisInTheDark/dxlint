@@ -481,8 +481,13 @@ fn widened(values: &Values<'_>, leaf: Leaf) -> NodeValue {
     let Known::Yes(leaf) = values.semantic.leaf(leaf) else { return NodeValue::Unknown };
     if let Some(answer) = values.semantic.values.widened.get(&leaf) { return answer }
     values.semantic.values.widened.insert(values.semantic.epoch, leaf, NodeValue::Unknown);
+    let mark = values.cycle_mark();
     let answer = widen(values, leaf);
-    values.semantic.values.widened.insert(values.semantic.epoch, leaf, answer.clone());
+    if answer == NodeValue::Unknown && values.cycled_since(mark) {
+        values.semantic.values.widened.remove(values.semantic.epoch, &leaf);
+    } else {
+        values.semantic.values.widened.insert(values.semantic.epoch, leaf, answer.clone());
+    }
     answer
 }
 

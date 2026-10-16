@@ -651,6 +651,16 @@ impl Names {
                             let Some(key) = lower_value(key, &path, &mut vocab, errors, &mut requested_classes) else { continue };
                             values::IndexedMode::Keyed(key)
                         }
+                        crate::config::ast::values::IndexedMode::Keys { bind } => {
+                            let bind = match bind {
+                                Some(bind) => {
+                                    let Some(bind) = path(errors, bind) else { continue };
+                                    Some(bind)
+                                }
+                                None => None,
+                            };
+                            values::IndexedMode::Keys { bind }
+                        }
                     };
                     let Some(views) = class_bits(&mut vocab.scope_classes, views, errors) else { continue };
                     let value = match value {

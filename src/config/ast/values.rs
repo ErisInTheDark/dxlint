@@ -20,6 +20,9 @@ pub enum IndexedMode {
     Slots { repeated: bool, strings: bool },
     Domain(KeyDomain),
     Keyed(Unwrap),
+    /// One member per key the path's values hold (an indexer per key
+    /// domain), with `bind`'s formal bound to that key.
+    Keys { bind: Option<Vec<Name>> },
 }
 
 /// Traits that cannot occur together in one possible value.

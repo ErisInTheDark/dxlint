@@ -13,7 +13,7 @@ use std::sync::Arc;
 use crate::expr::{Ctx, Value};
 use crate::expr::queries::Uncertainty;
 use crate::grammar::names::question::{FrameId, Known, Leaf, NodeRef, ScopeRef, Target, World};
-use crate::grammar::names::semantic::Semantic;
+use crate::grammar::names::semantic::{AttributeKey, Semantic};
 use crate::grammar::names::modules::compile::Action;
 use crate::grammar::names::modules::SharedQuestion;
 use crate::grammar::names::modules::resolution::{parse_metadata, program_inputs, Configuration, DiscoveryRequest, Host, Json, Resolver, Settings};
@@ -166,19 +166,56 @@ impl<'a> LintWorld<'a> {
         self.active_evaluation()?.question.as_ref()
     }
 
+    /// Where a query about `node` asked inside `question` stands: the
+    /// question's frame for nodes of its file, and its scope when that scope
+    /// stands for `node`.
+    fn asked_at(&'a self, question: &ActiveQuestion<'_, '_>, file: u32, node: u32) -> Leaf {
+        let frame = match question.at.target {
+            Target::Node(at) if at.file == file => question.at.frame,
+            Target::Scope(at) if at.file == file => question.at.frame,
+            _ => FrameId::ROOT,
+        };
+        let target = match question.at.target {
+            Target::Scope(scope) if scope.file == file && Files(self).names(file)
+                .and_then(|names| names.scopes.get(scope.scope as usize)).is_some_and(|scope| scope.node == node) => question.at.target,
+            _ => Target::Node(NodeRef { file, node }),
+        };
+        Leaf { target, frame }
+    }
+
+    /// A semantic attribute read inside a question, memoised per root
+    /// session by where its queries stand (see [`Self::asked_at`]); only
+    /// complete answers are kept. Outside a question `compute` runs as is.
+    pub(crate) fn semantic_attribute(&'a self, file: u32, node: u32, attr: u16, compute: impl FnOnce() -> Option<crate::vm::V>) -> Option<crate::vm::V> {
+        let Some(question) = self.question() else { return compute() };
+        let semantic = question.semantic;
+        // Like `asked_at`, without reading names: a scope target of this
+        // file keys the entry as is (names may still be resolving here).
+        let at = match question.at.target {
+            Target::Scope(scope) if scope.file == file => question.at,
+            Target::Node(at) if at.file == file => Leaf { target: Target::Node(NodeRef { file, node }), frame: question.at.frame },
+            _ => Leaf { target: Target::Node(NodeRef { file, node }), frame: FrameId::ROOT },
+        };
+        let key = AttributeKey { file, node, attr, at };
+        if let Some(kept) = semantic.attribute(&key) { return Some(kept) }
+        let mut value = None;
+        if let Known::Yes(Some(complete)) = self.complete_attribute(|| { value = compute(); value }) {
+            semantic.remember_attribute(key, complete);
+        }
+        value
+    }
+
+    /// Something read again while it is still being decided inside a
+    /// question (an attribute, a file's names): a cycle, so the question's
+    /// unknown answers computed meanwhile are not kept.
+    pub(crate) fn note_cycle(&self) {
+        if let Some(question) = self.question() { question.semantic.values().note_cycle_read() }
+    }
+
     fn semantic_query<R>(&'a self, file: u32, node: u32, uncertainty: Uncertainty, run: impl FnOnce(&Semantic<'_>, Leaf) -> Known<R>) -> Known<R> {
         let target = Target::Node(NodeRef { file, node });
         if let Some(question) = self.question() {
-            let frame = match question.at.target {
-                Target::Node(at) if at.file == file => question.at.frame,
-                Target::Scope(at) if at.file == file => question.at.frame,
-                _ => FrameId::ROOT,
-            };
-            let target = match question.at.target {
-                Target::Scope(scope) if scope.file == file && Files(self).names(file)
-                    .and_then(|names| names.scopes.get(scope.scope as usize)).is_some_and(|scope| scope.node == node) => question.at.target,
-                _ => target,
-            };
+            let Leaf { target, frame } = self.asked_at(question, file, node);
             let ask = || match question.semantic.leaf(Leaf { target, frame }) {
                 Known::Yes(at) => run(question.semantic, at),
                 Known::Unknown => Known::Unknown,
@@ -879,7 +916,15 @@ impl World for Files<'_> {
         if let Some(shared) = self.0.name_cache(file).and_then(std::sync::OnceLock::get) {
             return Some(&**shared.as_ref());
         }
-        let names = self.0.on(file, self.tree(file)?.root)?.names();
+        let ctx = self.0.on(file, self.tree(file)?.root)?;
+        // A question asked by the file's own name conditions cannot see its
+        // names: unknown, and a cycle so nothing computed from it is kept.
+        if ctx.names_resolving() {
+            self.0.note_cycle();
+            self.0.mark_unknown();
+            return None;
+        }
+        let names = ctx.names();
         if names.complete { Some(names) } else {
             self.0.mark_unknown();
             None
@@ -1013,6 +1058,7 @@ impl World for Files<'_> {
         // node (in any frame: each round can bind a new one) is a cycle.
         let key = (at.target, condition);
         if world.conditions.borrow().contains(&key) {
+            semantic.values().note_cycle_read();
             world.mark_unknown();
             return Known::Unknown;
         }

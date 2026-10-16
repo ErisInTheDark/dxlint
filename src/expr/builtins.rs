@@ -212,6 +212,12 @@ impl<'a> Ctx<'a> {
         })
     }
 
+    /// Whether this tree's names are being resolved right now (their
+    /// conditions are running), so they cannot be read yet.
+    pub(crate) fn names_resolving(&self) -> bool {
+        self.memo.resolving_names.get()
+    }
+
     /// This tree's names, resolved on first use and given to its native
     /// front end.
     pub(crate) fn names(&self) -> &'a crate::grammar::names::Resolved {

@@ -5,13 +5,7 @@ impl Values<'_> {
         // A modified value instantiates its source's carrier.
         let at = self.modified_source(at).unwrap_or(at);
         let Known::Yes(at) = self.semantic.leaf(at) else { return Known::Unknown };
-        if let Some(answer) = self.semantic.values.carriers.get(&at) {
-            return answer;
-        }
-        self.semantic.values.carriers.insert(self.semantic.epoch, at, Known::Unknown);
-        let answer = self.direct_carrier(at);
-        self.semantic.values.carriers.insert(self.semantic.epoch, at, answer.clone());
-        answer
+        self.memoized(&self.semantic.values.carriers, at, || self.direct_carrier(at))
     }
 
     fn direct_carrier(&self, at: Leaf) -> Known<Option<Carrier>> {

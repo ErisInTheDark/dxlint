@@ -249,7 +249,11 @@ fn item_names(item: &NameItem, out: &mut HashSet<String>) {
         }
         NameItem::Indexed { path, mode, value, .. } => {
             path_names(path, out);
-            if let crate::config::ast::values::IndexedMode::Keyed(key) = mode { value_names(key, out); }
+            match mode {
+                crate::config::ast::values::IndexedMode::Keyed(key) => value_names(key, out),
+                crate::config::ast::values::IndexedMode::Keys { bind: Some(bind) } => path_names(bind, out),
+                _ => {}
+            }
             if let Some(value) = value { value_names(value, out); }
         }
         NameItem::Member { classes: _, key, value } => {

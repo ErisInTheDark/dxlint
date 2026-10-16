@@ -199,14 +199,11 @@ impl Calls<'_> {
     pub fn headers(&self, value: &NodeValue, kind: InvokeKind) -> Known<Vec<Vec<Header>>> {
         self.profile(ProfileQuery::Headers, || {
             let key = (value.clone(), kind);
-            if let Some(answer) = self.semantic.calls.headers.get(&key) {
-                return answer;
-            }
+            let memo = &self.semantic.calls.headers;
+            let values = self.semantic.values();
+            if memo.get(&key).is_some() { return values.memoized(memo, key, || Known::Unknown) }
             let Some(_nest) = self.question.budget.nest() else { return Known::Unknown };
-            self.semantic.calls.headers.insert(self.semantic.epoch, key.clone(), Known::Unknown);
-            let answer = headers::headers(value, kind, &self.semantic.values());
-            self.semantic.calls.headers.insert(self.semantic.epoch, key, answer.clone());
-            answer
+            values.memoized(memo, key, || headers::headers(value, kind, &values))
         })
     }
 
@@ -229,15 +226,12 @@ impl Calls<'_> {
     fn candidates(&self, call: Leaf) -> select::Answer {
         self.profile(ProfileQuery::Select, || {
             let Known::Yes(call) = self.semantic.leaf(call) else { return Known::Unknown };
-            if let Some(answer) = self.semantic.calls.candidates.get(&call) {
-                return answer;
-            }
+            let memo = &self.semantic.calls.candidates;
+            let values = self.semantic.values();
+            if memo.get(&call).is_some() { return values.memoized(memo, call, || Known::Unknown) }
             if !self.question.budget.step() { return Known::Unknown }
             let Some(_nest) = self.question.budget.nest() else { return Known::Unknown };
-            self.semantic.calls.candidates.insert(self.semantic.epoch, call, Known::Unknown);
-            let answer = select::candidates(call, &self.semantic.values());
-            self.semantic.calls.candidates.insert(self.semantic.epoch, call, answer.clone());
-            answer
+            values.memoized(memo, call, || select::candidates(call, &values))
         })
     }
 
@@ -267,14 +261,18 @@ impl Calls<'_> {
             let depth = state.accepting.borrow().len();
             state.accepting.borrow_mut().push(unbound);
             let outer = state.assumed.replace(None);
-            let answer = accepts::accepts(expected, actual, &self.semantic.values());
+            let values = self.semantic.values();
+            let mark = values.cycle_mark();
+            let answer = accepts::accepts(expected, actual, &values);
             state.accepting.borrow_mut().pop();
             let rests_on = state.assumed.get().filter(|&at| at < depth);
             state.assumed.set(match (outer, rests_on) {
                 (Some(outer), Some(inner)) => Some(outer.min(inner)),
                 (outer, inner) => outer.or(inner),
             });
-            if !(answer == Known::Yes(true) && rests_on.is_some()) {
+            let provisional = answer == Known::Yes(true) && rests_on.is_some()
+                || answer == Known::Unknown && values.cycled_since(mark);
+            if !provisional {
                 state.acceptance.insert(self.semantic.epoch, key, answer);
             }
             answer
@@ -383,19 +381,14 @@ impl Calls<'_> {
     fn value(&self, at: Leaf, question: ValueQuestion) -> Known<Option<NodeValue>> {
         let Known::Yes(at) = self.semantic.leaf(at) else { return Known::Unknown };
         let key = (at, question);
-        if let Some(answer) = self.semantic.calls.values.get(&key) {
-            return answer;
-        }
-        if !self.question.budget.step() {
-            return Known::Unknown;
-        }
+        let memo = &self.semantic.calls.values;
+        let values = self.semantic.values();
+        if memo.get(&key).is_some() { return values.memoized(memo, key, || Known::Unknown) }
+        if !self.question.budget.step() { return Known::Unknown }
         let Some(_nest) = self.question.budget.nest() else { return Known::Unknown };
-        self.semantic.calls.values.insert(self.semantic.epoch, key, Known::Unknown);
-        let answer = match question {
+        values.memoized(memo, key, || match question {
             ValueQuestion::Result => result::result(at, &self.semantic.values()),
             ValueQuestion::Expected => expected::expected(at, &self.semantic.values()),
-        };
-        self.semantic.calls.values.insert(self.semantic.epoch, key, answer.clone());
-        answer
+        })
     }
 }

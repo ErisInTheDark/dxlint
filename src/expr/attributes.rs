@@ -594,7 +594,13 @@ impl<'a> Ctx<'a> {
             Lowered::Direct(body) => return vm::eval(self, node, body)?.persist(&self.memo.vm),
             Lowered::Semantic(body) => match self.world.filter(|world| world.cache_attribute(&self.memo.vm)) {
                 Some(world) => (body, Some(world)),
-                None => return self.memo.vm.uncached(node, attr, || vm::eval(self, node, body)?.persist(&self.memo.vm)),
+                None => return self.memo.vm.uncached(node, attr, || if let Some(world) = self.world { world.note_cycle() }, || {
+                    let compute = || vm::eval(self, node, body)?.persist(&self.memo.vm);
+                    match self.world {
+                        Some(world) => world.semantic_attribute(self.file_id, node, attr, compute),
+                        None => compute(),
+                    }
+                }),
             },
             Lowered::Cached(body) => (body, self.world),
         };

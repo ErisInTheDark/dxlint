@@ -23,7 +23,20 @@ pub struct State {
     pub(crate) effects: Rc<super::effects::State>,
     pub(crate) name_queries: Rc<crate::expr::queries::NamesMemo>,
     pub(crate) modules: super::modules::queries::State,
+    /// Semantic attributes read inside questions, by what their answer can
+    /// depend on: complete answers only.
+    attributes: super::memo::Memo<AttributeKey, crate::vm::V>,
     defects: RefCell<Vec<Defect>>,
+}
+
+/// A semantic attribute on a node, read where a question's frame (and a
+/// scope standing for that node) applies: everything its answer can see.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct AttributeKey {
+    pub file: u32,
+    pub node: u32,
+    pub attr: u16,
+    pub at: Leaf,
 }
 
 impl std::ops::Deref for Semantic<'_> {
@@ -60,7 +73,8 @@ impl Session {
         }
         let failed = self.question.budget.limited();
         let cut = self.question.budget.cut();
-        let discarded = semantic.values.finish(epoch, failed, cut) + semantic.calls.finish(epoch, failed, cut);
+        let discarded = semantic.values.finish(epoch, failed, cut) + semantic.calls.finish(epoch, failed, cut)
+            + semantic.attributes.finish(epoch, failed, cut, |_| true);
         if failed {
             if let Some(profile) = world.profile() {
                 crate::engine::Profile::add(&profile.semantic_budget_limits, 1);
@@ -159,6 +173,14 @@ impl<'a> Semantic<'a> {
 
     pub fn narrowing(&self) -> super::narrowing::Narrowing<'_> {
         super::narrowing::Narrowing { semantic: self }
+    }
+
+    pub(crate) fn attribute(&self, key: &AttributeKey) -> Option<crate::vm::V> {
+        self.attributes.get(key)
+    }
+
+    pub(crate) fn remember_attribute(&self, key: AttributeKey, value: crate::vm::V) {
+        self.attributes.insert(self.epoch, key, value);
     }
 
     pub fn defect(&self, item: u32, at: Leaf, message: impl Into<Box<str>>) {

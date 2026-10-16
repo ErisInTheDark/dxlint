@@ -125,7 +125,9 @@ impl Values<'_> {
         if unknown { Known::Unknown } else { Known::Yes(false) }
     }
 
-    fn parameter_owner(&self, at: Leaf, formal: Leaf) -> Known<(NodeRef, usize, usize)> {
+    /// The generic owner declaring `formal` (innermost bound frame first),
+    /// the formal's position among its parameters and their count.
+    pub(super) fn parameter_owner(&self, at: Leaf, formal: Leaf) -> Known<(NodeRef, usize, usize)> {
         let mut frame = at.frame;
         while frame != FrameId::ROOT {
             if !self.question.budget.step() { return Known::Unknown }
