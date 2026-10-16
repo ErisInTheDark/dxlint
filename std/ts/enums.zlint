@@ -1,4 +1,4 @@
-import .ts/typed/assignments
+import .ts/typed/transfers
 
 define {
 fn enum_origins(arm) = filter(arm, part => contains(part.traits, "enum"))
@@ -15,18 +15,39 @@ fn enum_root_bad(sender, receiver) = sender != null && receiver != null && len(r
       && all(source, part => !contains(part.traits, "any") && !contains(part.traits, "unknown")
         && !contains(part.uncertain_traits, "enum"))
   })
-fn enum_relation_pairs(sender, receiver, source) = {
-  value {sender: sender, receiver: receiver}
-  walk (pair) if pair.sender == null || pair.receiver == null
-    || len(pair.sender) != 1 || len(pair.receiver) != 1 then [] else {
-    value first(pair.sender)
-    flat_map (a) {
-      value first(pair.receiver)
-      flat_map (b) {
-        value assignment_carrier_arguments(a, b, source)
-        map (args) {sender: first(args), receiver: last(args)}
+fn enum_relation_children(pair, source) = {
+  value identity: {sender: pair.sender, receiver: pair.receiver}
+  value senders: if pair.sender != null then value_parts(pair.sender) else null
+  value receivers: if pair.receiver != null then value_parts(pair.receiver) else null
+  value if contains(pair.seen, identity) || senders == null || receivers == null
+    || len(senders) != 1 || len(receivers) != 1 then [] else {
+    value sender: first(senders)
+    value receiver: first(receivers)
+    value arguments: {
+      value sender.parts
+      flat_map (a) {
+        value receiver.parts
+        flat_map (b) {
+          value assignment_carrier_arguments(a, b, source)
+          map (args) {sender: first(args), receiver: last(args)}
+        }
       }
     }
+    value members: {
+      value value_children(receiver.handle, true, []) ?? []
+      map (edge) {sender: value_lookup(sender.handle, edge.member.key).member, receiver: edge.handle}
+      filter (child) child.sender != null && child.receiver != null
+    }
+    value unique(arguments members)
+    map (child) {sender: child.sender, receiver: child.receiver, seen: pair.seen [identity]}
+  }
+}
+fn enum_relation_pairs(sender, receiver, source) = {
+  value {sender: sender, receiver: receiver, seen: []}
+  walk (pair) enum_relation_children(pair, source)
+  map (pair) {
+    sender: if pair.sender != null then value_constituents(pair.sender) else null,
+    receiver: if pair.receiver != null then value_constituents(pair.receiver) else null,
   }
 }
 fn enum_bitwise_shape(n) = n is ts_binary && contains(["&", "|", "^"], n.operator)
@@ -46,12 +67,17 @@ fn enum_safe_bitwise(source, receiver) = enum_bitwise_shape(source) && {
 }
 fn enum_policy(site, source) = {
   value expected: if source != null then value_expected(source) else null
-  value receiver: if site is ts_update || site is ts_assignment && site.enum_mutation
-    then value_constituents(source)
-    else if site is (ts_as, ts_type_assertion) then value_constituents(site.type.node)
-    else if site.type != null then value_constituents(site.type.node) else expected.value
-  value sender: if source != null then value_constituents(source) else null
-  value pairs: enum_relation_pairs(sender, receiver, source)
+  value target: if site is ts_update || site is ts_assignment && site.enum_mutation then source
+    else if site is (ts_as, ts_type_assertion) then site.type.node
+    else if site.type != null then site.type.node
+    else if source != null && expected.present == true then value_expected_handle(source) else null
+  value owner: if source is ts_return.argument || source is ts_arrow.body then return_value_owner(source) else null
+  value asynchronous: owner != null && contains([] owner.modifier, "async")
+  value receiver_handle: if asynchronous && target != null then ts_awaited_value(target, target) else target
+  value sender_handle: if asynchronous && source != null then ts_awaited_value(source, source) else source
+  value receiver: if receiver_handle != null then value_constituents(receiver_handle) else null
+  value sender: if sender_handle != null then value_constituents(sender_handle) else null
+  value pairs: enum_relation_pairs(sender_handle, receiver_handle, source)
   value names: {
     value pairs
     flat_map (pair) pair.receiver ?? []
