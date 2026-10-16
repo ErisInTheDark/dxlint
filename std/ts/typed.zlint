@@ -391,7 +391,7 @@ in ts_return, ts_arrow.body rule no-unsafe-return:assignment {
 }
 
 fn non_null_style_fix(source, n) = {
-  value body: assertion_fix_body(source, assertion_fix_trace(n, false))
+  value body: assertion_fix_body(source, n)
   value wrapped: body.node is (structure_binary, structure_assertion, ts_sequence, ts_assignment,
     ts_conditional, ts_arrow, ts_yield, ts_unary, ts_await, ts_update)
   value replacement: expression_fix_wrap(body.text, wrapped) "!"

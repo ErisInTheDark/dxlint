@@ -3,9 +3,10 @@ import .ts/assertions
 
 define {
 
+fn type_argument_target(n) = unparenthesised_node(if n is ts_class then n.extends.node
+  else if n is ts_type_reference then n.name.node else n.callee.node)
 fn type_argument_declaration(n) = {
-  value target: unparenthesised_node(if n is ts_class then n.extends.node
-    else if n is ts_type_reference then n.name.node else n.callee.node)
+  value target: type_argument_target(n)
   value binding: if target is ts_identifier then name_binding(target) else null
   value owner: binding.node.parent
   value if target is (ts_function, ts_arrow, ts_class) then target
@@ -25,6 +26,14 @@ fn type_argument_same(argument, other, widened) =
   && type_argument_known(if widened then value_widened(other) else value_constituents(other))
   && value_accepts(argument, other, "value", if widened then "widened" else "value") == true
   && value_accepts(other, argument, if widened then "widened" else "value", "value") == true
+fn type_argument_default(n, declaration) = {
+  value sources: if declaration != null then [node_site(declaration)]
+    else value_sources(if n is ts_type_reference then n else type_argument_target(n)).sites
+  value site: if count(sources) == 1 then first(sources) else null
+  value formal: get(site_field(n, site, "type_parameter"), count(n.type_argument.nodes) - 1)
+  value defaults: site_field(n, formal, "default")
+  value if count(defaults) == 1 then declaration_value(n, first(defaults)) else null
+}
 fn type_argument_inferred(n, declaration, formal) = {
   value owner: n.parent.node
   value parameters: if declaration is ts_class then
@@ -46,9 +55,10 @@ fn type_argument_redundancy(n) = {
   value arguments: owner.type_argument.nodes
   value declaration: type_argument_declaration(owner)
   value formal: get(declaration.type_parameter.nodes, count(arguments) - 1)
-  value if last(arguments) != n || formal == null then null
-    else if formal.default != null && type_argument_same(n, formal.default.node, false) then "default"
-    else if type_argument_inferred(n, declaration, formal) then "inferred"
+  value default: type_argument_default(owner, declaration)
+  value if last(arguments) != n then null
+    else if default != null && type_argument_same(value_union(n, []), default, false) then "default"
+    else if formal != null && type_argument_inferred(n, declaration, formal) then "inferred"
     else null
 }
 fn reduce_type_argument_fresh(initializer, annotation) = {
@@ -88,7 +98,7 @@ fn type_argument_fix(n) = {
 }
 fn reduce_type_argument_fix(source, n) = {
   value call: n.parent.node
-  value assertion: assertion_fix(source, n, false)
+  value assertion: assertion_fix(source, n)
   value insertion: if call.optional != null then call.optional.end_offset else call.callee.end_offset
   value edits: {
     value if count(call.type_argument.nodes) == 0 then [{ start: insertion, end: insertion, text: "<" n.type.text ">" }] else []
