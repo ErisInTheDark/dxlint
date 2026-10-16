@@ -115,6 +115,13 @@ pub(super) fn selection(call: Leaf, values: &Values<'_>) -> Known<Option<Selecti
             selected.choices.push(candidate.chosen.clone());
             continue;
         }
+        // A lone signature is the call's contract even when an argument is
+        // incompatible with it: TypeScript still types the arguments (their
+        // expected values) from it and reports the mismatch.
+        if let [Known::Yes(sole)] = &group[..] {
+            selected.choices.push(sole.chosen.clone());
+            continue;
+        }
         let mut open = group.into_iter().filter(|candidate| !matches!(candidate,
             Known::Yes(candidate) if candidate.compatible == Known::Yes(false)));
         let first = open.next();

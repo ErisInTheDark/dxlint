@@ -46,6 +46,7 @@ pub(super) static FUNCTIONS: &[QueryFunction] = &[
         }
     } },
     QueryFunction { name: "site_text", arity: 2, call: site_text },
+    QueryFunction { name: "site_field", arity: 3, call: site_field },
     QueryFunction { name: "declaration_origin", arity: 2, call: declaration_origin },
     QueryFunction { name: "declaration_value", arity: 2, call: declaration_value },
     QueryFunction { name: "value_sources", arity: 1, call: |semantic, at, _| sources(semantic, at) },
@@ -407,6 +408,22 @@ fn site_text(semantic: &Semantic<'_>, _: crate::grammar::names::question::Leaf, 
     Known::Yes(Value::record(vec![("text".into(), Value::from(own)), ("leading".into(), Value::from(leading))]))
 }
 
+/// The children of a `{file, node}` site under one field, in any program
+/// file, as sites (`site_record`); null when not a site or no such field.
+fn site_field(semantic: &Semantic<'_>, _: crate::grammar::names::question::Leaf, args: &[Value<'static>]) -> Known<Value<'static>> {
+    use crate::grammar::names::question::NodeRef;
+    let Some((file, node)) = args.first().and_then(site_of) else { return Known::Yes(Value::Null) };
+    let Some(label) = args.get(1).and_then(|field| semantic.world.grammar().labels.get(&field.text())) else { return Known::Yes(Value::Null) };
+    let Some(tree) = semantic.world.tree(file) else { return Known::Unknown };
+    if tree.nodes.get(node as usize).is_none() { return Known::Yes(Value::Null) }
+    let mut sites = Vec::new();
+    for child in tree.fields(node, label) {
+        let Some(site) = site_record(semantic, NodeRef { file, node: child }) else { return Known::Unknown };
+        sites.push(site);
+    }
+    Known::Yes(Value::list(sites))
+}
+
 /// The value a `{file, node}` declaration site unwraps to, as a handle
 /// (read at the root frame, in any program file); null when not a site.
 fn declaration_value(semantic: &Semantic<'_>, _: crate::grammar::names::question::Leaf, args: &[Value<'static>]) -> Known<Value<'static>> {
@@ -484,12 +501,15 @@ fn site_record(semantic: &Semantic<'_>, node: crate::grammar::names::question::N
 
 /// The name a node declares: itself when it is a declared name, else the
 /// first name whose declaring node it is. Null for none or computed names.
+/// Implicit declarations (a function's `arguments`) are keyed by their
+/// declaring node and never name it.
 fn declared_name(semantic: &Semantic<'_>, node: crate::grammar::names::question::NodeRef) -> Value<'static> {
     let Some(names) = semantic.world.names(node.file) else { return Value::Null };
-    let name = if names.declared.contains_key(&node.node) {
+    let explicit = |name: &u32| !names.implicit.contains_key(name);
+    let name = if names.declared.contains_key(&node.node) && explicit(&node.node) {
         Some(node.node)
     } else {
-        names.declared.iter().filter(|(_, &(_, owner, ..))| owner == node.node).map(|(&name, _)| name).min()
+        names.declared.iter().filter(|(name, &(_, owner, ..))| owner == node.node && explicit(name)).map(|(&name, _)| name).min()
     };
     let Some(name) = name else { return Value::Null };
     match names.keys.get(&name) {
