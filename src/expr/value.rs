@@ -236,6 +236,20 @@ impl<'s> Value<'s> {
         }
     }
 
+    /// Whether [`Self::text`] is empty, without building it.
+    pub fn text_is_empty(&self) -> bool {
+        match self {
+            Value::Null => true,
+            Value::Bool(_) | Value::Num(_) | Value::Record(_) => false,
+            Value::Str(s) | Value::Node(_, s) => s.is_empty(),
+            Value::List(items) => match &items[..] {
+                [] => true,
+                [item] => item.text_is_empty(),
+                _ => false,
+            },
+        }
+    }
+
     /// Text form used in templates and string functions; borrows when it
     /// already is text.
     pub fn text(&self) -> Cow<'_, str> {

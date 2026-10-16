@@ -881,7 +881,7 @@ pub static FUNCTIONS: &[Function] = &[
         doc: "the list without null and empty items (always a list)",
         min: 1,
         max: 1,
-        call: |a| Ok(Value::List(a[0].items().into_iter().filter(|v| !matches!(v, Value::Null) && v.text() != "").collect())),
+        call: |a| Ok(Value::List(a[0].items().into_iter().filter(|v| !v.text_is_empty()).collect())),
     },
     Function {
         name: "any",

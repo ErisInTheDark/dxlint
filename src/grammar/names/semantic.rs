@@ -106,7 +106,23 @@ impl<'a> Semantic<'a> {
         let Some(canonical) = tree.semantic_node_with(node.node, &mut || self.question.budget.step()) else { return Known::Unknown };
         node.node = canonical;
         at.target = Target::Node(node);
+        at.frame = self.relevant_frame(at.frame, node);
         Known::Yes(at)
+    }
+
+    /// The innermost frame in `frame`'s chain that can matter to `node`: one
+    /// instantiating a declaration of the node's own file. Formals are only
+    /// visible in their own file, so frames of other files' owners bind
+    /// nothing the node reads; dropping them keeps one memo entry per node
+    /// (library types especially) instead of one per unrelated instantiation.
+    /// Owners in the same file are kept: their formals may be declared
+    /// around the owner (a constructor instantiates its class's parameters).
+    fn relevant_frame(&self, mut frame: super::question::FrameId, node: NodeRef) -> super::question::FrameId {
+        while let Some(binding) = self.question.get(frame) {
+            if binding.owner.file == node.file { return frame }
+            frame = binding.parent;
+        }
+        frame
     }
 
     pub fn parent(&self, at: Leaf) -> Known<Option<Leaf>> {
@@ -260,8 +276,13 @@ mod tests {
         let question = QueryContext::default();
         let semantic = Semantic::new(&world, &linter.grammar.names, &question);
         let frame = question.bind(FrameId::ROOT, NodeRef::here(0), None, None);
-        let at = Leaf { target: Target::Node(NodeRef { file: 7, node: 2 }), frame };
-        assert_eq!(semantic.leaf(at), Known::Yes(Leaf { target: Target::Node(NodeRef { file: 7, node: 0 }), frame }));
+        let enclosing = question.bind(FrameId::ROOT, NodeRef { file: 7, node: 0 }, None, None);
+        let at = Leaf { target: Target::Node(NodeRef { file: 7, node: 2 }), frame: enclosing };
+        assert_eq!(semantic.leaf(at), Known::Yes(Leaf { target: Target::Node(NodeRef { file: 7, node: 0 }), frame: enclosing }));
+        // A frame instantiating a declaration that does not enclose the node
+        // binds nothing it can read: the leaf drops it.
+        let unrelated = Leaf { target: Target::Node(NodeRef { file: 7, node: 2 }), frame };
+        assert_eq!(semantic.leaf(unrelated), Known::Yes(Leaf { target: Target::Node(NodeRef { file: 7, node: 0 }), frame: FrameId::ROOT }));
         for node in [0, 3, 4, 5] {
             let at = Leaf { target: Target::Node(NodeRef::here(node)), frame };
             assert_eq!(semantic.leaf(at), Known::Yes(at));
