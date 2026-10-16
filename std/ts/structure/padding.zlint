@@ -11,9 +11,7 @@ fn padding_sized_tag_matches(item, selector, tag) = tag != null && (
 )
 fn padding_named_selector_matches(item, selector) =
   selector == "*"
-  || selector == item.structure_padding_plain_tag
-  || selector == first(item.structure_padding_keyword_tag) && item.structure_padding_keyword == selector
-  || padding_sized_tag_matches(item, selector, item.structure_padding_sized_tag)
+  || contains(item.structure_padding_names, selector)
   || contains(["block-like", "multiline-block-like", "singleline-block-like"], selector)
     && item.structure_padding_block_like && padding_sized_tag_matches(item, selector, "block-like")
   || selector == "require" && item.structure_padding_require
@@ -27,13 +25,12 @@ fn padding_selector_matches(item, selector) =
     && ((selector.lineMode.nonempty ?? "any") == "any"
       || selector.lineMode == "multiline" && item.structure_padding_multiline
       || selector.lineMode == "singleline" && !item.structure_padding_multiline)
-fn padding_category_side_matches(info, selectors) = any(selectors, selector => padding_selector_matches(info, selector))
 fn padding_side_matches(item, selectors) = when {
   type_of(selectors) == "str" then
-    selectors == "*" || padding_selector_matches(item.structure_padding_categories, selectors)
+    selectors == "*" || padding_named_selector_matches(item.structure_padding_categories, selectors)
   type_of(selectors) == "list" then
-    any(selectors, selector => type_of(selector) == "str" && selector == "*")
-    || len(selectors) != 0 && padding_category_side_matches(item.structure_padding_categories, selectors)
+    contains(selectors, "*")
+    || any(selectors, selector => padding_selector_matches(item.structure_padding_categories, selector))
   else then padding_selector_matches(item.structure_padding_categories, selectors)
 }
 
@@ -112,6 +109,18 @@ in ts_variable_declaration let structure_padding_sized_tag when {
 in ts_export let structure_padding_sized_tag if structure_padding_keyword == "export" then "export" else null
 in ts_type_alias let structure_padding_sized_tag if structure_padding_keyword == "type" then "type" else null
 in ts_return let structure_padding_sized_tag if structure_padding_keyword == "return" then "return" else null
+in ts_node let structure_padding_names {
+  value plain: structure_padding_plain_tag
+  value keyword: first(structure_padding_keyword_tag)
+  value sized: structure_padding_sized_tag
+  value [
+    plain,
+    if keyword != null && structure_padding_keyword == keyword then keyword else null,
+    sized,
+    if sized != null then (if structure_padding_multiline then "multiline-" else "singleline-") sized else null,
+  ]
+  compact
+}
 in ts_declarator let structure_padding_init init.node
 in ts_variable_declaration let structure_padding_first_init first(declaration.structure_padding_init)
 in ts_variable_declaration let structure_padding_require { value structure_padding_first_init; structure_padding_receiver; structure_padding_is_require }
@@ -145,7 +154,7 @@ in ts_node let structure_padding_block_like structure_padding_iife
       any (block) block.end_offset == offset + byte_len(structure_padding_trimmed)
     })
 in ts_node let structure_padding_categories structure_padding_unlabel.nonempty ?? node
-in ts_node let structure_padding_multiline re_test(text, /[\n\r\u2028\u2029]/)
+in ts_node let structure_padding_multiline position(offset).js_line != position(end_offset).js_line
 fn structure_padding_receiver(n) = n.structure_padding_receiver.nonempty ?? n.structure_unwrapped
 fn structure_padding_is_require(n) = n.callee is ts_identifier && n.callee.text == "require"
 fn structure_padding_blank(text) = { value text; replace "\r\n" "\n"; re_test /[\n\r\u2028\u2029]\s*[\n\r\u2028\u2029]/ }
@@ -179,15 +188,20 @@ fn structure_padding_insert(source, end, start, comments) = {
   value { start: attached, end: attached, text: if { value source; byte_slice attached following; re_test /[\n\r\u2028\u2029]/ } then "\n" else "\n\n" }
 }
 fn structure_padding_finding(source, pair, comments) = {
-  value structure_padding_segments(pair.end, pair.start, comments)
-  padded: filter (segment) { value source; byte_slice segment.start segment.end; structure_padding_blank }
-  value edit: if pair.policy == "always" then structure_padding_insert(source, pair.end, pair.start, comments) else first(padded)
-  value {
-    offset: pair.start, policy: pair.policy, padded: len(padded),
-    edit: edit, replacement: when {
-      pair.policy == "always" then edit.text
-      len(padded) == 1 then structure_padding_remove(source, edit)
-      else then null
+  value padded: if len(comments) == 0
+    then if structure_padding_blank(byte_slice(source, pair.end, pair.start)) then [{start: pair.end, end: pair.start}] else []
+    else filter(structure_padding_segments(pair.end, pair.start, comments),
+      segment => structure_padding_blank(byte_slice(source, segment.start, segment.end)))
+  value if pair.policy == "always" && len(padded) > 0 || pair.policy == "never" && len(padded) == 0 then null
+  else {
+    value edit: if pair.policy == "always" then structure_padding_insert(source, pair.end, pair.start, comments) else first(padded)
+    value {
+      offset: pair.start, policy: pair.policy,
+      edit: edit, replacement: when {
+        pair.policy == "always" then edit.text
+        len(padded) == 1 then structure_padding_remove(source, edit)
+        else then null
+      }
     }
   }
 }
@@ -195,41 +209,29 @@ fn structure_padding_finding(source, pair, comments) = {
 in structure_padding_owner rule padding-line-between-statements {
   option options { blankLine: "any" | "always" | "never"; prev: string | { selector: string; lineMode?: "any" | "singleline" | "multiline" } | (string | { selector: string; lineMode?: "any" | "singleline" | "multiline" })[]; next: string | { selector: string; lineMode?: "any" | "singleline" | "multiline" } | (string | { selector: string; lineMode?: "any" | "singleline" | "multiline" })[] }[] = [] "ordered statement padding policies"
   when any(options, policy => policy.blankLine != "any")
-  let pairs {
-    value structure_padding_items
-    slice: slice 1
-    value zip(structure_padding_items, slice)
+  let policies {
+    value zip(structure_padding_items, slice(structure_padding_items, 1))
     map (pair) {
       prior: first(pair),
       following: last(pair),
-      end: {
-        value pair
-        previous_2: first
-        value pair
-        next_2: last
-        value structure_padding_gap_end(previous_2, next_2, source)
-      },
-      start: (last(pair)).offset
+      policy: find_last(options, config =>
+        padding_side_matches(first(pair), config.prev) && padding_side_matches(last(pair), config.next)).blankLine ?? "any",
     }
-  }
-  let policies {
-    value pairs
+    filter (pair) pair.policy != "any"
     map (pair) {
-      end: pair.end, start: pair.start,
-      policy: {
-        value find_last(options, config => padding_side_matches(pair.prior, config.prev) && padding_side_matches(pair.following, config.next)).blankLine
-        nonempty
-      } ?? "any"
+      end: structure_padding_gap_end(pair.prior, pair.following, source),
+      start: pair.following.offset, policy: pair.policy,
     }
-    filter (pair) pair.end <= pair.start && pair.policy != "any"
+    filter (pair) pair.end <= pair.start
+      && (pair.policy != "never" || structure_padding_blank(byte_slice(source, pair.end, pair.start)))
   }
-  let findings map(policies, pair => {
-    value overlapping(ts_comment, pair.end, pair.start)
-    comments: filter (comment) pair.end <= comment.offset && comment.end_offset <= pair.start
+  let findings compact(map(policies, pair => {
+    value comments: if !contains(byte_slice(source, pair.end, pair.start), "/") then []
+      else filter(overlapping(ts_comment, pair.end, pair.start),
+        comment => pair.end <= comment.offset && comment.end_offset <= pair.start)
     value structure_padding_finding(source, pair, comments)
-  })
+  }))
   each info in findings {
-    when info.policy == "always" && info.padded == 0 || info.policy == "never" && info.padded > 0
     report at info.offset
     warn if info.policy == "always" then "Expected blank line before this statement." else "Unexpected blank line before this statement."
     fix at info.edit if info.replacement != null as info.replacement

@@ -19,6 +19,14 @@ fn structure_declaration_previous(n) = {
   value if previous is ts_variable_declaration && previous.kind.text == n.kind.text
     then structure_declaration_counts(previous) else null
 }
+fn structure_declaration_entry(n, counts, prior) = {
+  node: n,
+  kind: n.kind.text,
+  counts: counts,
+  prior: prior,
+  for_init: n is ts_for.init,
+  for_binding: n.parent is (ts_for_in, ts_for_of),
+}
 fn structure_declaration_group(entries) = {
   value entries
   fold ({ counts: {initialized: 0, uninitialized: 0, requires: 0}, entries: [] }) (state, n) {
@@ -29,15 +37,7 @@ fn structure_declaration_group(entries) = {
         uninitialized: state.counts.uninitialized + counts.uninitialized,
         requires: state.counts.requires + counts.requires,
       },
-      entries: state.entries [{
-        node: n,
-        kind: n.kind.text,
-        counts: counts,
-        prior: state.counts,
-        previous: structure_declaration_previous(n),
-        for_init: n is ts_for.init,
-        for_binding: n.parent is (ts_for_in, ts_for_of),
-      }],
+      entries: state.entries [structure_declaration_entry(n, counts, state.counts)],
     }
   }
 }
@@ -49,9 +49,4 @@ in structure_lexical_scope let structure_declaration_entries {
   group_by (item) item.kind.text
   flat_map (group) structure_declaration_group(group.items).entries
 }
-in ts_variable_declaration let declaration_groups {
-  value scope: structure_declaration_scope(node)
-  value find(scope.structure_declaration_entries, entry => entry.node == node)
-}
-
 }

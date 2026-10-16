@@ -236,41 +236,53 @@ fn structure_declaration_split(declarations, kind, exported, source) = {
   value structure_fix_edits(source, edits)
 }
 
-in ts_variable_declaration rule one-var {
-  option options ("always" | "never" | "consecutive" | { separateRequires?: boolean; var?: "always" | "never" | "consecutive"; let?: "always" | "never" | "consecutive"; const?: "always" | "never" | "consecutive"; using?: "always" | "never" | "consecutive"; awaitUsing?: "always" | "never" | "consecutive"; initialized?: "always" | "never" | "consecutive"; uninitialized?: "always" | "never" | "consecutive" })[] = [] "declaration grouping policy"
-  let info declaration_groups
-  let settings { value options; first; nonempty } ?? "always"
-  let kind info.kind
-  let common if type_of(settings) == "str" then settings else if kind == "var" then settings.var else if kind == "let" then settings.let else if kind == "const" then settings.const else if kind == "using" then settings.using else settings.awaitUsing
-  let init_mode settings.initialized.nonempty ?? common
-  let uninit_mode settings.uninitialized.nonempty ?? common
-  let counts info.counts
-  let previous_counts info.previous
-  let total counts.initialized + counts.uninitialized
-  let prior_counts info.prior
-  let prior_init prior_counts.initialized > 0 && (!settings.separateRequires || prior_counts.initialized > prior_counts.requires)
-  let prior_uninit prior_counts.uninitialized > 0
-  let prior_required settings.separateRequires && prior_counts.requires > 0
-  let both_always init_mode == "always" && uninit_mode == "always"
-  let always_failed both_always && (prior_init || prior_uninit) && counts.requires == 0 || uninit_mode == "always" && counts.uninitialized > 0 && prior_uninit || init_mode == "always" && counts.initialized > 0 && prior_init && counts.requires == 0 || prior_required && counts.requires > 0
-  let consecutive previous_counts != null && !((counts.requires + previous_counts.requires > 0) && (total + previous_counts.initialized + previous_counts.uninitialized > counts.requires + previous_counts.requires))
-  let consecutive_message if !consecutive then null else if init_mode == "consecutive" && uninit_mode == "consecutive" then "Combine this with the previous '" kind "' statement." else if init_mode == "consecutive" && counts.initialized > 0 && previous_counts.initialized > 0 then "Combine this with the previous '" kind "' statement with initialized variables." else if uninit_mode == "consecutive" && counts.uninitialized > 0 && previous_counts.uninitialized > 0 then "Combine this with the previous '" kind "' statement with uninitialized variables." else null
-  let split_message if total < 2 || info.for_init then null else if init_mode == "never" && uninit_mode == "never" then "Split '" kind "' declarations into multiple statements." else if init_mode == "never" && counts.initialized > 0 then "Split initialized '" kind "' declarations into multiple statements." else if uninit_mode == "never" && counts.uninitialized > 0 then "Split uninitialized '" kind "' declarations into multiple statements." else null
-  let join_fix if previous_counts != null then structure_declaration_join(node, source) else null
-  let split_parent if parent is ts_export then parent.parent.node else parent.node
-  let declaration_exported parent is ts_export
-  let split_fix if split_message != null && split_parent is (ts_program, ts_block, ts_case, ts_static_block) then structure_declaration_split(declaration.nodes, kind, declaration_exported, source) else null
-  each issue in {
-    value [
+fn structure_declaration_findings(info, settings, source) = {
+  value kind: info.kind
+  value common: if type_of(settings) == "str" then settings else if kind == "var" then settings.var else if kind == "let" then settings.let else if kind == "const" then settings.const else if kind == "using" then settings.using else settings.awaitUsing
+  value init_mode: settings.initialized.nonempty ?? common
+  value uninit_mode: settings.uninitialized.nonempty ?? common
+  value counts: info.counts
+  value total: counts.initialized + counts.uninitialized
+  value prior_counts: info.prior
+  value prior_init: prior_counts.initialized > 0 && (!settings.separateRequires || prior_counts.initialized > prior_counts.requires)
+  value prior_uninit: prior_counts.uninitialized > 0
+  value prior_required: settings.separateRequires && prior_counts.requires > 0
+  value both_always: init_mode == "always" && uninit_mode == "always"
+  value always_failed: both_always && (prior_init || prior_uninit) && counts.requires == 0 || uninit_mode == "always" && counts.uninitialized > 0 && prior_uninit || init_mode == "always" && counts.initialized > 0 && prior_init && counts.requires == 0 || prior_required && counts.requires > 0
+  value joining: always_failed && (both_always || init_mode == "always" && counts.initialized > 0
+    || uninit_mode == "always" && counts.uninitialized > 0 && !info.for_binding)
+  value previous_counts: if init_mode == "consecutive" || uninit_mode == "consecutive" || joining
+    then structure_declaration_previous(info.node) else null
+  value consecutive: previous_counts != null && !((counts.requires + previous_counts.requires > 0) && (total + previous_counts.initialized + previous_counts.uninitialized > counts.requires + previous_counts.requires))
+  value consecutive_message: if !consecutive then null else if init_mode == "consecutive" && uninit_mode == "consecutive" then "Combine this with the previous '" kind "' statement." else if init_mode == "consecutive" && counts.initialized > 0 && previous_counts.initialized > 0 then "Combine this with the previous '" kind "' statement with initialized variables." else if uninit_mode == "consecutive" && counts.uninitialized > 0 && previous_counts.uninitialized > 0 then "Combine this with the previous '" kind "' statement with uninitialized variables." else null
+  value split_message: if total < 2 || info.for_init then null else if init_mode == "never" && uninit_mode == "never" then "Split '" kind "' declarations into multiple statements." else if init_mode == "never" && counts.initialized > 0 then "Split initialized '" kind "' declarations into multiple statements." else if uninit_mode == "never" && counts.uninitialized > 0 then "Split uninitialized '" kind "' declarations into multiple statements." else null
+  value join_fix: if previous_counts != null && (consecutive_message != null || joining)
+    then structure_declaration_join(info.node, source) else null
+  value split_parent: if info.node.parent is ts_export then info.node.parent.parent.node else info.node.parent.node
+  value declaration_exported: info.node.parent is ts_export
+  value split_fix: if split_message != null && split_parent is (ts_program, ts_block, ts_case, ts_static_block) then structure_declaration_split(info.node.declaration.nodes, kind, declaration_exported, source) else null
+  value issues: compact([
     if init_mode == "always" && settings.separateRequires && counts.requires > 0 && counts.requires < total then { message: "Split requires to be separated into a single block.", fix: null } else null,
     structure_declaration_issue(consecutive_message, join_fix),
     if always_failed && both_always then { message: "Combine this with the previous '" kind "' statement.", fix: join_fix } else null,
     if always_failed && !both_always && init_mode == "always" && counts.initialized > 0 then { message: "Combine this with the previous '" kind "' statement with initialized variables.", fix: join_fix } else null,
     if always_failed && !both_always && uninit_mode == "always" && counts.uninitialized > 0 && !info.for_binding then { message: "Combine this with the previous '" kind "' statement with uninitialized variables.", fix: join_fix } else null,
     structure_declaration_issue(split_message, split_fix)
-  ]
-    compact
-  } {
+  ])
+  value map(issues, issue => {node: info.node, message: issue.message, fix: issue.fix})
+}
+
+in structure_lexical_scope, ts_variable_declaration rule one-var {
+  option options ("always" | "never" | "consecutive" | { separateRequires?: boolean; var?: "always" | "never" | "consecutive"; let?: "always" | "never" | "consecutive"; const?: "always" | "never" | "consecutive"; using?: "always" | "never" | "consecutive"; awaitUsing?: "always" | "never" | "consecutive"; initialized?: "always" | "never" | "consecutive"; uninitialized?: "always" | "never" | "consecutive" })[] = [] "declaration grouping policy"
+  let settings { value options; first; nonempty } ?? "always"
+  let scoped if type_of(settings) == "str" then settings == "always"
+    else settings.separateRequires || contains([settings.var, settings.let, settings.const, settings.using, settings.awaitUsing, settings.initialized, settings.uninitialized], "always")
+  when if scoped then is structure_lexical_scope
+    else is ts_variable_declaration && (settings != "never" || count(node.declaration.nodes) > 1)
+  let entries if scoped then structure_declaration_entries
+    else [structure_declaration_entry(node, structure_declaration_counts(node), {initialized: 0, uninitialized: 0, requires: 0})]
+  each issue in flat_map(entries, info => structure_declaration_findings(info, settings, source)) {
+    report at issue.node
     fix at issue.fix if issue.fix != null as issue.fix.text
     warn "{issue.message}"
   }
@@ -679,7 +691,6 @@ fn structure_operator_fix(before, after, next, policy, operator, before_comment,
   }
 
 in ts_binary.operator, ts_logical.operator, ts_assignment.operator, ts_equals, ts_question, ts_colon, ts_punctuator rule operator-linebreak {
-  @ts_token_context
   option mode "before" | "after" | "none" | null = null "operator side of a line break"
   option overrides { [key: string]: "before" | "after" | "none" | "ignore" } = {} "operator-specific placement"
   when parent is (ts_binary, ts_logical, ts_assignment)
@@ -687,15 +698,22 @@ in ts_binary.operator, ts_logical.operator, ts_assignment.operator, ts_equals, t
     || parent is (ts_declarator, ts_class_property, ts_import_equals, ts_type_alias, ts_type_parameter, ts_enum_member) && text == "="
     || parent is (ts_union, ts_intersection) && contains(["|", "&"], text) && offset > parent.structure_first_type_offset
   let placement { value overrides; get text; nonempty } ?? if mode == null && contains(["?", ":"], text) then "before" else mode.nonempty ?? "after"
-  let next_text if parent is ts_type_alias then byte_slice(parent_text, space_after.end - parent.structure_start) else null
+  let operator_previous token(node, "before")
+  let operator_next token(node, "after")
+  let operator_before_break operator_previous != null && position(operator_previous.end).js_line != position(offset).js_line
+  let operator_after_break operator_next != null && position(end_offset).js_line != position(operator_next.start).js_line
+  when operator_before_break || operator_after_break
+  let next_text if parent is ts_type_alias then byte_slice(parent_text, operator_next.start - parent.structure_start) else null
   let policy if placement != "ignore" && parent is ts_type_alias && re_test(next_text, /^[|&]/) then "after" else placement
-  when policy != "ignore" && (space_before.line_break || space_after.line_break)
-  when space_before.line_break && space_after.line_break || policy == "before" && !space_before.line_break || policy == "after" && !space_after.line_break || policy == "none"
+  when policy != "ignore"
+  when operator_before_break && operator_after_break || policy == "before" && !operator_before_break || policy == "after" && !operator_after_break || policy == "none"
+  let space_before ts_token_space(source, node, true)
+  let space_after ts_token_space(source, node, false)
   let operator_before_comment { value overlapping(ts_comment, space_before.start, offset); last }
   let operator_after_comment { value overlapping(ts_comment, end_offset, space_after.end); first }
-  let operator_fix structure_operator_fix(space_before, space_after, token_neighbours.after, policy, text, operator_before_comment, operator_after_comment)
+  let operator_fix structure_operator_fix(space_before, space_after, operator_next, policy, text, operator_before_comment, operator_after_comment)
   fix at operator_fix if operator_fix != null as operator_fix.text
-  warn if space_before.line_break && space_after.line_break then "Bad line breaking before and after '{text}'." else if policy == "before" then "'{text}' should be placed at the beginning of the line." else if policy == "after" then "'{text}' should be placed at the end of the line." else "There should be no line break before or after '{text}'."
+  warn if operator_before_break && operator_after_break then "Bad line breaking before and after '{text}'." else if policy == "before" then "'{text}' should be placed at the beginning of the line." else if policy == "after" then "'{text}' should be placed at the end of the line." else "There should be no line break before or after '{text}'."
 }
 
 group core_ts_list ts_array, ts_array_pattern, ts_object, ts_object_pattern, ts_function, ts_arrow,
