@@ -198,16 +198,20 @@ in name_write_source let name_write_identifiers {
   unique
 }
 in ts_identifier, ts_member, ts_index, ts_array, ts_object, ts_array_pattern, ts_object_pattern let write_site name_write_owner.offset
-in ts_identifier let access {
-  value classes: name_role_classes(node, "reference")
+in ts_identifier let name_syntax_access {
   value writer: name_write_owner
   value when {
-    classes == null then null
     writer is ts_update || writer is ts_assignment && writer.operator != "=" then "read_write"
     writer != null then "write"
-    name_type_access || !contains(classes, "value")
-      || is ts_export_specifier.local && (parent.kind == "type" || parent.parent.kind == "type") then "type"
+    name_type_access || is ts_export_specifier.local && (parent.kind == "type" || parent.parent.kind == "type") then "type"
     else then "read"
+  }
+}
+in ts_identifier let access {
+  value classes: name_role_classes(node, "reference")
+  value if classes == null then null else {
+    value syntax: name_syntax_access
+    value if syntax == "read" && !contains(classes, "value") then "type" else syntax
   }
 }
 

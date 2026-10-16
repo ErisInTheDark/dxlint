@@ -28,9 +28,10 @@ fn string_boundary_negative_length(n, needle) = {
   value bare: unparenthesised_node(n)
   value bare is ts_unary && bare.operator == "-" && string_boundary_length(bare.argument.node, needle)
 }
-fn string_boundary_receiver(n, optional) = {
+fn string_boundary_receiver(n, optional) = if ts_value_string_like(n) then true
+else if !optional then false else {
   value arms: value_parts(n)
-  value ts_value_string_like(n) || optional && arms != null && len(arms) > 0
+  value arms != null && len(arms) > 0
     && any(arms, arm => any(arm.parts, part => contains(part.traits, "string")))
     && all(arms, arm => any(arm.parts, part =>
       contains(part.traits, "string") || contains(part.traits, "null") || contains(part.traits, "undefined"))
@@ -53,7 +54,10 @@ fn string_boundary_comparison(n, needle) = {
   value arguments: access.args
   value first: first(arguments)
   value last: last(arguments)
-  value if access == null || !string_boundary_receiver(access.receiver, access.optional) then null
+  value if access == null
+    || !(contains(["indexOf", "lastIndexOf", "index", "charAt"], access.method) && len(arguments) == 1
+      || contains(["slice", "substring"], access.method) && contains([1, 2], len(arguments))) then null
+  else if !string_boundary_receiver(access.receiver, access.optional) then null
   else if access.method == "indexOf" && len(arguments) == 1 && ts_runtime_number(needle) == 0 then {
     kind: "start", receiver: access.receiver, needle: first, optional: access.optional, safe: true
   }
