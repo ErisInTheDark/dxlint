@@ -139,6 +139,9 @@ pub(super) fn outputs(call: Leaf, values: &Values<'_>) -> Known<Option<NodeValue
         Known::Yes(None) => return Known::Yes(None),
         Known::Unknown => return Known::Unknown,
     };
+    // No candidate at all says nothing about the result: an empty union
+    // would claim the call never returns.
+    if groups.is_empty() { return Known::Unknown }
     let mut results = Vec::new();
     for group in groups {
         let result = match proven(&group) {
