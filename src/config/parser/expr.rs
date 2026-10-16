@@ -266,7 +266,9 @@ impl Parser<'_> {
             loop {
                 self.skip(true, true);
                 names.push(self.ident("trait name")?);
-                self.skip(grouped, true);
+                // Only inside parentheses: an invisible close after the last
+                // name ends a `{...}` hole or a macro group around the test.
+                self.skip(grouped, grouped);
                 if !grouped || !self.ts.peek_raw(0).is_some_and(|t| t.kind == Tk::Comma) { break; }
                 self.ts.next_raw();
             }
