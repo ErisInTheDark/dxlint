@@ -1,0 +1,15 @@
+import .ts
+ignore "node_modules/typescript/lib/lib.fixture.d.ts"
+
+in ts_call.callee rule allowed {
+  when type_value_allowed(["safe", "okay"], node) == true
+  warn "allowed"
+}
+in ts_call.callee rule disallowed {
+  when type_value_allowed(["safe", "okay"], node) == false
+  warn "disallowed"
+}
+in ts_call.callee rule wrong-origin {
+  when type_value_allowed([{from: "file", name: ["safe", "okay"], path: "other.ts"}], node) == false
+  warn "wrong origin"
+}

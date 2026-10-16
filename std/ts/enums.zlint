@@ -66,11 +66,15 @@ fn enum_safe_bitwise(source, receiver) = enum_bitwise_shape(source) && {
   }
 }
 fn enum_policy(site, source) = {
-  value expected: if source != null then value_expected(source) else null
+  value context: if site is ts_property then site
+    else if source is ts_spread && source.parent is ts_object
+      then if source == last(source.parent.property.nodes) then source.parent.node else null
+    else source
+  value expected: if context != null then value_expected(context) else null
   value target: if site is ts_update || site is ts_assignment && site.enum_mutation then source
     else if site is (ts_as, ts_type_assertion) then site.type.node
     else if site.type != null then site.type.node
-    else if source != null && expected.present == true then value_expected_handle(source) else null
+    else if context != null && expected.present == true then value_expected_handle(context) else null
   value owner: if source is ts_return.argument || source is ts_arrow.body then return_value_owner(source) else null
   value asynchronous: owner != null && contains([] owner.modifier, "async")
   value receiver_handle: if asynchronous && target != null then ts_awaited_value(target, target) else target

@@ -27,7 +27,11 @@ fn type_specifier_matches(entry, gate, directory) =
         value path: type_specifier_path(gate.path)
         value if entry.path == null then starts_with(path,
           base (if ends_with(base, "/") then "" else "/"))
-          else path == type_specifier_path(base "/" entry.path)
+          else {
+            value allowed: type_specifier_path(entry.path)
+            value absolute: starts_with(allowed, "/") || re_test(allowed, /^[A-Za-z]:\//)
+            value path == (if absolute then allowed else type_specifier_path(base "/" entry.path))
+          }
       }
       else then false
     }

@@ -1,0 +1,3 @@
+cases.policy:6:1-6:11 file-policy#0 not allowed
+cases.policy:7:1-7:12 file-policy#0 not allowed
+cases.policy:8:1-8:15 file-policy#0 not allowed

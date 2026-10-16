@@ -1,0 +1,10 @@
+a.ts:4:1-4:5 allowed#0 allowed
+a.ts:4:1-4:5 wrong-origin#0 wrong origin
+a.ts:5:1-5:7 disallowed#0 disallowed
+a.ts:5:1-5:7 wrong-origin#0 wrong origin
+a.ts:6:1-6:12 allowed#0 allowed
+a.ts:6:1-6:12 wrong-origin#0 wrong origin
+a.ts:7:1-7:15 disallowed#0 disallowed
+a.ts:7:1-7:15 wrong-origin#0 wrong origin
+a.ts:9:1-9:6 allowed#0 allowed
+a.ts:9:1-9:6 wrong-origin#0 wrong origin

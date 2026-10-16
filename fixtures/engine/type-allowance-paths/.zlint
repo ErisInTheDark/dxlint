@@ -1,0 +1,21 @@
+import .ts/type-specifiers
+lang policy "*.policy"
+
+in .policy match sample /[^\r\n]+/ {
+  let cases {
+    posix: {base: "/project", path: "/project/src/safe.ts", origin: "/project/src/safe.ts"},
+    windows: {base: "C:/project", path: "C:/project/src/safe.ts", origin: "C:/project/src/safe.ts"},
+    backslashes: {base: "C:/project", path: "C:\\project\\src\\safe.ts", origin: "C:/project/src/safe.ts"},
+    relative: {base: "/project", path: "src/../src/safe.ts", origin: "/project/src/safe.ts"},
+    parent_relative: {base: "/project/src", path: "../safe.ts", origin: "/project/safe.ts"},
+    wrong_file: {base: "/project", path: "/project/src/other.ts", origin: "/project/src/safe.ts"},
+    wrong_drive: {base: "C:/project", path: "D:/project/src/safe.ts", origin: "C:/project/src/safe.ts"},
+    wrong_relative: {base: "/project", path: "src/other.ts", origin: "/project/src/safe.ts"}
+  }
+  let scenario get(cases, text)
+  rule file-policy {
+    when !type_specifier_matches({from: "file", name: "Safe", path: scenario.path},
+      {from: "file", name: "Safe", path: scenario.origin}, scenario.base)
+    warn "not allowed"
+  }
+}

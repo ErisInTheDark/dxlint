@@ -1,0 +1,2 @@
+a.ts:5:3-5:8 no-unsafe-enum-assignment#2
+a.ts:8:3-8:12 no-unsafe-enum-assignment:spread#0
