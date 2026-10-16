@@ -15,6 +15,7 @@ const FIELD: &str = "value_handle";
 
 pub(super) static FUNCTIONS: &[QueryFunction] = &[
     QueryFunction { name: "value_parts", arity: 1, call: |semantic, at, args| parts(semantic, semantic.values().values(at), args) },
+    QueryFunction { name: "value_alternatives", arity: 1, call: |semantic, at, args| alternatives(semantic, semantic.values().values(at), args) },
     QueryFunction { name: "value_children", arity: 3, call: |semantic, at, args| children(semantic, semantic.values().values(at), args) },
     QueryFunction { name: "value_signatures", arity: 1, call: |semantic, at, args| signatures(semantic, semantic.values().values(at), args) },
     QueryFunction { name: "value_constructors", arity: 1, call: |semantic, at, args| constructors(semantic, semantic.values().values(at), args) },
@@ -51,6 +52,7 @@ pub struct HandleFunction {
 
 static HANDLES: &[HandleFunction] = &[
     HandleFunction { name: "value_parts", call: parts },
+    HandleFunction { name: "value_alternatives", call: alternatives },
     HandleFunction { name: "value_children", call: children },
     HandleFunction { name: "value_signatures", call: signatures },
     HandleFunction { name: "value_constructors", call: constructors },
@@ -98,6 +100,17 @@ pub fn handle_of(value: &Value<'_>) -> Option<Handle> {
 pub(super) fn handle(semantic: &Semantic<'_>, value: NodeValue) -> Value<'static> {
     let canonical = semantic.calls().without_incidental_frames(&value, true);
     Value::record(vec![(FIELD.into(), Value::Num(semantic.question.handle(canonical).number()))])
+}
+
+/// Each alternative's handle, without describing it: `[]` is never.
+fn alternatives(semantic: &Semantic<'_>, value: NodeValue, _: &[Value<'static>]) -> Known<Value<'static>> {
+    let NodeValue::Alternatives(rows) = value else { return Known::Unknown };
+    let mut arms = Vec::with_capacity(rows.len());
+    for row in rows {
+        if row.is_empty() || !semantic.question.budget.step() { return Known::Unknown }
+        arms.push(handle(semantic, NodeValue::Alternatives(vec![row])));
+    }
+    Known::Yes(Value::list(arms))
 }
 
 /// Each alternative as `{ handle, parts }`: the arm's handle (its leaves
