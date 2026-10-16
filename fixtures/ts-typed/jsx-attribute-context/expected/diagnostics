@@ -1,0 +1,5 @@
+main.tsx:4:27-4:36 void-context#0 void context
+main.tsx:5:30-5:39 unknown-context#0 unknown context
+main.tsx:6:29-6:38 absent-context#0 absent context
+main.tsx:7:26-7:35 absent-context#0 absent context
+main.tsx:8:33-8:42 number-context#0 number context

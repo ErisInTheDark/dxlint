@@ -195,6 +195,11 @@ define {
     }
   }
   in ts_property { in value expects it.expected }
+  in ts_jsx_attribute {
+    let calls_jsx_key ts_value_key(name.node)
+    in value expects parent.name.first_parameter.[calls_jsx_key]
+  }
+  in ts_jsx_expression { in expression expects it.expected }
   in ts_arrow {
     when body not ts_block { in body expects return_type ?? it.expected.result }
   }

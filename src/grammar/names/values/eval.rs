@@ -381,6 +381,7 @@ impl<'a, 'world> Run<'a, 'world> {
             super::super::RETURNED => returned(self.values, leaf, None),
             super::super::WIDENED => Known::Yes(Some(widened(self.values, leaf))),
             super::super::RECEIVER => receiver(self.values, leaf),
+            super::super::FIRST_PARAMETER => first_parameter(self.values, leaf),
             _ => Known::Unknown,
         }
     }
@@ -546,6 +547,37 @@ fn receiver(values: &Values<'_>, at: Leaf) -> Known<Option<NodeValue>> {
     if receivers.is_empty() { return Known::Yes(None) }
     if absent { return Known::Unknown }
     Known::Yes(Some(combine(values, receivers, false)))
+}
+
+/// The first parameter of every call signature `at`'s value has (a
+/// component's props): absent when every signature takes none; unknown
+/// when some do and some don't, or the value has no call signatures.
+fn first_parameter(values: &Values<'_>, at: Leaf) -> Known<Option<NodeValue>> {
+    let Some(_nested) = values.question.budget.nest() else { return Known::Unknown };
+    let value = values.values(at);
+    if value == NodeValue::Unknown { return Known::Unknown }
+    let calls = values.semantic.calls();
+    let Known::Yes(groups) = calls.headers(&value, super::super::calls::InvokeKind::Call) else { return Known::Unknown };
+    let mut parameters = Vec::new();
+    let mut absent = false;
+    for group in groups {
+        if !values.question.budget.step() { return Known::Unknown }
+        if group.is_empty() { return Known::Unknown }
+        for header in group {
+            match calls.parameters(header) {
+                Known::Yes(found) => match found.first() {
+                    Some(&first) => parameters.push(values.values(first)),
+                    None => absent = true,
+                },
+                Known::Unknown => return Known::Unknown,
+            }
+        }
+    }
+    match (parameters.is_empty(), absent) {
+        (true, true) => Known::Yes(None),
+        (true, false) | (false, true) => Known::Unknown,
+        (false, false) => Known::Yes(Some(combine(values, parameters, false))),
+    }
 }
 
 fn returned(values: &Values<'_>, owner: Leaf, default: Option<&Value>) -> Known<Option<NodeValue>> {

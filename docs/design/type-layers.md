@@ -195,6 +195,10 @@ in ts_declarator { in init expects type }
   projecting results. No declared receivers = absent (`??` falls through);
   unknown metadata or a mix of present and absent = unknown; never stays
   never.
+- `first_parameter` (path step, e.g. `parent.name.first_parameter`): the
+  first parameter's value of every call signature the value has, unioned
+  (a component's props). Every signature taking none = absent; a mix, or
+  a value without call signatures, = unknown.
 - `self` (value primary): the raw current leaf, same file and frame, not
   expanded (`it` keeps normal expansion). `unwraps self & constraint`
   keeps the declaration's own traits and carriers alongside the

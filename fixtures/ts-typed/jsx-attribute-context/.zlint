@@ -1,0 +1,27 @@
+import .ts
+ignore "node_modules/typescript/lib/lib.fixture.d.ts"
+
+in ts_arrow rule void-context {
+  when body.text == "102"
+  let signatures value_signatures(value_expected_handle(node))
+  when signatures != null && count(signatures) > 0
+    && all(signatures, arm => count(arm) > 0 && all(arm, header => ts_value_has_void(header.result) == true))
+  warn "void context"
+}
+in ts_arrow rule unknown-context {
+  when body.text == "103"
+  when value_has_expected(node) == null
+  warn "unknown context"
+}
+in ts_arrow rule number-context {
+  when body.text == "106"
+  let signatures value_signatures(value_expected_handle(node))
+  when signatures != null && count(signatures) > 0
+    && all(signatures, arm => count(arm) > 0 && all(arm, header => ts_value_has_trait(header.result, "number") == true))
+  warn "number context"
+}
+in ts_arrow rule absent-context {
+  when body.text == "104" || body.text == "105"
+  when value_has_expected(node) == false
+  warn "absent context"
+}

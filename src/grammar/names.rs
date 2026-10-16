@@ -254,8 +254,9 @@ pub(crate) fn lower_path(g: &Grammar, attrs: &crate::expr::AttrNames, errors: &m
         (None, "returned") => Ok(RETURNED),
         (None, "widened") => Ok(WIDENED),
         (None, "receiver") => Ok(RECEIVER),
+        (None, "first_parameter") => Ok(FIRST_PARAMETER),
         (None, name) => match attrs.get(name) {
-            Some(attr) if attr < PRODUCT_ITEMS - ATTR_STEP => Ok(ATTR_STEP | attr),
+            Some(attr) if attr < SPECIAL_STEPS - ATTR_STEP => Ok(ATTR_STEP | attr),
             _ => {
                 errors.push(ConfigError::new(field.span, format!("no layer has a field or attribute `{}`", field.text))
                     .note("path steps are fields, `let` attributes, or `parent`, `it`, `through`, `definition`, `position`, `result`, `expected`, `inferred`, `returned`, `widened`, `receiver`"));
@@ -1119,6 +1120,9 @@ pub const RETURNED: u16 = u16::MAX - 8;
 pub const WIDENED: u16 = u16::MAX - 9;
 pub const RECEIVER: u16 = u16::MAX - 10;
 pub const PRODUCT_ITEMS: u16 = u16::MAX - 11;
+pub const FIRST_PARAMETER: u16 = u16::MAX - 12;
+/// The lowest special step: attribute steps stay below it.
+const SPECIAL_STEPS: u16 = FIRST_PARAMETER;
 /// `ATTR_STEP | id`: the node a `let` attribute (by engine attribute id)
 /// holds; fields are numbered below it, the special steps above.
 pub const ATTR_STEP: u16 = 0x8000;
@@ -1126,11 +1130,11 @@ pub const ATTR_STEP: u16 = 0x8000;
 /// Steps that ask a value question (`result`, `expected`, `inferred`, ...)
 /// instead of leading to syntax sites.
 pub fn query_step(step: u16) -> bool {
-    matches!(step, RESULT | EXPECTED | INFERRED | RETURNED | WIDENED | RECEIVER)
+    matches!(step, RESULT | EXPECTED | INFERRED | RETURNED | WIDENED | RECEIVER | FIRST_PARAMETER)
 }
 
 pub fn attribute_step(step: u16) -> Option<u16> {
-    (ATTR_STEP..PRODUCT_ITEMS).contains(&step).then_some(step & !ATTR_STEP)
+    (ATTR_STEP..SPECIAL_STEPS).contains(&step).then_some(step & !ATTR_STEP)
 }
 
 /// The bits of `classes`, adding new ones to `list` (at most 64).
