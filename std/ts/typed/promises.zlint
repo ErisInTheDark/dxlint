@@ -1,5 +1,6 @@
 import .ts/constants
 import .ts/values/inspection
+import .ts/typed/awaitability
 
 define {
 
@@ -22,7 +23,7 @@ in ts_node rule no-misused-promises:conditionals {
     || is (ts_if.test, ts_while.test, ts_do_while.test, ts_for.test)
     || is ts_unary.argument && node.parent.operator == "!"
   when promise_boolean_test || promise_boolean_left
-  when node could thenable && (flagUnions == "all" || node always thenable || flagUnions == "strict" && type_awaitability.union_equivalent == true)
+  when node could thenable && (flagUnions == "all" || node always thenable || flagUnions == "strict" && ts_await_union_equivalent(node) == true)
   warn "Expected non-Promise value in a boolean conditional."
 }
 
@@ -33,11 +34,36 @@ in ts_spread rule no-misused-promises:spreads {
   warn "Expected a non-Promise value to be spread in an object."
 }
 
-fn promise_void_transfer(contract) = contract.complete
-  && any(contract.source, result => result.thenable)
-  && any(contract.target, result => result.kind == "void")
-  && !any(contract.target, result => result.thenable)
-fn promise_contract_site(n) = if n is (ts_property, ts_method, ts_method_signature, ts_class_property, ts_property_signature) then n else n.parent
+fn promise_return_arms(signatures) = {
+  value headers: flat_map(signatures ?? [], arm => arm)
+  value returns: map(headers, header => if header.result == null then null else value_constituents(header.result))
+  value if signatures == null || count(headers) == 0 || any(returns, arms => arms == null) then null
+    else flat_map(returns, arms => arms)
+}
+fn promise_returns_known(arms) = arms != null && all(arms, arm => all(arm, part =>
+  contains(part.traits, "intersection") || !any(["any", "unknown", "error"], trait => contains(part.traits, trait))
+    && !contains(part.uncertain_traits, "thenable") && !contains(part.uncertain_traits, "void")))
+fn promise_returns_thenable(arms) = promise_returns_known(arms)
+  && any(arms, arm => any(arm, part => contains(part.traits, "thenable")))
+fn promise_returns_void(arms) = promise_returns_known(arms) && count(arms) > 0
+  && any(arms, arm => any(arm, part => contains(part.traits, "void")))
+  && !any(arms, arm => any(arm, part => contains(part.traits, "thenable")))
+fn promise_void_context(n) = {
+  value source: promise_return_arms(value_signatures(n))
+  value targets: expected_call_signatures(n)
+  value headers: flat_map(targets ?? [], arm => arm)
+  value target: flat_map(headers, header => header.result)
+  value promise_returns_thenable(source) && targets != null && count(headers) > 0
+    && all(headers, header => header.result_known) && promise_returns_void(target)
+}
+fn promise_member_void_context(n, key) = {
+  value expected: value_expected_handle(n)
+  value source: value_lookup(n, key).member
+  value target: if expected != null then value_lookup(expected, key).member else null
+  value source != null && target != null
+    && promise_returns_thenable(promise_return_arms(value_signatures(source)))
+    && promise_returns_void(promise_return_arms(value_signatures(target)))
+}
 fn promise_property_source(n) = if n is ts_property then n.value.node ?? n.key.node else n
 fn promise_property_site(n) = {
   value n: unparenthesised_node(n)
@@ -49,68 +75,98 @@ fn promise_finally_member(n) = n is (ts_member, ts_index)
   && n.object.promise_builtin_instance
 in ts_call let promise_finally_callback { value callee.node; unparenthesised_node; promise_finally_member }
 
+fn promise_async_policy(n, names) = {
+  value source: if n is ts_function && n.name != null then n.name.node else n
+  value signatures: value_signatures(source)
+  value headers: flat_map(signatures ?? [], arm => arm)
+  value returns: map(headers, header => {
+    value arms: if header.result == null then null else value_parts(header.result)
+    value matches: map(arms ?? [], arm => {
+      value parts: filter(arm.parts, part => !contains(part.traits, "intersection"))
+      value named: map(parts, part => part.carrier != null
+        && any(ts_value_ancestry(part).parts, base => contains(names, base.carrier.description.name)))
+      value {every: count(named) > 0 && all(named, found => found), some: any(named, found => found)}
+    })
+    value {
+      known: arms != null && all(arms, arm => all(arm.parts, part => part.carrier_known)),
+      dynamic: any(arms ?? [], arm => any(arm.parts, part =>
+        contains(part.traits, "any") || contains(part.traits, "unknown"))),
+      every: count(matches) > 0 && all(matches, result => result.every),
+      some: any(matches, result => result.some),
+      mixed: count(arms) > 1 && !all(matches, result => result.every),
+    }
+  })
+  value {
+    known: signatures != null && count(returns) > 0 && all(returns, result => result.known),
+    dynamic: any(returns, result => result.dynamic),
+    required: all(returns, result => if n.return_type != null then result.every else result.some),
+    mixed: any(returns, result => result.mixed),
+  }
+}
+
 in ts_call.argument, ts_new.argument, ts_template.expression rule no-misused-promises:void-arguments {
   when parent not ts_call || node.index != 0 || !parent.promise_finally_callback
-  each promise_contract in callable_contracts(parent, node) {
-    when promise_void_transfer(promise_contract)
-    report at unparenthesised_node(node)
-    warn "Promise returned in function argument where a void return was expected."
-  }
+  when promise_void_context(node)
+  report at unparenthesised_node(node)
+  warn "Promise returned in function argument where a void return was expected."
 }
 
 in ts_call.argument rule no-misused-promises:predicates {
   when node.index == 0 && condition_array_callback(parent)
-  each promise_contract in callable_contracts(parent, node) {
-    when any(promise_contract.source, result => result.thenable)
-    report at unparenthesised_node(node)
-    warn "Expected a non-Promise value to be returned."
-  }
+  when promise_returns_thenable(promise_return_arms(value_signatures(node)))
+  report at unparenthesised_node(node)
+  warn "Expected a non-Promise value to be returned."
 }
 
 in ts_declarator.init, ts_parameter.init, ts_assignment.right rule no-misused-promises:void-variables {
-  each promise_contract in callable_contracts(parent, node) callable_contracts(parent, node, ["[Symbol.dispose]"]) {
-    when promise_contract.origin != "heritage"
-    when promise_void_transfer(promise_contract)
-    report at unparenthesised_node(node)
-    warn "Promise-returning function provided to variable where a void return was expected."
-  }
+  when promise_void_context(node)
+    || promise_member_void_context(node, {global: "Symbol", class: "value", path: ["dispose"]})
+  report at unparenthesised_node(node)
+  warn "Promise-returning function provided to variable where a void return was expected."
 }
 
 in ts_property, ts_method, ts_class_property.init rule no-misused-promises:void-properties {
   when not ts_method || parent is ts_object
+  when not ts_class_property.init || node.parent.type != null
   let promise_source promise_property_source(node)
-  each promise_contract in { value node; promise_contract_site; callable_contracts promise_source } {
-    when promise_contract.origin != "heritage"
-    when promise_void_transfer(promise_contract)
-    report at promise_property_site(promise_source)
-    warn "Promise-returning function provided to property where a void return was expected."
-  }
+  when promise_void_context(promise_source)
+  report at promise_property_site(promise_source)
+  warn "Promise-returning function provided to property where a void return was expected."
 }
 
 in ts_return.argument, ts_arrow.body rule no-misused-promises:void-returns {
-  each promise_contract in callable_contracts(parent, node) {
-    when promise_void_transfer(promise_contract)
-    report at unparenthesised_node(node)
-    warn "Promise-returning function provided to return value where a void return was expected."
-  }
+  when promise_void_context(node)
+  report at unparenthesised_node(node)
+  warn "Promise-returning function provided to return value where a void return was expected."
 }
 
 in ts_jsx_expression.expression rule no-misused-promises:void-attributes {
   when parent.parent is ts_jsx_attribute
-  each promise_contract in callable_contracts(parent, node) {
-    when promise_void_transfer(promise_contract)
-    report at parent.node
-    warn "Promise-returning function provided to attribute where a void return was expected."
-  }
+  when promise_void_context(node)
+  report at parent.node
+  warn "Promise-returning function provided to attribute where a void return was expected."
 }
 
+fn promise_inherited_void_targets(n) = {
+  value owner: n.parent.node
+  value declared: owner.implements.nodes (if owner is ts_interface then owner.extends.nodes else [])
+  value constructed: if owner is ts_class && owner.extends != null then {
+    value headers: value_constructors(owner.extends.node)
+    value map(flat_map(headers ?? [], arm => arm), header => {heritage: owner.extends.node, value: header.result})
+  } else []
+  value targets: map(declared, heritage => {heritage: heritage, value: heritage}) constructed
+  value filter(targets, target => target.value != null && {
+    value member: value_lookup(target.value, n.static_name).member
+    value member != null && promise_returns_void(promise_return_arms(value_signatures(member)))
+  })
+}
 in ts_method, ts_method_signature, ts_class_property, ts_property_signature rule no-misused-promises:void-inherited-methods {
   when !is_static
-  each promise_contract in { value node; promise_contract_site; callable_contracts node } {
-    when promise_contract.origin == "heritage"
-    when promise_void_transfer(promise_contract)
+  when static_name != null && parent is (ts_class, ts_interface)
+  when promise_returns_thenable(promise_return_arms(value_signatures(node)))
+  each target in promise_inherited_void_targets(node) {
     report at node
-    warn "Promise-returning method provided where a void return was expected by extended/implemented type '" promise_contract.heritage.text "'."
+    warn "Promise-returning method provided where a void return was expected by extended/implemented type '" target.heritage.text "'."
   }
 }
 

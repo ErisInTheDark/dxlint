@@ -1,6 +1,8 @@
 import .ts
 
             in ts_declarator.init rule selected-contract {
-                when { value callable_contracts(parent, node, ["missing"]); count } == 0
+                let lookup value_lookup(node, "missing")
+                when lookup.alternatives != null && count(lookup.alternatives) > 0
+                  && all(lookup.alternatives, arm => arm.matched == false)
                 warn "selected"
             }

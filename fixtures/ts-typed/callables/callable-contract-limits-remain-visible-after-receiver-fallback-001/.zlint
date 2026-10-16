@@ -1,7 +1,7 @@
 import .ts
 
         in ts_call.argument rule partial-contract {
-            each contract in callable_contracts(parent, node)
-            when !contract.complete
+            let signatures expected_call_signatures(node)
+            when signatures == null || any(signatures, arm => any(arm, signature => !signature.result_known))
             warn "partial"
         }

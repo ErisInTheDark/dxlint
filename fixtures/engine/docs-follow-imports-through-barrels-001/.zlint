@@ -1,8 +1,10 @@
 import .ts
 in ts_identifier rule d {
-  let declaration first(symbol_metadata.declarations)
-  when imported_name != null && declaration.doc != null
-  info "{text}: {declaration.doc}"
+  let sources value_sources(node)
+  let sites walk(sources.sites ?? [], site => site_sources(node, site).sites ?? [])
+  let doc first(map(sites, site => deprecation_doc(node, site)))
+  when imported_name != null && doc != null
+  info "{text}: {doc}"
 }
 
 # Project inputs remain readable, but the original Rust test linted only this main file.

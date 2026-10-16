@@ -38,4 +38,49 @@ fn type_is_allowed(entries, groups, node) = {
   value count(groups) > 0 && any(entries, entry =>
     all(groups, group => any(group, gate => type_specifier_matches(entry, gate, directory))))
 }
+fn type_specifier_site(entry, n, site, name, directory) = {
+  value origin: declaration_origin(n, site)
+  value if origin == null || name == null || entry.from == "file" && directory == null then null else type_specifier_matches(entry, {
+    name: name,
+    from: if origin.kind == "library" then "lib" else if origin.kind == "package" then "package" else "file",
+    path: origin.path,
+    package: origin.package
+  }, directory)
+}
+fn type_specifier_part(entry, n, part, directory) = {
+  value scalar: find(["any", "unknown", "never", "void", "undefined", "null", "string", "number",
+    "boolean", "bigint", "symbol", "object"], name => contains(part.traits, name))
+  value if !part.carrier_known then null
+    else if part.carrier != null && contains(["named", "enum"], part.carrier.description.kind)
+      then type_specifier_site(entry, n, part.carrier, part.carrier.description.name, directory)
+    else if scalar != null then type_specifier_matches(entry, {name: scalar, from: "lib"}, directory)
+    else if contains(part.traits, "parameter") then null
+    else false
+}
+fn type_value_allowed(entries, n) = if count(entries) == 0 then false else {
+  value arms: value_parts(n)
+  value roots: value_sources(n)
+  value sites: walk(roots.sites ?? [], site => site_sources(n, site).sites ?? [])
+  value complete: roots != null && all(sites, site => contains(["ts_class", "ts_interface", "ts_enum"], site.kind)
+    || site.kind != "ts_function" && site_sources(n, site) != null)
+  value aliases: if count(arms) == 1 then filter(sites, site => site.kind == "ts_type_alias") else []
+  value directory: if any(entries, entry => entry.from == "file") then program_directory(n) else null
+  value states: map(entries, entry => {
+    value alias_states: map(aliases, site => type_specifier_site(entry, n, site, site.name, directory))
+    value alternatives: map(arms ?? [], arm => {
+      value parts: map(arm.parts, part => type_specifier_part(entry, n, part, directory))
+      value if any(parts, state => state == true) || any(alias_states, state => state == true) then true
+        else if !complete || any(parts, state => state == null) || any(alias_states, state => state == null) then null
+        else false
+    })
+    value if arms == null then null
+      else if count(arms) == 0 then type_specifier_matches(entry, {name: "never", from: "lib"}, directory)
+      else if all(alternatives, state => state == true) then true
+      else if any(alternatives, state => state == false) then false
+      else null
+  })
+  value if any(states, state => state == true) then true
+    else if any(states, state => state == null) then null
+    else false
+}
 }

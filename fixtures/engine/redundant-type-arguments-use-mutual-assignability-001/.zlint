@@ -1,2 +1,2 @@
 import .ts
-in ts_call.type_argument, ts_type_reference.type_argument rule t info "{text}:{type_argument_redundant}" { when type_argument_redundant != null }
+in ts_call.type_argument, ts_type_reference.type_argument rule t info "{text}:{type_argument_redundancy(node)}" { when type_argument_redundancy(node) != null }

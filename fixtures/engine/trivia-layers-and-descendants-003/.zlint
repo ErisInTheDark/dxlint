@@ -2,4 +2,3 @@ import .ts
 
         in ts_program rule d info "{ { value descendants(ts_function_like); map (n) kind_name(n); join ',' } }"
         in ts_new rule t info "{first_token is ts_keyword}:{last_token.text}"
-        in ts_try rule y info "{type}"

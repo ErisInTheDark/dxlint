@@ -17,32 +17,70 @@ fn deprecation_first(docs) = {
   filter (reason) reason != null
   first
 }
-fn deprecation_declarations(declarations) = {
-  value declarations
-  map (declaration) {
-    value if declaration.kind == "class" then [declaration.doc] else [declaration.doc] declaration.signature_docs
-    deprecation_first
+fn deprecation_leading_doc(leading) = {
+  value doc: if leading == null then null else re_find(leading, /\/\*\*(?:[^*]|\*+[^*/])*\*\/\s*$/)
+  value if doc == null then null else {
+    value doc
+    re_replace /^\s*\/\*\*/ ""
+    re_replace /\*\/\s*$/ ""
+    re_replace /\r\n?/ "\n"
+    re_replace /(?m)^[ \t]*\*?[ \t]?/ ""
+    trim
   }
-  filter (reason) reason != null
-  first
 }
-fn deprecation_reason(metadata, computed, called) =
-  if { value metadata.aliases; map (alias) alias.doc; deprecation_first } != null then { value metadata.aliases; map (alias) alias.doc; deprecation_first }
-  else if !computed && metadata.selected_signature != null && count(metadata.declarations) > 0 && all(metadata.declarations, declaration => contains(["function", "method"], declaration.kind)) then deprecation_tag(metadata.selected_signature.doc)
-  else if deprecation_declarations(metadata.declarations) != null then deprecation_declarations(metadata.declarations)
-  else if deprecation_tag(metadata.selected_signature.doc) != null then deprecation_tag(metadata.selected_signature.doc)
-  else if called then { value metadata.alias_target_declarations; filter (declaration) !contains(["function", "method"], declaration.kind); deprecation_declarations }
-  else null
-fn deprecation_allowed(entries, metadata, node) = {
-  value directory: if any(entries, entry => entry.from == "file") then program_directory(node) else null
-  value any(metadata.declarations metadata.alias_target_declarations, declaration =>
-    any(declaration.provenance, gate => any(entries, entry => type_specifier_matches(entry, gate, directory))))
+fn deprecation_doc(n, site) = deprecation_leading_doc(site_text(n, site).leading)
+fn deprecation_local_doc(n) = {
+  value owner: find(walk([] n.declaration, current =>
+    if current is (ts_declarator, ts_identifier) then current.parent.node else null),
+    current => current is ts_variable_declaration)
+  value if owner == null then null else deprecation_leading_doc(owner.gap_before ?? owner.text_before)
 }
-
-in ts_node let deprecation_called
-  if is (ts_call.callee, ts_new.callee, ts_tagged_template.tag) then true
-  else if is (ts_member.property, ts_parenthesized.expression, ts_non_null.expression, ts_instantiation.expression) then parent.deprecation_called == true
-  else false
+fn deprecation_subject(n) = if n is ts_member.property then n.parent.node
+  else if n.deprecation_shorthand then n.declaration else n
+fn deprecation_symbols(n) = {
+  value subject: deprecation_subject(n)
+  value member: subject is ts_member
+  value binding: if member then null else name_binding(subject)
+  value name: if member then subject.static_name else binding.key
+  value lookup: if member then value_lookup(subject.object.node, name) else null
+  value declaration: if member then null else declaration_identity(subject)
+  value sites: if member then unique(flat_map(lookup.alternatives ?? [], alternative =>
+    map(alternative.sources ?? [], source => source.site)))
+    else if declaration != null then [declaration] else []
+  value complete: name != null && (if member then lookup.alternatives != null
+    && count(lookup.alternatives) > 0 && all(lookup.alternatives, alternative =>
+      alternative.matched && alternative.sources != null && count(alternative.sources) > 0)
+    else binding != null && binding.node.imported_name == null && declaration != null)
+  value {name: name, sites: sites, complete: complete}
+}
+fn deprecation_value_allowed(entries, n) = if count(entries) == 0 then false else {
+  value symbols: deprecation_symbols(n)
+  value directory: if any(entries, entry => entry.from == "file") then program_directory(n) else null
+  value states: flat_map(entries, entry => map(symbols.sites, site =>
+    type_specifier_site(entry, n, site, symbols.name, directory)))
+  value if any(states, state => state == true) then true
+    else if !symbols.complete || any(states, state => state == null) then null else false
+}
+fn deprecation_call(n) = {
+  value chain: walk([n], current => if current.parent is (ts_parenthesized, ts_non_null, ts_instantiation)
+    then current.parent.node else null)
+  value callee: find(chain, current => current is (ts_call.callee, ts_new.callee, ts_tagged_template.tag))
+  value callee.parent.node
+}
+fn deprecation_reason(n) = {
+  value subject: deprecation_subject(n)
+  value call: deprecation_call(subject)
+  value selection: if call != null then call_selection(call) else null
+  value roots: value_sources(subject)
+  value sites: walk(roots.sites ?? [], site => site_sources(subject, site).sites ?? [])
+  value members: if subject is ts_member then deprecation_symbols(subject).sites else []
+  value origin: declaration_identity(subject)
+  value docs: if call != null then
+    if selection != null && !selection.uncertain && count(selection.selected) == 1
+      then map(selection.selected, site => deprecation_doc(subject, site)) else []
+    else map(unique([] members (if origin != null then [origin] else []) sites), site => deprecation_doc(subject, site))
+  value deprecation_first([deprecation_local_doc(subject)] docs)
+}
 
 in ts_node let deprecation_import
   if is (ts_import, ts_import_equals) then true
@@ -53,20 +91,18 @@ in ts_node let deprecation_excluded
   deprecation_import || uses != null && !(is ts_pattern_property.key) || is (ts_function.name, ts_class.name, ts_interface.name, ts_type_alias.name, ts_enum.name, ts_namespace.name, ts_method.key, ts_class_property.key, ts_property_signature.key, ts_method_signature.key) || is ts_property.key && !deprecation_shorthand || is (ts_enum_member.name, ts_parameter.name, ts_type_parameter.name, ts_import_equals.name, ts_export_specifier.exported, ts_jsx_closing.name, ts_index.index)
 in ts_index let deprecation_key index.node
 in ts_node let deprecation_export_name if is ts_export_specifier.local then parent.exported.node ?? node else null
-in ts_node let deprecation_metadata if deprecation_shorthand then declaration.symbol_metadata else symbol_metadata
 in ts_node let no_deprecated_checked true
 
 in ts_identifier, ts_private_name, ts_super, ts_jsx_attribute.name, ts_index rule no-deprecated {
   option allow (string | type_specifier_file | type_specifier_lib | type_specifier_package)[] = [] "Allowed deprecated symbols"
   when !deprecation_excluded
   when deprecation_export_name == null || deprecation_export_name is ts_identifier
-  let metadata deprecation_metadata
   let computed is ts_index
-  let tag deprecation_reason(metadata, computed, deprecation_called)
+  let tag deprecation_reason(node)
   when tag != null
   when no_deprecated_checked
-  when if computed then !type_is_allowed(allow, object.type_specifier_groups, node) else !deprecation_allowed(allow, metadata, node)
+  when (if computed then type_value_allowed(allow, object.node) else deprecation_value_allowed(allow, node)) == false
   report at if computed then deprecation_key else deprecation_export_name ?? node
-  warn "`" (deprecation_export_name.identifier_name ?? metadata.name) "` is deprecated." (if tag.reason == "" then "" else " " tag.reason)
+  warn "`" (deprecation_export_name.identifier_name ?? (if computed then static_name else identifier_name)) "` is deprecated." (if tag.reason == "" then "" else " " tag.reason)
 }
 }

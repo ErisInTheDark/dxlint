@@ -132,9 +132,9 @@ fn layout_trailing_commas(n) = {
     if count(arguments) > 0 then {items: arguments, kind: "type-arguments"} else null
   ]
   value lists
-  filter (list) list != null
+  compact
   map (list) layout_trailing_comma(n, list)
-  filter (site) site != null
+  compact
 }
 fn layout_terminal_arrow_block(n, end) = {
   value chain: walk([n], current => if current is ts_block then null

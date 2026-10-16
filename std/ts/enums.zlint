@@ -1,35 +1,79 @@
-# Enum transfer policy; type identities and relations remain native facts.
+import .ts/typed/assignments
+
 define {
-fn enum_root_bad(pair) =
-  {
-    value pair.sender
-    zip pair.assignable
-    any (entry) any(pair.receiver, target => len(target.enums) > 0 && any(target.domains, domain => { value first(entry).domains; contains domain }))
-    && !any(pair.receiver, target => any(target.enums, identity => { value first(entry).enums; contains identity }))
-    && !{
-      value entry
-      last_entry_2: last
-      value zip(pair.receiver, last_entry_2)
-      any (allowance) { value first(allowance).enums; len } == 0 && last(allowance) == true
+fn enum_origins(arm) = filter(arm, part => contains(part.traits, "enum"))
+fn enum_root_bad(sender, receiver) = sender != null && receiver != null && len(receiver) > 0
+  && all(receiver, arm => len(enum_origins(arm)) > 0
+    && all(enum_origins(arm), part => part.carrier_known && part.carrier != null))
+  && any(sender, source => {
+    value origins: enum_origins(source)
+    value domains: filter(["number", "string"], trait => any(source, part => contains(part.traits, trait)))
+    value len(domains) > 0 && all(origins, part => part.carrier_known && part.carrier != null)
+      && any(receiver, target => any(domains, domain => any(target, part => contains(part.traits, domain))))
+      && !any(receiver, target => any(enum_origins(target), b => any(origins, a =>
+        a.carrier.file == b.carrier.file && a.carrier.node == b.carrier.node)))
+      && all(source, part => !contains(part.traits, "any") && !contains(part.traits, "unknown")
+        && !contains(part.uncertain_traits, "enum"))
+  })
+fn enum_relation_pairs(sender, receiver, source) = {
+  value {sender: sender, receiver: receiver}
+  walk (pair) if pair.sender == null || pair.receiver == null
+    || len(pair.sender) != 1 || len(pair.receiver) != 1 then [] else {
+    value first(pair.sender)
+    flat_map (a) {
+      value first(pair.receiver)
+      flat_map (b) {
+        value assignment_carrier_arguments(a, b, source)
+        map (args) {sender: first(args), receiver: last(args)}
+      }
     }
   }
-fn enum_relation_bad(pair) = { value pair; walk (relation) relation.children; any (relation) enum_root_bad(relation) }
-fn enum_context_bad(context) = context.complete && enum_relation_bad(context.relation) && !enum_safe_bitwise(context.expression)
+}
+fn enum_bitwise_shape(n) = n is ts_binary && contains(["&", "|", "^"], n.operator)
+  || n is ts_unary && n.operator == "~"
+fn enum_bitwise_leaves(source) = {
+  value source
+  walk (n) if n is ts_binary && enum_bitwise_shape(n) then [n.left.node, n.right.node]
+    else if n is ts_unary && enum_bitwise_shape(n) then [n.argument.node] else []
+  filter (n) !enum_bitwise_shape(n)
+}
+fn enum_safe_bitwise(source, receiver) = enum_bitwise_shape(source) && {
+  value enum_bitwise_leaves(source)
+  all (n) {
+    value parts: value_constituents(n)
+    value parts != null && !enum_root_bad(parts, receiver)
+  }
+}
+fn enum_policy(site, source) = {
+  value expected: if source != null then value_expected(source) else null
+  value receiver: if site is ts_update || site is ts_assignment && site.enum_mutation
+    then value_constituents(source)
+    else if site is (ts_as, ts_type_assertion) then value_constituents(site.type.node)
+    else if site.type != null then value_constituents(site.type.node) else expected.value
+  value sender: if source != null then value_constituents(source) else null
+  value pairs: enum_relation_pairs(sender, receiver, source)
+  value names: {
+    value pairs
+    flat_map (pair) pair.receiver ?? []
+    flat_map (arm) enum_origins(arm)
+    map (part) part.carrier.description.name
+    filter (name) name != null
+    unique
+  }
+  value if receiver == null || sender == null || len(names) == 0
+    || enum_bitwise_shape(unparenthesised_node(source))
+      && any(enum_bitwise_leaves(unparenthesised_node(source)), leaf => value_constituents(leaf) == null) then []
+    else [{names: names, bad: any(pairs, pair => enum_root_bad(pair.sender, pair.receiver))
+      && !enum_safe_bitwise(unparenthesised_node(source), receiver)}]
+}
+fn enum_context_bad(context) = context.bad
 fn enum_names_text(contexts) = {
   value contexts
-  fold ([]) (names, context) names context.enum_names
+  fold ([]) (names, context) names context.names
   unique
   sort
   map (name) "'" name "'"
   join ", "
-}
-fn enum_bitwise_shape(expression) =
-  expression.kind == "binary" && contains(["&", "|", "^"], expression.operator) && len(expression.operands) == 2
-  || expression.kind == "unary" && expression.operator == "~" && len(expression.operands) == 1
-fn enum_safe_bitwise(expression) = enum_bitwise_shape(expression) && {
-  value expression.operands
-  walk (operand) if enum_root_bad(operand.relation) && enum_bitwise_shape(operand) then operand.operands else []
-  all (operand) !enum_root_bad(operand.relation) || enum_bitwise_shape(operand)
 }
 
 group enum_transfer ts_declarator, ts_parameter, ts_class_property, ts_assignment, ts_assignment_pattern, ts_property, ts_as, ts_type_assertion, ts_update
@@ -40,11 +84,9 @@ in enum_transfer let enum_value
   else if is (ts_as, ts_type_assertion) then expression.node
   else if is ts_update then argument.node
   else value.node ?? key.node
-in enum_transfer let enum_contexts type_flow(node, enum_value)
-in enum_transfer let enum_heritage filter(enum_contexts, context => context.origin == "heritage")
-in enum_transfer let enum_heritage_bad is ts_class_property && len(enum_heritage) > 0 && all(enum_heritage, context => enum_context_bad(context))
-in enum_transfer let enum_selected_contexts if enum_heritage_bad then enum_heritage else filter(enum_contexts, context => context.origin != "heritage")
-in enum_transfer let enum_reports enum_value != null && (enum_mutation || enum_heritage_bad || unparenthesised_node(enum_value) not (ts_object, ts_array)) && (if enum_mutation then ts_value_has_enum(enum_value) else any(enum_selected_contexts, context => enum_context_bad(context)))
+in enum_transfer let enum_contexts enum_policy(node, enum_value)
+in enum_transfer let enum_selected_contexts enum_contexts
+in enum_transfer let enum_reports enum_value != null && len(enum_contexts) > 0 && (enum_mutation || unparenthesised_node(enum_value) not (ts_object, ts_array)) && (if enum_mutation then ts_value_has_enum(enum_value) else any(enum_selected_contexts, context => enum_context_bad(context)))
 in ts_node let enum_checked
   if is ts_property then parent.enum_checked == true
   else if is (ts_object, ts_array, ts_parenthesized, ts_as, ts_type_assertion, ts_non_null, ts_satisfies, ts_spread, ts_conditional, ts_logical)
@@ -62,39 +104,39 @@ in enum_transfer rule no-unsafe-enum-assignment {
 }
 in ts_array.element rule no-unsafe-enum-assignment:element {
   when !parent.enum_checked && unparenthesised_node(node) not (ts_object, ts_array)
-  let contexts type_flow(node, node)
+  let contexts enum_policy(node, node)
   when any(contexts, context => enum_context_bad(context))
   warn "The value assigned here does not have a shared enum type with the expected enum {enum_names_text(contexts)}."
 }
 in ts_object.property rule no-unsafe-enum-assignment:spread {
   when node is ts_spread && !parent.enum_checked
-  let contexts type_flow(node, node)
+  let contexts enum_policy(node, node)
   when any(contexts, context => enum_context_bad(context))
   warn "The value assigned here does not have a shared enum type with the expected enum {enum_names_text(contexts)}."
 }
 in ts_jsx_expression.expression rule no-unsafe-enum-assignment:jsx {
   when unparenthesised_node(node) not (ts_object, ts_array)
-  let contexts type_flow(node, node)
+  let contexts enum_policy(node, node)
   when any(contexts, context => enum_context_bad(context))
   warn "The value assigned here does not have a shared enum type with the expected enum {enum_names_text(contexts)}."
 }
 in ts_call.argument, ts_new.argument, ts_template.expression rule no-unsafe-enum-assignment:arguments {
   when !(is ts_template.expression) || parent is ts_tagged_template.quasi
   when unparenthesised_node(node) not (ts_object, ts_array)
-  let contexts type_flow(node, node)
-  when any(contexts, context => context.origin == "argument" && enum_context_bad(context))
+  let contexts enum_policy(node, node)
+  when any(contexts, context => enum_context_bad(context))
   warn "The argument passed here does not have a shared enum type with the expected enum {enum_names_text(contexts)}."
 }
 in ts_return.argument, ts_arrow.body rule no-unsafe-enum-assignment:returns {
   when unparenthesised_node(node) not (ts_object, ts_array, ts_block)
-  let contexts type_flow(node, node)
-  when any(contexts, context => context.origin == "return" && enum_context_bad(context))
+  let contexts enum_policy(node, node)
+  when any(contexts, context => enum_context_bad(context))
   report at if is ts_return.argument then parent.node else node
   warn "The value returned here does not have a shared enum type with the expected enum {enum_names_text(contexts)}."
 }
 in ts_index.index rule no-unsafe-enum-assignment:access {
-  let contexts type_flow(parent.node, node)
-  when any(contexts, context => context.origin == "index" && enum_context_bad(context))
+  let contexts enum_policy(parent.node, node)
+  when any(contexts, context => enum_context_bad(context))
   warn "The computed key used here does not have a shared enum type with the expected enum {enum_names_text(contexts)}."
 }
 }

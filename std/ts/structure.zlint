@@ -110,6 +110,8 @@ fn structure_property_info(subject, key) = {
   value flags: first(sources).flags
   value {
     declared: declared,
+    named: any(lookups, lookup => any(lookup.alternatives, alternative =>
+      any(alternative.sources, source => source.kind == "named"))),
     visibility: if !declared then null else if contains(flags, "private_access") then "private"
       else if contains(flags, "protected_access") then "protected" else "public",
   }
@@ -136,7 +138,8 @@ in ts_index rule dot-notation:computed {
   let property if allowPrivateClassPropertyAccess || allowProtectedClassPropertyAccess || allow_index
     then structure_property_info(object.node, name) else null
   when !(allowPrivateClassPropertyAccess && property.visibility == "private" || allowProtectedClassPropertyAccess && property.visibility == "protected")
-  when !allow_index || property.declared == true || !any(object.index_key_types, key_type => key_type.string_like)
+  when !allow_index || property.named == true || ts_value_has_trait(object.node, "unknown") == true
+    || ts_value_has_trait(object.node, "any") == true || value_has_member(object.node, name, null) == false
   let open index.space_before.start - 1
   let fixable { value overlapping(ts_comment, open, end_offset); count } == 0
   let receiver object.structure_unwrapped

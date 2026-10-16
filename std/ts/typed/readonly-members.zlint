@@ -76,16 +76,27 @@ fn readonly_primitive_annotation(initializer) = {
   value names: filter(["string", "number", "boolean", "bigint"], name => ts_value_has_trait(initializer, name) == true)
   value if count(names) > 0 then join(names, " | ") else null
 }
-in ts_node let readonly_name_bindings type_structure([], ["name_bindings"])
+fn readonly_enum_annotation(initializer) = {
+  value parts: value_constituents(initializer)
+  value carriers: {
+    value parts
+    flat_map (arm) arm
+    filter (part) part.carrier_known && part.carrier.description.kind == "enum"
+    map (part) part.carrier
+    unique
+  }
+  value carrier: first(carriers)
+  value scopes: if count(carriers) == 1 then name_scopes(initializer, "lexical") else null
+  value rows: map(scopes, scope => {declarations: name_scope_declarations(initializer, scope.id, carrier.description.name)})
+  value row: find(rows, row => row.declarations == null || count(row.declarations) > 0)
+  value identity: {file: carrier.file, node: carrier.node}
+  value if parts != null && scopes != null && row.declarations != null && count(row.declarations) > 0
+    && all(row.declarations, declaration => declaration_identity(declaration.node) == identity)
+    then carrier.description.name else null
+}
 fn readonly_initializer_annotation(initializer) = {
-  value type_name: initializer.type()
-  value bindings: initializer.readonly_name_bindings.name_bindings
-  value type_parts: split(type_name, ".")
   value if ts_value_has_trait(initializer, "any") == true then "any"
-  else if ts_value_has_enum(initializer) then
-    if count(bindings) == 1 && first(bindings).same_declaration
-      && (initializer.type_structure([], ["kind"], false).kind == "enum_member" || first(bindings).name == last(type_parts))
-    then first(bindings).name else null
+  else if ts_value_has_enum(initializer) then readonly_enum_annotation(initializer)
   else readonly_primitive_annotation(initializer)
 }
 

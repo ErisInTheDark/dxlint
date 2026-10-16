@@ -1,3 +1,8 @@
 import .ts
 rule no-deprecated 
-override in ts_node let no_deprecated_checked !any(deprecation_metadata.declarations, declaration => any(declaration.provenance, gate => gate.from == 'lib' && gate.name == 'old'))
+override in ts_node let no_deprecated_checked {
+  value symbols: deprecation_symbols(node)
+  value origins: map(symbols.sites, site => declaration_origin(node, site))
+  value symbols.complete && all(origins, origin => origin != null)
+    && !(symbols.name == "old" && any(origins, origin => origin.kind == "library"))
+}

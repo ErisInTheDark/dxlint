@@ -1,2 +1,4 @@
 import .ts
 rule no-unnecessary-type-assertion
+ignore "tsconfig.json"
+ignore "node_modules/typescript/lib/lib.fixture.d.ts"

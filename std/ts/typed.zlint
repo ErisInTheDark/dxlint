@@ -45,10 +45,19 @@ import .ts/constants
 
 define {
 
-fn matches_type_names(groups, names) = all(groups, group => any(group, name => contains(names, name)))
-
+fn generated_empty_type(n) = {
+  value arms: value_parts(n)
+  value arms != null && any(arms, arm =>
+    count(arm.parts) > 0 && all(arm.parts, part =>
+      contains(part.traits, "structural") && count(part.uncertain_traits) == 0
+      && part.carrier_known && part.carrier == null)
+    && value_children(arm.handle, true, []) == []
+    && value_signatures(arm.handle) == [[]] && value_constructors(arm.handle) == [[]])
+}
 in ts_type_reference, ts_intersection rule no-generated-empty-object-type {
-  when generated_empty_object
+  when node is ts_intersection || count(type_argument.nodes) > 0
+    && last(walk(node, item => if item.parent is ts_parenthesized_type then item.parent.node else null)).parent not ts_intersection
+  when generated_empty_type(node)
   warn "This type resolves to `{{}}`, the empty object type. This was likely not intentional."
 }
 
@@ -81,10 +90,12 @@ in promise_function_async_function rule promise-function-async {
   when !(promise_function_async_exempt.nonempty ?? false)
   when promise_function_async_checked
   let names ("Promise" allowedPromiseNames)
-  let disallowed_unknown (!allowAny && any(function_return_info.returns, result => result.unknown))
-  when disallowed_unknown || all(function_return_info.returns, result => if function_return_info.explicit then matches_type_names(result.groups, names) else any(result.groups, group => any(group, name => contains(names, name))))
+  let policy promise_async_policy(node, names)
+  when policy.known
+  let disallowed_unknown !allowAny && policy.dynamic
+  when disallowed_unknown || policy.required
   report at function_head_site(node)
-  warn if !disallowed_unknown && any(function_return_info.returns, result => result.union && !matches_type_names(result.groups, names)) then "Functions that return promises must be async. Consider adding an explicit return type annotation if the function is intended to return a union of promise and non-promise types." else "Functions that return promises must be async."
+  warn if !disallowed_unknown && policy.mixed then "Functions that return promises must be async. Consider adding an explicit return type annotation if the function is intended to return a union of promise and non-promise types." else "Functions that return promises must be async."
   let edit promise_function_async_edit(node)
   fix at { start: edit.start, end: edit.start } if !disallowed_unknown as edit.text
 }
@@ -95,12 +106,13 @@ in ts_throw.argument rule only-throw-error {
   option allowRethrowing boolean = true "Allow rethrowing catch and Promise rejection parameters"
   option allowThrowingAny boolean = true "Allow any values"
   option allowThrowingUnknown boolean = true "Allow unknown values"
+  when value_parts(node) != null
   when ts_error_value.kind != "error"
   when !allowRethrowing || !ts_error_value.rethrown
   when !allowThrowingAny || ts_error_value.kind != "any"
   when !allowThrowingUnknown || ts_error_value.kind != "unknown"
   when only_throw_error_checked
-  when !type_is_allowed(allow, type_specifier_groups, node)
+  when type_value_allowed(allow, node) == false
   report at unparenthesised_node(node)
   warn if ts_error_value.kind == "undefined" then "Do not throw undefined." else "Expected an error object to be thrown."
 }
@@ -121,7 +133,7 @@ in ts_identifier let rejection_binding is ts_parameter.name && parent.rejection_
 in ts_call let rejection_call
   callee.rejection_member == true || any(callee.declarations, d => d.rejection_binding == true)
 in ts_node let rejection_reason
-  {possible: could_be_error && error_undefined_identifier != true, kind: ts_error_value.kind, groups: type_specifier_groups}
+  {possible: could_be_error && error_undefined_identifier != true, kind: ts_error_value.kind, subject: node}
 in ts_call let prefer_promise_reject_errors_checked true
 in ts_call rule prefer-promise-reject-errors {
   option allowEmptyReject boolean = false "Allow rejection without a reason"
@@ -131,31 +143,66 @@ in ts_call rule prefer-promise-reject-errors {
   when rejection_call
   let reason first([] argument.rejection_reason)
   when reason != null || !allowEmptyReject
-  when reason == null || (if re_test(file, /\.[cm]?tsx?$/) then reason.kind != "error" && !(allowThrowingAny && reason.kind == "any") && !(allowThrowingUnknown && reason.kind == "unknown") && !type_is_allowed(allow, reason.groups, node) else !reason.possible)
+  when reason == null || (if re_test(file, /\.[cm]?tsx?$/) then value_parts(reason.subject) != null && reason.kind != "error" && !(allowThrowingAny && reason.kind == "any") && !(allowThrowingUnknown && reason.kind == "unknown") && type_value_allowed(allow, reason.subject) == false else !reason.possible)
   when prefer_promise_reject_errors_checked
   warn "Expected the Promise rejection reason to be an Error."
 }
 
-fn stringification_compound(parts, kind) =
-  if kind == "union" then if all(parts, part => part == 2) then 2 else if all(parts, part => part == 0) then 0 else 1
-  else if any(parts, part => part == 0) then 0 else 2
-fn stringification_collection(parts) = if any(parts, part => part == 2) then 2 else if any(parts, part => part == 1) then 1 else 0
-fn stringification_object_member(declaration) = declaration.owner.kind == "interface" && declaration.owner.name == "Object"
-fn stringification_leaf(t, unknown) =
-  if any(t.members, member => member.name == "[Symbol.toPrimitive]" && any(member.declarations, declaration => declaration.signature && declaration.key_symbol == "toPrimitive")) then 0
-  else if any(t.members, member => member.name != "[Symbol.toPrimitive]" && any(member.declarations, declaration => !stringification_object_member(declaration))) then 0
-  else if any(t.members, member => member.name != "[Symbol.toPrimitive]" && any(member.declarations, declaration => stringification_object_member(declaration))) then 2
-  else if unknown && contains(["unknown", "parameter"], t.kind) then 1 else 0
-fn stringification_certainty(t, ignored, unknown) =
-  if t.kind == "boolean" || any(t.names t.generic_names t.aliases, name => contains(ignored, name)) then 0
-  else if contains(["union", "intersection"], t.kind) then { value t.parts; map (part) stringification_certainty(part, ignored, unknown); stringification_compound t.kind }
-  else if contains(["array", "tuple"], t.kind) then { value t.parts; map (part) stringification_certainty(part, ignored, unknown); stringification_collection }
-  else stringification_leaf(t, unknown)
-fn stringification_join(t, ignored, unknown) =
-  if contains(["union", "intersection"], t.kind) then { value t.parts; map (part) stringification_join(part, ignored, unknown); stringification_compound t.kind }
-  else if contains(["array", "tuple"], t.kind) then { value t.parts; map (part) stringification_certainty(part, ignored, unknown); stringification_collection }
-  else 0
-in ts_node let stringification_type type_structure(["toString", "toLocaleString", "valueOf", "[Symbol.toPrimitive]"])
+fn stringification_collection(states) = if any(states, state => state == null) then null
+  else if any(states, state => state == 2) then 2 else if any(states, state => state == 1) then 1 else 0
+fn stringification_union(states) = if count(states) == 0 then 0 else if any(states, state => state == null) then null
+  else if all(states, state => state == 2) then 2 else if all(states, state => state == 0) then 0 else 1
+fn stringification_member(n, handle, key) = {
+  value roots: global_declarations(n, "Object", "type")
+  value defaults: map(roots ?? [], root => value_lookup(declaration_value(n, root), key))
+  value lookup: value_lookup(handle, key)
+  value known: roots != null && count(roots) > 0
+    && all(defaults, item => item.alternatives != null)
+    && lookup.alternatives != null
+  value canonical: flat_map(defaults, item => flat_map(item.alternatives, arm => map(arm.sources, source => source.site)))
+  value sources: flat_map(lookup.alternatives ?? [], arm => arm.sources)
+  value if !known || any(sources, source => source.site == null) then null
+    else if any(sources, source => !contains(canonical, source.site)) then 0
+    else if count(sources) > 0 then 2 else null
+}
+fn stringification_part(n, part, ignored, check_unknown, seen) = {
+  value primitive: any(["boolean", "string", "number", "bigint", "symbol", "null", "undefined", "any"],
+    trait => contains(part.traits, trait))
+  value carrier: part.carrier
+  value ignored_name: carrier != null && contains(ignored, carrier.description.name)
+  value if primitive || ignored_name then 0
+    else if contains(part.traits, "unknown") || contains(part.traits, "parameter") then if check_unknown then 1 else 0
+    else if contains(["array", "tuple"], carrier.description.kind) then
+      stringification_collection(map(carrier.arguments, argument => stringification_certainty(n, argument, ignored, check_unknown, seen)))
+    else if !part.carrier_known then null else {
+      value symbol: value_lookup(part.handle, {global: "Symbol", class: "value", path: ["toPrimitive"]})
+      value custom_symbol: symbol.alternatives != null
+        && any(symbol.alternatives, arm => arm.matched && count(arm.sources) > 0)
+      value states: map(["toString", "toLocaleString", "valueOf"], key => stringification_member(n, part.handle, key))
+      value if custom_symbol || any(states, state => state == 0) then 0
+        else if symbol.alternatives == null || any(states, state => state == null) then null
+        else if any(states, state => state == 2) then 2 else null
+    }
+}
+fn stringification_certainty(n, handle, ignored, check_unknown, seen) = {
+  value arms: if contains(seen, handle) then null else value_parts(handle)
+  value if arms == null then null else if count(arms) == 0 then 0 else stringification_union(map(arms, arm => {
+    value states: map(arm.parts, part => stringification_part(n, part, ignored, check_unknown, seen [handle]))
+    value if any(states, state => state == 0) then 0
+      else if any(states, state => state == null) then null
+      else if all(states, state => state == 1) then 1 else 2
+  }))
+}
+fn stringification_join(n, ignored, check_unknown) = {
+  value arms: value_parts(n)
+  value if arms == null then null else stringification_union(map(arms, arm => {
+    value states: map(arm.parts, part => if contains(["array", "tuple"], part.carrier.description.kind)
+      then stringification_collection(map(part.carrier.arguments, argument => stringification_certainty(n, argument, ignored, check_unknown, [])))
+      else 0)
+    value if any(states, state => state == 0) then 0
+      else if any(states, state => state == null) then null else max(states)
+  }))
+}
 in ts_call let stringification_subjects
   if callee is ts_identifier && global_callee == "String" then [{node: { value argument.nodes; first; unparenthesised_node }, join: false}]
   else if callee is ts_member && callee.property is ts_identifier && contains(["toString", "toLocaleString", "join"], callee.property.text) then [{node: unparenthesised_node(callee.object.node), join: callee.property.text == "join"}]
@@ -171,11 +218,11 @@ in ts_call, ts_binary, ts_assignment, ts_template rule no-base-to-string {
   let findings map(stringification_subjects, subject => {
     node: subject.node,
     join: subject.join,
-    certainty: if subject.join then stringification_join(subject.node.stringification_type, ignoredTypeNames, checkUnknown) else stringification_certainty(subject.node.stringification_type, ignoredTypeNames, checkUnknown)
+    certainty: if subject.join then stringification_join(subject.node, ignoredTypeNames, checkUnknown) else stringification_certainty(subject.node, subject.node, ignoredTypeNames, checkUnknown, [])
   })
   each subject in findings {
     when subject.node != null && subject.node not (ts_literal, ts_spread)
-    when subject.certainty > 0
+    when subject.certainty != null && subject.certainty > 0
     report at {start: subject.node.offset, end: subject.node.end_offset}
     warn if subject.join then "Using `join()` for " subject.node.text " " (if subject.certainty == 2 then "will" else "may") " use Object's default stringification format ('[object Object]') when stringified."
       else "'" subject.node.text "' " (if subject.certainty == 2 then "will" else "may") " use Object's default stringification format ('[object Object]') when stringified."
@@ -258,28 +305,28 @@ fn unsafe_assignment_sender(transfer) = if transfer.error then "error typed" els
 
 in ts_call, ts_new, ts_tagged_template {
   rule no-unsafe-argument {
-    each unsafe_arg in argument_transfers.nonempty ?? [] {
+    each unsafe_arg in argument_value_transfers ?? [] {
       when unsafe_arg.mode == "argument"
       report at unsafe_arg.offset
       warn "Unsafe argument of type " unsafe_argument_sender(unsafe_arg) " assigned to a parameter of type `{unsafe_arg.receiver}`."
     }
   }
   rule no-unsafe-argument:spread {
-    each unsafe_arg in argument_transfers.nonempty ?? [] {
+    each unsafe_arg in argument_value_transfers ?? [] {
       when unsafe_arg.mode == "spread"
       report at unsafe_arg.offset
       warn "Unsafe spread of an " unsafe_argument_sender(unsafe_arg) " type."
     }
   }
   rule no-unsafe-argument:array {
-    each unsafe_arg in argument_transfers.nonempty ?? [] {
+    each unsafe_arg in argument_value_transfers ?? [] {
       when unsafe_arg.mode == "array"
       report at unsafe_arg.offset
       warn "Unsafe spread of an " unsafe_argument_sender(unsafe_arg) " array type."
     }
   }
   rule no-unsafe-argument:tuple {
-    each unsafe_arg in argument_transfers.nonempty ?? [] {
+    each unsafe_arg in argument_value_transfers ?? [] {
       when unsafe_arg.mode == "tuple"
       report at unsafe_arg.offset
       warn "Unsafe spread of a tuple type. The argument is " unsafe_argument_sender(unsafe_arg) " and is assigned to a parameter of type `{unsafe_arg.receiver}`."
@@ -335,12 +382,12 @@ in ts_declarator, ts_parameter, ts_class_property, ts_assignment, ts_assignment_
 fn unsafe_return_sender(transfer) = if transfer.error then "error" else if transfer.mode == "array" then "`any[]`" else if transfer.mode == "promise" then "`Promise<any>`" else "`any`"
 
 in ts_return, ts_arrow.body rule no-unsafe-return {
-  when return_transfer != null && return_transfer.mode != "generic"
-  warn "Unsafe return of a value of type " unsafe_return_sender(return_transfer) "."
+  when return_value_transfer != null && return_value_transfer.mode != "generic"
+  warn "Unsafe return of a value of type " unsafe_return_sender(return_value_transfer) "."
 }
 in ts_return, ts_arrow.body rule no-unsafe-return:assignment {
-  when return_transfer != null && return_transfer.mode == "generic"
-  warn "Unsafe return of type `{return_transfer.sender}` from function with return type `{return_transfer.receiver}`."
+  when return_value_transfer != null && return_value_transfer.mode == "generic"
+  warn "Unsafe return of type `{return_value_transfer.sender}` from function with return type `{return_value_transfer.receiver}`."
 }
 
 fn non_null_style_fix(source, n) = {
@@ -351,7 +398,7 @@ fn non_null_style_fix(source, n) = {
   value if !expression_fix_retains_comments(n, replacement) then null else assertion_fix_output(n, replacement)
 }
 in ts_as, ts_type_assertion rule non-nullable-type-assertion-style {
-  when non_null_assertion == true
+  when type.text != "const" && assertion_non_null_style(node) == true
   warn "Use a ! assertion to more succinctly remove null and undefined from the type."
   let edit non_null_style_fix(source, node)
   fix at edit.target if edit != null as edit.text
@@ -406,13 +453,17 @@ in ts_template.expression rule restrict-template-expressions {
   when parent.tagged_template != true
   when template_type_checks != null
   when any(restrict_template_expressions_type_checks, clause => !any(clause, gate => contains(enabled_template_options, gate.option) || gate.name != null && (if allow == null then gate.from == "lib" && contains(["Error", "URL", "URLSearchParams"], gate.name) else contains(allow, gate.name))))
-  warn "Invalid type \"{template_type_display}\" of template literal expression."
+  let template_display_parts value_constituents(node)
+  when template_display_parts != null
+  warn "Invalid type \"{ts_value_print(template_display_parts)}\" of template literal expression."
 }
 
 in ts_unary rule no-unsafe-unary-minus {
   when operator == "-" && !ts_value_opaque(argument.node)
     && !any(["any", "unknown", "number", "bigint", "enum"], trait => ts_value_has_trait(argument.node, trait) == true)
-  warn "Argument of unary negation should be assignable to number | bigint but is { { value argument.type().nonempty ?? '?'; re_replace /^\"[\s\S]*\"$/ 'string' } } instead."
+  let operand_type value_constituents(argument.node)
+  when operand_type != null
+  warn "Argument of unary negation should be assignable to number | bigint but is { { value ts_value_print(operand_type); re_replace /^\"[\s\S]*\"$/ 'string' } } instead."
 }
 
 in ts_member, ts_index let object_array_type ts_value_array_like(object.node)
@@ -435,8 +486,16 @@ in ts_assignment_pattern, ts_parameter rule no-useless-default-assignment {
 }
 
 in ts_as, ts_type_assertion rule no-unsafe-type-assertion {
-  when unsafe_assertion != null
-  warn if unsafe_assertion.kind == "from-any" then "Unsafe assertion from {unsafe_assertion.type} detected: consider using type guards or a safer assertion." else if unsafe_assertion.kind == "to-any" then "Unsafe assertion to {unsafe_assertion.type} detected: consider using a more specific type to ensure safety." else if unsafe_assertion.kind == "unconstrained" then "Unsafe type assertion: '{unsafe_assertion.type}' could be instantiated with an arbitrary type which could be unrelated to the original type." else if unsafe_assertion.kind == "constraint" then "Unsafe type assertion: the original type is assignable to the constraint of type '{unsafe_assertion.type}', but '{unsafe_assertion.type}' could be instantiated with a different subtype of its constraint." else "Unsafe type assertion: type '{unsafe_assertion.type}' is more narrow than the original type."
+  when type.text != "const"
+  let operand value_constituents(expression.node)
+  let annotation value_constituents(type.node)
+  when operand != null && annotation != null
+  let from_any !assignment_empty_map(expression.node) && assignment_unsafe(operand, annotation, node)
+  let to_any ts_value_trait(operand, "unknown") && ts_value_category(annotation) != null || assignment_unsafe(annotation, operand, node)
+  let narrow !from_any && !to_any && assertion_parts_known(value_parts(expression.node)) && assertion_parts_known(value_parts(type.node)) && value_accepts(type.node, expression.node, "value", "value") == false
+  let label if from_any then if ts_value_category(operand) == "error" then "error typed" else "`any`" else if to_any then if ts_value_category(annotation) == "error" then "error typed" else "`any`" else ts_value_print(annotation)
+  when from_any || to_any || narrow && !re_test(label, /\bunknown\b/)
+  warn if from_any then "Unsafe assertion from {label} detected: consider using type guards or a safer assertion." else if to_any then "Unsafe assertion to {label} detected: consider using a more specific type to ensure safety." else "Unsafe type assertion: type '{label}' is more narrow than the original type."
 }
 
 in ts_member let object_string_array_type ts_value_string_array(object.node)
@@ -462,7 +521,9 @@ in ts_unary rule no-meaningless-void-operator {
   let call underlying is (ts_call, ts_new)
   when if call then ts_value_trait(value_constituents(argument.node), "undefined")
     || checkNever && value_parts(argument.node) == [] else value_has_member(argument.node, "then", null) != true
-  warn if call then "void operator shouldn't be used on {argument.type()}; it should convey that a return value is being ignored" else "void operator is useless here; it should only discard a call's return value"
+  let operand_type if call then value_constituents(argument.node) else []
+  when !call || operand_type != null
+  warn if call then "void operator shouldn't be used on {ts_value_print(operand_type)}; it should convey that a return value is being ignored" else "void operator is useless here; it should only discard a call's return value"
   let operand argument.node
   let parens expression_fix_parens(source, node, operand)
   let replacement expression_fix_wrap(operand.text, parens > 0)

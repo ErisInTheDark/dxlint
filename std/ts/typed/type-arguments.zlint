@@ -3,6 +3,78 @@ import .ts/assertions
 
 define {
 
+fn type_argument_declaration(n) = {
+  value target: unparenthesised_node(if n is ts_class then n.extends.node
+    else if n is ts_type_reference then n.name.node else n.callee.node)
+  value binding: if target is ts_identifier then name_binding(target) else null
+  value owner: binding.node.parent
+  value if target is (ts_function, ts_arrow, ts_class) then target
+    else if count(binding.declarations) != 1 then null
+    else if owner is (ts_function, ts_class, ts_interface, ts_type_alias) then owner
+    else if owner is ts_declarator && owner.type == null && owner.parent.kind == "const"
+      && unparenthesised_node(owner.init.node) is (ts_function, ts_arrow, ts_class)
+      then unparenthesised_node(owner.init.node)
+    else null
+}
+fn type_argument_known(parts) = parts != null && all(parts, arm => all(arm, part =>
+  part.carrier_known && !any(["any", "unknown", "error", "parameter"],
+    trait => contains(part.traits, trait) || contains(part.uncertain_traits, trait))
+  && all(part.carrier.arguments ?? [], argument => type_argument_known(argument))))
+fn type_argument_same(argument, other, widened) =
+  type_argument_known(value_constituents(argument))
+  && type_argument_known(if widened then value_widened(other) else value_constituents(other))
+  && value_accepts(argument, other, "value", if widened then "widened" else "value") == true
+  && value_accepts(other, argument, if widened then "widened" else "value", "value") == true
+fn type_argument_inferred(n, declaration, formal) = {
+  value owner: n.parent.node
+  value parameters: if declaration is ts_class then
+    find(declaration.member.nodes, member => member is ts_method && member.key.text == "constructor").parameter.nodes
+    else declaration.parameter.nodes
+  value pairs: zip(parameters, owner.argument.nodes)
+  value pair: find(pairs, pair => {
+    value annotation: first(pair).type.node
+    value candidates: if annotation is ts_union then annotation.type.nodes else [annotation]
+    value any(candidates, candidate => candidate is ts_type_reference
+      && candidate.type_argument == null && candidate.name is ts_identifier
+      && name_binding(candidate.name.node).node == formal.name.node)
+  })
+  value if owner not (ts_call, ts_new) || last(pair) == null || last(pair) is (ts_this, ts_spread)
+    then false else type_argument_same(n, last(pair), true)
+}
+fn type_argument_redundancy(n) = {
+  value owner: n.parent.node
+  value arguments: owner.type_argument.nodes
+  value declaration: type_argument_declaration(owner)
+  value formal: get(declaration.type_parameter.nodes, count(arguments) - 1)
+  value if last(arguments) != n || formal == null then null
+    else if formal.default != null && type_argument_same(n, formal.default.node, false) then "default"
+    else if type_argument_inferred(n, declaration, formal) then "inferred"
+    else null
+}
+fn reduce_type_argument_fresh(initializer, annotation) = {
+  value bare: unparenthesised_node(initializer)
+  value bare not ts_object || count(value_parts(annotation)) == 1 && all(bare.property.nodes, property =>
+    property is (ts_property, ts_method) && {
+      value key: ts_value_key(property.key.node)
+      value lookup: if key != null then value_lookup(annotation, key) else null
+      value source: if property is ts_method then property else property.value.node ?? property.key.node
+      value arms: value_parts(source)
+      value lookup != null && count(lookup.alternatives) > 0
+        && all(lookup.alternatives, alternative => alternative.matched == true)
+        && lookup.value_known && lookup.member != null && arms != null
+        && all(arms, arm => value_accepts(lookup.member, arm.handle, "value", "value") == true)
+    })
+}
+fn reduce_type_argument(n) = {
+  value call: n.parent.node
+  value callee: unparenthesised_node(call.callee.node)
+  value key: if callee is ts_member then callee.static_name
+    else if callee is ts_index then ts_runtime_string(callee.index.node) else null
+  value call is ts_call && get(call.argument.nodes, 1) == n && key == "reduce"
+    && ts_value_array_like(callee.object.node)
+    && value_accepts(n.type.node, n.expression.node, "value", "value") == true
+    && reduce_type_argument_fresh(n.expression.node, n.type.node)
+}
 fn type_argument_fix(n) = {
   value owner: n.parent.node
   value arguments: owner.type_argument.nodes
@@ -28,14 +100,15 @@ fn reduce_type_argument_fix(source, n) = {
 }
 
 in ts_as, ts_type_assertion rule prefer-reduce-type-parameter {
-  when reduce_type_assertion == true
+  when reduce_type_argument(node)
   warn "Unnecessary assertion: Array#reduce accepts a type parameter for the default value."
   let edit reduce_type_argument_fix(source, node)
   fix at edit.target if edit != null as edit.text
 }
 in ts_call.type_argument, ts_new.type_argument, ts_type_reference.type_argument, ts_class.type_argument rule no-unnecessary-type-arguments {
-  when type_argument_redundant != null
-  warn if type_argument_redundant == "default" then "This is the default value for this type parameter, so it can be omitted." else "This value can be trivially inferred for this type parameter, so it can be omitted."
+  let redundancy type_argument_redundancy(node)
+  when redundancy != null
+  warn if redundancy == "default" then "This is the default value for this type parameter, so it can be omitted." else "This value can be trivially inferred for this type parameter, so it can be omitted."
   let edit type_argument_fix(node)
   fix at edit if edit != null as ""
 }

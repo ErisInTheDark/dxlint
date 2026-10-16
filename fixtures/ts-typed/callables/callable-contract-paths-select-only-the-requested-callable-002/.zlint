@@ -1,6 +1,10 @@
 import .ts
 
             in ts_declarator.init rule selected-contract {
-                when { value callable_contracts(parent, node, ["selected", "callback"]); count } == 1
+                let actual fold(["selected", "callback"], node, (subject, key) => value_lookup(subject, key).member)
+                let expected fold(["selected", "callback"], value_expected_handle(node), (subject, key) => value_lookup(subject, key).member)
+                when actual != null && expected != null
+                when promise_return_arms(value_signatures(actual)) != null
+                  && promise_returns_void(promise_return_arms(value_signatures(expected)))
                 warn "selected"
             }

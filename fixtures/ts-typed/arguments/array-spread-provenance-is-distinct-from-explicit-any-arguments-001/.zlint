@@ -1,7 +1,8 @@
 import .ts
+import .ts/typed/transfers
 
             in ts_call rule provenance {
-                each transfer in (argument_transfers.nonempty ?? [])
+                each transfer in (argument_value_transfers ?? [])
                 when transfer.error == true
                 warn "provenance"
             }

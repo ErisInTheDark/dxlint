@@ -74,10 +74,7 @@ fn unbound_builtin_type(arm, n, key) = {
 }
 fn unbound_global(n, key) = {
   value spelling: join([n.text, key.text], ".")
-  value n is ts_identifier && key is ts_identifier
-  && n.declaration == null && (n.global != null
-    || any(n.symbol_metadata.declarations, declaration => any(declaration.provenance, gate => contains(["lib", "package"], gate.from))))
-  && contains([
+  value listed: n is ts_identifier && key is ts_identifier && n.declaration == null && contains([
     "Number.isFinite", "Number.isInteger", "Number.isNaN", "Number.isSafeInteger", "Number.parseFloat", "Number.parseInt",
     "Object.assign", "Object.getOwnPropertyDescriptor", "Object.getOwnPropertyDescriptors", "Object.getOwnPropertyNames",
     "Object.getOwnPropertySymbols", "Object.hasOwn", "Object.is", "Object.preventExtensions", "Object.seal", "Object.create",
@@ -102,6 +99,13 @@ fn unbound_global(n, key) = {
     "Intl.DateTimeFormat", "Intl.NumberFormat", "Intl.Collator", "Intl.PluralRules", "Intl.RelativeTimeFormat", "Intl.ListFormat",
     "Intl.Locale", "Intl.DisplayNames", "Intl.Segmenter", "Intl.DurationFormat",
   ], spelling)
+  value globals: if listed then global_declarations(n, n.text, "value") else []
+  value identity: if listed then declaration_identity(n) else null
+  value origins: map(globals ?? [], site => declaration_origin(n, site))
+  value if !listed then false else if globals == null || identity == null then null
+    else if !contains(globals, identity) then false
+    else if any(origins, origin => contains(["library", "package"], origin.kind)) then true
+    else if any(origins, origin => origin == null) then null else false
 }
 
 fn unbound_danger(arm, key, ignore_static) = {
@@ -147,7 +151,7 @@ in ts_member, ts_index, ts_pattern_property.key, ts_property.key, ts_computed_ke
   }
   let danger {
     value keys
-    flat_map (key) if any(profiles, source => source.bound && (source.direct && unbound_global(source.node, key_node)
+    flat_map (key) if any(profiles, source => source.bound && (source.direct && unbound_global(source.node, key_node) != false
       || count(source.profiles) > 0 && all(source.profiles, profile => unbound_builtin_type(profile, source.node, key)))) then []
       else {
         value profiles

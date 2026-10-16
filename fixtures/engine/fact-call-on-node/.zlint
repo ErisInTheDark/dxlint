@@ -1,8 +1,0 @@
-import .ts
-
-# `node.fact(...)` asks the fact about that node, not the rule's; a `fn`
-# may ask it about a node it is given.
-fn printed_type(n) = n.type()
-in ts_binary rule lit warn "lit" {
-  when left.text == "1" && printed_type(right.node) == "number"
-}

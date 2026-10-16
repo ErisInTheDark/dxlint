@@ -2,6 +2,82 @@ import .ts/scoping/usage
 
 define {
 
+fn ts_awaited_callback(callback) = {
+  value signatures: value_signatures(callback)
+  value headers: flat_map(signatures ?? [], arm => arm)
+  value values: map(headers, header => first(header.parameters))
+  value {
+    known: signatures != null && all(headers, header => header.parameters != null)
+      && all(values, value => value != null),
+    values: values,
+  }
+}
+fn ts_awaited_fulfilments(arm) = {
+  value member: value_lookup(arm, "then").member
+  value signatures: if member != null then value_signatures(member) else null
+  value headers: flat_map(signatures ?? [], alternative => alternative)
+  value callbacks: map(headers, header => value_alternatives(first(header.parameters)))
+  value states: flat_map(callbacks, alternatives => map(alternatives ?? [], callback => ts_awaited_callback(callback)))
+  value values: flat_map(states, state => state.values)
+  value {
+    known: signatures != null && count(headers) > 0 && all(callbacks, alternatives => alternatives != null)
+      && all(states, state => state.known) && count(values) > 0,
+    values: values,
+  }
+}
+fn ts_awaited_step(entry) = {
+  value arms: if contains(entry.seen, entry.source) then null else value_alternatives(entry.source)
+  value states: map(arms ?? [], arm => {
+    value parts: value_constituents(arm)
+    value dynamic: parts != null && count(parts) == 1 && count(first(parts)) == 1
+      && any(first(parts), part => contains(part.traits, "any") || contains(part.traits, "unknown"))
+    value ordinary: if dynamic then true else ts_value_nonthenable(arm)
+    value fulfilment: if ordinary == false then ts_awaited_fulfilments(arm) else null
+    value {
+      known: ordinary == true || fulfilment.known == true,
+      leaves: if ordinary == true then [arm] else [],
+      children: if fulfilment.known == true then fulfilment.values else [],
+    }
+  })
+  value {
+    known: arms != null && all(states, state => state.known),
+    leaves: if arms == [] then [value_union(entry.source, [])] else flat_map(states, state => state.leaves),
+    children: map(flat_map(states, state => state.children), source =>
+      {source: source, seen: entry.seen [entry.source]}),
+  }
+}
+fn ts_awaited_union(values) = if count(values) == 0 then null else value_union(first(values), slice(values, 1))
+fn ts_awaited_value(n, source) = {
+  value limit: 64
+  value states: walk({pending: [{source: source, seen: []}], leaves: [], steps: 0, known: true}, state =>
+    if !state.known || count(state.pending) == 0 || state.steps >= limit then [] else {
+      value step: ts_awaited_step(first(state.pending))
+      value pending: slice(state.pending, 1) step.children
+      value [{
+        pending: pending,
+        leaves: state.leaves step.leaves,
+        steps: state.steps + 1,
+        known: step.known && count(pending) <= limit,
+      }]
+    })
+  value result: last(states)
+  value if !result.known || count(result.pending) > 0 then null else ts_awaited_union(result.leaves)
+}
+fn ts_await_union_equivalent(n) = {
+  value arms: value_alternatives(n)
+  value states: map(arms ?? [], arm => {handle: arm, ordinary: ts_value_nonthenable(arm)})
+  value ordinary: filter(states, state => state.ordinary == true)
+  value asynchronous: filter(states, state => state.ordinary == false)
+  value if arms == null || any(states, state => state.ordinary == null)
+    || count(ordinary) == 0 || count(asynchronous) == 0 then null else {
+    value awaited: ts_awaited_value(n, ts_awaited_union(map(asynchronous, state => state.handle)))
+    value other: ts_awaited_union(map(ordinary, state => state.handle))
+    value forward: if awaited != null && other != null then value_accepts(other, awaited, "value", "value") else null
+    value reverse: if awaited != null && other != null then value_accepts(awaited, other, "value", "value") else null
+    value if forward == null || reverse == null then null else forward && reverse
+  }
+}
+
 fn ts_await_warning_site(n) = function_head_site(n)
 fn ts_await_function_name(n) = {
   value name: n.function_name ?? "async function"

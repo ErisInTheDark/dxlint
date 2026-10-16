@@ -1,6 +1,88 @@
 import .ts/values/inspection
+import .ts/typed/assignments
+import .ts/typed/awaitability
 
 define {
+
+fn argument_value_finding(site, mode, sender, receiver) = {
+  offset: site.offset, mode: mode, error: ts_value_category(sender) == "error",
+  sender: ts_value_print(sender), receiver: ts_value_print(receiver)
+}
+fn argument_value_findings(call) = if call not (ts_call, ts_new) then [] else {
+  value call.argument.nodes
+  flat_map (argument) {
+    value spread: argument is ts_spread
+    value source: if spread then argument.argument.node else argument
+    value sender: value_constituents(source)
+    value expected: if !spread then value_expected(argument) else null
+    value receiver: expected.value
+    value carrier: assignment_carrier(sender)
+    value element: first(carrier.arguments)
+    value when {
+      spread && ts_value_category(sender) != null then
+        [argument_value_finding(argument, "spread", sender, null)]
+      spread && assignment_array(sender, source) && ts_value_category(element) != null then
+        [argument_value_finding(argument, "array", element, null)]
+      !spread && expected.present == true && receiver != null
+        && !assignment_empty_map(source) && assignment_unsafe(sender, receiver, call) then
+        [argument_value_finding(argument, "argument", sender, receiver)]
+      else then []
+    }
+  }
+}
+fn return_value_owner(n) = {
+  value n.parent.node
+  walk (current) current.parent.node
+  find (current) current is (ts_function, ts_arrow, ts_method)
+}
+fn return_value_finding(n) = {
+  value source: if n is ts_return then n.argument.node
+    else if n.parent is ts_arrow && n is ts_arrow.body && n not ts_block then n else null
+  value owner: if source != null then return_value_owner(n) else null
+  value sender: if source != null then value_constituents(source) else null
+  value expected: if source != null then value_expected(source) else null
+  value receiver: if owner.return_type != null then value_constituents(owner.return_type.node) else expected.value
+  value known: owner != null && (owner.return_type != null && receiver != null
+    || expected != null && (!expected.present || receiver != null))
+  value carrier: assignment_carrier(sender)
+  value target_carrier: assignment_carrier(receiver)
+  value element: first(carrier.arguments)
+  value target_element: first(target_carrier.arguments)
+  value asynchronous: contains([] owner.modifier, "async")
+  value promise: source != null && source could thenable && ts_value_category(sender) == null
+    && !assignment_array(sender, source)
+  value awaited_handle: if promise then ts_awaited_value(source, source) else null
+  value awaited: if awaited_handle != null then value_constituents(awaited_handle) else null
+  value async_target: asynchronous && owner.return_type != null && owner.return_type.node could thenable
+  value target_handle: if promise && owner.return_type == null && expected.present == true
+    then value_expected_handle(source) else null
+  value target_awaited_handle: if !promise && !async_target || receiver == null then null
+    else if owner.return_type != null then ts_awaited_value(owner.return_type.node, owner.return_type.node)
+    else if target_handle != null then ts_awaited_value(target_handle, target_handle) else null
+  value target_awaited: if target_awaited_handle != null then value_constituents(target_awaited_handle) else null
+  value mode: when {
+    ts_value_category(sender) != null then "value"
+    assignment_array(sender, source) && ts_value_trait(element, "any") then "array"
+    ts_value_trait(awaited, "any") then "promise"
+    else then "generic"
+  }
+  value allowed: ts_value_trait(receiver, "unknown") || owner.return_type != null
+    && ts_value_trait(receiver, "any")
+    || async_target && (ts_value_trait(target_awaited, "any") || ts_value_trait(target_awaited, "unknown"))
+    || mode == "promise" && (ts_value_trait(target_awaited, "unknown")
+      || owner.return_type != null && ts_value_trait(target_awaited, "any"))
+    || mode == "array" && assignment_array(receiver, source)
+      && (ts_value_trait(target_element, "unknown") || owner.return_type != null && ts_value_trait(target_element, "any"))
+  value if !known || sender == null || allowed || source == null
+    || async_target && target_awaited == null
+    || promise && (awaited == null || receiver != null && target_awaited == null)
+    || mode == "promise" && !asynchronous then null
+    else if mode != "generic" then assignment_finding(n, mode, sender, receiver)
+    else if !assignment_empty_map(source) && assignment_unsafe(sender, receiver, source)
+      then assignment_finding(n, mode, sender, receiver) else null
+}
+in ts_call, ts_new, ts_tagged_template { let argument_value_transfers argument_value_findings(node) }
+in ts_node { let return_value_transfer return_value_finding(node) }
 
 fn typed_accessor_key(method) = ts_value_key(method.key.node) ?? join(token_list(method.key.node), "")
 fn typed_accessor_type_mismatch(annotation) = {

@@ -1,7 +1,9 @@
 import .ts
 
         in ts_call.argument rule complete-root {
-            each contract in callable_contracts(parent, node, [])
-            when contract.complete
+            let signatures expected_call_signatures(node)
+            let headers flat_map(signatures ?? [], arm => arm)
+            when signatures != null && count(headers) > 0
+              && all(headers, signature => signature.result_known)
             warn "complete"
         }

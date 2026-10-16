@@ -1,6 +1,6 @@
 import .ts
 
             in ts_declarator.init rule selected-contract {
-                when { value callable_contracts(parent, node, []); count } == 0
+                when value_signatures(node) == [[]]
                 warn "selected"
             }

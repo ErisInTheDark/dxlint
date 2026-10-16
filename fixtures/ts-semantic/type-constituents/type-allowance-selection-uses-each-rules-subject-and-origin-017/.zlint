@@ -1,6 +1,6 @@
 import .ts
 rule no-misused-spread 
-override in ts_spread, ts_jsx_spread_attribute let no_misused_spread_checked !{ value node.argument.type_specifier_groups; all (group) any(group, gate => gate.name == 'Allowed' && gate.from == 'file' && ends_with(gate.path, 'main.ts')) }
+override in ts_spread, ts_jsx_spread_attribute let no_misused_spread_checked type_value_allowed([{from: "file", name: "Allowed", path: "main.ts"}], argument.node) == false
 
 # Project inputs remain readable, but the original Rust test linted only this main file.
 ignore "node_modules/typescript/lib/lib.es5.d.ts"

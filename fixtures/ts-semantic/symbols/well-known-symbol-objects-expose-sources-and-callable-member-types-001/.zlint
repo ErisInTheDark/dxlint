@@ -6,8 +6,8 @@ import .ts/values/inspection
                 warn "resolved source"
             }
             in ts_declarator.init rule member-known {
-                each symbol_contract in callable_contracts(parent, node, ["[Symbol.dispose]"])
-                when any(symbol_contract.source, result => result.thenable)
+                let member value_lookup(node, {global: "Symbol", class: "value", path: ["dispose"]}).member
+                when member != null && promise_returns_thenable(promise_return_arms(value_signatures(member)))
                 warn "resolved callable"
             }
 

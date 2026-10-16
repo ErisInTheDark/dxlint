@@ -1,0 +1,8 @@
+import .ts
+ignore "**/tsconfig.json"
+ignore "node_modules/typescript/lib/lib.fixture.d.ts"
+in ts_as rule context-proof {
+  let expected value_expected(node)
+  let accepted value_accepts(node, expression.node, "expected", "value")
+  info "{ expected.present }/{ accepted }"
+}

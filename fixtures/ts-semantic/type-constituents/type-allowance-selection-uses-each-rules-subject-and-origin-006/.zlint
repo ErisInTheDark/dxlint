@@ -1,6 +1,6 @@
 import .ts
 rule only-throw-error 
-override in ts_node let only_throw_error_checked !{ value type_specifier_groups; all (group) any(group, gate => gate.name == 'Allowed' && gate.from == 'lib') }
+override in ts_node let only_throw_error_checked type_value_allowed([{from: "lib", name: "Allowed"}], node) == false
 
 # Project inputs remain readable, but the original Rust test linted only this main file.
 ignore "node_modules/typescript/lib/lib.es5.d.ts"

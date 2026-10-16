@@ -1,1 +1,1 @@
-{"compilerOptions":{"lib":[],"types":[]}}
+{"compilerOptions":{"lib":["fixture"],"types":[]}}

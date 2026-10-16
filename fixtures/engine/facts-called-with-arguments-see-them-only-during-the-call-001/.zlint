@@ -1,2 +1,2 @@
 import .ts
-in ts_identifier rule u warn "{symbol_metadata.name}/{symbol_metadata().name}" { when declaration_kind != null }
+in ts_identifier rule u warn "{name_binding(node).key}/{name_binding(node).key}" { when declaration_kind != null }

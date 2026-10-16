@@ -2,16 +2,21 @@ import .ts/expression-fixes
 
 define {
 
-in ts_node let strict_void_kind type_structure([], ["kind"]).kind
+in ts_node let strict_void_kind {
+  value parts: value_constituents(node)
+  value kinds: filter(["void", "undefined", "null", "any", "unknown", "boolean", "number", "bigint", "string", "symbol"], kind =>
+    parts != null && count(parts) > 0 && all(parts, arm => any(arm, part =>
+      contains(part.traits, kind) && !contains(part.uncertain_traits, kind))))
+  value if parts == null then null else if count(parts) == 0 then "never"
+    else if count(kinds) == 1 then first(kinds) else null
+}
 fn strict_void_allowed(kind, any) = contains(["void", "undefined", "never"], kind) || any && kind == "any"
 fn strict_void_signature_allowed(signature, allow_any) = all(signature.result, arm =>
   any(arm, part => contains(part.traits, "undefined") || allow_any && contains(part.traits, "any")))
 fn strict_void_signatures_known(signatures) = count(signatures) > 0
   && all(signatures, signature => signature.result_known)
-fn strict_void_source_allowed(signatures, source, allow_any) =
-  if strict_void_signatures_known(signatures)
-  then all(signatures, signature => strict_void_signature_allowed(signature, allow_any))
-  else all(source, result => strict_void_allowed(result.kind, allow_any))
+fn strict_void_source_allowed(signatures, allow_any) = strict_void_signatures_known(signatures)
+  && all(signatures, signature => strict_void_signature_allowed(signature, allow_any))
 fn strict_void_expected_transfer(signatures, argument) =
   if argument then any(signatures, signature => any(signature.result, arm =>
     any(arm, part => contains(part.traits, "void"))))
@@ -44,18 +49,7 @@ fn strict_void_argument_transfer(n) = {
       || strict_void_expected_transfer(signatures, true)
   }
 }
-fn strict_void_only_void(returns) = count(returns ?? []) > 0 && all(returns, result => result.kind == "void")
-fn strict_void_permissive(returns) = any(returns ?? [], result => result.kind == "void")
-  && all(returns, result => contains(["void", "undefined", "null", "any", "never"], result.kind))
-fn strict_void_transfer(contract) = {
-  value expected: if contract.origin == "heritage" then contract.target else contract.contextual_returns ?? contract.target
-  value contract.complete && count(contract.source) > 0
-    && (if contract.origin == "argument" then strict_void_permissive(contract.target)
-      || strict_void_permissive(contract.declared_target) else strict_void_only_void(expected))
-}
-fn strict_void_fields(n) = if n.parent is (ts_call, ts_new) then ["declared_target"] else ["declared_target", "contextual_returns"]
 fn strict_void_source(n) = if n is ts_property then n.value.node ?? n.key.node else n
-fn strict_void_site(n) = if n is (ts_property, ts_method) then n else n.parent.node
 fn strict_void_reports(n, any) = when {
   n not (ts_function, ts_arrow, ts_method) then [{site: n, mode: "function"}]
   contains(n.modifier, "*") then [{site: function_head_site(n), mode: "function"}]
@@ -63,20 +57,10 @@ fn strict_void_reports(n, any) = when {
   n.body not ts_block then [{site: unparenthesised_node(n.body.node), mode: "return"}]
   n.return_type != null && n.return_type.text != "void" then [{site: n.return_type.node, mode: "function"}]
   else then {
-    value invalid: filter(n.scoping_own_returns, returned => returned.argument != null
+    value invalid: filter(n.scoping_own_returns, returned => returned.argument != null && returned.argument.strict_void_kind != null
       && !strict_void_allowed(returned.argument.strict_void_kind, any))
     value map(invalid, returned => {site: {start: returned.offset, end: returned.offset + 6}, mode: "return"})
   }
-}
-fn strict_void_static_contracts(n) = {
-  value member: if n is ts_method then n else n.parent.node
-  value owner: member.parent.node
-  value if member is (ts_method, ts_class_property) && owner is ts_class
-    && contains(member.modifier, "static") && member.static_name != null
-    then {
-      value fields: strict_void_fields(owner)
-      value owner.node.callable_contracts(owner.parent.node, owner, [member.static_name], fields)
-    } else []
 }
 
 in ts_call.argument, ts_new.argument, ts_declarator.init, ts_assignment.right, ts_property, ts_method, ts_class_property.init, ts_return.argument, ts_arrow.body, ts_array.element, ts_jsx_expression.expression rule strict-void-return {
@@ -94,18 +78,13 @@ in ts_call.argument, ts_new.argument, ts_declarator.init, ts_assignment.right, t
   let expected_signatures { value expected ?? []; flat_map (arm) arm }
   let expected_known expected != null && all(expected_signatures, signature => signature.result_known)
   let argument_transfer strict_void_argument_transfer(actual)
-  let site strict_void_site(node)
-  let fields strict_void_fields(actual)
-  let contracts if !expected_known || !strict_void_signatures_known(signatures)
-    then callable_contracts(site, actual, [], fields) strict_void_static_contracts(actual) else []
+  when strict_void_signatures_known(signatures)
   when if argument_transfer != null
     then argument_transfer
-      && !strict_void_source_allowed(signatures, { value contracts; filter (contract) contract.complete; flat_map (contract) contract.source }, allowReturnAny)
-    else if expected_known
-    then strict_void_expected_transfer(expected_signatures, outer_parenthesised_node(actual).parent is (ts_call, ts_new))
-      && !strict_void_source_allowed(signatures, { value contracts; filter (contract) contract.complete; flat_map (contract) contract.source }, allowReturnAny)
-    else any(contracts, contract => strict_void_transfer(contract)
-      && !strict_void_source_allowed(signatures, contract.source, allowReturnAny))
+      && !strict_void_source_allowed(signatures, allowReturnAny)
+    else expected_known
+      && strict_void_expected_transfer(expected_signatures, outer_parenthesised_node(actual).parent is (ts_call, ts_new))
+      && !strict_void_source_allowed(signatures, allowReturnAny)
   let unwrapped unparenthesised_node(actual)
   each report in strict_void_reports(unwrapped, allowReturnAny) {
     report at report.site

@@ -1,5 +1,6 @@
 import .ts
+import .ts/typed/transfers
 in ts_return, ts_arrow.body rule transfer {
-when return_transfer != null && return_transfer.mode == "generic"
+when return_value_transfer != null && return_value_transfer.mode == "generic"
 warn "transfer"
 }

@@ -2,11 +2,9 @@
 
 define {
 
-in ts_node let floating_promise_type type_structure([], ["kind", "parts", "aliases", "declarations"])
-in ts_node let floating_handler_callable type_structure([], ["callable"]).callable
-in ts_node let floating_thenable_type type_structure(["then"], ["kind", "parts", "aliases", "declarations", "member_types", "call_signatures", "callable"])
+in ts_node let floating_promise_arms value_parts(node)
 in ts_node let floating_promise_safe_call false
-in ts_node let floating_promise_allowed_types []
+in ts_node let floating_promise_safe_types []
 in ts_node let floating_promises_checked true
 fn floating_promise_safe(n, safe_calls) = {
   value expression: unparenthesised_node(n)
@@ -33,7 +31,7 @@ fn floating_rejection_handler(n) = {
   value checked_count: position + 1
   value preceding: slice(n.argument.nodes, 0, checked_count)
   value if handler == null || any(preceding, argument => argument is ts_spread) then "missing"
-    else if handler.floating_handler_callable then "handled" else "useless"
+    else if handler could callable && handler always callable then "handled" else "useless"
 }
 fn floating_promise_nonnull(n) = {
   value arms: value_constituents(n)
@@ -58,23 +56,41 @@ fn floating_promise_leaves(n, ignore_void) = {
     && !(part is ts_call && part.callee.node.static_name == "finally")
     && !(!ignore_void && part is ts_unary && part.operator == "void")
 }
-fn floating_promise_named(t, safe_promises) =
-  any(t.aliases, name => contains(safe_promises, name))
-    || any(t.declarations, declaration => contains(safe_promises, declaration.name))
-fn floating_promise_allowed(t, safe_promises) = {
-  value t
-  walk (part) if floating_promise_named(part, safe_promises) then [] else part.parts
-  filter (part) floating_promise_named(part, safe_promises)
+fn floating_promise_alias_allowed(n, safe_promises) = len(safe_promises) > 0 && {
+  value walk(value_sources(n).sites ?? [], site => {
+    value sources: site_sources(n, site)
+    value if sources.combine == "union" then [] else sources.sites ?? []
+  })
+  any (site) site.kind == "ts_type_alias" && contains(safe_promises, site.name)
+    && any(site_sources(n, site).sites, body =>
+      contains(["ts_type_literal", "ts_union", "ts_intersection", "ts_array_type", "ts_tuple_type", "ts_readonly_type"], body.kind))
 }
+fn floating_promise_arm_allowed(arm, n, safe_promises) = {
+  value entries: n.floating_promise_safe_types
+  value directory: if any(entries, entry => entry.from == "file") then program_directory(n) else null
+  value len(safe_promises) > 0 && any(arm.parts, part => part.carrier != null
+      && any(ts_value_ancestry(part).parts, base => contains(safe_promises, base.carrier.description.name)))
+    || any(entries, entry => any(arm.parts, part => type_specifier_part(entry, n, part, directory) != false))
+}
+fn floating_promise_arm(arm, n, check_thenables, safe_promises) =
+  !floating_promise_arm_allowed(arm, n, safe_promises)
+  && (any(arm.parts, part => part.carrier != null
+      && ts_value_builtin_ancestor(part, n, ["Promise"]) == true)
+    || check_thenables && {
+      value member: value_lookup(arm.handle, "then").member
+      value headers: value_signatures(member)
+      value any(headers ?? [], alternatives => any(alternatives, header => count(header.parameters) >= 2
+        && all(slice(header.parameters, 0, 2), parameter => floating_callable_arm(parameter))))
+    })
 fn floating_promise_failure(n, check_thenables, ignore_void, safe_promises, safe_calls) = {
   value floating_promise_leaves(n, ignore_void)
-  map (part) if part is ts_assignment || floating_promise_safe(part, safe_calls) then null else {
-      value part_type: if check_thenables then part.floating_thenable_type else part.floating_promise_type
-      value allowed: concat(part.floating_promise_allowed_types,
-        if len(safe_promises) == 0 then [] else floating_promise_allowed(part_type, safe_promises))
-      value if floating_promise_array(part_type, check_thenables, allowed) then "array"
+  map (part) if part is ts_assignment || floating_promise_safe(part, safe_calls)
+    || floating_promise_alias_allowed(part, safe_promises)
+    || type_value_allowed(part.floating_promise_safe_types, part) != false then null else {
+      value arms: part.floating_promise_arms
+      value if floating_promise_array(arms, part, check_thenables, safe_promises) then "array"
         else if part not ts_await
-          && floating_promise_element(part_type, check_thenables, allowed)
+          && any(arms ?? [], arm => floating_promise_arm(arm, part, check_thenables, safe_promises))
           then if part is ts_call then {
             value handler: floating_rejection_handler(part)
             value if handler == "handled" then null else if handler == "useless" then "useless" else "promise"
@@ -98,30 +114,19 @@ in ts_expression_statement.expression, ts_arrow.body rule no-floating-promises {
       then " A rejection handler that is not a function will be ignored." else "")
 }
 
-fn floating_callable_arm(t) = {
-  value t
-  walk (part) if part.kind == "union" then part.parts else []
-  any (part) part.kind != "union" && part.callable
-}
-fn floating_promise_element(t, check_thenables, allowed) = {
-  value t
-  walk (part) if !contains(allowed, part) && contains(["union", "intersection"], part.kind) then part.parts else []
-  any (part) !contains(allowed, part) && !contains(["union", "intersection"], part.kind)
-    && (any(part.declarations, declaration => declaration.name == "Promise" && declaration.from == "lib")
-    || check_thenables && any(part.member_types, member => member.name == "then"
-      && any(member.type.call_signatures, signature => count(signature.parameters) >= 2
-        && {
-          value signature.parameters
-          slice 0 2
-          all (parameter) floating_callable_arm(parameter)
-        })))
-}
-fn floating_promise_array(t, check_thenables, allowed) = {
-  value t
-  walk (part) if !contains(allowed, part) && part.kind == "union" then part.parts else []
-  any (part) !contains(allowed, part) && contains(["array", "tuple"], part.kind)
-    && any(part.parts, element => floating_promise_element(element, check_thenables, allowed))
-}
+fn floating_callable_arm(handle) = any(value_alternatives(handle) ?? [], arm => {
+  value signatures: value_signatures(arm)
+  value signatures != null && any(signatures, headers => len(headers) > 0)
+})
+fn floating_promise_array(arms, n, check_thenables, safe_promises) = any(arms ?? [], arm =>
+  !any(arm.parts, part => contains(part.traits, "intersection"))
+  && !floating_promise_arm_allowed(arm, n, safe_promises) && any(arm.parts, part => {
+    value shape: ts_value_array_part(part, n)
+    value elements: if shape.tuple then value_children(part.handle, true, [])
+      else if shape.array then value_children(part.handle, false, [0]) else []
+    value any(elements ?? [], element => any(value_parts(element.handle) ?? [],
+      item => floating_promise_arm(item, n, check_thenables, safe_promises)))
+  }))
 
 in ts_expression_statement.expression, ts_arrow.body rule no-floating-promises:array {
   option checkThenables boolean = false "Check promise-like types with fulfilment and rejection callbacks"
