@@ -40,6 +40,7 @@ fn ts_value_key(key) = {
     else if literal is ts_template && count(literal.expression.nodes) == 0 then js_string_parts(literal.text).text
     else if literal is ts_number then "" literal.ts_value_number
     else if literal is ts_bigint then js_bigint(literal.text)
+    else if literal is ts_identifier && !contains(literal.text, "\\") then literal.text
     else { value "\"" literal.text "\""; js_string }
 }
 fn ts_value_static(modifiers) = any(modifiers, modifier => modifier.text == "static")
@@ -544,9 +545,10 @@ in ts_interface, ts_type_literal {
 in ts_interface, ts_type_literal, ts_class {
   let ts_value_computed_members filter(member.nodes, item => item.key is ts_computed_key && ts_value_key(item.key.node) == null
     && !ts_value_static(item.modifier.nodes))
-  let ts_value_text_indexers filter(member.nodes, item => item is ts_index_signature && item.parameter.type always string)
-  let ts_value_ordinal_indexers filter(member.nodes, item => item is ts_index_signature && item.parameter.type always number)
-  let ts_value_symbol_indexers filter(member.nodes, item => item is ts_index_signature && item.parameter.type always symbol)
+  let ts_value_index_signatures filter(member.nodes, item => item is ts_index_signature)
+  let ts_value_text_indexers filter(ts_value_index_signatures, item => item.parameter.type always string)
+  let ts_value_ordinal_indexers filter(ts_value_index_signatures, item => item.parameter.type always number)
+  let ts_value_symbol_indexers filter(ts_value_index_signatures, item => item.parameter.type always symbol)
   indexed keyed ts_value_computed_members by key.expression using it in members
   indexed text ts_value_text_indexers using it.type in members
   indexed ordinal ts_value_ordinal_indexers using it.type in members
@@ -572,7 +574,10 @@ in ts_object {
 }
 in ts_interface, ts_type_literal, ts_class {
   let ts_value_then_shape {
-    value if node is ts_type_literal && ts_value_closed_type_members(member.nodes)
+    value if node is ts_type_literal && all(member.nodes, member => member.key is ts_identifier
+      && !contains(member.key.text, "\\") && member.key.text != "then")
+      then { known: true, thenable: false }
+      else if node is ts_type_literal && ts_value_closed_type_members(member.nodes)
       && value_has_member(node, "then", null) == false
       then { known: true, thenable: false }
       else {

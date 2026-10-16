@@ -2,8 +2,6 @@ import .ts/type-specifiers
 
 define {
 
-fn readonly_parameter_all(values) = if contains(values, false) then false
-  else if contains(values, null) then null else true
 fn readonly_parameter_marker(part) = count(part.traits) == 1 && contains(part.traits, "intersection")
 fn readonly_parameter_uncertain(part) = !readonly_parameter_marker(part)
   && any(part.uncertain_traits, trait => !contains(["thenable", "nonthenable"], trait))
@@ -89,11 +87,11 @@ fn readonly_parameter_step(entry, settings) = if entry.kind == "source" then {
       else if any(arm.parts, part => readonly_parameter_uncertain(part)) then null else branch.answer,
     children: branch.children}
 }
-fn readonly_parameter_walk(source, methods, allow) = {
+fn readonly_parameter_has_mutable(source, methods, allow) = {
   value settings: {node: source, methods: methods, allow: allow,
     directory: if count(allow) > 0 then program_directory(source) else null}
   value states: walk({kind: "source", source: source, root: true}, entry => readonly_parameter_step(entry, settings).children)
-  value readonly_parameter_all(map(states, entry => readonly_parameter_step(entry, settings).answer))
+  value any(states, entry => readonly_parameter_step(entry, settings).answer == false)
 }
 
 in ts_parameter rule prefer-readonly-parameter-types {
@@ -104,10 +102,11 @@ in ts_parameter rule prefer-readonly-parameter-types {
   when parent is (ts_function, ts_arrow, ts_method, ts_function_type, ts_method_signature, ts_call_signature)
   when checkParameterProperties || !any([] modifier, modifier => contains(["private", "public", "protected", "readonly"], modifier))
   when !ignoreInferredTypes || type != null
+  when type not ts_type_keyword
+    || !contains(["any", "unknown", "undefined", "null", "void", "never", "boolean", "number", "string", "bigint", "symbol"], type.text)
   let readonly_parameter_source type.node ?? init.node ?? node
-  let readonly_parameter_result if readonly_parameter_annotation_allowed(type.node, allow) then true
-    else readonly_parameter_walk(readonly_parameter_source, treatMethodsAsReadonly, allow)
-  when readonly_parameter_result == false
+  when !readonly_parameter_annotation_allowed(type.node, allow)
+  when readonly_parameter_has_mutable(readonly_parameter_source, treatMethodsAsReadonly, allow)
   report at { start: name.offset, end: end_offset }
   warn "Parameter should be a read only type."
 }

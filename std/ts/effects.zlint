@@ -110,7 +110,12 @@ in ts_node let flow_destructuring_target
   else if is (ts_property.key, ts_pattern_property.key) && (node.parent.value == null || node.parent.flow_shorthand_default) then parent.flow_destructuring_target
   else false
 in ts_identifier, ts_member, ts_index {
-  when flow_destructuring_target { assigned it }
+  when is (ts_for_in.left, ts_for_of.left, ts_declarator.name, ts_assignment.left,
+    ts_array.element, ts_array_pattern.element, ts_object.property, ts_object_pattern.property,
+    ts_object_pattern.rest, ts_rest.argument, ts_spread.argument, ts_assignment_pattern.left,
+    ts_parenthesized.expression, ts_as.expression, ts_satisfies.expression, ts_non_null.expression,
+    ts_type_assertion.expression, ts_instantiation.expression, ts_property.value, ts_pattern_property.value,
+    ts_property.key, ts_pattern_property.key) && flow_destructuring_target { assigned it }
 }
 in ts_assignment {
   when flow_destructuring_target { runs maybe right then left }

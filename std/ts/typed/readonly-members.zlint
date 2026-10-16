@@ -3,9 +3,31 @@
 define {
 
 group readonly_write_access ts_member, ts_index
-in ts_program let readonly_write_accesses {
-  value descendants(readonly_write_access)
-  filter (access) access.write_site != null
+in ts_program let readonly_write_index {
+  value accesses: {
+    value descendants(readonly_write_access)
+    filter (access) access.write_site != null
+  }
+  value if any(accesses, access => access.readonly_write_name == null && access.readonly_write_sources == null)
+    then { unknown_names: [null], writes: [] } else {
+    value unknown_names: {
+      value accesses
+      filter (access) access.readonly_write_sources == null
+      map (access) access.readonly_write_name
+      unique
+    }
+    value writes: {
+      value accesses
+      flat_map (access) {
+        value access.readonly_write_sources
+        map (source) source.site
+        unique
+        map (site) { site: site, access: access }
+      }
+      group_by (write) write.site
+    }
+    value { unknown_names: unknown_names, writes: writes }
+  }
 }
 in ts_member, ts_index {
   let readonly_write_key if is ts_member then ts_value_key(property.node) else index.node
@@ -29,10 +51,9 @@ fn readonly_writes(n) = {
   value key: if raw_key is ts_computed_key then raw_key.expression.node else raw_key
   value name: ts_value_key(key)
   value program: last(walk(n, item => item.parent.node))
-  value accesses: program.readonly_write_accesses
-  value unknown: any(accesses, access => access.readonly_write_sources == null
-    && (access.readonly_write_name == null || access.readonly_write_name == name))
-  value if unknown then null else filter(accesses, access => any(access.readonly_write_sources, source => source.site == identity))
+  value index: program.readonly_write_index
+  value unknown: contains(index.unknown_names, null) || contains(index.unknown_names, name)
+  value if unknown then null else map(find(index.writes, group => group.key == identity).items ?? [], write => write.access)
 }
 fn readonly_constructor_write(n, access) = {
   value owner: access.readonly_write_function
@@ -71,10 +92,10 @@ fn readonly_initializer_annotation(initializer) = {
 in ts_class_property rule prefer-readonly {
   option onlyInlineLambdas boolean = false "Limit initialised members to direct arrow functions"
   when !onlyInlineLambdas || init == null || init is ts_arrow
-  when readonly_writes != null
   when (contains([] modifier, "private") || key is ts_private_name)
     && !contains([] modifier, "readonly") && !contains([] modifier, "accessor")
-    && readonly_member_key(key.node) && readonly_member_writes == 0
+    && readonly_member_key(key.node)
+  when readonly_writes != null && readonly_member_writes == 0
   report at {start: style_head_offset, end: key.end_offset}
   warn "Member '{key}' is never reassigned; mark it as `readonly`."
   let preserve_inference type.node == null && init != null && count(readonly_constructor_writes) > 0
@@ -87,8 +108,8 @@ in ts_class_property rule prefer-readonly {
 in ts_parameter rule prefer-readonly:parameter {
   option onlyInlineLambdas boolean = false "Limit initialised members to direct arrow functions"
   when !onlyInlineLambdas || init == null || init is ts_arrow
-  when readonly_writes != null
-  when contains([] modifier, "private") && !contains([] modifier, "readonly") && readonly_member_writes == 0
+  when contains([] modifier, "private") && !contains([] modifier, "readonly")
+  when readonly_writes != null && readonly_member_writes == 0
   report at {start: style_head_offset, end: name.end_offset}
   warn "Member '{name}' is never reassigned; mark it as `readonly`."
   fix at name.node if readonly_constructor_indirect_writes == 0 as "readonly " name
