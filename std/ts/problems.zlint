@@ -790,8 +790,8 @@ in ts_import rule no-unassigned-import {
   warn "Imported module should be assigned"
 }
 
-in ts_identifier rule no-unused-imports {
-  when is (ts_import.default_import, ts_import.namespace, ts_import_specifier.local, ts_import_specifier.imported, ts_import_equals.name)
+in ts_import.default_import, ts_import.namespace, ts_import_specifier.local, ts_import_specifier.imported, ts_import_equals.name rule no-unused-imports {
+  when is ts_identifier
   when declaration_kind == "import" && uses == 0
   # TypeScript counts `{@link X}` in JSDoc as a use.
   when !{ value result: "\\x7B@link(?:code|plain)?\\s+" re_escape(text) "\\b"; value re_test(source, result) }
@@ -874,7 +874,7 @@ in problem_irregular_ws rule no-irregular-whitespace {
 # At the `(`, `[`, template or `/` on the new line.
 in ts_open_paren, ts_open_angle, ts_open_bracket, ts_template, ts_punctuator rule no-unexpected-multiline {
   when is (ts_open_paren, ts_open_angle, ts_open_bracket, ts_template) || text == "/"
-  when token_neighbours.before.line_break == true
+  when re_test(byte_slice(source, token(node, "before").end ?? offset, offset), /[\r\n\u{2028}\u{2029}]/)
   let multiline_kind if parent is ts_call && parent.optional == null && count(parent.argument) > 0
       && (is ts_open_paren && count(parent.type_argument) == 0 || is ts_open_angle && count(parent.type_argument) > 0) then "function"
     else if is ts_open_bracket && parent is ts_index && parent.optional == null then "property"

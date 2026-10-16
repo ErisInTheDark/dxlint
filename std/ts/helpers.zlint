@@ -3,7 +3,7 @@
 # A plain identifier, nothing else (`x`, `$el`, not `a.b` or `f()`).
 fn is_identifier(x) = re_test(x, /^[A-Za-z_$][\w$]*$/)
 
-fn unparenthesised_node(n) = { value n; walk (current) if current is ts_parenthesized then current.expression.node else null; last }
+fn unparenthesised_node(n) = if n not ts_parenthesized then n else { value n; walk (current) if current is ts_parenthesized then current.expression.node else null; last }
 fn outer_parenthesised_node(n) = { value n; walk (current) if current.parent is ts_parenthesized then current.parent.node else null; last }
 
 fn function_uses_this(n) = {

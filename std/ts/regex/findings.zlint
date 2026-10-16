@@ -20,9 +20,14 @@ fn regexp_finding(input, check, kind, data, start, end) = {
   value { check: check, kind: kind, data: data, offset: span.offset, end: span.end }
 }
 fn regexp_controls(nodes, input) = {
-  value characters: filter(nodes, entry => entry.kind == "character" && type_of(entry.value) == "num" && entry.value <= 31 && {
+  value atoms: filter(nodes, entry => entry.kind == "regexp_character" && re_test(entry.text, /^[\u{0}-\u{1f}]$/)
+    || entry.kind == "regexp_escape" && regexp_kind(nodes, input, entry) == "character")
+  value parts: flat(map(atoms, entry => regexp_character_parts(nodes, input, entry)))
+  value characters: filter(parts, entry => type_of(entry.value) == "num" && entry.value <= 31 && {
+    value raw: byte_slice(input.text, entry.start, entry.end)
+    value character: regexp_character(entry.value)
     value written: regexp_written(input, entry.start, entry.end)
-    value starts_with(entry.raw, entry.character) || starts_with(entry.raw, "\\x") || starts_with(entry.raw, "\\u")
+    value starts_with(raw, character) || starts_with(raw, "\\x") || starts_with(raw, "\\u")
       || starts_with(written, "\\x") || starts_with(written, "\\u")
   })
   value if len(characters) == 0 then [] else {
@@ -182,7 +187,7 @@ fn regexp_checked_by_call(n) = {
   value n is ts_regex && owner is (ts_call, ts_new) && first == n && len(arguments) > 1 && regexp_input(owner) != null
 }
 in regexp_site let regexp_control_findings if regexp_tree.ok
-  then regexp_controls(regexp_view_nodes, regexp_input) else []
+  then regexp_controls(regexp_nodes, regexp_input) else []
 in regexp_site let regexp_empty_class_findings if node is ts_regex && regexp_tree.ok && regexp_error == null
   then regexp_empty_classes(regexp_view_nodes, regexp_input) else []
 in regexp_site let regexp_space_findings if regexp_tree.ok && regexp_error == null

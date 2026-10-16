@@ -68,9 +68,15 @@ fn import_default_text(source, n) = {
   value byte_slice(source, n.default_import.offset, n.default_import.token_neighbours.after.start)
   trim_end
 }
+in ts_node let import_merge_groups {
+  value node.body.nodes
+  filter (other) other is ts_import && other.import_type_named && !other.import_has_attributes
+  group_by (other) other.from.literal_value.value
+}
 fn import_merge_target(n) = {
-  value n.parent.body.nodes
-  find (other) other is ts_import && other != n && other.import_type_named && !other.import_has_attributes && other.from.literal_value.value == n.from.literal_value.value
+  value n.parent.import_merge_groups
+  find (group) group.key == n.from.literal_value.value
+  then (group) { value group.items; find (other) other != n }
 }
 fn import_merge_edit(target, text) = {
   value before: target.import_named_close

@@ -1,7 +1,7 @@
 define {
 
 group member_usage_access ts_member, ts_index, ts_pattern_property, ts_property
-in ts_program let member_usage_accesses descendants(member_usage_access)
+in ts_class let member_usage_accesses descendants(member_usage_access)
 fn member_usage_class(n) = find(walk(n, item => item.parent.node), item => item is ts_class)
 fn member_usage_key(n) = if n is ts_parameter then n.name.node else n.key.node
 fn member_usage_members(owner) = {
@@ -78,10 +78,9 @@ fn member_usage_hash_owner(access) = {
 fn member_usage_used(declaration) = {
   value name: ts_value_key(member_usage_key(declaration))
   value class: member_usage_class(declaration)
-  value program: last(walk(class, item => item.parent.node))
   value accessor: declaration is ts_method && contains(["get", "set"], declaration.kind)
     || contains([] declaration.modifier, "accessor")
-  value any(program.member_usage_accesses, access =>
+  value any(class.member_usage_accesses, access =>
     access.member_usage_name == name && (accessor || access.member_usage_read)
       && (if access is ts_member && access.property is ts_private_name
         then member_usage_hash_owner(access) == class
@@ -91,8 +90,8 @@ fn member_usage_used(declaration) = {
         }))
 }
 
-in ts_private_name, ts_identifier, ts_string, ts_number, ts_computed_key rule no-unused-private-class-members {
-  when is (ts_method.key, ts_class_property.key, ts_parameter.name)
+in ts_method.key, ts_class_property.key, ts_parameter.name rule no-unused-private-class-members {
+  when is (ts_private_name, ts_identifier, ts_string, ts_number, ts_computed_key)
   when parent not ts_parameter || contains([] parent.modifier, "private")
   let typed re_test(file, /\.[cm]?tsx?$/)
   when is ts_private_name || typed && contains([] parent.modifier, "private")

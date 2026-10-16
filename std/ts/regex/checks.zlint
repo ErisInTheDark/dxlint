@@ -46,15 +46,13 @@ fn regexp_group_error(nodes, entry) = {
 }
 fn regexp_escape_error(nodes, input, entry) = {
   value raw: entry.text
-  value in_class: regexp_in_class(nodes, entry)
   value unicode: regexp_unicode(input)
+  value in_class: unicode && regexp_in_class(nodes, entry)
   value sets: contains(input.flags, "v")
-  value quoted: '"' raw '"'
-  value decoded: js_string_parts(quoted)
   value if raw == "\\" && (unicode || byte_char(input.text, entry.end) != "c") then { message: "\\ at end of pattern", offset: entry.end }
     else if !unicode then null
     else if starts_with(raw, "\\u") && (!re_test(raw, /^\\u(?:[0-9a-fA-F]{4}|[dD][89aAbB][0-9a-fA-F]{2}\\u[dD][c-fC-F][0-9a-fA-F]{2}|\{[0-9a-fA-F]+\})$/)
-      || decoded == null) then { message: "Invalid unicode escape", offset: entry.end }
+      || js_string_parts('"' raw '"') == null) then { message: "Invalid unicode escape", offset: entry.end }
     else if starts_with(raw, "\\x") && !re_test(raw, /^\\x[0-9a-fA-F]{2}$/) then { message: "Invalid escape", offset: entry.end }
     else if starts_with(raw, "\\c") && !re_test(raw, /^\\c[A-Za-z]$/) then { message: if in_class then "Invalid class escape" else "Invalid unicode escape", offset: entry.end }
     else if re_test(raw, /^\\[pP]/) then {
@@ -142,7 +140,8 @@ fn regexp_range_error(nodes, input, entry) = {
     message: "Invalid character class", offset: entry.end
   } else null
 }
-fn regexp_character_error(nodes, input, entry) = {
+fn regexp_character_error(nodes, input, entry) = if !regexp_unicode(input)
+  || !contains("{{}}]&!#$%*+,.:;<=>?@^`~()[/-|", entry.text) then null else {
   value raw: entry.text
   value in_class: regexp_in_class(nodes, entry)
   value if !in_class && regexp_unicode(input) && contains(["{{", "}}", "]"], raw) then {

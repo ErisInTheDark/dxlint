@@ -90,7 +90,8 @@ fn layout_assignment_pattern(n) = {
 }
 fn layout_trailing_comma(n, list) = {
   value item: last(list.items)
-  value after: item.token_neighbours.after
+  value after: token(item, "after")
+  value terminal: token(item, "last")
   value trailing: after.text == ","
   value comma: if trailing then first(overlapping(ts_comma, after.start, after.end)) else null
   value closing: if trailing then token(comma, "after") else after
@@ -98,9 +99,9 @@ fn layout_trailing_comma(n, list) = {
     && item.name not ts_rest
   value if item is ts_hole || !contains(["}}", "]", ")", ">"], closing.text) then null else {
     kind: list.kind,
-    offset: if trailing then after.start else item.last_token.end,
+    offset: if trailing then after.start else terminal.end,
     trailing: trailing,
-    multiline: position(if trailing then after.end else item.last_token.end).js_line != position(closing.end).js_line,
+    multiline: position(if trailing then after.end else terminal.end).js_line != position(closing.end).js_line,
     allowed: allowed,
     tsx_single: list.kind == "generics" && count(list.items) == 1 && ends_with(n.file, ".tsx")
   }
@@ -143,11 +144,11 @@ fn layout_statement_semicolon(source, n, mode, omit_block, omit_class) = {
       || n.parent is (ts_for_in, ts_for_of) && n.parent.left.node == n)
   value if header || n is (ts_function, ts_method) && n.body.node != null
     || n is ts_export && n.declaration.node != null then null else {
-  value last: n.last_token
-  value token: node_at(last.start)
-  value present: token is ts_semicolon
-  value before: if present then token.token_neighbours.before else last
-  value next: token.token_neighbours.after
+  value last: token(n, "last")
+  value last_node: node_at(last.start)
+  value present: last_node is ts_semicolon
+  value before: if present then token(last_node, "before") else last
+  value next: token(last_node, "after")
   value field: n is ts_class_property
   value closing: next.text == "}}"
   value body_open: if closing && (omit_block && n.parent is ts_static_block

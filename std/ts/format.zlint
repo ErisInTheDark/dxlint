@@ -112,11 +112,13 @@ in ts_variable_declaration.kind rule no-var warn "Unexpected var, use let or con
 in ts_open_paren rule space-in-parens:after {
   option mode "always" | "never" = "never" "spacing inside parentheses"
   option exceptions ("{}" | "[]" | "()" | "empty")[] = [] "invert spacing for nested delimiters"
-  when mode != "never" || count(exceptions) > 0 || space_after.text != ""
-  let paren_space { value space_after.text; re_find /^\s*/; nonempty } ?? ""
+  let paren_edge token(node, "after")
+  when mode != "never" || count(exceptions) > 0 || paren_edge.start != end_offset
+  let paren_gap if paren_edge == null then null else byte_slice(source, end_offset, paren_edge.start)
+  let paren_space { value paren_gap; re_find /^\s*/; nonempty } ?? ""
   when count(exceptions) > 0 || (mode == "always") == (paren_space == "")
   let paren_next when {
-    space_after.comments then ""
+    trim(paren_gap) != "" then ""
     next_token is ts_open_brace then "{{}}"
     next_token is ts_open_bracket then "[]"
     next_token is ts_open_paren then "()"
@@ -124,7 +126,7 @@ in ts_open_paren rule space-in-parens:after {
     else then ""
   }
   let paren_wants if count(exceptions) == 0 then mode == "always" else (mode == "always") != contains(exceptions, paren_next)
-  when if paren_space != "" then !re_test(paren_space, /[\n\r\u{2028}\u{2029}]/) && !{ value space_after.text; trim_start; starts_with "//" } && !paren_wants else paren_wants && (paren_next != "empty" || contains(exceptions, "empty"))
+  when if paren_space != "" then !re_test(paren_space, /[\n\r\u{2028}\u{2029}]/) && !{ value paren_gap; trim_start; starts_with "//" } && !paren_wants else paren_wants && (paren_next != "empty" || contains(exceptions, "empty"))
   report at if paren_space != "" then end_offset else offset
   fix space_after as if paren_wants then " " else ""
   warn if paren_space != "" then "There should be no space after this paren." else "There must be a space after this paren."
@@ -132,11 +134,13 @@ in ts_open_paren rule space-in-parens:after {
 in ts_close_paren rule space-in-parens:before {
   option mode "always" | "never" = "never" "spacing inside parentheses"
   option exceptions ("{}" | "[]" | "()" | "empty")[] = [] "invert spacing for nested delimiters"
-  when mode != "never" || count(exceptions) > 0 || space_before.text != ""
-  let paren_space { value space_before.text; re_find /\s*$/; nonempty } ?? ""
+  let paren_edge token(node, "before")
+  when mode != "never" || count(exceptions) > 0 || paren_edge.end != offset
+  let paren_gap if paren_edge == null then null else byte_slice(source, paren_edge.end, offset)
+  let paren_space { value paren_gap; re_find /\s*$/; nonempty } ?? ""
   when count(exceptions) > 0 || (mode == "always") == (paren_space == "")
   let paren_previous when {
-    space_before.comments then ""
+    trim(paren_gap) != "" then ""
     previous_token is ts_close_brace then "{{}}"
     previous_token is ts_close_bracket then "[]"
     previous_token is ts_close_paren then "()"

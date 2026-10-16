@@ -282,17 +282,10 @@ fn ts_name_self_owner(n) = when {
     && n.parent.init is (ts_function, ts_arrow) then n.parent.init.node
   else then null
 }
-in ts_identifier let ts_name_usage {
+in ts_identifier let ts_name_usage_references {
   value binding: if ts_name_declared then ts_name_binding else null
   value refs: filter(binding.references, reference => reference is ts_identifier)
-  value self_owner: ts_name_self_owner(node)
-  value if binding == null || binding.node != node || any(refs, reference => reference.access == null) then null else {
-    uses: count(filter(refs, reference => reference.access != "write")),
-    value_uses: count(filter(refs, reference => contains(["read", "read_write"], reference.access))),
-    self_uses: count(filter(refs, reference => reference.access != "write" && self_owner != null
-      && self_owner.offset <= reference.offset && reference.end_offset <= self_owner.end_offset)),
-    writes: count(filter(refs, reference => contains(["write", "read_write"], reference.access)))
-  }
+  value if binding == null || binding.node != node || any(refs, reference => reference.access == null) then null else refs
 }
 in ts_node {
   let uses null
@@ -305,10 +298,17 @@ in ts_node {
   let restricted_binding false
 }
 in ts_identifier {
-  let uses ts_name_usage.uses
-  let value_uses ts_name_usage.value_uses
-  let self_uses ts_name_usage.self_uses
-  let writes ts_name_usage.writes
+  let uses if ts_name_usage_references == null then null
+    else count(filter(ts_name_usage_references, reference => reference.access != "write"))
+  let value_uses if ts_name_usage_references == null then null
+    else count(filter(ts_name_usage_references, reference => contains(["read", "read_write"], reference.access)))
+  let self_uses if ts_name_usage_references == null then null else {
+    value self_owner: ts_name_self_owner(node)
+    value if self_owner == null then 0 else count(filter(ts_name_usage_references, reference => reference.access != "write"
+      && self_owner.offset <= reference.offset && reference.end_offset <= self_owner.end_offset))
+  }
+  let writes if ts_name_usage_references == null then null
+    else count(filter(ts_name_usage_references, reference => contains(["write", "read_write"], reference.access)))
   let ambient if ts_name_declared && ts_name_binding.node == node
     then all(ts_name_binding.declarations, declaration => declaration.ts_name_ambient) else null
   let exported if ts_name_declared && ts_name_binding.node == node

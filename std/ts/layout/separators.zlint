@@ -162,7 +162,7 @@ in semicolon_statement rule semi {
   option omitLastInOneLineBlock boolean = false "omit final semicolons in single-line blocks"
   option omitLastInOneLineClassBody boolean = false "omit final semicolons in single-line class bodies"
   option beforeStatementContinuationChars "always" | "any" | "never" = "any" "semicolons before continuation characters"
-  when mode != "always" || omitLastInOneLineBlock || omitLastInOneLineClassBody || last_token.text != ";"
+  when mode != "always" || omitLastInOneLineBlock || omitLastInOneLineClassBody || token(node, "last").text != ";"
   let statement_semi layout_statement_semicolon(source, node, mode, omitLastInOneLineBlock, omitLastInOneLineClassBody)
   when statement_semi != null
   let omit_statement_semi omitLastInOneLineBlock && statement_semi.one_line_block || omitLastInOneLineClassBody && statement_semi.one_line_class

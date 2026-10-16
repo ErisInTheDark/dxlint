@@ -44,7 +44,7 @@ in ts_parameter let layout_annotation_category "parameter"
 in ts_class_property, ts_property_signature, ts_index_signature, ts_method_signature, ts_call_signature let layout_annotation_category "property"
 in ts_function, ts_arrow, ts_method let layout_annotation_category "returnType"
 in ts_function_type, ts_tuple_member, ts_mapped_type let layout_annotation_category "colon"
-in ts_colon let layout_annotation_optional token_neighbours.before.text == "?"
+in ts_colon let layout_annotation_optional token(node, "before").text == "?"
 @macro layout_annotation_options {
   option before boolean = false "space before annotation punctuation"
   option after boolean = true "space after annotation punctuation"
@@ -64,7 +64,7 @@ in ts_colon let layout_annotation_optional token_neighbours.before.text == "?"
 }
 in ts_colon rule type-annotation-spacing:before {
   @layout_annotation_options
-  when len(overrides) > 0 || layout_annotation_optional || space_before.spaced != before
+  when len(overrides) > 0 || layout_annotation_optional || before || token(node, "before").end != offset
   @layout_annotation_policy
   let annotation_gap if annotation_optional then ts_token_space(source, parent.optional.node, true) else space_before
   when annotation_gap != null && annotation_gap.spaced != annotation_before
@@ -74,7 +74,9 @@ in ts_colon rule type-annotation-spacing:before {
 }
 in ts_colon rule type-annotation-spacing:after {
   @layout_annotation_options
-  when len(overrides) > 0 || space_after.spaced != after
+  let annotation_edge token(node, "after")
+  let annotation_gap_text if annotation_edge == null then null else byte_slice(source, end_offset, annotation_edge.start)
+  when len(overrides) > 0 || (if annotation_gap_text == "" then false else if annotation_gap_text == " " then true else space_after.spaced) != after
   @layout_annotation_policy
   when space_after.spaced != annotation_after
   warn if annotation_after then "Expected a space after the '{annotation_label}'." else "Unexpected space after the '{annotation_label}'."
@@ -83,7 +85,7 @@ in ts_colon rule type-annotation-spacing:after {
 in ts_colon rule type-annotation-spacing:between {
   when layout_annotation_optional
   @layout_annotation_options
-  when space_before.spaced != (overrides.questionMark.after.nonempty ?? false)
+  when (if token(node, "before").end == offset then false else space_before.spaced) != (overrides.questionMark.after.nonempty ?? false)
   @layout_annotation_policy
   when annotation_optional
   let annotation_inner overrides.questionMark.after.nonempty ?? false
