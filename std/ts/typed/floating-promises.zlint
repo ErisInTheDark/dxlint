@@ -2,24 +2,27 @@
 
 define {
 
-in ts_node let floating_promise_type type_structure([], ["kind", "parts", "aliases", "declarations", "callable"])
+in ts_node let floating_promise_type type_structure([], ["kind", "parts", "aliases", "declarations"])
+in ts_node let floating_handler_callable type_structure([], ["callable"]).callable
 in ts_node let floating_thenable_type type_structure(["then"], ["kind", "parts", "aliases", "declarations", "member_types", "call_signatures", "callable"])
 in ts_node let floating_promise_safe_call false
 in ts_node let floating_promise_allowed_types []
 in ts_node let floating_promises_checked true
 fn floating_promise_safe(n, safe_calls) = {
   value expression: unparenthesised_node(n)
-  value callee: unparenthesised_node(expression.callee.node)
   value expression.floating_promise_safe_call
-    || expression is ts_call && callee is ts_identifier && contains(safe_calls, callee.text)
+    || len(safe_calls) > 0 && expression is ts_call && {
+      value callee: unparenthesised_node(expression.callee.node)
+      value callee is ts_identifier && contains(safe_calls, callee.text)
+    }
 }
 fn floating_promise_subject_checked(n, ignore_iife) = {
-  value expression: unparenthesised_node(n)
-  value callee: unparenthesised_node(expression.callee.node)
   value n.floating_promises_checked
   && (!(n.parent.node is ts_arrow) || n is ts_unary)
-  && !(ignore_iife && n.parent.node is ts_expression_statement
-    && expression is ts_call && callee is (ts_function, ts_arrow))
+  && !(ignore_iife && n.parent.node is ts_expression_statement && {
+    value expression: unparenthesised_node(n)
+    value expression is ts_call && unparenthesised_node(expression.callee.node) is (ts_function, ts_arrow)
+  })
 }
 fn floating_rejection_handler(n) = {
   value callee: unparenthesised_node(n.callee.node)
@@ -30,7 +33,7 @@ fn floating_rejection_handler(n) = {
   value checked_count: position + 1
   value preceding: slice(n.argument.nodes, 0, checked_count)
   value if handler == null || any(preceding, argument => argument is ts_spread) then "missing"
-    else if handler.floating_promise_type.callable then "handled" else "useless"
+    else if handler.floating_handler_callable then "handled" else "useless"
 }
 fn floating_promise_nonnull(n) = {
   value arms: value_constituents(n)
@@ -67,7 +70,8 @@ fn floating_promise_failure(n, check_thenables, ignore_void, safe_promises, safe
   value floating_promise_leaves(n, ignore_void)
   map (part) if part is ts_assignment || floating_promise_safe(part, safe_calls) then null else {
       value part_type: if check_thenables then part.floating_thenable_type else part.floating_promise_type
-      value allowed: concat(part.floating_promise_allowed_types, floating_promise_allowed(part_type, safe_promises))
+      value allowed: concat(part.floating_promise_allowed_types,
+        if len(safe_promises) == 0 then [] else floating_promise_allowed(part_type, safe_promises))
       value if floating_promise_array(part_type, check_thenables, allowed) then "array"
         else if part not ts_await
           && floating_promise_element(part_type, check_thenables, allowed)
@@ -86,10 +90,11 @@ in ts_expression_statement.expression, ts_arrow.body rule no-floating-promises {
   option allowForKnownSafePromises string[] = [] "Promise type names whose rejection is handled elsewhere"
   option allowForKnownSafeCalls string[] = [] "Function names whose returned promise is handled elsewhere"
   when floating_promise_subject_checked(node, ignoreIIFE)
-  when contains(["promise", "useless"], floating_promise_failure(node, checkThenables, ignoreVoid, allowForKnownSafePromises, allowForKnownSafeCalls))
+  let failure floating_promise_failure(node, checkThenables, ignoreVoid, allowForKnownSafePromises, allowForKnownSafeCalls)
+  when contains(["promise", "useless"], failure)
   report at if parent.node is ts_expression_statement then parent.node else node
   warn (if ignoreVoid then "Promises must be awaited, end with a call to .catch, end with a call to .then with a rejection handler or be explicitly marked as ignored with the `void` operator."
-    else "Promises must be awaited, end with a call to .catch, or end with a call to .then with a rejection handler.") (if floating_promise_failure(node, checkThenables, ignoreVoid, allowForKnownSafePromises, allowForKnownSafeCalls) == "useless"
+    else "Promises must be awaited, end with a call to .catch, or end with a call to .then with a rejection handler.") (if failure == "useless"
       then " A rejection handler that is not a function will be ignored." else "")
 }
 

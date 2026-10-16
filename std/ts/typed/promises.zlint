@@ -3,26 +3,16 @@ import .ts/values/inspection
 
 define {
 
-fn promise_boolean_parent(n) =
-  when {
-    n.parent is (ts_parenthesized, ts_logical) then n.parent
-    n.parent is ts_conditional && n.parent.test.node != n then n.parent
-    else then null
-  }
-fn promise_boolean_left_parent(n) =
-  if n.parent is ts_logical && (n.parent.operator == "??" || n.parent.left.node != n) then null
-  else promise_boolean_parent(n)
-fn promise_boolean_use(n) = {
-  value n
-  walk (current) promise_boolean_parent(current)
-  any (current) current.parent is (ts_if, ts_while, ts_do_while, ts_for, ts_conditional) && current.parent.test.node == current
-  || current.parent is ts_unary && current.parent.operator == "!" && current.parent.argument.node == current
-}
-  || {
-    value n
-    walk (current) promise_boolean_left_parent(current)
-    any (current) current.parent is ts_logical && current.parent.operator != "??" && current.parent.left.node == current
-  }
+in ts_node let promise_boolean_test
+  is (ts_if.test, ts_while.test, ts_do_while.test, ts_for.test, ts_conditional.test)
+  || is ts_unary.argument && node.parent.operator == "!"
+  || (parent is (ts_parenthesized, ts_logical) || parent is ts_conditional && not ts_conditional.test)
+    && parent.promise_boolean_test == true
+in ts_node let promise_boolean_left
+  is ts_logical.left && node.parent.operator != "??"
+  || (parent is ts_parenthesized || is ts_logical.left && node.parent.operator != "??"
+    || parent is ts_conditional && not ts_conditional.test)
+    && parent.promise_boolean_left == true
 
 in ts_node rule no-misused-promises:conditionals {
   option flagUnions "none" | "strict" | "all" = "none" "Which mixed promise unions to flag"
@@ -31,7 +21,7 @@ in ts_node rule no-misused-promises:conditionals {
   when parent is (ts_parenthesized, ts_logical, ts_conditional)
     || is (ts_if.test, ts_while.test, ts_do_while.test, ts_for.test)
     || is ts_unary.argument && node.parent.operator == "!"
-  when promise_boolean_use(node)
+  when promise_boolean_test || promise_boolean_left
   when node could thenable && (flagUnions == "all" || node always thenable || flagUnions == "strict" && type_awaitability.union_equivalent == true)
   warn "Expected non-Promise value in a boolean conditional."
 }
