@@ -46,9 +46,13 @@ define {
 
   in ts_function, ts_arrow, ts_method, ts_function_type, ts_method_signature, ts_call_signature {
     overloads infer last
-    let calls_overload_implementation node is ts_function && node.body != null
-      && any(name_binding(node.name.node).declarations, declaration =>
+    let calls_overload_implementation node.body != null && (
+      node is ts_function && any(name_binding(node.name.node).declarations, declaration =>
         declaration.parent.node is ts_function && declaration.parent.node.body == null)
+      || node is ts_method && parent is ts_class && ts_value_key(key.node) != null
+        && any(parent.member.nodes, declaration => declaration is ts_method && declaration.body == null
+          && ts_value_key(declaration.key.node) == ts_value_key(key.node)
+          && ts_value_static(declaration.modifier.nodes) == ts_value_static(modifier.nodes)))
     let calls_receivers filter(parameter.nodes, p => p.name is ts_this || p.name is ts_identifier && p.name == "this")
     let calls_parameters filter(parameter.nodes, p => !(p.name is ts_this || p.name is ts_identifier && p.name == "this"))
     let calls_concise_result if node is ts_arrow && node.body not ts_block then node.body.node else null
@@ -64,9 +68,10 @@ define {
       value parts != null && count(parts) > 0
         && all(parts, arm => any(arm, part => contains(part.traits, "void")))
     }
-    generics type_parameter
+    when node is ts_method && calls_constructor { generics parent.type_parameter }
+    when !(node is ts_method && calls_constructor) { generics type_parameter }
     when !calls_overload_implementation && !contains([] node.modifier, "async") && !contains([] node.modifier, "*")
-      && !(node is ts_method && node.calls_constructor && count(node.parent.type_parameter) == 0) {
+      && !(node is ts_method && node.calls_constructor) {
       when calls_concise_result != null && calls_inferred_widen {
         signature calls_parameters receiver calls_receivers returns calls_concise_result.widened
       }
@@ -116,7 +121,7 @@ define {
     )
     fits callable when kind != "get" && kind != "set" && !calls_constructor
     fits constructible when calls_constructor
-    when calls_constructor && count(parent.type_parameter) == 0 {
+    when calls_constructor && !calls_overload_implementation {
       signature calls_parameters receiver calls_receivers returns scope members from parent
     }
     variance parameters bivariant

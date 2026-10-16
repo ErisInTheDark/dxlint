@@ -1,0 +1,10 @@
+import .ts
+
+in ts_new rule constructor-result {
+  let expected if first(argument.nodes) is ts_string then "string" else "number"
+  let member value_lookup(node, "value").member
+  let headers { value value_signatures(value_lookup(node, "read").member) ?? []; flat_map (arm) arm }
+  report at parent.name.node
+  info "{ ts_value_has_trait(node, 'void') }/{ ts_value_has_trait(member, expected) }/{ count(headers) }"
+}
+rule constructor-result
