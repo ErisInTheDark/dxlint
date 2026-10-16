@@ -102,7 +102,9 @@ fn watch_every() -> Option<std::time::Duration> {
     (seconds > 0).then(|| std::time::Duration::from_secs(seconds))
 }
 
-fn watch(profile: &crate::engine::Profile, every: std::time::Duration, working: &std::sync::atomic::AtomicUsize) {
+fn watch(linter: &Linter, profile: &crate::engine::Profile, every: std::time::Duration, working: &std::sync::atomic::AtomicUsize) {
+    let attribute = |index: usize| u16::try_from(index).ok()
+        .and_then(|index| linter.attrs.definition(index)).map_or_else(|| index.to_string(), |(name, _)| name.to_string());
     let tick = std::time::Duration::from_millis(100);
     let mut waited = std::time::Duration::ZERO;
     while working.load(std::sync::atomic::Ordering::Relaxed) > 0 {
@@ -110,7 +112,7 @@ fn watch(profile: &crate::engine::Profile, every: std::time::Duration, working: 
         waited += tick;
         if waited >= every {
             waited = std::time::Duration::ZERO;
-            eprintln!("{}", profile.watch_line());
+            eprintln!("{}", profile.watch_line(attribute));
         }
     }
 }
@@ -251,7 +253,7 @@ pub(super) fn prepared(output: &mut Output<'_>, args: LintArgs, project: &mut Pr
             std::thread::scope(|w| {
                 if let (Some(every), Some(profile)) = (watch_every(), linter.profile.as_ref()) {
                     let working = &working;
-                    w.spawn(move || watch(profile, every, working));
+                    w.spawn(move || watch(linter, profile, every, working));
                 }
                 for _ in 0..threads {
                     let tx = tx.clone();

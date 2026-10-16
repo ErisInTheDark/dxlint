@@ -143,6 +143,7 @@ pub struct Profile {
     pub attr_nanos: Vec<AtomicU64>,
     pub attr_self_nanos: Vec<AtomicU64>,
     pub attr_calls: Vec<AtomicU64>,
+    pub attr_entered: Vec<AtomicU64>,
     /// Nanoseconds searching for each overlay matcher, and the nodes found.
     pub overlay_nanos: Vec<AtomicU64>,
     pub overlay_nodes: Vec<AtomicU64>,
@@ -219,6 +220,9 @@ pub struct SemanticQueryProfile {
     /// Time not spent in nested queries, value evaluations or name loads.
     pub self_nanos: AtomicU64,
     pub calls: AtomicU64,
+    /// Calls started, finished or not: shows queries a hanging run keeps
+    /// entering.
+    pub entered: AtomicU64,
     pub names_nanos: AtomicU64,
     pub names_trees: AtomicU64,
 }
@@ -371,14 +375,22 @@ impl Profile {
 
     /// One line on the busiest semantic queries so far (by self time), for
     /// watching a run that never finishes (`ZLINT_PROFILE_EVERY`).
-    pub fn watch_line(&self) -> String {
+    /// `entered/finished` counts show what a stuck run keeps starting;
+    /// `attribute` names a `let` by index.
+    pub fn watch_line(&self, attribute: impl Fn(usize) -> String) -> String {
         let mut queries: Vec<_> = self.semantic_queries.iter()
-            .map(|(&name, query)| (Self::get(&query.self_nanos), Self::get(&query.calls), name))
-            .filter(|&(_, calls, _)| calls > 0).collect();
+            .map(|(&name, query)| (Self::get(&query.entered), Self::get(&query.calls), Self::get(&query.self_nanos), name))
+            .filter(|&(entered, ..)| entered > 0).collect();
         queries.sort_by_key(|row| std::cmp::Reverse(row.0));
-        let top: Vec<String> = queries.iter().take(8)
-            .map(|(nanos, calls, name)| format!("{name} {:.0}ms/{calls}", *nanos as f64 / 1e6)).collect();
-        format!("zlint profile: steps {} limits {} | {}", Self::get(&self.semantic_budget_steps_total), Self::get(&self.semantic_budget_limits), top.join(", "))
+        let queries: Vec<String> = queries.iter().take(8)
+            .map(|(entered, calls, nanos, name)| format!("{name} {entered}/{calls} {:.0}ms", *nanos as f64 / 1e6)).collect();
+        let mut lets: Vec<_> = self.attr_entered.iter().enumerate()
+            .map(|(index, entered)| (Self::get(entered), Self::get(&self.attr_calls[index]), index))
+            .filter(|&(entered, ..)| entered > 0).collect();
+        lets.sort_by_key(|row| std::cmp::Reverse(row.0));
+        let lets: Vec<String> = lets.iter().take(6)
+            .map(|&(entered, calls, index)| format!("{} {entered}/{calls}", attribute(index))).collect();
+        format!("zlint profile: queries {} | lets {}", queries.join(", "), lets.join(", "))
     }
 
     const SLOWEST_FILES: usize = 10;
@@ -402,10 +414,12 @@ impl Profile {
         self.attr_nanos = counters(attributes);
         self.attr_self_nanos = counters(attributes);
         self.attr_calls = counters(attributes);
+        self.attr_entered = counters(attributes);
         self
     }
 
     pub(crate) fn begin_attribute(&self, attr: usize) -> Option<ValueEvaluation<'_>> {
+        Self::add(self.attr_entered.get(attr)?, 1);
         Some(ValueEvaluation {
             nanos: self.attr_nanos.get(attr)?,
             self_nanos: self.attr_self_nanos.get(attr)?,
@@ -467,6 +481,7 @@ impl Profile {
     pub fn time_semantic_query<T>(&self, name: &'static str, run: impl FnOnce() -> T) -> T {
         let _scope = SemanticQueryScope(SEMANTIC_QUERY.with(|query| query.replace(Some(name))));
         let Some(query) = self.semantic_queries.get(name) else { return run() };
+        Self::add(&query.entered, 1);
         let region = Region::start();
         let value = run();
         let (elapsed, own) = region.finish();
