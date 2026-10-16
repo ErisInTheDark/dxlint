@@ -518,12 +518,16 @@ pub fn profile(output: &mut Output<'_>, linter: &Linter, format: super::Format, 
         }
     }
     let mut semantic: Vec<_> = p.semantic_queries.iter()
-        .map(|(&name, query)| (Profile::get(&query.nanos), Profile::get(&query.self_nanos), Profile::get(&query.calls), name))
-        .filter(|(_, _, calls, _)| *calls > 0).collect();
+        .map(|(&name, query)| (Profile::get(&query.nanos), Profile::get(&query.self_nanos), Profile::get(&query.calls), Profile::get(&query.limited), name))
+        .filter(|(_, _, calls, ..)| *calls > 0).collect();
     semantic.sort_by_key(|row| std::cmp::Reverse(row.0));
-    output.err(format_args!("\n  {BOLD}semantic queries{BOLD:#} {DIM}inclusive time (nested calls overlap), then self time{DIM:#}"));
-    for (nanos, own, calls, name) in semantic {
-        output.err(format_args!("  {:>11.1} ms {:>11.1} ms self {calls:>11} calls  {CYAN}{name}{CYAN:#}", ms(nanos), ms(own)));
+    output.err(format_args!("\n  {BOLD}semantic queries{BOLD:#} {DIM}inclusive time (nested calls overlap), then self time; limits: root questions it asked that ran out of budget{DIM:#}"));
+    for (nanos, own, calls, limited, name) in semantic {
+        output.err(format_args!("  {:>11.1} ms {:>11.1} ms self {calls:>11} calls {limited:>9} limits  {CYAN}{name}{CYAN:#}", ms(nanos), ms(own)));
+    }
+    let unattributed = Profile::get(&p.unattributed_names.limited);
+    if unattributed > 0 {
+        output.err(format_args!("  {unattributed:>9} budget limits outside any semantic query"));
     }
     let mut values: Vec<_> = linter.grammar.matchers.iter().enumerate()
         .map(|(index, matcher)| (Profile::get(&p.value_nanos[index]), Profile::get(&p.value_self_nanos[index]), Profile::get(&p.value_calls[index]), matcher.name.as_str()))

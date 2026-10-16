@@ -223,6 +223,8 @@ pub struct SemanticQueryProfile {
     /// Calls started, finished or not: shows queries a hanging run keeps
     /// entering.
     pub entered: AtomicU64,
+    /// Root questions started by this query that ran out of budget.
+    pub limited: AtomicU64,
     pub names_nanos: AtomicU64,
     pub names_trees: AtomicU64,
 }
@@ -441,6 +443,14 @@ impl Profile {
     /// when outermost, against this thread's fact clock.
     pub fn time_fact<T>(&self, fact: usize, compute: impl FnOnce() -> T) -> T {
         shared(&self.fact_nanos[fact], &self.fact_calls[fact], compute)
+    }
+
+    /// Counts a root question cut short by its budget against the semantic
+    /// query that asked it.
+    pub fn note_budget_limit(&self) {
+        let label = SEMANTIC_QUERY.with(Cell::get);
+        let query = label.and_then(|label| self.semantic_queries.get(label)).unwrap_or(&self.unattributed_names);
+        Self::add(&query.limited, 1);
     }
 
     /// Resolves one tree's names: shared by every rule, so outside their time.

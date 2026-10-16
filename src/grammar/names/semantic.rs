@@ -64,6 +64,7 @@ impl Session {
         if failed {
             if let Some(profile) = world.profile() {
                 crate::engine::Profile::add(&profile.semantic_budget_limits, 1);
+                profile.note_budget_limit();
                 crate::engine::Profile::add(&profile.semantic_state_discards, 1);
                 crate::engine::Profile::add(&profile.semantic_memo_discards, discarded);
             }
