@@ -95,6 +95,26 @@ fn display(path: &Path, cwd: &Path) -> String {
     path.strip_prefix(cwd).unwrap_or(path).to_string_lossy().replace('\\', "/")
 }
 
+/// `ZLINT_PROFILE_EVERY=<seconds>` with `--profile`: print the busiest
+/// semantic queries while the run is still going (for runs that hang).
+fn watch_every() -> Option<std::time::Duration> {
+    let seconds: u64 = std::env::var("ZLINT_PROFILE_EVERY").ok()?.parse().ok()?;
+    (seconds > 0).then(|| std::time::Duration::from_secs(seconds))
+}
+
+fn watch(profile: &crate::engine::Profile, every: std::time::Duration, working: &std::sync::atomic::AtomicUsize) {
+    let tick = std::time::Duration::from_millis(100);
+    let mut waited = std::time::Duration::ZERO;
+    while working.load(std::sync::atomic::Ordering::Relaxed) > 0 {
+        std::thread::sleep(tick);
+        waited += tick;
+        if waited >= every {
+            waited = std::time::Duration::ZERO;
+            eprintln!("{}", profile.watch_line());
+        }
+    }
+}
+
 pub(super) fn walker(roots: &[PathBuf], jobs: usize, exclude: &'static [&'static str]) -> WalkBuilder {
     let mut walker = WalkBuilder::new(&roots[0]);
     for root in &roots[1..] { walker.add(root); }
@@ -227,17 +247,23 @@ pub(super) fn prepared(output: &mut Output<'_>, args: LintArgs, project: &mut Pr
             linter.set_discovery_jobs(jobs / threads);
             let linter = &*linter;
             let run = linter.run();
+            let working = std::sync::atomic::AtomicUsize::new(threads);
             std::thread::scope(|w| {
+                if let (Some(every), Some(profile)) = (watch_every(), linter.profile.as_ref()) {
+                    let working = &working;
+                    w.spawn(move || watch(profile, every, working));
+                }
                 for _ in 0..threads {
                     let tx = tx.clone();
-                    let (queue, next) = (&queue, &next);
+                    let (queue, next, working) = (&queue, &next, &working);
                     let run = &run;
                     w.spawn(move || {
                         while let Some((_, path)) = queue.get(next.fetch_add(1, std::sync::atomic::Ordering::Relaxed)) {
                             if tx.send(lint_file(linter, run, cache, path, fix)).is_err() {
-                                return;
+                                break;
                             }
                         }
+                        working.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
                     });
                 }
             });

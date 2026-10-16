@@ -137,6 +137,12 @@ pub struct Profile {
     pub value_nanos: Vec<AtomicU64>,
     pub value_self_nanos: Vec<AtomicU64>,
     pub value_calls: Vec<AtomicU64>,
+    /// Per attribute (`let`): reads including memo hits, total and self
+    /// time, so a shared let's cost shows on the let, not on whichever
+    /// rule read it first.
+    pub attr_nanos: Vec<AtomicU64>,
+    pub attr_self_nanos: Vec<AtomicU64>,
+    pub attr_calls: Vec<AtomicU64>,
     /// Nanoseconds searching for each overlay matcher, and the nodes found.
     pub overlay_nanos: Vec<AtomicU64>,
     pub overlay_nodes: Vec<AtomicU64>,
@@ -363,6 +369,18 @@ impl Profile {
         counter.load(Ordering::Relaxed)
     }
 
+    /// One line on the busiest semantic queries so far (by self time), for
+    /// watching a run that never finishes (`ZLINT_PROFILE_EVERY`).
+    pub fn watch_line(&self) -> String {
+        let mut queries: Vec<_> = self.semantic_queries.iter()
+            .map(|(&name, query)| (Self::get(&query.self_nanos), Self::get(&query.calls), name))
+            .filter(|&(_, calls, _)| calls > 0).collect();
+        queries.sort_by_key(|row| std::cmp::Reverse(row.0));
+        let top: Vec<String> = queries.iter().take(8)
+            .map(|(nanos, calls, name)| format!("{name} {:.0}ms/{calls}", *nanos as f64 / 1e6)).collect();
+        format!("zlint profile: steps {} limits {} | {}", Self::get(&self.semantic_budget_steps_total), Self::get(&self.semantic_budget_limits), top.join(", "))
+    }
+
     const SLOWEST_FILES: usize = 10;
 
     pub(crate) fn note_file(&self, file: &str, d: Duration) {
@@ -376,6 +394,24 @@ impl Profile {
 
     pub fn slowest_files(&self) -> Vec<(u64, String)> {
         self.slowest_files.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// Sizes the per-attribute counters (the linter knows its attributes
+    /// only after the grammar).
+    pub fn with_attributes(mut self, attributes: usize) -> Self {
+        self.attr_nanos = counters(attributes);
+        self.attr_self_nanos = counters(attributes);
+        self.attr_calls = counters(attributes);
+        self
+    }
+
+    pub(crate) fn begin_attribute(&self, attr: usize) -> Option<ValueEvaluation<'_>> {
+        Some(ValueEvaluation {
+            nanos: self.attr_nanos.get(attr)?,
+            self_nanos: self.attr_self_nanos.get(attr)?,
+            calls: self.attr_calls.get(attr)?,
+            region: Region::start(),
+        })
     }
 
     pub(crate) fn begin_value(&self, matcher: usize) -> Option<ValueEvaluation<'_>> {

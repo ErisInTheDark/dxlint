@@ -56,6 +56,8 @@ impl Attributes {
         self.attrs.get(usize::from(id)).map(|attr| (attr.name.as_str(), attr.defs.as_slice()))
     }
 
+    pub fn count(&self) -> usize { self.attrs.len() }
+
     pub fn new(attrs: Vec<Attr>, forwards: &[(u32, u16, u16)], grammar: &Grammar) -> Self {
         let stats = vm::stats();
         if attrs.is_empty() {
@@ -583,6 +585,7 @@ impl<'a> Ctx<'a> {
     /// An attribute through the VM, from the node's record when it has a
     /// field there (computed on first read); `None` on an error or a cycle.
     fn vm_attr(&self, node: u32, attr: u16, index: u32, slot: u16) -> Option<V> {
+        let _timed = self.profile.and_then(|profile| profile.begin_attribute(usize::from(attr)));
         let (lowered, world) = match &self.attrs.attrs[attr as usize].lowered[index as usize] {
             Lowered::Direct(body) => return vm::eval(self, node, body)?.persist(&self.memo.vm),
             Lowered::Semantic(body) => match self.world.filter(|world| world.cache_attribute(&self.memo.vm)) {
