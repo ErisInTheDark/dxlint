@@ -19,6 +19,31 @@ fn strict_void_expected_transfer(signatures, argument) =
       any(["void", "undefined", "null", "any"], trait => contains(part.traits, trait)))))
   else count(signatures) > 0 && all(signatures, signature => count(signature.result) > 0
     && all(signature.result, arm => any(arm, part => contains(part.traits, "void"))))
+fn strict_void_argument_transfer(n) = {
+  value outer: outer_parenthesised_node(n)
+  value call: outer.parent.node
+  value if call not (ts_call, ts_new) then null else {
+    value alternatives: if call is ts_new then value_constructors(call.callee.node) else value_signatures(call.callee.node)
+    value headers: flat_map(alternatives ?? [], arm => arm)
+    value index: index_of(call.argument.nodes, outer)
+    value groups: map(headers, header => {
+      value parameter: first(slice(header.parameters, index, index + 1))
+      value callbacks: if parameter == null then [] else value_signatures(parameter)
+      value if callbacks == null then null else map(callbacks, arm => map(arm, callback => {
+        value result: value_constituents(callback.result)
+        value {result: result, result_known: result != null}
+      }))
+    })
+    value signatures: { value groups; flat_map (group) group ?? []; flat_map (arm) arm }
+    value known: alternatives != null && count(headers) > 0 && count(signatures) > 0 && index != null
+      && all(groups, group => group != null) && all(signatures, signature => signature.result_known)
+    value contextual: { value expected_call_signatures(n) ?? []; flat_map (arm) arm }
+    value use_context: count(headers) == 1 || all(signatures, signature => all(signature.result, arm =>
+      any(arm, part => any(["void", "undefined", "null", "any", "parameter"], trait => contains(part.traits, trait)))))
+    value if !known then null else use_context && strict_void_expected_transfer(contextual, true)
+      || strict_void_expected_transfer(signatures, true)
+  }
+}
 fn strict_void_only_void(returns) = count(returns ?? []) > 0 && all(returns, result => result.kind == "void")
 fn strict_void_permissive(returns) = any(returns ?? [], result => result.kind == "void")
   && all(returns, result => contains(["void", "undefined", "null", "any", "never"], result.kind))
@@ -68,11 +93,15 @@ in ts_call.argument, ts_new.argument, ts_declarator.init, ts_assignment.right, t
   let expected expected_call_signatures(actual)
   let expected_signatures { value expected ?? []; flat_map (arm) arm }
   let expected_known expected != null && all(expected_signatures, signature => signature.result_known)
+  let argument_transfer strict_void_argument_transfer(actual)
   let site strict_void_site(node)
   let fields strict_void_fields(actual)
   let contracts if !expected_known || !strict_void_signatures_known(signatures)
     then callable_contracts(site, actual, [], fields) strict_void_static_contracts(actual) else []
-  when if expected_known
+  when if argument_transfer != null
+    then argument_transfer
+      && !strict_void_source_allowed(signatures, { value contracts; filter (contract) contract.complete; flat_map (contract) contract.source }, allowReturnAny)
+    else if expected_known
     then strict_void_expected_transfer(expected_signatures, outer_parenthesised_node(actual).parent is (ts_call, ts_new))
       && !strict_void_source_allowed(signatures, { value contracts; filter (contract) contract.complete; flat_map (contract) contract.source }, allowReturnAny)
     else any(contracts, contract => strict_void_transfer(contract)

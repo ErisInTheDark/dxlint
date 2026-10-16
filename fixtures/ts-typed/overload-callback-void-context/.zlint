@@ -1,0 +1,14 @@
+import .ts
+ignore "**/tsconfig.json"
+rule strict-void-return
+in ts_call rule overload-context {
+  when callee.text == "foo"
+  let headers { value value_signatures(callee.node); flat_map (arm) arm }
+  let callbacks flat_map(headers, header => {
+    value value_signatures(last(header.parameters)) ?? []
+    flat_map (arm) arm
+  })
+  let void_count count(filter(callbacks, callback => ts_value_has_trait(callback.result, "void")))
+  let any_count count(filter(callbacks, callback => ts_value_has_trait(callback.result, "any")))
+  info "{ count(headers) }/{ count(call_binding(node).choices) }/{ void_count }/{ any_count }"
+}
