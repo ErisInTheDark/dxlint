@@ -753,7 +753,7 @@ in ts_type_parameter {
   fits parameter open
   carries as { kind: "parameter", name: name.text }
   when constraint != null { constrains constraint }
-  unwraps it.inferred ?? (self & (default ?? constraint ?? trait unknown))
+  unwraps it.inferred ?? (self & (constraint ?? trait unknown))
 }
 in ts_union { unwraps ...type }
 in ts_intersection {

@@ -38,8 +38,13 @@ in ts_type_predicate {
 in ts_binary {
   when operator == "===" { unwraps truthy includes right from left }
   when operator == "===" { unwraps truthy includes left from right }
-  when operator == "!==" { unwraps truthy !includes right from left }
-  when operator == "!==" { unwraps truthy !includes left from right }
+  # Unequal to a literal rules that value out; unequal to some `number` proves nothing.
+  when operator == "!==" && (right always literal || right always undefined || right.structure_unwrapped is ts_null) {
+    unwraps truthy !includes right from left
+  }
+  when operator == "!==" && (left always literal || left always undefined || left.structure_unwrapped is ts_null) {
+    unwraps truthy !includes left from right
+  }
   when operator == "==" && (right.structure_unwrapped is ts_null || right always undefined) {
     unwraps truthy !(left \ nullable)
   }

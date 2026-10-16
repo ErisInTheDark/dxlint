@@ -1,0 +1,26 @@
+import .ts
+rule * off
+ignore "**/tsconfig.json"
+
+fn has_trait(source, trait) = {
+  value arms: value_constituents(source)
+  value arms != null && count(arms) > 0
+    && all(arms, arm => any(arm, part => contains(part.traits, trait)))
+}
+fn is_literal(source, literal) = {
+  value arms: value_constituents(source)
+  value arms != null && count(arms) > 0 && all(arms, arm =>
+    any(arm, part => part.identity_known && part.identity.kind == "value" && part.identity.value == literal))
+}
+in ts_assignment rule unequal-number {
+  when text == "canvas.width = requiredCanvasWidth"
+  when !has_trait(right.node, "number")
+  warn "Unequal numbers must retain their number values."
+}
+in ts_declarator rule unequal-control {
+  when name == "unit" || name == "wide"
+  when !(if name == "unit" then is_literal(init.node, 2) else has_trait(init.node, "string"))
+  warn "Inequality must remove only a matching unit literal."
+}
+rule unequal-number
+rule unequal-control
