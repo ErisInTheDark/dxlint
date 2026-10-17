@@ -332,8 +332,8 @@ in ts_identifier {
     then any(ts_name_binding.declarations, declaration =>
       declaration.ts_name_kind != "parameter" && declaration.ts_name_site.parent is ts_export)
     else null
-  let restricted_binding ts_name_declared && ts_name_binding != null
-    && contains(["NaN", "Infinity", "undefined", "eval", "arguments", "globalThis"], identifier_name)
+  let restricted_binding contains(["NaN", "Infinity", "undefined", "eval", "arguments", "globalThis"], identifier_name)
+    && ts_name_declared && ts_name_binding != null
     && (identifier_name != "undefined" || ts_name_binding.node.writes != 0
       || any(ts_name_binding.declarations, declaration =>
         declaration.parent not ts_declarator || declaration.parent.name.node != declaration

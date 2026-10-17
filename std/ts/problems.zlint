@@ -687,11 +687,13 @@ in ts_case rule no-fallthrough {
   option allowEmptyCase boolean = false "allow empty cases separated by blank lines"
   option commentPattern regex | null = null "comments that allow falling through (default: /falls?\\s?through/i)"
   option reportUnusedFallthroughComment boolean = false "report such comments where nothing falls through"
+  when index > 0
   let previous_path { value parent.case_paths; slice 0 index; last }
+  when previous_path == "falls_through"
   let previous_has_body { value parent.case_bodies; slice 0 index; last }
+  when previous_has_body || !allowEmptyCase && { value gap_before.nonempty ?? ""; re_count /\n/ } >= 2
   let comment_body { value case_comment.nonempty ?? ""; re_replace /^\/[*\/]|\*\/$/ ""; trim }
   let allowing case_comment != null && { value default: commentPattern.nonempty ?? "(?i)falls?\\s?through"; value re_test(comment_body, default) } && !re_test(comment_body, /^(?:eslint[- ]|(?:globals?|exported) )/)
-  when index > 0 && previous_path == "falls_through" && (previous_has_body || !allowEmptyCase && { value gap_before.nonempty ?? ""; re_count /\n/ } >= 2)
   when !allowing
   warn "Expected a 'break' statement before '{if test == null then 'default' else 'case'}'."
 }
@@ -854,6 +856,7 @@ in regexp_site rule no-regex-spaces {
 # The flags first (`RegExp` checks them first), then the pattern.
 in ts_call, ts_new rule no-invalid-regexp {
   option allowConstructorFlags string[] = [] "flags beyond the standard ones that are allowed"
+  when regexp_candidate
   when callee.global_value == "RegExp"
   let flags_problem if regexp_flags == null then null else regex_flags_error(regexp_flags, allowConstructorFlags)
   when flags_problem != null || regexp_pattern_error != null

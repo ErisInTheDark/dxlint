@@ -73,6 +73,13 @@ fn ts_token_space(source, n, before) = {
       if before then n.offset else adjacent.start)
 }
 
+fn ts_token_gap_text(source, n, before) = {
+  value adjacent: ts_token_adjacent(n, before)
+  value if adjacent == null then null
+    else byte_slice(source, if before then adjacent.end else n.end_offset,
+      if before then n.offset else adjacent.start)
+}
+
 fn ts_token_neighbour(source, n, before) = {
   value adjacent: ts_token_adjacent(n, before)
   value if adjacent == null then null else {

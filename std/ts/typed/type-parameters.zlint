@@ -86,9 +86,15 @@ fn type_parameter_handle(source, target, returned, from_class, seen) = {
   value if arms == null then { known: false, uses: [] }
     else type_parameter_parts(map(arms, arm => arm.parts), target, returned, from_class, seen)
 }
-fn type_parameter_written(source, parts, target, returned, from_class) =
-  if source is (ts_type_literal, ts_function_type) then type_parameter_handle(source, target, returned, from_class, [])
+fn type_parameter_written(source, parts, target, returned, from_class) = {
+  value bare: ts_value_bare_type(source)
+  value declaration: if bare is ts_type_reference && count(bare.type_argument.nodes) == 0
+    && bare.name is ts_identifier then name_binding(bare.name.node).node.parent.node else null
+  value if declaration is ts_type_parameter && declaration_identity(declaration) == target
+    then { known: true, uses: [true] }
+    else if source is (ts_type_literal, ts_function_type) then type_parameter_handle(source, target, returned, from_class, [])
     else type_parameter_value(parts, target, returned, from_class)
+}
 fn type_parameter_independent_parameter(parameter) =
   parameter.type is ts_type_keyword && contains(["any", "unknown"], parameter.type.text)
     || parameter.type == null && parameter.init == null
@@ -121,7 +127,7 @@ fn type_parameter_signature(signature, target, from_class, result_type, declarat
 }
 fn type_parameter_callable(n, target, from_class) = {
   value signatures: call_signatures(n)
-  value declaration: if n.body == null && count(signatures) == 1 && count(first(signatures)) == 1 then n else null
+  value declaration: if count(signatures) == 1 && count(first(signatures)) == 1 then n else null
   value lazy_signatures: if n.return_type == null && count(signatures) == 1 && count(first(signatures)) == 1
     then value_signatures(n) else null
   value inferred_result: if count(lazy_signatures) == 1 && count(first(lazy_signatures)) == 1
@@ -147,12 +153,12 @@ in ts_type_parameter rule no-unnecessary-type-parameters warn "Type parameter {n
   let type_parameter_descriptor if type_parameter_owner is ts_class then "class" else "function"
   let type_parameter_binding name_binding(name.node)
   when type_parameter_binding != null
-  let type_parameter_boundary type_parameter_owner.body.offset ?? type_parameter_owner.return_type.end ?? type_parameter_owner.end
+  let type_parameter_boundary type_parameter_owner.body.offset ?? type_parameter_owner.return_type.end_offset ?? type_parameter_owner.end_offset
   let type_parameter_written {
     value type_parameter_binding.references
     filter (reference) contains(name_role_classes(reference, "reference"), "type")
       && reference.offset <= type_parameter_boundary
-      && (reference.offset >= node.end || reference.end <= node.offset)
+      && (reference.offset >= node.end_offset || reference.end_offset <= node.offset)
   }
   when type_parameter_owner is ts_class || count(type_parameter_written) < 2
   let type_parameter_target declaration_identity(node)

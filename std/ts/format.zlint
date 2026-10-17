@@ -389,7 +389,7 @@ in ts_mapped_type let format_object_tail type.format_curly_tail.nonempty ?? type
 in ts_open_brace rule object-curly-spacing:open {
   @format_object_curly_options
   when !curly_empty
-  let curly_gap re_find(space_after.text, /^\s*/)
+  let curly_gap re_find(ts_token_gap_text(source, node, false), /^\s*/)
   when !re_test(curly_gap, /[\n\r\u{2028}\u{2029}]/)
   let curly_required if curly_arrays && (parent is ts_mapped_type || first(parent.member.node) is ts_index_signature) then !curly_spaced else curly_spaced
   when (curly_gap != "") != curly_required
@@ -401,14 +401,14 @@ in ts_open_brace rule object-curly-spacing:open {
 in ts_close_brace rule object-curly-spacing:close {
   @format_object_curly_options
   when !curly_empty
-  let curly_gap re_find(space_before.text, /\s*$/)
+  let curly_gap re_find(ts_token_gap_text(source, node, true), /\s*$/)
   when !re_test(curly_gap, /[\n\r\u{2028}\u{2029}]/)
   let curly_tail when {
     parent is (ts_object, ts_object_pattern) then { value parent.property.format_curly_tail; last; nonempty } ?? last(parent.property.node)
     parent is ts_mapped_type then parent.format_object_tail
     else then { value parent.member.format_curly_tail; last; nonempty } ?? last(parent.member.node)
   }
-  let curly_required if !space_before.comments && (curly_arrays && previous_token is ts_close_bracket && curly_tail is (ts_array, ts_tuple_type) || curly_objects && previous_token is ts_close_brace && curly_tail is (ts_object, ts_object_pattern, ts_mapped_type, ts_type_literal)) then !curly_spaced else curly_spaced
+  let curly_required if (curly_arrays && previous_token is ts_close_bracket && curly_tail is (ts_array, ts_tuple_type) || curly_objects && previous_token is ts_close_brace && curly_tail is (ts_object, ts_object_pattern, ts_mapped_type, ts_type_literal)) && !space_before.comments then !curly_spaced else curly_spaced
   when (curly_gap != "") != curly_required
   report at if curly_required then offset else offset - byte_len(curly_gap)
   fix space_before as if curly_required then " " else ""
