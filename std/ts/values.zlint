@@ -23,6 +23,7 @@ product ts_array items fits object, truthy, array as { kind: "array" } inherits 
 
 in ts_program { fits object, truthy in module }
 in ts_namespace {
+  unwraps trait unknown for type
   let ts_value_namespace_runtime ts_namespace_runtime(node)
   when ts_value_namespace_runtime {
     unwraps scope namespace from it
@@ -245,8 +246,20 @@ fn ts_value_then_contract(member) = if member == null then { known: true, thenab
   else { value signatures: call_parameters(member); value ts_value_then_headers(signatures) }
 fn ts_value_nonthenable(n) = {
   value parts: value_parts(n)
-  value certain: parts != null && all(parts, arm =>
-    any(arm.parts, part => contains(part.traits, "nonthenable") && !contains(part.uncertain_traits, "nonthenable")))
+  value certain: parts != null && all(parts, arm => {
+    value fixed: any(arm.parts, part => contains(part.traits, "nonthenable")
+      && !contains(part.uncertain_traits, "nonthenable"))
+    value members: filter(arm.parts, part => part.traits != ["intersection"] && part.traits != ["enum"]
+      && part.traits != ["parameter"])
+    value fixed || count(members) > 0 && all(members, part => {
+      value closed: part.carrier_known && (part.carrier == null || part.carrier.description.kind == "enum")
+        && count(part.uncertain_traits) == 0
+        && (any(part.traits, trait => contains(["number", "string", "boolean", "bigint", "symbol", "structural"], trait))
+          || part.carrier.description.kind == "enum" && contains(part.traits, "object"))
+      value children: if closed then value_children(part.handle, true, []) else null
+      value children != null && !any(children, child => child.member.key == "then")
+    })
+  })
   value if certain then true else {
     value shape: ts_value_then_headers(member_call_parameters(n, "then"))
     value if parts == null || len(parts) == 0 || !shape.known then null else !shape.thenable
@@ -266,11 +279,11 @@ in ts_null {
   fits null, nullable, falsy
   identity null
 }
-in ts_null, ts_boolean, ts_number, ts_bigint, ts_string { fits nonthenable }
+in ts_null { fits nonthenable }
 in ts_boolean, ts_number, ts_bigint, ts_string { fits literal }
 in ts_boolean {
   fits boolean
-  widens (trait boolean, truthy, nonthenable) | (trait boolean, falsy, nonthenable)
+  widens (trait boolean, truthy) | (trait boolean, falsy)
   fits falsy when text == "false"
   fits truthy when text == "true"
   identity text == "true"
@@ -279,29 +292,29 @@ in ts_number {
   let ts_value_number_raw replace(text, "_", "")
   let ts_value_number js_number(ts_value_number_raw)
   fits number
-  widens (trait number, truthy, nonthenable) | (trait number, falsy, nonthenable)
+  widens (trait number, truthy) | (trait number, falsy)
   fits falsy when ts_value_number == 0
   fits truthy when ts_value_number != 0
   identity ts_value_number
 }
 in ts_bigint {
   fits bigint
-  widens (trait bigint, truthy, nonthenable) | (trait bigint, falsy, nonthenable)
+  widens (trait bigint, truthy) | (trait bigint, falsy)
   fits falsy when js_bigint(text) == "0"
   fits truthy when js_bigint(text) != "0"
   identity { type: "bigint", value: js_bigint(text) }
 }
 in ts_string {
   fits string
-  widens (trait string, truthy, nonthenable) | (trait string, falsy, nonthenable)
+  widens (trait string, truthy) | (trait string, falsy)
   fits falsy when js_string(text) == ""
   fits truthy when js_string(text) != ""
   identity js_string(text)
 }
 in ts_template {
   when !(is ts_tagged_template.quasi) {
-    fits string, nonthenable
-    widens (trait string, truthy, nonthenable) | (trait string, falsy, nonthenable)
+    fits string
+    widens (trait string, truthy) | (trait string, falsy)
     fits falsy when count(expression.nodes) == 0 && text == "``"
     fits truthy when count(expression.nodes) == 0 && text != "``"
   }
@@ -341,11 +354,11 @@ in ts_declarator {
   let ts_value_unique_symbol ts_value_unique_symbol_binding(node)
   widens type ?? init.widened
   when ts_value_unique_symbol {
-    fits symbol, truthy, nonthenable
+    fits symbol, truthy
     identity node
   }
   when ts_value_iteration_binding {
-    when parent.parent.ts_value_iteration_string { unwraps type ?? trait string, nonthenable }
+    when parent.parent.ts_value_iteration_string { unwraps type ?? trait string }
     when !parent.parent.ts_value_iteration_string {
       calls parent.parent.["next"] with ts_value_iteration_arguments
       unwraps type ?? result.["value"]
@@ -418,24 +431,38 @@ in ts_assignment {
   when operator == "&&=" { unwraps (left \ truthy) | right }
   when operator == "||=" { unwraps (left \ falsy) | right }
   when operator == "??=" { unwraps (left \ nullable) | right }
-  when operator == "+=" { unwraps left.widened | right.widened }
 }
 in ts_binary, ts_assignment {
   let ts_value_numeric_kind if contains([">>>", ">>>="], operator) then "number"
+    else if left always number || right always number then "number"
     else if left always bigint && right always bigint then "bigint"
     else if (left could bigint) != false && (right could bigint) != false then "both"
     else "number"
   when contains(["-", "*", "/", "%", "**", "&", "|", "^", "<<", ">>", ">>>",
     "-=", "*=", "/=", "%=", "**=", "&=", "|=", "^=", "<<=", ">>=", ">>>="], operator) {
     when ts_value_numeric_kind == "number" {
-      unwraps (trait number, truthy, nonthenable) | (trait number, falsy, nonthenable)
+      unwraps (trait number, truthy) | (trait number, falsy)
     }
     when ts_value_numeric_kind == "bigint" {
-      unwraps (trait bigint, truthy, nonthenable) | (trait bigint, falsy, nonthenable)
+      unwraps (trait bigint, truthy) | (trait bigint, falsy)
     }
     when ts_value_numeric_kind == "both" {
-      unwraps (trait number, truthy, nonthenable) | (trait number, falsy, nonthenable) | (trait bigint, truthy, nonthenable) | (trait bigint, falsy, nonthenable)
+      unwraps (trait number, truthy) | (trait number, falsy) | (trait bigint, truthy) | (trait bigint, falsy)
     }
+  }
+  when operator == "+" || operator == "+=" {
+    when ts_value_has_trait(left.node, "any") == true { unwraps left }
+    when ts_value_has_trait(right.node, "any") == true { unwraps right }
+    when left always number && right always number {
+      unwraps (trait number, truthy) | (trait number, falsy)
+    }
+    when left always bigint && right always bigint {
+      unwraps (trait bigint, truthy) | (trait bigint, falsy)
+    }
+    when left always string || right always string {
+      unwraps (trait string, truthy) | (trait string, falsy)
+    }
+    unwraps left.widened | right.widened
   }
 }
 in ts_conditional { unwraps consequent | alternate }
@@ -469,10 +496,8 @@ in ts_await {
 }
 in ts_yield { unwraps unknown }
 in ts_unary {
-  when operator == "void" || operator == "typeof" || operator == "delete" || operator == "!"
-      || operator == "+" || operator == "~" { fits nonthenable }
   when operator == "void" {
-    fits undefined, nullable, falsy
+    fits undefined, nullable, falsy, nonthenable
     identity { type: "undefined" }
   }
   when operator == "typeof" { fits string, truthy }
@@ -484,29 +509,42 @@ in ts_unary {
     when argument always truthy { identity false }
     when argument always falsy { identity true }
   }
-  when operator == "+" || operator == "~" { fits number }
+  when operator == "+" { fits number }
+  when operator == "~" {
+    when argument always bigint {
+      unwraps (trait bigint, truthy) | (trait bigint, falsy)
+    }
+    when !(argument always bigint) { fits number }
+  }
   when operator == "-" && argument is ts_number {
-    fits number, nonthenable, literal
-    widens (trait number, truthy, nonthenable) | (trait number, falsy, nonthenable)
+    fits number, literal
+    widens (trait number, truthy) | (trait number, falsy)
     fits falsy when argument always falsy
     fits truthy when argument always truthy
     identity -argument.ts_value_number
   }
   when operator == "-" && argument is ts_bigint {
-    fits bigint, nonthenable, literal
-    widens (trait bigint, truthy, nonthenable) | (trait bigint, falsy, nonthenable)
+    fits bigint, literal
+    widens (trait bigint, truthy) | (trait bigint, falsy)
     fits falsy when argument always falsy
     fits truthy when argument always truthy
     identity { type: "bigint", value: ts_value_negated_bigint(argument.text) }
   }
-  when operator == "-" && !(argument is (ts_number, ts_bigint)) { unwraps unknown }
+  when operator == "-" && !(argument is (ts_number, ts_bigint)) {
+    when argument always number {
+      unwraps (trait number, truthy) | (trait number, falsy)
+    }
+    when argument always bigint {
+      unwraps (trait bigint, truthy) | (trait bigint, falsy)
+    }
+    when !(argument always number) && !(argument always bigint) { unwraps unknown }
+  }
 }
 in ts_update { unwraps argument.widened }
 in ts_binary {
   when operator == "===" || operator == "!==" || operator == "==" || operator == "!="
       || operator == "<" || operator == "<=" || operator == ">" || operator == ">="
-      || operator == "in" || operator == "instanceof" { fits boolean, nonthenable }
-  when operator == "+" { unwraps left.widened | right.widened }
+      || operator == "in" || operator == "instanceof" { fits boolean }
 }
 
 in ts_hole { unwraps trait undefined, nullable, falsy, nonthenable }
@@ -567,10 +605,9 @@ in ts_object {
   let ts_value_then_member find(property.nodes, member => ts_value_key(member.key.node) == "then")
   let ts_value_closed_object_members all(property.nodes, member => member not ts_spread
     && ts_value_key(member.key.node) != null)
+  when ts_value_closed_object_members { members members closed }
   let ts_value_then_shape ts_value_then_contract(ts_value_then_member)
   fits thenable in members when ts_value_then_shape.thenable
-  fits nonthenable in members when ts_value_closed_object_members
-    && ts_value_then_shape.known && !ts_value_then_shape.thenable
 }
 in ts_interface, ts_type_literal, ts_class {
   let ts_value_then_shape {
@@ -743,7 +780,7 @@ in ts_type_predicate {
     target_union: type is ts_union,
     target_source: if type != null then value_sources(type.node) else null,
   }
-  when modifier == null { fits boolean, nonthenable }
+  when modifier == null { fits boolean }
   when modifier != null {
     fits void, undefined, nullable, falsy, nonthenable
     identity { type: "undefined" }
@@ -768,15 +805,15 @@ in ts_intersection {
 in ts_literal_type {
   when !starts_with(text, "-") { unwraps value }
   when starts_with(text, "-") && value is ts_number {
-    fits number, nonthenable, literal
-    widens (trait number, truthy, nonthenable) | (trait number, falsy, nonthenable)
+    fits number, literal
+    widens (trait number, truthy) | (trait number, falsy)
     fits falsy when value always falsy
     fits truthy when value always truthy
     identity -value.ts_value_number
   }
   when starts_with(text, "-") && value is ts_bigint {
-    fits bigint, nonthenable, literal
-    widens (trait bigint, truthy, nonthenable) | (trait bigint, falsy, nonthenable)
+    fits bigint, literal
+    widens (trait bigint, truthy) | (trait bigint, falsy)
     fits falsy when value always falsy
     fits truthy when value always truthy
     identity { type: "bigint", value: ts_value_negated_bigint(value.text) }
@@ -823,8 +860,8 @@ in ts_conditional_type {
 in ts_type_operator {
   when operator == "readonly" { unwraps type }
   when operator == "unique" && type.text == "symbol" {
-    fits symbol, truthy, nonthenable
-    widens trait symbol, truthy, nonthenable
+    fits symbol, truthy
+    widens trait symbol, truthy
     identity node
   }
   when operator != "readonly" && !(operator == "unique" && type.text == "symbol") { unwraps unknown }
@@ -836,6 +873,36 @@ in ts_template_type {
 in ts_infer { unwraps type_parameter }
 fn ts_value_bare_type(n) = last(walk(n, item => if item is ts_parenthesized_type then item.type.node else null))
 in ts_mapped_type {
+  scope members
+  members members closed
+  fits structural in members
+  generics type_parameter
+  let ts_value_mapped_modifiers {
+    value constraint: ts_value_bare_type(type_parameter.constraint.node)
+    value formal: if constraint is ts_type_reference && constraint.name is ts_identifier
+      && count(constraint.type_argument.nodes) == 0
+      then find(map(name_binding(constraint.name.node).declarations, item => item.parent.node), item => item is ts_type_parameter) else null
+    value keys: if formal != null then ts_value_bare_type(formal.constraint.node) else constraint
+    value if keys is ts_type_operator && keys.operator == "keyof" && keys.type.text != "any"
+      then keys.type.node else null
+  }
+  let ts_value_mapped_member if ts_value_mapped_modifiers != null
+    then value_lookup(ts_value_mapped_modifiers, type_parameter.node) else null
+  optional when if optional != null then optional != "-?"
+    else if ts_value_mapped_modifiers == null then false
+    else if ts_value_mapped_member == null then null
+    else all(ts_value_mapped_member.alternatives, item => item.matched && item.required == false)
+  flag readonly when if modifier != null then modifier != "-readonly"
+    else if ts_value_mapped_modifiers == null then false
+    else if ts_value_mapped_member == null then null
+    else all(ts_value_mapped_member.alternatives, item => item.matched
+      && all(item.sources, source => contains(source.flags, "readonly")))
+  when optional != null && optional != "-?" {
+    indexed keys type_parameter.constraint bind type_parameter using (type | trait undefined, nullable, falsy, nonthenable) in members
+  }
+  when optional == null || optional == "-?" {
+    indexed keys type_parameter.constraint bind type_parameter using type in members
+  }
   let ts_value_mapped_constraint ts_value_bare_type(type_parameter.constraint.node)
   let ts_value_mapped_template ts_value_bare_type(type.node)
   let ts_value_mapped_source if name == null && ts_value_mapped_constraint is ts_type_operator
@@ -866,7 +933,8 @@ in ts_mapped_type {
     when ts_value_mapped_readonly == "add" { unwraps modified ts_value_mapped_source optional remove readonly add flag readonly add }
     when ts_value_mapped_readonly == "remove" { unwraps modified ts_value_mapped_source optional remove readonly remove flag readonly remove }
   }
-  when ts_value_mapped_source == null { unwraps unknown }
+  when ts_value_mapped_source == null && name == null { unwraps scope members from it }
+  when ts_value_mapped_source == null && name != null { unwraps unknown }
 }
 in ts_import_type { unwraps unknown }
 fn ts_value_intrinsic_text(name, text) = if name == "Uppercase" then upper(text)
@@ -899,23 +967,23 @@ in ts_type_keyword {
     when !(ts_value_intrinsic_formal always any || ts_value_intrinsic_formal always error) {
       unwraps select ts_value_intrinsic_formal against trait string then self else trait unknown distribute ts_value_intrinsic_formal
     }
-    fits string, nonthenable
+    fits string
     when type_of(ts_value_intrinsic_result) == "str" {
       fits literal
       fits truthy when ts_value_intrinsic_result != ""
       fits falsy when ts_value_intrinsic_result == ""
       identity ts_value_intrinsic_result
-      widens (trait string, truthy, nonthenable) | (trait string, falsy, nonthenable)
+      widens (trait string, truthy) | (trait string, falsy)
     }
     when type_of(ts_value_intrinsic_result) != "str" {
       fits truthy when ts_value_intrinsic_formal always truthy
       fits falsy when ts_value_intrinsic_formal always falsy
     }
   }
-  when text == "string" { unwraps (trait string, truthy, nonthenable) | (trait string, falsy, nonthenable) }
-  when text == "number" { unwraps (trait number, truthy, nonthenable) | (trait number, falsy, nonthenable) }
-  when text == "boolean" { unwraps (trait boolean, truthy, nonthenable) | (trait boolean, falsy, nonthenable) }
-  when text == "bigint" { unwraps (trait bigint, truthy, nonthenable) | (trait bigint, falsy, nonthenable) }
+  when text == "string" { unwraps (trait string, truthy) | (trait string, falsy) }
+  when text == "number" { unwraps (trait number, truthy) | (trait number, falsy) }
+  when text == "boolean" { unwraps (trait boolean, truthy) | (trait boolean, falsy) }
+  when text == "bigint" { unwraps (trait bigint, truthy) | (trait bigint, falsy) }
   fits string when text == "string"
   fits number when text == "number"
   fits boolean when text == "boolean"
@@ -923,8 +991,7 @@ in ts_type_keyword {
   fits symbol when text == "symbol"
   fits truthy when text == "symbol"
   fits object, truthy when text == "object"
-  fits nonthenable when text == "string" || text == "number" || text == "boolean" || text == "bigint"
-      || text == "symbol" || text == "null" || text == "undefined" || text == "void"
+  fits nonthenable when text == "null" || text == "undefined" || text == "void"
   fits null, nullable, falsy when text == "null"
   fits undefined, nullable, falsy when text == "undefined" || text == "void"
   fits void when text == "void"

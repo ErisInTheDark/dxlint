@@ -1,0 +1,14 @@
+import .ts
+rule * off
+ignore "**/tsconfig.json"
+in ts_declarator rule mapped-modifiers {
+  when starts_with(name, "check")
+  let edges value_children(type.node, true, [])
+  let optional contains(name, "Optional")
+  let readonly contains(name, "Readonly")
+  let member find(edges, edge => edge.member.key == (if optional then "optional" else "required")).member
+  when edges == null || member == null || member.optional != optional
+    || !all(member.sources, source => contains(source.flags, "readonly") == readonly)
+  warn "Mapped members must keep their source modifiers."
+}
+rule mapped-modifiers

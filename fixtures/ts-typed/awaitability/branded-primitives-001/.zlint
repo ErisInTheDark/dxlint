@@ -1,0 +1,28 @@
+import .ts
+rule * off
+ignore "**/tsconfig.json"
+
+in ts_expression_statement.expression rule primitive-awaiting {
+  when starts_with(text, "awaitable")
+  when !(node could thenable) || ts_value_nonthenable(node) != false
+  warn "A thenable intersection must retain its callable then contract."
+}
+in ts_expression_statement.expression rule primitive-ordinary {
+  when starts_with(text, "ordinary")
+  when ts_value_nonthenable(node) != true
+  warn "A plain primitive must remain nonthenable."
+}
+in ts_expression_statement.expression rule primitive-impossible {
+  when starts_with(text, "impossible")
+  when value_parts(node) != []
+  warn "Disjoint primitive intersections must remain impossible."
+}
+in ts_expression_statement.expression rule primitive-uncertain {
+  when starts_with(text, "uncertain")
+  when ts_value_nonthenable(node) != null
+  warn "An open member set must not prove absence."
+}
+rule primitive-awaiting
+rule primitive-ordinary
+rule primitive-impossible
+rule primitive-uncertain

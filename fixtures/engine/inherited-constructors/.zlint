@@ -1,0 +1,26 @@
+import .ts
+rule no-misused-spread
+ignore "node_modules/typescript/lib/lib.fixture.d.ts"
+
+in ts_new rule constructed-instance {
+  when callee.text != "Unresolved"
+  when value_parts(node) == null || !(node always object)
+  warn "A derived constructor must return its instance."
+}
+in ts_new.argument rule inherited-parameter {
+  when parent.callee.text != "Unresolved"
+  let expected if text == "'input'" then "string" else "number"
+  when ts_value_has_trait(value_expected_handle(node), expected) != true
+  warn "A derived constructor must keep its base parameter contract."
+}
+in ts_expression_statement.expression rule derived-member {
+  when node is ts_member
+  let expected if static_name == "child" || static_name == "imported" then "string"
+    else if static_name == "grandchild" then "boolean" else "number"
+  when ts_value_has_trait(node, expected) != true
+  warn "A derived constructor must keep its derived and inherited members."
+}
+in ts_new rule unresolved-base {
+  when callee.text == "Unresolved" && value_parts(node) != null
+  warn "An unresolved base must not invent a constructor."
+}

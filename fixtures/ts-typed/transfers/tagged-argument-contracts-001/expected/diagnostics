@@ -1,2 +1,2 @@
-a.ts:4:14-4:14 no-unsafe-argument#0
-a.ts:7:16-7:16 no-unsafe-argument#0
+a.ts:4:14-4:20 no-unsafe-argument#0
+a.ts:7:16-7:22 no-unsafe-argument#0

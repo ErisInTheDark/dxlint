@@ -160,24 +160,41 @@ fn stringification_member(n, handle, key) = {
     && all(defaults, item => item.alternatives != null)
     && lookup.alternatives != null
   value canonical: flat_map(defaults, item => flat_map(item.alternatives, arm => map(arm.sources, source => source.site)))
-  value sources: flat_map(lookup.alternatives ?? [], arm => arm.sources)
+  value sources: filter(flat_map(lookup.alternatives ?? [], arm => arm.sources), source => source.kind != "indexer")
   value if !known || any(sources, source => source.site == null) then null
     else if any(sources, source => !contains(canonical, source.site)) then 0
-    else if count(sources) > 0 then 2 else null
+    else 2
+}
+fn stringification_ignored_base(n, carrier, ignored) = if carrier == null then false else {
+  value sites: walk([carrier], site => {
+    value constructed: if site.kind != "ts_declarator" then [] else flat_map(value_lookup(declaration_value(n, site), "prototype").value ?? [], arm => map(arm, part => part.carrier))
+    value (site_field(n, site, "extends") ?? []) (site_sources(n, site).sites ?? []) filter(constructed, item => item != null)
+  })
+  value any(sites, site => contains(["ts_class", "ts_interface"], site.kind) && contains(ignored, site.name)
+    || site.description.kind == "named" && contains(ignored, site.description.name))
+}
+fn stringification_ignored_alias(n, ignored) = {
+  value arms: value_parts(n)
+  value roots: value_sources(n)
+  value sites: walk(if count(roots.sites) == 1 then roots.sites else [], site =>
+    if count(site_sources(n, site).sites) == 1 then site_sources(n, site).sites else [])
+  value arms != null && all(arms, arm => all(arm.parts, part => part.carrier_known && part.carrier == null))
+    && any(sites, site => site.kind == "ts_type_alias" && contains(ignored, site.name))
 }
 fn stringification_part(n, part, ignored, check_unknown, seen) = {
-  value primitive: any(["boolean", "string", "number", "bigint", "symbol", "null", "undefined", "any"],
+  value primitive: any(["boolean", "string", "number", "bigint", "symbol", "null", "undefined", "any", "callable"],
     trait => contains(part.traits, trait))
   value carrier: part.carrier
   value ignored_name: carrier != null && contains(ignored, carrier.description.name)
+    || stringification_ignored_base(n, carrier, ignored)
   value if primitive || ignored_name then 0
     else if contains(part.traits, "unknown") || contains(part.traits, "parameter") then if check_unknown then 1 else 0
     else if contains(["array", "tuple"], carrier.description.kind) then
       stringification_collection(map(carrier.arguments, argument => stringification_certainty(n, argument, ignored, check_unknown, seen)))
     else if !part.carrier_known then null else {
-      value symbol: value_lookup(part.handle, {global: "Symbol", class: "value", path: ["toPrimitive"]})
+      value symbol: value_lookup(part.handle, ts_value_symbol_key(n, "toPrimitive"))
       value custom_symbol: symbol.alternatives != null
-        && any(symbol.alternatives, arm => arm.matched && count(arm.sources) > 0)
+        && any(symbol.alternatives, arm => arm.matched && any(arm.sources, source => source.kind != "indexer"))
       value states: map(["toString", "toLocaleString", "valueOf"], key => stringification_member(n, part.handle, key))
       value if custom_symbol || any(states, state => state == 0) then 0
         else if symbol.alternatives == null || any(states, state => state == null) then null
@@ -187,7 +204,9 @@ fn stringification_part(n, part, ignored, check_unknown, seen) = {
 fn stringification_certainty(n, handle, ignored, check_unknown, seen) = {
   value arms: if contains(seen, handle) then null else value_parts(handle)
   value if arms == null then null else if count(arms) == 0 then 0 else stringification_union(map(arms, arm => {
-    value states: map(arm.parts, part => stringification_part(n, part, ignored, check_unknown, seen [handle]))
+    value concrete: filter(arm.parts, part => part.traits != ["parameter"])
+    value parts: if count(concrete) > 0 then concrete else arm.parts
+    value states: map(parts, part => stringification_part(n, part, ignored, check_unknown, seen [handle]))
     value if any(states, state => state == 0) then 0
       else if any(states, state => state == null) then null
       else if all(states, state => state == 1) then 1 else 2
@@ -218,7 +237,7 @@ in ts_call, ts_binary, ts_assignment, ts_template rule no-base-to-string {
   let findings map(stringification_subjects, subject => {
     node: subject.node,
     join: subject.join,
-    certainty: if subject.join then stringification_join(subject.node, ignoredTypeNames, checkUnknown) else stringification_certainty(subject.node, subject.node, ignoredTypeNames, checkUnknown, [])
+    certainty: if stringification_ignored_alias(subject.node, ignoredTypeNames) then 0 else if subject.join then stringification_join(subject.node, ignoredTypeNames, checkUnknown) else stringification_certainty(subject.node, subject.node, ignoredTypeNames, checkUnknown, [])
   })
   each subject in findings {
     when subject.node != null && subject.node not (ts_literal, ts_spread)
@@ -307,28 +326,28 @@ in ts_call, ts_new, ts_tagged_template {
   rule no-unsafe-argument {
     each unsafe_arg in argument_value_transfers ?? [] {
       when unsafe_arg.mode == "argument"
-      report at unsafe_arg.offset
+      report at unsafe_arg.site
       warn "Unsafe argument of type " unsafe_argument_sender(unsafe_arg) " assigned to a parameter of type `{unsafe_arg.receiver}`."
     }
   }
   rule no-unsafe-argument:spread {
     each unsafe_arg in argument_value_transfers ?? [] {
       when unsafe_arg.mode == "spread"
-      report at unsafe_arg.offset
+      report at unsafe_arg.site
       warn "Unsafe spread of an " unsafe_argument_sender(unsafe_arg) " type."
     }
   }
   rule no-unsafe-argument:array {
     each unsafe_arg in argument_value_transfers ?? [] {
       when unsafe_arg.mode == "array"
-      report at unsafe_arg.offset
+      report at unsafe_arg.site
       warn "Unsafe spread of an " unsafe_argument_sender(unsafe_arg) " array type."
     }
   }
   rule no-unsafe-argument:tuple {
     each unsafe_arg in argument_value_transfers ?? [] {
       when unsafe_arg.mode == "tuple"
-      report at unsafe_arg.offset
+      report at unsafe_arg.site
       warn "Unsafe spread of a tuple type. The argument is " unsafe_argument_sender(unsafe_arg) " and is assigned to a parameter of type `{unsafe_arg.receiver}`."
     }
   }
@@ -490,10 +509,10 @@ in ts_as, ts_type_assertion rule no-unsafe-type-assertion {
   let operand value_constituents(expression.node)
   let annotation value_constituents(type.node)
   when operand != null && annotation != null
-  let from_any !assignment_empty_map(expression.node) && assignment_unsafe(operand, annotation, node)
-  let to_any ts_value_trait(operand, "unknown") && ts_value_category(annotation) != null || assignment_unsafe(annotation, operand, node)
+  let from_any !assignment_empty_map(expression.node) && (assignment_unsafe(operand, annotation, node) || annotation == [] && ts_value_category(operand) != null)
+  let to_any (operand == [] || ts_value_trait(operand, "unknown")) && ts_value_category(annotation) != null || assignment_unsafe(annotation, operand, node)
   let narrow !from_any && !to_any && assertion_parts_known(value_parts(expression.node)) && assertion_parts_known(value_parts(type.node)) && value_accepts(type.node, expression.node, "value", "value") == false
-  let label if from_any then if ts_value_category(operand) == "error" then "error typed" else "`any`" else if to_any then if ts_value_category(annotation) == "error" then "error typed" else "`any`" else ts_value_print(annotation)
+  let label if from_any then if ts_value_category(operand) == "error" then "error typed" else "`any`" else if to_any then if ts_value_category(annotation) == "error" then "error typed" else "`any`" else ts_value_print_handle(type.node)
   when from_any || to_any || narrow && !re_test(label, /\bunknown\b/)
   warn if from_any then "Unsafe assertion from {label} detected: consider using type guards or a safer assertion." else if to_any then "Unsafe assertion to {label} detected: consider using a more specific type to ensure safety." else "Unsafe type assertion: type '{label}' is more narrow than the original type."
 }

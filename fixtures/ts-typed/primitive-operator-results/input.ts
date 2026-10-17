@@ -1,0 +1,20 @@
+export {};
+enum Flags { Read = 1 << 0, Write = 1 << 1 }
+declare const n: number;
+declare const b: bigint;
+declare const s: string;
+const checkNumberAdd = Flags.Read + Flags.Write;
+const checkNumberOr = Flags.Read | Flags.Write;
+const checkNumberMixed = Flags.Read | 1;
+const checkNumberNested = Flags.Read | (Flags.Write | 1);
+const checkNumberShift = Flags.Read << Flags.Write;
+const checkNumberMinus = -Flags.Read;
+const checkNumberPlain = -n;
+const checkBigintMinus = -b;
+const checkBigintNot = ~b;
+const checkBigintAdd = b + b;
+const checkBigintMultiply = b * b;
+const checkStringAdd = s + n;
+const checkStringEnum = s + Flags.Read;
+const checkNumberLiteral = -1;
+const checkBigintLiteral = -1n;

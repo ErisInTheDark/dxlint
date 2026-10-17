@@ -110,6 +110,11 @@ fn assertion_same_handles(source, target) = if source == null || target == null 
 fn assertion_parts_known(arms) = arms != null && all(arms, arm => count(arm.parts) > 0
   && all(arm.parts, part => count(part.uncertain_traits) == 0
     && !any(["any", "unknown", "error", "parameter"], trait => contains(part.traits, trait))))
+fn assertion_receiver_known(arms) = arms != null && count(arms) > 0
+  && all(arms, arm => count(arm.parts) > 0
+    && all(arm.parts, part => part.traits == ["unknown"]
+      || count(part.uncertain_traits) == 0
+        && !any(["any", "unknown", "error", "parameter"], trait => contains(part.traits, trait))))
 fn assertion_parts_non_null(arms) = assertion_parts_known(arms)
   && all(arms, arm => all(arm.parts, part =>
     !any(["null", "undefined", "void"], trait => contains(part.traits, trait))))
@@ -241,7 +246,7 @@ in ts_non_null rule no-unnecessary-type-assertion:non-null {
   let target assignment && outer is ts_assignment.left
   let unassigned { value expression.node; unparenthesised_node; assertion_unassigned }
   let unchanged assertion_parts_non_null(value_parts(expression.node)) && !unassigned
-  let contextual !unassigned && assertion_parts_known(value_parts(value_expected_handle(node)))
+  let contextual !unassigned && assertion_receiver_known(value_parts(value_expected_handle(node)))
     && value_accepts(node, expression.node, "expected", "value") == true
   let unchecked ts_compiler_option(node, "noUncheckedIndexedAccess") == true && unparenthesised_node(expression.node) is ts_index && condition_access(unparenthesised_node(expression.node)).from_index
   when target || !assignment && !unchecked && (unchanged || contextual)

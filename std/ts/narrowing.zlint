@@ -36,8 +36,8 @@ in ts_type_predicate {
   when modifier == null { unwraps truthy includes type from name }
 }
 in ts_binary {
-  when operator == "===" { unwraps truthy includes right from left }
-  when operator == "===" { unwraps truthy includes left from right }
+  when operator == "===" && (right always literal || right always undefined || right.structure_unwrapped is ts_null) { unwraps truthy includes right from left }
+  when operator == "===" && (left always literal || left always undefined || left.structure_unwrapped is ts_null) { unwraps truthy includes left from right }
   # Unequal to a literal rules that value out; unequal to some `number` proves nothing.
   when operator == "!==" && (right always literal || right always undefined || right.structure_unwrapped is ts_null) {
     unwraps truthy !includes right from left
@@ -83,11 +83,11 @@ in ts_binary {
     }
   }
 }
-@narrowing_typeof("string", (trait string, truthy, nonthenable | trait string, falsy, nonthenable), true)
-@narrowing_typeof("number", (trait number, truthy, nonthenable | trait number, falsy, nonthenable), true)
-@narrowing_typeof("boolean", (trait boolean, truthy, nonthenable | trait boolean, falsy, nonthenable), true)
-@narrowing_typeof("bigint", (trait bigint, truthy, nonthenable | trait bigint, falsy, nonthenable), true)
-@narrowing_typeof("symbol", (trait symbol, truthy, nonthenable), true)
+@narrowing_typeof("string", (trait string, truthy | trait string, falsy), true)
+@narrowing_typeof("number", (trait number, truthy | trait number, falsy), true)
+@narrowing_typeof("boolean", (trait boolean, truthy | trait boolean, falsy), true)
+@narrowing_typeof("bigint", (trait bigint, truthy | trait bigint, falsy), true)
+@narrowing_typeof("symbol", (trait symbol, truthy), true)
 @narrowing_typeof("undefined", (trait undefined, nullable, falsy, nonthenable), true)
 @narrowing_typeof("function", (instance "Function"), global_declarations(node, "Function", "type") != null && count(global_declarations(node, "Function", "type")) > 0)
 @narrowing_typeof("function", (trait callable, object, truthy), global_declarations(node, "Function", "type") == [])

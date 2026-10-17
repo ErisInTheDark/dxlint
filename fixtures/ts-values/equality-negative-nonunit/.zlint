@@ -1,0 +1,17 @@
+import .ts
+rule * off
+ignore "**/tsconfig.json"
+
+in ts_expression_statement.expression rule inhabited {
+  when text == "inhabited"
+  when value_parts(node) == []
+  warn "Unequal non-unit values can still be inhabited."
+}
+in ts_declarator rule literal-control {
+  when starts_with(name.text, "kept")
+  when value_accepts(type.node, init.node, "value", "value") != true
+    || value_accepts(init.node, type.node, "value", "value") != true
+  warn "Unit equality must preserve its branch narrowing."
+}
+rule inhabited
+rule literal-control

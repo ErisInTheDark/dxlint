@@ -148,9 +148,11 @@ in ts_export_specifier {
   }
   when parent.from != null {
     when kind != "type" && parent.kind != "type" {
+      resolves value, type, query local.node in module js_string(parent.from.text) as ts_module_name(local.node)
       exports value, type, query ts_module_name(local.node) from module js_string(parent.from.text) as ts_module_name(exported.node ?? local.node)
     }
     when kind == "type" || parent.kind == "type" {
+      resolves type, query local.node in module js_string(parent.from.text) as ts_module_name(local.node) asking all
       exports type, query ts_module_name(local.node) from module js_string(parent.from.text) as ts_module_name(exported.node ?? local.node) asking all
     }
   }

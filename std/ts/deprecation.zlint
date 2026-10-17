@@ -28,7 +28,17 @@ fn deprecation_leading_doc(leading) = {
     trim
   }
 }
-fn deprecation_doc(n, site) = deprecation_leading_doc(site_text(n, site).leading)
+fn deprecation_doc(n, site) = {
+  value owners: walk([site], current => {
+    value parent: site_parent(n, current)
+    value if parent != null && (parent.kind == "ts_export"
+      || current.kind == "ts_identifier" && parent.kind == "ts_declarator"
+      || current.kind == "ts_declarator" && parent.kind == "ts_variable_declaration")
+      then parent else null
+  })
+  value first(filter(map(owners, owner => deprecation_leading_doc(site_text(n, owner).leading)),
+    doc => doc != null))
+}
 fn deprecation_local_doc(n) = {
   value owner: find(walk([] n.declaration, current =>
     if current is (ts_declarator, ts_identifier) then current.parent.node else null),
@@ -75,10 +85,12 @@ fn deprecation_reason(n) = {
   value sites: walk(roots.sites ?? [], site => site_sources(subject, site).sites ?? [])
   value members: if subject is ts_member then deprecation_symbols(subject).sites else []
   value origin: declaration_identity(subject)
-  value docs: if call != null then
-    if selection != null && !selection.uncertain && count(selection.selected) == 1
-      then map(selection.selected, site => deprecation_doc(subject, site)) else []
-    else map(unique([] members (if origin != null then [origin] else []) sites), site => deprecation_doc(subject, site))
+  value declarations: unique([] members (if origin != null then [origin] else []) sites)
+  value owners: if call == null then declarations else filter(roots.sites ?? [], site =>
+    !contains(["ts_function", "ts_arrow", "ts_method", "ts_function_type", "ts_method_signature", "ts_call_signature"], site.kind))
+  value signatures: if call != null && selection != null && !selection.uncertain && count(selection.selected) == 1
+    then selection.selected else []
+  value docs: map(unique([] signatures owners), site => deprecation_doc(subject, site))
   value deprecation_first([deprecation_local_doc(subject)] docs)
 }
 

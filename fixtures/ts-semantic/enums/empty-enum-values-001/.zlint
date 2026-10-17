@@ -1,0 +1,14 @@
+import .ts
+import .ts/values/enums
+
+in ts_expression_statement rule numeric-enum {
+  let value expression.node
+  when value is ts_identifier
+  when !(value always number) || !ts_value_has_enum(value)
+  warn "A numeric enum must remain an inhabited enum value."
+}
+in ts_declarator rule enum-object {
+  when name.node.text == "statics"
+  when !(init.node always object) || init.node always number
+  warn "An enum object must remain separate from its numeric values."
+}

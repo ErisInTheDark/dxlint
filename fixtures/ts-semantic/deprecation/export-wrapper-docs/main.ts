@@ -1,0 +1,10 @@
+import { old, fresh, oldValue, freshValue } from "./barrel";
+import * as imported from "./barrel";
+old();
+fresh();
+oldValue;
+freshValue;
+imported.old();
+imported.fresh();
+imported.oldValue;
+imported.freshValue;

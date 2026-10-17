@@ -143,6 +143,9 @@ define {
     when count(calls_constructor_headers) == 0 && extends == null {
       signature calls_constructor_headers returns scope members from it
     }
+    when count(calls_constructor_headers) == 0 && extends != null {
+      signatures extends returns scope members from it
+    }
   }
 
   in ts_parameter {

@@ -1,0 +1,15 @@
+import .ts
+rule * off
+ignore "**/tsconfig.json"
+
+in ts_declarator rule primitive-operator {
+  when starts_with(name, "check")
+  let expected if contains(name, "Bigint") then "bigint"
+    else if contains(name, "String") then "string" else "number"
+  let arms value_constituents(init.node)
+  when arms == null || count(arms) == 0 || !all(arms, arm =>
+    any(arm, part => contains(part.traits, expected))
+    && !any(arm, part => contains(part.traits, "enum")))
+  warn "Operator result must be a plain " expected "."
+}
+rule primitive-operator

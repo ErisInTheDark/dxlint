@@ -1,0 +1,12 @@
+declare const text: { [key: string]: string };
+String(text);
+declare const callable: { [key: string]: () => string };
+String(callable);
+declare const custom: { [key: string]: unknown; toString(): string };
+String(custom);
+declare const mapped: { [P in "toString"]: () => string };
+String(mapped);
+declare const symbolIndex: { [key: symbol]: () => string };
+String(symbolIndex);
+declare const symbolCustom: { [Symbol.toPrimitive](): string };
+String(symbolCustom);

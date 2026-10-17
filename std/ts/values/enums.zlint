@@ -35,10 +35,12 @@ in ts_enum {
   scope statics
   scope enum_origin
   members statics closed
-  fits object, truthy, nonthenable in statics
-  fits enum in enum_origin open
+  fits object, truthy in statics
+  fits enum in enum_origin
+  fits number in enum_origin when count(member.nodes) == 0
   carries as { kind: "enum", name: name.text, first_member_kind: first(member.nodes).ts_value_enum_kind ?? "number" }
-  unwraps ...member for type
+  when count(member.nodes) > 0 { unwraps ...member for type }
+  when count(member.nodes) == 0 { unwraps scope enum_origin from it for type }
   unwraps scope statics from it
 }
 in ts_namespace {
@@ -67,8 +69,8 @@ in ts_enum_member {
     else then null
   }
   when ts_value_enum_kind != null {
-    fits number, nonthenable when ts_value_enum_kind == "number"
-    fits string, nonthenable when ts_value_enum_kind == "string"
+    fits number when ts_value_enum_kind == "number"
+    fits string when ts_value_enum_kind == "string"
     fits falsy when ts_value_enum_literal != null && (ts_value_enum_literal == 0 || ts_value_enum_literal == "")
     fits truthy when ts_value_enum_literal != null && ts_value_enum_literal != 0 && ts_value_enum_literal != ""
     when ts_value_enum_literal != null { identity ts_value_enum_literal }

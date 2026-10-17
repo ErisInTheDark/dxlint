@@ -1,0 +1,20 @@
+import .ts
+rule * off
+ignore "**/tsconfig.json"
+
+fn has_trait(source, trait) = {
+  value arms: value_constituents(source)
+  value arms != null && count(arms) > 0
+    && all(arms, arm => any(arm, part => contains(part.traits, trait)))
+}
+in ts_declarator rule namespace-meaning {
+  when contains(name, "check")
+  let expected if contains(name, "String") then "string"
+    else if contains(name, "Boolean") then "boolean"
+    else if contains(name, "Object") then "object"
+    else if contains(name, "Structural") then "structural"
+    else "number"
+  when !has_trait(init.node, expected)
+  warn name " must retain its " expected " meaning."
+}
+rule namespace-meaning
