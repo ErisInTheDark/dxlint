@@ -201,10 +201,14 @@ fn stringification_part(n, part, ignored, check_unknown, seen) = {
         else if any(states, state => state == 2) then 2 else null
     }
 }
+fn stringification_parts(arm) = {
+  value concrete: filter(arm.parts, part => part.traits != ["intersection"])
+  value if count(concrete) > 0 then concrete else arm.parts
+}
 fn stringification_certainty(n, handle, ignored, check_unknown, seen) = {
   value arms: if contains(seen, handle) then null else value_parts(handle)
   value if arms == null then null else if count(arms) == 0 then 0 else stringification_union(map(arms, arm => {
-    value concrete: filter(arm.parts, part => part.traits != ["parameter"])
+    value concrete: filter(stringification_parts(arm), part => part.traits != ["parameter"])
     value parts: if count(concrete) > 0 then concrete else arm.parts
     value states: map(parts, part => stringification_part(n, part, ignored, check_unknown, seen [handle]))
     value if any(states, state => state == 0) then 0
@@ -215,7 +219,7 @@ fn stringification_certainty(n, handle, ignored, check_unknown, seen) = {
 fn stringification_join(n, ignored, check_unknown) = {
   value arms: value_parts(n)
   value if arms == null then null else stringification_union(map(arms, arm => {
-    value states: map(arm.parts, part => if contains(["array", "tuple"], part.carrier.description.kind)
+    value states: map(stringification_parts(arm), part => if contains(["array", "tuple"], part.carrier.description.kind)
       then stringification_collection(map(part.carrier.arguments, argument => stringification_certainty(n, argument, ignored, check_unknown, [])))
       else 0)
     value if any(states, state => state == 0) then 0

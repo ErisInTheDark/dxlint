@@ -46,7 +46,7 @@ fn deprecation_local_doc(n) = {
     current => current is ts_variable_declaration)
   value if owner == null then null else deprecation_leading_doc(owner.gap_before ?? owner.text_before)
 }
-fn deprecation_subject(n) = if n is ts_member.property then n.parent.node
+fn deprecation_subject(n) = if n is (ts_member.property, ts_qualified_name.right) then n.parent.node
   else if n.deprecation_shorthand then n.declaration else n
 fn deprecation_pattern_source(pattern) = {
   value path: walk(pattern, current =>

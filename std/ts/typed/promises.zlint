@@ -64,7 +64,7 @@ fn promise_member_void_context(n, key) = {
     && promise_returns_thenable(promise_return_arms(value_signatures(source)))
     && promise_returns_void(promise_return_arms(value_signatures(target)))
 }
-fn promise_property_source(n) = if n is ts_property then n.value.node ?? n.key.node else n
+fn promise_property_source(n) = if n is ts_property then n.value.node ?? n else n
 fn promise_property_site(n) = {
   value n: unparenthesised_node(n)
   value if n is (ts_arrow, ts_function, ts_method) then n.return_type.node ?? function_head_site(n) else n

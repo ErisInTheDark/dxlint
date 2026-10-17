@@ -107,17 +107,17 @@ fn assertion_generic_call(n) = {
 fn assertion_same_handles(source, target) = if source == null || target == null then null else
   if all(source, arm => any(target, other => arm.handle == other.handle))
     && all(target, arm => any(source, other => arm.handle == other.handle)) then true else null
+fn assertion_part_known(part) = count(part.uncertain_traits) == 0
+  && !any(["any", "unknown", "error", "parameter"], trait => contains(part.traits, trait))
 fn assertion_parts_known(arms) = arms != null && all(arms, arm => count(arm.parts) > 0
-  && all(arm.parts, part => count(part.uncertain_traits) == 0
-    && !any(["any", "unknown", "error", "parameter"], trait => contains(part.traits, trait))))
+  && all(arm.parts, part => assertion_part_known(part)))
 fn assertion_receiver_known(arms) = arms != null && count(arms) > 0
   && all(arms, arm => count(arm.parts) > 0
     && all(arm.parts, part => part.traits == ["unknown"]
-      || count(part.uncertain_traits) == 0
-        && !any(["any", "unknown", "error", "parameter"], trait => contains(part.traits, trait))))
-fn assertion_parts_non_null(arms) = assertion_parts_known(arms)
-  && all(arms, arm => all(arm.parts, part =>
-    !any(["null", "undefined", "void"], trait => contains(part.traits, trait))))
+      || assertion_part_known(part)))
+fn assertion_parts_non_null(arms) = arms != null && count(arms) > 0
+  && all(arms, arm => any(arm.parts, part => assertion_part_known(part)
+    && !any(["null", "undefined", "void"], trait => contains(part.traits, trait))))
 fn assertion_scalar_identity_known(value) = value != null && all(value, arm => all(arm, part =>
   part.identity_known && part.carrier_known && part.product_known && count(part.uncertain_traits) == 0
     && part.carrier == null && part.product == null && (part.identity != null || any(
@@ -128,6 +128,20 @@ fn assertion_same_value(source, target) = {
   value b: value_constituents(target)
   value assertion_same_handles(value_parts(source), value_parts(target)) == true
     || assertion_scalar_identity_known(a) && assertion_scalar_identity_known(b) && a == b
+}
+fn assertion_scalar_types(n) = {
+  value arms: value_constituents(n)
+  value if !assertion_scalar_identity_known(arms) then null else map(arms, arm => map(arm, part => {
+    traits: filter(part.traits, trait => !contains(["truthy", "falsy"], trait)),
+    identity: part.identity
+  }))
+}
+fn assertion_same_scalar_type(source, target) = {
+  value left: assertion_scalar_types(source)
+  value right: assertion_scalar_types(target)
+  value left != null && right != null && count(left) > 0 && count(right) > 0
+    && all(left, arm => count(arm) > 0 && contains(right, arm))
+    && all(right, arm => count(arm) > 0 && contains(left, arm))
 }
 fn assertion_subject(n, ignored) = {
   value n.expression.node
@@ -171,7 +185,8 @@ fn assertion_non_null_style(n) = {
   value non_null: value_union(first(retained).handle, map(slice(retained, 1), arm => arm.handle))
   value if !assertion_parts_known(source) || !assertion_parts_non_null(target) then null
     else count(retained) < count(source)
-      && (assertion_same_handles(retained, target) == true || assertion_same_value(non_null, n.type.node))
+      && (assertion_same_handles(retained, target) == true || assertion_same_value(non_null, n.type.node)
+        || assertion_same_scalar_type(non_null, n.type.node))
 }
 fn assertion_unassigned(n) = n is ts_identifier && (n.declaration == null && n.resolved != "global" || n.declaration.parent is ts_declarator && n.declaration.ambient != true && (n.declaration.parent.init == null && { value n.declaration.parent.token_texts; slice 1 2; first } != "!" || n.declaration.parent.parent.kind == "var" && {
   value n.declaration.parent.parent.parent
