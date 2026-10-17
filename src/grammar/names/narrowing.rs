@@ -22,6 +22,7 @@ impl Narrowing<'_> {
 
     fn refine_graph(&self, at: Leaf, mut base: NodeValue) -> NodeValue {
         let Known::Yes(subject) = self.place(at) else { return base };
+        let written = self.written_place(at).known().unwrap_or_else(|| subject.clone());
         let effects = self.semantic.effects();
         let Known::Yes(entry) = effects.entry_for(at) else { return base };
         let mut contexts = vec![(entry, at)];
@@ -42,13 +43,15 @@ impl Narrowing<'_> {
             }
         }
         for (context_entry, site) in contexts.into_iter().rev() {
-            base = self.refine_in(&subject, context_entry, site, base, context_entry != entry);
+            base = self.refine_in(&subject, &written, context_entry, site, base, context_entry != entry);
             if self.semantic.question.budget.exhausted() { return NodeValue::Unknown }
         }
         base
     }
 
-    fn refine_in(&self, subject: &Place, entry: Leaf, at: Leaf, mut base: NodeValue, captured: bool) -> NodeValue {
+    /// `subject` matches guards (through call arguments); `written` is the
+    /// binding writes replace.
+    fn refine_in(&self, subject: &Place, written: &Place, entry: Leaf, at: Leaf, mut base: NodeValue, captured: bool) -> NodeValue {
         let Known::Yes(at) = self.semantic.leaf(at) else { return base };
         let Target::Node(node) = at.target else { return base };
         let effects = self.semantic.effects();
@@ -63,7 +66,7 @@ impl Narrowing<'_> {
         }
         if uses.is_empty() { return base }
         if !captured {
-            base = self.assigned(subject, &execution, &uses, entry.frame, base);
+            base = self.assigned(written, &execution, &uses, entry.frame, base);
         }
         for &node in execution.guard_owners(|execution| self.guard_owners(execution)) {
             if !self.semantic.question.budget.step() { return NodeValue::Unknown }
@@ -126,7 +129,7 @@ impl Narrowing<'_> {
             let Some(event) = execution.step(id).and_then(|step| step.event()) else { return base };
             let Some(target) = event.target else { return base };
             let at = Leaf { target: Target::Node(target.value), frame };
-            if self.place(at) != Known::Yes(subject.clone()) { return base }
+            if self.written_place(at) != Known::Yes(subject.clone()) { return base }
             let Some(written) = &event.written else { return base };
             let written = values.evaluate(written.owner, &written.recipe);
             let NodeValue::Alternatives(rows) = values.reduce(&base, &written) else { return base };
@@ -135,11 +138,12 @@ impl Narrowing<'_> {
         NodeValue::Alternatives(alternatives)
     }
 
+    /// Whether `event` replaces (part of) `tested`, a written place.
     fn write_invalidates(&self, event: &Event, tested: &Place, frame: super::question::FrameId) -> bool {
         if event.kind != EventKind::Write || event.phase != Phase::Leave { return false }
         let Some(target) = event.target else { return true };
         let at = Leaf { target: Target::Node(target.value), frame };
-        match self.place(at) {
+        match self.written_place(at) {
             Known::Yes(written) => written.invalidates(tested),
             Known::Unknown => true,
         }
@@ -166,7 +170,20 @@ impl Narrowing<'_> {
         }
     }
 
-    fn place(&self, mut at: Leaf) -> Known<Place> {
+    /// The binding and member path `at` names; a parameter read through its
+    /// call is followed to the argument it was bound to.
+    fn place(&self, at: Leaf) -> Known<Place> {
+        self.find_place(at, true)
+    }
+
+    /// The binding a write replaces: lexical, never through a call's
+    /// arguments (writing a parameter changes the parameter, not what the
+    /// caller passed).
+    fn written_place(&self, at: Leaf) -> Known<Place> {
+        self.find_place(at, false)
+    }
+
+    fn find_place(&self, mut at: Leaf, through_arguments: bool) -> Known<Place> {
         let values = self.semantic.values();
         let mut path = Vec::new();
         loop {
@@ -182,14 +199,16 @@ impl Narrowing<'_> {
                 }
             }
             if names.declared.contains_key(&node.node) {
-                match self.semantic.calls().argument_sites(at) {
-                    Known::Yes(Some(sites)) => {
-                        let [argument] = sites.as_slice() else { return Known::Unknown };
-                        at = *argument;
-                        continue;
+                if through_arguments {
+                    match self.semantic.calls().argument_sites(at) {
+                        Known::Yes(Some(sites)) => {
+                            let [argument] = sites.as_slice() else { return Known::Unknown };
+                            at = *argument;
+                            continue;
+                        }
+                        Known::Unknown => return Known::Unknown,
+                        Known::Yes(None) => {}
                     }
-                    Known::Unknown => return Known::Unknown,
-                    Known::Yes(None) => {}
                 }
                 path.reverse();
                 return Known::Yes(Place { root: at, path });

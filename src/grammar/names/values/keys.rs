@@ -111,8 +111,14 @@ impl Values<'_> {
                 Known::Unknown => { unknown = true; None }
             };
             if let Some(key) = key {
-                if literal.as_ref().is_some_and(|previous| previous != &key) { return Known::Unknown }
-                literal = Some(key);
+                match &literal {
+                    // A member redeclared in merged declarations (`dispose:
+                    // unique symbol` in two lib files) intersects each one's
+                    // own symbol; TypeScript keys the member by the first.
+                    Some(Key::Symbol(_)) if matches!(key, Key::Symbol(_)) => continue,
+                    Some(previous) if previous != &key => return Known::Unknown,
+                    _ => literal = Some(key),
+                }
             }
         }
         match (literal, domain) {
