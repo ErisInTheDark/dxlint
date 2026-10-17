@@ -102,7 +102,13 @@ fn assertion_generic_call(n) = {
     else if count(binding.declarations) == 1 && declaration is ts_declarator && declaration.type == null
       then unparenthesised_node(declaration.init.node) else null
   value if call not ts_call || call.type_argument != null then false
-    else if target not (ts_function, ts_arrow) then null else count(target.type_parameter) > 0
+    else if target is (ts_function, ts_arrow) then count(target.type_parameter) > 0 else {
+      value alternatives: value_signatures(callee)
+      value headers: flat_map(alternatives ?? [], arm => arm)
+      value parameters: map(headers, header => site_field(call, header.site, "type_parameter"))
+      value if alternatives != null && count(headers) > 0
+        && all(parameters, formals => formals != null && count(formals) == 0) then false else null
+    }
 }
 fn assertion_same_handles(source, target) = if source == null || target == null then null else
   if all(source, arm => any(target, other => arm.handle == other.handle))
@@ -136,12 +142,20 @@ fn assertion_scalar_types(n) = {
     identity: part.identity
   }))
 }
-fn assertion_same_scalar_type(source, target) = {
-  value left: assertion_scalar_types(source)
-  value right: assertion_scalar_types(target)
-  value left != null && right != null && count(left) > 0 && count(right) > 0
+fn assertion_scalar_types_equal(left, right) = left != null && right != null && count(left) > 0 && count(right) > 0
     && all(left, arm => count(arm) > 0 && contains(right, arm))
     && all(right, arm => count(arm) > 0 && contains(left, arm))
+fn assertion_same_scalar_type(source, target) = assertion_scalar_types_equal(
+  assertion_scalar_types(source), assertion_scalar_types(target))
+fn assertion_undefined_arm(arm) = count(arm) == 1 && contains(first(arm).traits, "undefined")
+fn assertion_same_optional_type(source, target) = {
+  value left: assertion_scalar_types(source)
+  value right: assertion_scalar_types(target)
+  value ts_compiler_option(source, "exactOptionalPropertyTypes") == true
+    && left != null && right != null && any(left, arm => assertion_undefined_arm(arm))
+    && any(right, arm => assertion_undefined_arm(arm))
+    && assertion_scalar_types_equal(filter(left, arm => !assertion_undefined_arm(arm)),
+      filter(right, arm => !assertion_undefined_arm(arm)))
 }
 fn assertion_type_parameter(n) = {
   value bare: ts_value_bare_type(n)
@@ -208,14 +222,16 @@ fn assertion_check(n, ignored, check_const) = {
     && value_accepts(n, subject, "expected", "value") == true
   value same: if literal_const then assertion_same_handles(operand, annotation) == true else
     assertion_parts_known(operand) && assertion_parts_known(annotation)
-      && assertion_same_value(subject, n.type.node)
+      && (assertion_same_value(subject, n.type.node) || assertion_same_scalar_type(subject, n.type.node)
+        || assertion_same_optional_type(subject, n.type.node))
   value generic: assertion_generic_call(subject)
   value literal_preserved: !any(annotation ?? [], arm => any(arm.parts, part =>
     part.identity_known && part.identity.kind == "value")) || assertion_literal_preserved(n)
       || subject is ts_call && generic == false
   value enum_preserved: ts_value_has_enum(n) != null && ts_value_has_enum(n) == ts_value_has_enum(subject)
   value if contains(ignored, n.type.text) || literal_const && (!check_const || !assertion_const_scalar(n))
-    || !contextual && (!same || subject is (ts_object, ts_array) || !literal_const && subject is ts_template
+    || !contextual && (!same || subject is (ts_object, ts_array)
+      || !literal_const && subject is ts_template && count(subject.expression.nodes) == 0
       || !literal_preserved || !enum_preserved) || generic == null then null
     else {subject: subject, raw_subject: raw_subject, contextual: contextual && !same, generic: generic}
 }

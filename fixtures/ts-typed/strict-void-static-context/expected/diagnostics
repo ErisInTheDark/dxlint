@@ -1,0 +1,3 @@
+input.ts:2:22-2:24 strict-void-return#2
+input.ts:5:17-5:23 strict-void-return#2
+input.ts:8:25-8:26 strict-void-return#2

@@ -78,7 +78,7 @@ in ts_jsx_element, ts_jsx_fragment {
   let jsx_child_has_jsx any(body.nodes, item => item is (ts_jsx_element, ts_jsx_fragment))
 }
 fn jsx_child_group_contains(row, line) = row.first == line || row.last == line
-in ts_node rule jsx-one-expression-per-line {
+in ts_jsx_element.body, ts_jsx_fragment.body rule jsx-one-expression-per-line {
   option mode "always" | "single-child" | "single-line" = "always" "same-line child layout"
   let opening_line position(parent.opening.end_offset).js_line
   let closing_line { value parent.closing.offset.nonempty ?? parent.opening.end_offset; position }.js_line
@@ -87,7 +87,7 @@ in ts_node rule jsx-one-expression-per-line {
   let first_wrong jsx_child_previous_row != null && jsx_child_group_contains(jsx_child_previous_row, first_line) || first_line == opening_line || first_line == closing_line && !(jsx_child_next_row != null && jsx_child_group_contains(jsx_child_next_row, first_line))
   let last_wrong jsx_child_previous_row != null && jsx_child_group_contains(jsx_child_previous_row, last_line) || last_line == opening_line || last_line == closing_line && !(jsx_child_next_row != null && jsx_child_group_contains(jsx_child_next_row, last_line))
   let single_group_wrong index == first(parent.jsx_child_rows).index && first_line == opening_line || index == last(parent.jsx_child_rows).index && last_line == closing_line
-  when is (ts_jsx_element.body, ts_jsx_fragment.body) && jsx_child_row
+  when jsx_child_row
   when parent.jsx_one_expression_per_line_enabled
   when !(mode == "single-child" && parent.jsx_child_single || mode == "single-line" && parent.jsx_child_single_line_allowed)
   when if mode == "single-line" && parent.jsx_child_one_group then single_group_wrong else first_wrong || last_wrong
@@ -117,12 +117,12 @@ fn jsx_newline_text(text, remove) = {
   }
   value result.text
 }
-in ts_node rule jsx-newline {
+in ts_jsx_element.body, ts_jsx_fragment.body rule jsx-newline {
   option prevent boolean = false "prevent blank lines between children"
   option allowMultilines boolean = false "keep blank lines around multiline children"
   let multiline previous.jsx_child_preceding_multiline == true || jsx_child_next_multiline
   let blank { value result: "\n" jsx_space_regex() "*\n"; value re_test(previous.text, result) }
-  when is (ts_jsx_element.body, ts_jsx_fragment.body) && previous is ts_jsx_text && previous.jsx_child_preceding_eligible
+  when previous is ts_jsx_text && previous.jsx_child_preceding_eligible
   when if allowMultilines && multiline then !blank else blank == prevent
   report at previous.node
   warn if allowMultilines && multiline then "Multiline JSX elements should start in a new line" else if prevent then "JSX element should not start in a new line" else "JSX element should start in a new line"

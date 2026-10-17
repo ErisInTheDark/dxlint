@@ -3,6 +3,7 @@
 define {
 
 in ts_node let floating_promise_arms value_parts(node)
+in ts_await let floating_promise_arms value_parts(ts_awaited_value(node, argument.node))
 in ts_node let floating_promise_safe_call false
 in ts_node let floating_promise_safe_types []
 in ts_node let floating_promises_checked true

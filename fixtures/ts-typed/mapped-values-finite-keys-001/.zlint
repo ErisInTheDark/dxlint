@@ -1,0 +1,6 @@
+import .ts
+rule no-useless-default-assignment
+in ts_expression_statement.expression rule unsafe-result {
+  when ts_value_has_trait(node, "any") == true
+  warn "unsafe result"
+}

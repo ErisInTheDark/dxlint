@@ -182,7 +182,7 @@ define {
   in ts_array { in element expects each (parent.expected \ nullable).[position] }
   in ts_method, ts_class_property, ts_property {
     let calls_member_key if key is ts_computed_key then key.expression.node else ts_value_key(key.node)
-    when parent is ts_object {
+    when parent is ts_object || parent is ts_class && contains([] modifier, "static") {
       in it expects parent.expected.[calls_member_key]
     }
     when parent is ts_class && parent.extends != null {

@@ -636,9 +636,9 @@ in ts_identifier rule no-use-before-define {
   option typedefs boolean = true "check type declarations"
   option allowNamedExports boolean = false "allow export specifiers before declarations"
   option ignoreTypeReferences boolean = true "allow type references before declarations"
+  when !(ignoreTypeReferences && access == "type")
   let definition scoping_definition_context(node)
   when definition.before && !(allowNamedExports && definition.export)
-  when !(ignoreTypeReferences && access == "type")
   when !((!functions || mode == "nofunc") && (definition.kind == "function" || definition.kind == "function_name"))
   when !(definition.separate && (!classes && (definition.kind == "class" || definition.kind == "class_name") || !variables && contains(["var", "let", "const", "using"], definition.kind)))
   when !(!enums && definition.kind == "enum")
@@ -661,14 +661,16 @@ in ts_variable_declaration, ts_function, ts_class rule no-implicit-globals {
 }
 in ts_identifier rule no-implicit-globals:leak {
   option lexicalBindings boolean = false "also top-level let, const and class declarations"
+  when access == "write"
   let setting ts_global_setting(scoping_program, identifier_name)
-  when ts_source_type(scoping_program) != "module" && !scoping_strict_code && resolved == "global" && (setting == null || setting == "off") && access == "write"
+  when ts_source_type(scoping_program) != "module" && !scoping_strict_code && resolved == "global" && (setting == null || setting == "off")
   warn "Global variable leak, declare the variable if it is intended to be local."
 }
 in ts_identifier rule no-implicit-globals:readonly {
   option lexicalBindings boolean = false "also top-level let, const and class declarations"
+  when access == "write"
   when ts_source_type(scoping_program) != "module" && resolved == "global"
-    && ts_global_setting(scoping_program, identifier_name) == "readonly" && access == "write"
+    && ts_global_setting(scoping_program, identifier_name) == "readonly"
   warn "Unexpected assignment to read-only global variable."
 }
 
@@ -693,7 +695,7 @@ in ts_identifier rule no-param-reassign {
   option props boolean = false "also assignments to parameter properties"
   option ignorePropertyModificationsFor string[] = [] "parameter names whose properties may change"
   option ignorePropertyModificationsForRegex string[] = [] "patterns for exempt parameter names"
-  when reference_kind == "parameter" && (access == "write" || access == "read_write")
+  when (access == "write" || access == "read_write") && reference_kind == "parameter"
   warn "Assignment to function parameter '{text}'."
 }
 in ts_identifier rule no-param-reassign:property {

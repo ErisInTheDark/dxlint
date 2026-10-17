@@ -1,0 +1,15 @@
+declare const implicit: { a?: string };
+declare const explicit: { a?: string | undefined };
+const first = implicit.a as string | undefined;
+const second = explicit.a as string | undefined;
+const narrowed = implicit.a as string;
+const changed = implicit.a as number | undefined;
+declare const literal: { a?: "first" };
+const widened = literal.a as string | undefined;
+const changedLiteral = literal.a as "second" | undefined;
+declare const required: { a: string };
+const added = required.a as string | undefined;
+declare const dynamic: { a?: any };
+const unknownSource = dynamic.a as string | undefined;
+declare const object: { a?: { x: number } };
+const unknownCarrier = object.a as { x: number } | undefined;

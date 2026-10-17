@@ -4,7 +4,8 @@ import .ts/assertions
 define {
 
 fn type_argument_target(n) = unparenthesised_node(if n is ts_class then n.extends.node
-  else if n is ts_type_reference then n.name.node else n.callee.node)
+  else if n is (ts_type_reference, ts_jsx_opening) then n.name.node
+  else if n is ts_tagged_template then n.tag.node else n.callee.node)
 fn type_argument_declaration(n) = {
   value target: type_argument_target(n)
   value binding: if target is ts_identifier then name_binding(target) else null
@@ -133,7 +134,7 @@ in ts_as, ts_type_assertion rule prefer-reduce-type-parameter {
   let edit reduce_type_argument_fix(source, node)
   fix at edit.target if edit != null as edit.text
 }
-in ts_call.type_argument, ts_new.type_argument, ts_type_reference.type_argument, ts_class.type_argument rule no-unnecessary-type-arguments {
+in ts_call.type_argument, ts_new.type_argument, ts_type_reference.type_argument, ts_class.type_argument, ts_jsx_opening.type_argument, ts_tagged_template.type_argument rule no-unnecessary-type-arguments {
   let redundancy type_argument_redundancy(node)
   when redundancy != null
   warn if redundancy == "default" then "This is the default value for this type parameter, so it can be omitted." else "This value can be trivially inferred for this type parameter, so it can be omitted."
