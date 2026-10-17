@@ -1,0 +1,23 @@
+import .ts
+rule no-for-in-array
+
+in ts_declarator rule evolving-element {
+  when contains(["element", "mutableElement", "indexedElement", "copiedElement"], name.text)
+  when value_parts(init.node) == [] || ts_value_has_trait(init.node, "unknown") != true
+  warn "An evolving array element must not be never."
+}
+rule evolving-element
+
+in ts_declarator rule fixed-element {
+  when contains(["literalElement", "annotatedElement"], name.text)
+  when value_parts(init.node) != []
+  warn "A fixed empty array element must stay never."
+}
+rule fixed-element
+
+in ts_expression_statement.expression rule array-binding {
+  when contains(["sections", "mutable", "copied"], text)
+  when ts_value_has_trait(node, "array") != true || ts_value_has_trait(node, "object") != true
+  warn "An evolving binding must stay an array."
+}
+rule array-binding

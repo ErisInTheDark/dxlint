@@ -126,6 +126,15 @@ in ts_import_specifier {
   }
 }
 in ts_import_equals {
+  let ts_module_alias_key ts_module_name(value.property.node)
+  when value.node is ts_member {
+    defines (scope module, namespace from value.object.definition).[ts_module_alias_key] ?? (scope statics from value.object.definition).[ts_module_alias_key]
+    unwraps definition
+  }
+  when value.node not (ts_call, ts_member) {
+    defines value.definition
+    unwraps definition
+  }
   when value.node is ts_call && value.callee.text == "require" {
     uses module_resolution ts_require
     when kind != "type" {

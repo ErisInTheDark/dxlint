@@ -21,11 +21,13 @@ fn type_argument_known(parts) = parts != null && all(parts, arm => all(arm, part
   part.carrier_known && !any(["any", "unknown", "error", "parameter"],
     trait => contains(part.traits, trait) || contains(part.uncertain_traits, trait))
   && all(part.carrier.arguments ?? [], argument => type_argument_known(argument))))
-fn type_argument_same(argument, other, widened) =
-  type_argument_known(value_constituents(argument))
-  && type_argument_known(if widened then value_widened(other) else value_constituents(other))
-  && value_accepts(argument, other, "value", if widened then "widened" else "value") == true
-  && value_accepts(other, argument, if widened then "widened" else "value", "value") == true
+fn type_argument_same(argument, other, widened) = {
+  value a: value_constituents(argument)
+  value b: if widened then value_widened(other) else value_constituents(other)
+  value type_argument_known(a) && type_argument_known(b) && (
+    !widened && value_same(argument, other) == true
+    || assertion_scalar_identity_known(a) && assertion_scalar_identity_known(b) && a == b)
+}
 fn type_argument_default(n, declaration) = {
   value sources: if declaration != null then [node_site(declaration)]
     else value_sources(if n is ts_type_reference then n else type_argument_target(n)).sites
@@ -39,6 +41,9 @@ fn type_argument_inferred(n, declaration, formal) = {
   value parameters: if declaration is ts_class then
     find(declaration.member.nodes, member => member is ts_method && member.key.text == "constructor").parameter.nodes
     else declaration.parameter.nodes
+  value nested: any(parameters, parameter => any(parameter.type.descendants(ts_type_reference),
+    reference => reference.name is ts_identifier
+      && name_binding(reference.name.node).node == formal.name.node))
   value pairs: zip(parameters, owner.argument.nodes)
   value pair: find(pairs, pair => {
     value annotation: first(pair).type.node
@@ -47,7 +52,7 @@ fn type_argument_inferred(n, declaration, formal) = {
       && candidate.type_argument == null && candidate.name is ts_identifier
       && name_binding(candidate.name.node).node == formal.name.node)
   })
-  value if owner not (ts_call, ts_new) || last(pair) == null || last(pair) is (ts_this, ts_spread)
+  value if nested || owner not (ts_call, ts_new) || last(pair) == null || last(pair) is (ts_this, ts_spread)
     then false else type_argument_same(n, last(pair), true)
 }
 fn type_argument_redundancy(n) = {
@@ -82,8 +87,21 @@ fn reduce_type_argument(n) = {
     else if callee is ts_index then ts_runtime_string(callee.index.node) else null
   value call is ts_call && get(call.argument.nodes, 1) == n && key == "reduce"
     && ts_value_array_like(callee.object.node)
+    && reduce_type_argument_signature(call)
     && value_accepts(n.type.node, n.expression.node, "value", "value") == true
     && reduce_type_argument_fresh(n.expression.node, n.type.node)
+}
+fn reduce_type_argument_signature(call) = {
+  value selection: call_selection(call)
+  value signatures: if selection == null then value_signatures(call.callee.node) else null
+  value sites: if selection != null && selection.uncertain == false then [selection.selected]
+    else if signatures != null then map(signatures, arm => map(arm, header => header.site)) else null
+  value declarations: concat(global_declarations(call, "Array", "type"),
+    global_declarations(call, "ReadonlyArray", "type"))
+  value sites != null && count(sites) > 0
+    && all(sites, arm => count(arm) > 0 && all(arm, selected => selected != null && any(declarations, declaration =>
+      any(site_field(call, declaration, "member"), member =>
+        member.name == "reduce" && member.file == selected.file && member.node == selected.node))))
 }
 fn type_argument_fix(n) = {
   value owner: n.parent.node

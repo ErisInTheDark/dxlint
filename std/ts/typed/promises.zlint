@@ -76,7 +76,7 @@ fn promise_finally_member(n) = n is (ts_member, ts_index)
 in ts_call let promise_finally_callback { value callee.node; unparenthesised_node; promise_finally_member }
 
 fn promise_async_policy(n, names) = {
-  value source: if n is ts_function && n.name != null then n.name.node else n
+  value source: if n is ts_function && n.name != null then name_binding(n.name.node).node ?? n.name.node else n
   value signatures: value_signatures(source)
   value headers: flat_map(signatures ?? [], arm => arm)
   value returns: map(headers, header => {

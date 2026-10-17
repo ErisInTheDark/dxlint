@@ -153,10 +153,11 @@ fn assertion_check(n, ignored, check_const) = {
   value same: if literal_const then assertion_same_handles(operand, annotation) == true else
     assertion_parts_known(operand) && assertion_parts_known(annotation)
       && assertion_same_value(subject, n.type.node)
+  value generic: assertion_generic_call(subject)
   value literal_preserved: !any(annotation ?? [], arm => any(arm.parts, part =>
     part.identity_known && part.identity.kind == "value")) || assertion_literal_preserved(n)
+      || subject is ts_call && generic == false
   value enum_preserved: ts_value_has_enum(n) != null && ts_value_has_enum(n) == ts_value_has_enum(subject)
-  value generic: assertion_generic_call(subject)
   value if contains(ignored, n.type.text) || literal_const && (!check_const || !assertion_const_scalar(n))
     || !contextual && (!same || subject is (ts_object, ts_array) || !literal_const && subject is ts_template
       || !literal_preserved || !enum_preserved) || generic == null then null

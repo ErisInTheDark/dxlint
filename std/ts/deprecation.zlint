@@ -1,6 +1,7 @@
 # Declaration documentation policy.
 
 import .ts/type-specifiers
+import .ts/constants
 
 define {
 fn deprecation_tag(doc) =
@@ -47,12 +48,33 @@ fn deprecation_local_doc(n) = {
 }
 fn deprecation_subject(n) = if n is ts_member.property then n.parent.node
   else if n.deprecation_shorthand then n.declaration else n
+fn deprecation_pattern_source(pattern) = {
+  value path: walk(pattern, current =>
+    if current is (ts_pattern_property.value, ts_property.value) then current.parent.parent.node
+    else if current is (ts_array_pattern.element, ts_array.element, ts_assignment_pattern.left, ts_parenthesized.expression)
+      then current.parent.node else null)
+  value root: last(path)
+  value source: if root is ts_declarator.name then root.parent.init.node
+    else if root is ts_parameter.name then root.parent.type.node ?? root.parent.init.node
+    else if root is ts_assignment.left then root.parent.right.node else null
+  value fold(reverse(path), source, (receiver, current) =>
+    if current is (ts_pattern_property.value, ts_property.value) then
+      value_lookup(receiver, ts_value_key(current.parent.key.node)).member
+    else if current is (ts_array_pattern.element, ts_array.element) then
+      value_lookup(receiver, index_of(current.parent.element.nodes, current)).member
+    else receiver)
+}
 fn deprecation_symbols(n) = {
   value subject: deprecation_subject(n)
-  value member: subject is ts_member
+  value pattern: subject.deprecation_pattern_key
+  value member: subject is (ts_member, ts_index) || pattern
   value binding: if member then null else name_binding(subject)
-  value name: if member then subject.static_name else binding.key
-  value lookup: if member then value_lookup(subject.object.node, name) else null
+  value key: if pattern then ts_value_key(subject)
+    else if subject is ts_index then subject.static_name ?? value_key(subject.index.node)
+    else if subject is ts_member then subject.static_name else binding.key
+  value name: if type_of(key) == "str" then key else if subject is ts_index then ts_runtime_string(subject.index.node) else null
+  value receiver: if pattern then deprecation_pattern_source(subject.parent.parent.node) else subject.object.node
+  value lookup: if member && name != null then value_lookup(receiver, name) else null
   value declaration: if member then null else declaration_identity(subject)
   value sites: if member then unique(flat_map(lookup.alternatives ?? [], alternative =>
     map(alternative.sources ?? [], source => source.site)))
@@ -82,8 +104,10 @@ fn deprecation_reason(n) = {
   value call: deprecation_call(subject)
   value selection: if call != null then call_selection(call) else null
   value roots: value_sources(subject)
-  value sites: walk(roots.sites ?? [], site => site_sources(subject, site).sites ?? [])
-  value members: if subject is ts_member then deprecation_symbols(subject).sites else []
+  value sites: walk(roots.sites ?? [], site =>
+    if contains(["ts_declarator", "ts_parameter"], site.kind) then []
+    else site_sources(subject, site).sites ?? [])
+  value members: if subject is (ts_member, ts_index) || subject.deprecation_pattern_key then deprecation_symbols(subject).sites else []
   value origin: declaration_identity(subject)
   value declarations: unique([] members (if origin != null then [origin] else []) sites)
   value owners: if call == null then declarations else filter(roots.sites ?? [], site =>
@@ -98,14 +122,15 @@ in ts_node let deprecation_import
   if is (ts_import, ts_import_equals) then true
   else if is (ts_program, ts_block, ts_function, ts_arrow, ts_class, ts_interface) then false
   else parent.deprecation_import == true
-in ts_node let deprecation_shorthand is ts_property.key && parent.value.node == null
+in ts_node let deprecation_pattern_key is ts_pattern_property.key || is ts_property.key && parent.flow_destructuring_target
+in ts_node let deprecation_shorthand is ts_property.key && parent.value.node == null && !deprecation_pattern_key
 in ts_node let deprecation_excluded
-  deprecation_import || uses != null && !(is ts_pattern_property.key) || is (ts_function.name, ts_class.name, ts_interface.name, ts_type_alias.name, ts_enum.name, ts_namespace.name, ts_method.key, ts_class_property.key, ts_property_signature.key, ts_method_signature.key) || is ts_property.key && !deprecation_shorthand || is (ts_enum_member.name, ts_parameter.name, ts_type_parameter.name, ts_import_equals.name, ts_export_specifier.exported, ts_jsx_closing.name, ts_index.index)
+  deprecation_import || uses != null && !deprecation_pattern_key || is (ts_function.name, ts_class.name, ts_interface.name, ts_type_alias.name, ts_enum.name, ts_namespace.name, ts_method.key, ts_class_property.key, ts_property_signature.key, ts_method_signature.key) || is ts_property.key && !deprecation_shorthand && !deprecation_pattern_key || is (ts_enum_member.name, ts_parameter.name, ts_type_parameter.name, ts_import_equals.name, ts_export_specifier.exported, ts_jsx_closing.name, ts_index.index)
 in ts_index let deprecation_key index.node
 in ts_node let deprecation_export_name if is ts_export_specifier.local then parent.exported.node ?? node else null
 in ts_node let no_deprecated_checked true
 
-in ts_identifier, ts_private_name, ts_super, ts_jsx_attribute.name, ts_index rule no-deprecated {
+in ts_identifier, ts_private_name, ts_super, ts_jsx_attribute.name, ts_index, ts_pattern_property.key, ts_property.key rule no-deprecated {
   option allow (string | type_specifier_file | type_specifier_lib | type_specifier_package)[] = [] "Allowed deprecated symbols"
   when !deprecation_excluded
   when deprecation_export_name == null || deprecation_export_name is ts_identifier
@@ -113,8 +138,8 @@ in ts_identifier, ts_private_name, ts_super, ts_jsx_attribute.name, ts_index rul
   let tag deprecation_reason(node)
   when tag != null
   when no_deprecated_checked
-  when (if computed then type_value_allowed(allow, object.node) else deprecation_value_allowed(allow, node)) == false
+  when deprecation_value_allowed(allow, node) == false
   report at if computed then deprecation_key else deprecation_export_name ?? node
-  warn "`" (deprecation_export_name.identifier_name ?? (if computed then static_name else identifier_name)) "` is deprecated." (if tag.reason == "" then "" else " " tag.reason)
+  warn "`" (deprecation_export_name.identifier_name ?? deprecation_symbols(node).name ?? identifier_name) "` is deprecated." (if tag.reason == "" then "" else " " tag.reason)
 }
 }

@@ -1,0 +1,11 @@
+import .ts
+
+in ts_declarator rule alias-contract {
+  when init != null && type != null
+  let expected value_union(type.node, [])
+  let actual value_union(init.node, [])
+  when expected == null || actual == null
+    || value_accepts(expected, actual, "value", "value") != true
+    || value_accepts(actual, expected, "value", "value") != true
+  warn "An import alias must retain the target's value and type."
+}

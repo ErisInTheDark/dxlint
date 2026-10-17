@@ -352,7 +352,12 @@ in ts_declarator {
   let ts_value_iteration_arguments []
   let ts_value_iteration_binding name is ts_identifier && parent is ts_for_of.left && parent.parent.modifier == null
   let ts_value_unique_symbol ts_value_unique_symbol_binding(node)
-  widens type ?? init.widened
+  let ts_value_evolving_array name is ts_identifier && type == null && init is ts_array && count(init.element.nodes) == 0
+  when ts_value_evolving_array {
+    unwraps product ts_array of init using trait unknown repeated values ts_value_array_element
+    widens product ts_array of init using trait unknown repeated values ts_value_array_element
+  }
+  when !ts_value_evolving_array { widens type ?? init.widened }
   when ts_value_unique_symbol {
     fits symbol, truthy
     identity node
@@ -364,8 +369,8 @@ in ts_declarator {
       unwraps type ?? result.["value"]
     }
   }
-  when !ts_value_iteration_binding && !ts_value_unique_symbol && name is ts_identifier && parent.kind == "const" { unwraps type ?? init }
-  when !ts_value_iteration_binding && name is ts_identifier && parent.kind != "const" { unwraps type ?? init.widened }
+  when !ts_value_iteration_binding && !ts_value_unique_symbol && !ts_value_evolving_array && name is ts_identifier && parent.kind == "const" { unwraps type ?? init }
+  when !ts_value_iteration_binding && !ts_value_evolving_array && name is ts_identifier && parent.kind != "const" { unwraps type ?? init.widened }
   when !(name is ts_identifier) { unwraps unknown }
 }
 in ts_parameter, ts_rest {
@@ -381,9 +386,10 @@ in ts_rest, ts_spread { let ts_value_tuple_repeated true }
 in ts_node let ts_value_array_element node not ts_spread
 in ts_assignment_pattern { unwraps left ?? right }
 in ts_pattern_property, ts_object_pattern, ts_array_pattern, ts_import, ts_import_specifier,
-    ts_import_equals, ts_meta_property, ts_import_call {
+    ts_meta_property, ts_import_call {
   unwraps unknown
 }
+in ts_import_equals { when value.node is ts_call { unwraps unknown } }
 in ts_super {
   let ts_value_super_context ts_value_this_context(node)
   let ts_value_super_base ts_value_super_context.container.extends.node
