@@ -35,6 +35,13 @@ impl<T> Known<T> {
             Known::Unknown => None,
         }
     }
+
+    pub fn map<U>(self, f: impl FnOnce(T) -> U) -> Known<U> {
+        match self {
+            Known::Yes(v) => Known::Yes(f(v)),
+            Known::Unknown => Known::Unknown,
+        }
+    }
 }
 
 /// One question's work budget: every step (an unwrap, a lookup, a graph

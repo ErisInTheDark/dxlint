@@ -35,8 +35,7 @@ impl Narrowing<'_> {
     }
 
     fn refine_graph(&self, at: Leaf, mut base: NodeValue) -> NodeValue {
-        let Known::Yes(subject) = self.place(at) else { return base };
-        let written = self.written_place(at).known().unwrap_or_else(|| subject.clone());
+        let Known::Yes((subject, written)) = self.find_place(at, true) else { return base };
         let effects = self.semantic.effects();
         let Known::Yes(entry) = effects.entry_for(at) else { return base };
         let mut contexts = vec![(entry, at)];
@@ -187,7 +186,7 @@ impl Narrowing<'_> {
     /// The binding and member path `at` names; a parameter read through its
     /// call is followed to the argument it was bound to.
     fn place(&self, at: Leaf) -> Known<Place> {
-        self.find_place(at, true)
+        self.find_place(at, true).map(|(place, _)| place)
     }
 
     /// The binding a write replaces: lexical, never through a call's
@@ -195,12 +194,16 @@ impl Narrowing<'_> {
     /// caller passed).
     fn written_place(&self, at: Leaf) -> Known<Place> {
         let Known::Yes(at) = self.semantic.leaf(at) else { return Known::Unknown };
-        self.semantic.values().memoized(&self.semantic.narrowing_places.written, at, || self.find_place(at, false))
+        self.semantic.values().memoized(&self.semantic.narrowing_places.written, at,
+            || self.find_place(at, false).map(|(place, _)| place))
     }
 
-    fn find_place(&self, mut at: Leaf, through_arguments: bool) -> Known<Place> {
+    /// The place `at` names (through call arguments when asked) and the
+    /// lexical place a write there replaces: one walk for both.
+    fn find_place(&self, mut at: Leaf, through_arguments: bool) -> Known<(Place, Place)> {
         let values = self.semantic.values();
         let mut path = Vec::new();
+        let mut lexical = None;
         loop {
             if !self.semantic.question.budget.step() { return Known::Unknown }
             let Known::Yes(normalized) = self.semantic.leaf(at) else { return Known::Unknown };
@@ -214,6 +217,9 @@ impl Narrowing<'_> {
                 }
             }
             if names.declared.contains_key(&node.node) {
+                if lexical.is_none() {
+                    lexical = Some(Place { root: at, path: path.iter().rev().cloned().collect() });
+                }
                 if through_arguments {
                     match self.semantic.calls().argument_sites(at) {
                         Known::Yes(Some(sites)) => {
@@ -226,7 +232,9 @@ impl Narrowing<'_> {
                     }
                 }
                 path.reverse();
-                return Known::Yes(Place { root: at, path });
+                let place = Place { root: at, path };
+                let lexical = lexical.unwrap_or_else(|| place.clone());
+                return Known::Yes((place, lexical));
             }
             let Some(tree) = self.semantic.world.tree(node.file) else { return Known::Unknown };
             let Some(data) = tree.nodes.get(node.node as usize) else { return Known::Unknown };
