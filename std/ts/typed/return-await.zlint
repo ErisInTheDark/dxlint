@@ -27,9 +27,9 @@ fn return_await_handling(n, owner, resources) = {
     })
 }
 fn return_await_certainty(n) = {
-  value parts: value_constituents(n)
+  value parts: value_parts(n)
   value complete: parts != null && len(parts) > 0
-    && all(parts, arm => len(arm) > 0 && all(arm, part => !contains(part.uncertain_traits, "thenable")
+    && all(parts, arm => len(arm.parts) > 0 && all(arm.parts, part => !contains(part.uncertain_traits, "thenable")
       && !contains(part.traits, "any") && !contains(part.traits, "unknown")))
   value when {
     complete && n could thenable then "always"

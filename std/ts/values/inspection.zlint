@@ -55,6 +55,50 @@ fn ts_value_print(parts) = if parts == null then "unknown" else if len(parts) ==
   value arms: map(parts, arm => { value arm; map (part) ts_value_print_part(part); unique; join " & " })
   value { value arms; unique; join " | " }
 }
+fn ts_value_print_member(edge, seen) = {
+  value key: edge.member.key
+  value name: if type_of(key) == "num" then "" key
+    else if type_of(key) != "str" then null
+    else if re_test(key, /^[$A-Za-z_][$A-Za-z_0-9]*$/) then key else ts_value_string(key)
+  value prefix: if any(edge.member.sources, source => contains(source.flags, "readonly")) then "readonly " else ""
+  value optional: if edge.member.optional then "?" else ""
+  value result: ts_value_print_handle_seen(edge.handle, seen)
+  value if name == null || edge.member.optional == null
+    || any(edge.member.sources, source => source.flags == null) then "unknown"
+    else "{prefix}{name}{optional}: {result};"
+}
+fn ts_value_print_handle_part(part, seen) = {
+  value structural: part.carrier == null && contains(part.traits, "structural")
+    && !contains(part.traits, "callable") && !contains(part.traits, "constructible")
+  value children: if structural then value_children(part.handle, true, []) else null
+  value members: map(children ?? [], edge => ts_value_print_member(edge, seen))
+  value if !structural then ts_value_print(value_constituents(part.handle))
+    else if children == null then "unknown"
+    else if count(children) == 0 then "{{}}"
+    else "{{ " {value members; join " "} " }}"
+}
+fn ts_value_print_handle_seen(n, seen) = {
+  value arms: if contains(seen, n) then null else value_parts(n)
+  value labels: map(arms ?? [], arm => {
+    value arm.parts
+    map (part) ts_value_print_handle_part(part, [] seen n)
+    unique
+    join " & "
+  })
+  value if arms == null then "unknown" else if count(arms) == 0 then "never"
+    else {value labels; unique; join " | "}
+}
+fn ts_value_print_handle(n) = ts_value_print_handle_seen(n, [])
+fn ts_value_symbol_key(n, key) = {
+  value roots: global_declarations(n, "Symbol", "value")
+  value properties: map(roots ?? [], root => value_lookup(declaration_value(n, root), key))
+  value parts: flat_map(properties, property => flat_map(property.value ?? [], arm => arm))
+  value identity: first(parts).identity
+  value if roots != null && count(parts) > 0 && all(properties, property => property.value_known)
+    && all(parts, part => contains(part.traits, "symbol") && part.identity_known
+      && part.identity.kind == "declaration" && part.identity == identity)
+    then {symbol: {file: identity.file, node: identity.node}} else null
+}
 
 fn ts_value_ancestry_links(handle) = {
   value bases: value_bases(handle)

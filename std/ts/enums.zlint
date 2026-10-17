@@ -2,6 +2,8 @@ import .ts/typed/transfers
 
 define {
 fn enum_origins(arm) = filter(arm, part => contains(part.traits, "enum"))
+fn enum_receiver_parts(parts) = if parts == null then null else filter(parts, arm =>
+  !all(arm, part => contains(part.traits, "null") || contains(part.traits, "undefined")))
 fn enum_root_bad(sender, receiver) = sender != null && receiver != null && len(receiver) > 0
   && all(receiver, arm => len(enum_origins(arm)) > 0
     && all(enum_origins(arm), part => part.carrier_known && part.carrier != null))
@@ -38,7 +40,15 @@ fn enum_relation_children(pair, source) = {
       map (edge) {sender: value_lookup(sender.handle, edge.member.key).member, receiver: edge.handle}
       filter (child) child.sender != null && child.receiver != null
     }
-    value unique(arguments members)
+    value indexes: {
+      value ["text", "ordinal", "symbol"]
+      map (domain) {key: {domain: domain}, target: value_lookup(receiver.handle, {domain: domain})}
+      filter (entry) entry.target.member != null && any(entry.target.alternatives, arm =>
+        any(arm.sources, origin => origin.kind == "indexer"))
+      map (entry) {sender: value_lookup(sender.handle, entry.key).member, receiver: entry.target.member}
+      filter (child) child.sender != null
+    }
+    value unique(arguments members indexes)
     map (child) {sender: child.sender, receiver: child.receiver, seen: pair.seen [identity]}
   }
 }
@@ -47,15 +57,15 @@ fn enum_relation_pairs(sender, receiver, source) = {
   walk (pair) enum_relation_children(pair, source)
   map (pair) {
     sender: if pair.sender != null then value_constituents(pair.sender) else null,
-    receiver: if pair.receiver != null then value_constituents(pair.receiver) else null,
+    receiver: if pair.receiver != null then enum_receiver_parts(value_constituents(pair.receiver)) else null,
   }
 }
 fn enum_bitwise_shape(n) = n is ts_binary && contains(["&", "|", "^"], n.operator)
   || n is ts_unary && n.operator == "~"
 fn enum_bitwise_leaves(source) = {
-  value source
-  walk (n) if n is ts_binary && enum_bitwise_shape(n) then [n.left.node, n.right.node]
-    else if n is ts_unary && enum_bitwise_shape(n) then [n.argument.node] else []
+  value unparenthesised_node(source)
+  walk (n) if n is ts_binary && enum_bitwise_shape(n) then map([n.left.node, n.right.node], child => unparenthesised_node(child))
+    else if n is ts_unary && enum_bitwise_shape(n) then [unparenthesised_node(n.argument.node)] else []
   filter (n) !enum_bitwise_shape(n)
 }
 fn enum_safe_bitwise(source, receiver) = enum_bitwise_shape(source) && {
@@ -64,6 +74,40 @@ fn enum_safe_bitwise(source, receiver) = enum_bitwise_shape(source) && {
     value parts: value_constituents(n)
     value parts != null && !enum_root_bad(parts, receiver)
   }
+}
+fn enum_annotation_step(entry) = {
+  value parent: entry.site.parent.node
+  value key: if entry.site is (ts_property, ts_pattern_property) && parent is (ts_object, ts_object_pattern)
+      then ts_value_key(entry.site.key.node)
+    else if parent is (ts_array, ts_array_pattern) && entry.site not (ts_spread, ts_rest)
+      then index_of(parent.element.nodes, entry.site)
+    else null
+  value if key != null then [{site: parent, path: [key] entry.path}]
+    else if parent is ts_assignment_pattern && entry.site == parent.right.node
+      || entry.site is ts_assignment_pattern && parent is ts_pattern_property
+      || parent is (ts_parenthesized, ts_non_null, ts_satisfies)
+      || parent is (ts_as, ts_type_assertion) && parent.type.node.text == "const"
+      then [{site: parent, path: entry.path}]
+    else []
+}
+fn enum_annotation_target(context) = {
+  value frames: walk({site: context, path: []}, entry => enum_annotation_step(entry))
+  value candidates: map(frames, entry => {
+    value parent: entry.site.parent.node
+    value returned: parent is ts_return && entry.site == parent.argument.node
+      || parent is ts_arrow && entry.site == parent.body.node
+    value owner: if returned then return_value_owner(entry.site) else null
+    value annotation: if parent is (ts_parameter, ts_declarator, ts_class_property)
+        && (entry.site == parent.init.node || entry.site == parent.name.node) then parent.type.node
+      else if parent is (ts_as, ts_type_assertion) && parent.type.node.text != "const" then parent.type.node
+      else if returned then owner.return_type.node else null
+    value target: if returned && annotation != null && contains([] owner.modifier, "async")
+      then ts_awaited_value(annotation, annotation) else annotation
+    value {target: target, path: entry.path}
+  })
+  value frame: find(candidates, entry => entry.target != null)
+  value if frame == null then null else
+    fold(frame.path, frame.target, (target, key) => value_lookup(target, key).member)
 }
 fn enum_policy(site, source) = {
   value context: if site is ts_property then site
@@ -74,7 +118,8 @@ fn enum_policy(site, source) = {
   value target: if site is ts_update || site is ts_assignment && site.enum_mutation then source
     else if site is (ts_as, ts_type_assertion) then site.type.node
     else if site.type != null then site.type.node
-    else if context != null && expected.present == true then value_expected_handle(context) else null
+    else if context != null && expected.present == true then value_expected_handle(context)
+    else if context != null then enum_annotation_target(context) else null
   value owner: if source is ts_return.argument || source is ts_arrow.body then return_value_owner(source) else null
   value asynchronous: owner != null && contains([] owner.modifier, "async")
   value receiver_handle: if asynchronous && target != null then ts_awaited_value(target, target) else target

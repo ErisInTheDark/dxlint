@@ -113,13 +113,59 @@ fn assertion_parts_known(arms) = arms != null && all(arms, arm => count(arm.part
 fn assertion_parts_non_null(arms) = assertion_parts_known(arms)
   && all(arms, arm => all(arm.parts, part =>
     !any(["null", "undefined", "void"], trait => contains(part.traits, trait))))
+fn assertion_scalar_identity_known(value) = value != null && all(value, arm => all(arm, part =>
+  part.identity_known && part.carrier_known && part.product_known && count(part.uncertain_traits) == 0
+    && part.carrier == null && part.product == null && (part.identity != null || any(
+      ["number", "string", "boolean", "bigint", "symbol", "null", "undefined", "void"],
+      trait => contains(part.traits, trait)))))
+fn assertion_same_value(source, target) = {
+  value a: value_constituents(source)
+  value b: value_constituents(target)
+  value assertion_same_handles(value_parts(source), value_parts(target)) == true
+    || assertion_scalar_identity_known(a) && assertion_scalar_identity_known(b) && a == b
+}
+fn assertion_subject(n, ignored) = {
+  value n.expression.node
+  walk (current) {
+    value cast: unparenthesised_node(current)
+    value if cast is (ts_as, ts_type_assertion) && cast.type.text != "const"
+      && !contains(ignored, cast.type.text) then cast.expression.node else null
+  }
+  last
+}
+fn assertion_check(n, ignored, check_const) = {
+  value literal_const: n.type.text == "const"
+  value raw_subject: if literal_const then n.expression.node else assertion_subject(n, ignored)
+  value subject: if literal_const then raw_subject else unparenthesised_node(raw_subject)
+  value operand: value_parts(subject)
+  value annotation: if literal_const then value_parts(n) else value_parts(n.type.node)
+  value expected: value_parts(value_expected_handle(n))
+  value contextual: !literal_const && (ts_value_category(value_constituents(n.type.node)) == "any"
+      || ts_value_trait(value_constituents(n.type.node), "unknown") || subject != unparenthesised_node(n.expression.node))
+    && assertion_outer(n).parent not (ts_as, ts_type_assertion)
+    && assertion_parts_known(operand) && assertion_parts_known(expected)
+    && value_accepts(n, subject, "expected", "value") == true
+  value same: if literal_const then assertion_same_handles(operand, annotation) == true else
+    assertion_parts_known(operand) && assertion_parts_known(annotation)
+      && assertion_same_value(subject, n.type.node)
+  value literal_preserved: !any(annotation ?? [], arm => any(arm.parts, part =>
+    part.identity_known && part.identity.kind == "value")) || assertion_literal_preserved(n)
+  value enum_preserved: ts_value_has_enum(n) != null && ts_value_has_enum(n) == ts_value_has_enum(subject)
+  value generic: assertion_generic_call(subject)
+  value if contains(ignored, n.type.text) || literal_const && (!check_const || !assertion_const_scalar(n))
+    || !contextual && (!same || subject is (ts_object, ts_array) || !literal_const && subject is ts_template
+      || !literal_preserved || !enum_preserved) || generic == null then null
+    else {subject: subject, raw_subject: raw_subject, contextual: contextual && !same, generic: generic}
+}
 fn assertion_non_null_style(n) = {
   value source: value_parts(n.expression.node)
   value target: value_parts(n.type.node)
   value retained: filter(source ?? [], arm => !any(arm.parts, part =>
     contains(part.traits, "null") || contains(part.traits, "undefined")))
+  value non_null: value_union(first(retained).handle, map(slice(retained, 1), arm => arm.handle))
   value if !assertion_parts_known(source) || !assertion_parts_non_null(target) then null
-    else count(retained) < count(source) && assertion_same_handles(retained, target) == true
+    else count(retained) < count(source)
+      && (assertion_same_handles(retained, target) == true || assertion_same_value(non_null, n.type.node))
 }
 fn assertion_unassigned(n) = n is ts_identifier && (n.declaration == null && n.resolved != "global" || n.declaration.parent is ts_declarator && n.declaration.ambient != true && (n.declaration.parent.init == null && { value n.declaration.parent.token_texts; slice 1 2; first } != "!" || n.declaration.parent.parent.kind == "var" && {
   value n.declaration.parent.parent.parent
@@ -174,38 +220,31 @@ fn assertion_fix(source, n) = {
   value assertion_fix_with_body(source, n, body)
 }
 
-in ts_as, ts_type_assertion let no_unnecessary_type_assertion_checked type.text != "const"
-in ts_non_null let no_unnecessary_type_assertion_checked true
 in ts_as, ts_type_assertion rule no-unnecessary-type-assertion {
   option typesToIgnore string[] = [] "Ignore these written assertion types"
   option checkLiteralConstAssertions boolean = false "Check const assertions on literal values"
-  when no_unnecessary_type_assertion_checked || checkLiteralConstAssertions && type.text == "const"
-  when !contains(typesToIgnore, type.text)
-  let literal_const type.text == "const"
-  when !literal_const || assertion_const_scalar(node)
-  let operand value_parts(expression.node)
-  let annotation if literal_const then value_parts(node) else value_parts(type.node)
-  when literal_const || assertion_parts_known(operand) && assertion_parts_known(annotation)
-  when assertion_same_handles(operand, annotation) == true
-  when unparenthesised_node(expression.node) not (ts_object, ts_array)
-  when literal_const || unparenthesised_node(expression.node) not ts_template
-  when !any(annotation, arm => any(arm.parts, part => part.identity_known && part.identity.kind == "value")) || assertion_literal_preserved(node)
-  when ts_value_has_enum(node) != null && ts_value_has_enum(node) == ts_value_has_enum(expression.node)
-  let generic assertion_generic_call(expression.node)
-  when generic != null
-  warn if generic then "The type arguments for this generic call may be inferred from the assertion. Specify them explicitly instead." else "This assertion is unnecessary since it does not change the type of the expression."
-  let edit if generic then null else assertion_fix(source, node)
+  let check assertion_check(node, typesToIgnore, checkLiteralConstAssertions)
+  when check != null
+  let owner assertion_outer(node).parent.node
+  when owner not (ts_as, ts_type_assertion) || assertion_check(owner, typesToIgnore, checkLiteralConstAssertions) == null
+  warn if check.generic then "The type arguments for this generic call may be inferred from the assertion. Specify them explicitly instead." else if !check.contextual then "This assertion is unnecessary since it does not change the type of the expression." else "This assertion is unnecessary since the receiver accepts the original type of the expression."
+  let chain check.subject != unparenthesised_node(expression.node)
+  let base if expression_fix_retains_comments(check.raw_subject, check.subject.text) then check.subject else check.raw_subject
+  let body if !chain then assertion_fix_body(source, node) else {node: base, text: base.text}
+  let edit if check.generic || chain && !expression_fix_retains_comments(node, body.text) then null else assertion_fix_with_body(source, node, body)
   fix at edit.target if edit != null as edit.text
 }
 
 in ts_non_null rule no-unnecessary-type-assertion:non-null {
-  when no_unnecessary_type_assertion_checked
   let outer assertion_outer(node)
   let assignment outer.parent is ts_assignment && outer.parent.operator == "="
   let target assignment && outer is ts_assignment.left
-  let unchanged assertion_parts_non_null(value_parts(expression.node)) && !{ value expression.node; unparenthesised_node; assertion_unassigned }
+  let unassigned { value expression.node; unparenthesised_node; assertion_unassigned }
+  let unchanged assertion_parts_non_null(value_parts(expression.node)) && !unassigned
+  let contextual !unassigned && assertion_parts_known(value_parts(value_expected_handle(node)))
+    && value_accepts(node, expression.node, "expected", "value") == true
   let unchecked ts_compiler_option(node, "noUncheckedIndexedAccess") == true && unparenthesised_node(expression.node) is ts_index && condition_access(unparenthesised_node(expression.node)).from_index
-  when target || !assignment && !unchecked && unchanged
+  when target || !assignment && !unchecked && (unchanged || contextual)
   warn if target || !unchanged then "This assertion is unnecessary since the receiver accepts the original type of the expression." else "This assertion is unnecessary since it does not change the type of the expression."
   let edit assertion_fix(source, node)
   fix at edit.target if edit != null as edit.text

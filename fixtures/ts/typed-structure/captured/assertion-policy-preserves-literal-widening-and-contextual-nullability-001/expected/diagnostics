@@ -1,3 +1,3 @@
-a.ts:1:15-1:21 no-unnecessary-type-assertion#2
+a.ts:1:15-1:21 no-unnecessary-type-assertion#1
 a.ts:1:153-1:162 no-unnecessary-type-assertion:non-null#0
 a.ts:1:74-1:79 no-unnecessary-type-assertion:non-null#1

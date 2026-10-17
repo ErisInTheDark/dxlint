@@ -1,0 +1,11 @@
+import .ts
+import .ts/typed/awaitability
+
+in ts_declarator rule awaited-equivalence {
+  when init != null && type != null
+  let awaited ts_awaited_value(init.node, init.node)
+  let expected value_union(type.node, [])
+  when awaited == null || value_accepts(expected, awaited, "value", "value") != true
+    || value_accepts(awaited, expected, "value", "value") != true
+  warn "Awaited value differs from the declared result."
+}

@@ -29,9 +29,12 @@ fn ts_awaited_step(entry) = {
   value arms: if contains(entry.seen, entry.source) then null else value_alternatives(entry.source)
   value states: map(arms ?? [], arm => {
     value parts: value_constituents(arm)
-    value dynamic: parts != null && count(parts) == 1 && count(first(parts)) == 1
-      && any(first(parts), part => contains(part.traits, "any") || contains(part.traits, "unknown"))
-    value ordinary: if dynamic then true else ts_value_nonthenable(arm)
+    value terminal: parts != null && count(parts) == 1 && count(first(parts)) == 1
+      && any(first(parts), part => contains(part.traits, "any") || contains(part.traits, "unknown")
+        || contains(part.traits, "object") && all(part.traits, trait => contains(["object", "truthy"], trait))
+          && part.uncertain_traits == [] && part.carrier_known && part.carrier == null
+          && part.product_known && part.product == null && part.identity_known && part.identity == null)
+    value ordinary: if terminal then true else ts_value_nonthenable(arm)
     value fulfilment: if ordinary == false then ts_awaited_fulfilments(arm) else null
     value {
       known: ordinary == true || fulfilment.known == true,

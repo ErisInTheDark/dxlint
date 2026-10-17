@@ -1,2 +1,2 @@
-a.ts:1:102-1:123 no-unsafe-type-assertion#4
-a.ts:1:36-1:56 no-unsafe-type-assertion#4
+a.ts:1:102-1:123 no-unsafe-type-assertion#2
+a.ts:1:36-1:56 no-unsafe-type-assertion#2

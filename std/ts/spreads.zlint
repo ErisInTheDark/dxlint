@@ -11,38 +11,55 @@ fn spread_written_properties(n) = {
     any(binding.references, reference => reference.parent is (ts_member, ts_index)
       && reference.parent.object.node == reference && reference.parent.write_site != null)
 }
-fn spread_class_value(n) = {
-  value binding: name_binding(n)
-  value binding != null && any(binding.declarations, declaration => declaration.parent is ts_class)
+fn spread_class_value(n, arms) = {
+  value roots: value_sources(n)
+  value sites: walk(roots.sites ?? [], site => site_sources(n, site).sites ?? [])
+  value any(arms, arm => any(arm.parts, part => contains(part.traits, "constructible")))
+    && (n is ts_class || any(sites, site => site.kind == "ts_class"))
+}
+fn spread_global_instance(n, carrier) = if carrier.description.name == null then false else {
+  value types: global_declarations(n, carrier.description.name, "type")
+  value constructors: if types == null || !contains(types, {file: carrier.file, node: carrier.node}) then [] else
+    global_declarations(n, carrier.description.name, "value")
+  value any(constructors ?? [], constructor =>
+    any(value_constructors(declaration_value(n, constructor)) ?? [], headers =>
+      any(headers, signature => any(value_parts(signature.result) ?? [], arm =>
+        any(arm.parts, part => part.carrier.file == carrier.file && part.carrier.node == carrier.node)))))
 }
 fn spread_class_instance(n, arms) = any(arms, arm => any(arm.parts, part => {
   value carrier: part.carrier
-  value constructor: if carrier == null then null else declaration_value(n, {file: carrier.file, node: carrier.node})
-  value headers: if constructor == null then null else value_constructors(constructor)
-  value !contains(part.traits, "constructible") && carrier.description.kind == "named"
-    && headers != null && any(headers, signatures => count(signatures) > 0)
+  value if contains(part.traits, "constructible") || carrier.description.kind != "named" then false else {
+    value headers: value_constructors(declaration_value(n, {file: carrier.file, node: carrier.node}))
+    value headers != null && any(headers, signatures => count(signatures) > 0)
+      || spread_global_instance(n, carrier)
+  }
 }))
-fn spread_iterable(n) = {
-  value member: value_lookup(n, {global: "Symbol", class: "value", path: ["iterator"]})
-  value signatures: if member.member == null then null else value_signatures(member.member)
-  value member.alternatives != null && count(member.alternatives) > 0
-    && all(member.alternatives, arm => arm.matched)
-    && signatures != null && count(signatures) > 0 && all(signatures, arm => count(arm) > 0)
+fn spread_iterable(n, arms) = {
+  value key: ts_value_symbol_key(n, "iterator")
+  value key != null && any(arms, arm => {
+    value member: value_lookup(arm.handle, key)
+    value signatures: if member.member == null then null else value_signatures(member.member)
+    value member.alternatives != null && count(member.alternatives) > 0
+      && all(member.alternatives, alternative => alternative.matched)
+      && signatures != null && count(signatures) > 0 && all(signatures, headers => count(headers) > 0)
+  })
 }
+fn spread_builtin_type(n, arms, names) = any(arms, arm =>
+  any(arm.parts, part => ts_value_builtin_ancestor(part, n, names) == true))
 fn spread_object_category(n) = {
   value arms: value_parts(n)
   value if arms == null then null
-    else if ts_value_builtin_type(n, ["Promise"]) == true then "promise"
+    else if spread_builtin_type(n, arms, ["Promise"]) then "promise"
     else if spread_written_properties(n) == false && any(arms, arm => {
       value signatures: value_signatures(arm.handle)
       value signatures != null && any(signatures, headers => count(headers) > 0)
         && value_children(arm.handle, true, []) == []
     }) then "function"
-    else if ts_value_builtin_type(n, ["Map", "ReadonlyMap", "WeakMap"]) == true then "map"
+    else if spread_builtin_type(n, arms, ["Map", "ReadonlyMap", "WeakMap"]) then "map"
     else if any(arms, arm => any(arm.parts, part => contains(["array", "tuple"], part.carrier.description.kind))) then "array"
-    else if !spread_string(n) && spread_iterable(n) then "iterable"
+    else if !spread_string(n) && spread_iterable(n, arms) then "iterable"
     else if spread_class_instance(n, arms) then "instance"
-    else if spread_class_value(n) then "class" else null
+    else if spread_class_value(n, arms) then "class" else null
 }
 in ts_spread, ts_jsx_spread_attribute let no_misused_spread_checked true
 in ts_spread, ts_jsx_spread_attribute rule no-misused-spread {

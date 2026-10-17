@@ -1,0 +1,3 @@
+a.ts:19:9-19:18 no-unsafe-enum-assignment#2
+a.ts:4:5-4:6 no-unsafe-enum-assignment:element#0
+a.ts:9:5-9:13 no-unsafe-enum-assignment#2

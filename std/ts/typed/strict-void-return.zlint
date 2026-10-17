@@ -4,7 +4,7 @@ define {
 
 in ts_node let strict_void_kind {
   value parts: value_constituents(node)
-  value kinds: filter(["void", "undefined", "null", "any", "unknown", "boolean", "number", "bigint", "string", "symbol"], kind =>
+  value kinds: filter(["void", "undefined", "null", "any", "unknown", "boolean", "number", "bigint", "string", "symbol", "object"], kind =>
     parts != null && count(parts) > 0 && all(parts, arm => any(arm, part =>
       contains(part.traits, kind) && !contains(part.uncertain_traits, kind))))
   value if parts == null then null else if count(parts) == 0 then "never"

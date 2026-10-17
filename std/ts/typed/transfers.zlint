@@ -8,8 +8,8 @@ fn argument_value_finding(site, mode, sender, receiver) = {
   offset: site.offset, mode: mode, error: ts_value_category(sender) == "error",
   sender: ts_value_print(sender), receiver: ts_value_print(receiver)
 }
-fn argument_value_findings(call) = if call not (ts_call, ts_new) then [] else {
-  value call.argument.nodes
+fn argument_value_findings(call) = if call not (ts_call, ts_new, ts_tagged_template) then [] else {
+  value if call is ts_tagged_template then call.quasi.expression.nodes else call.argument.nodes
   flat_map (argument) {
     value spread: argument is ts_spread
     value source: if spread then argument.argument.node else argument
