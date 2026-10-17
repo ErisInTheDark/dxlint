@@ -20,6 +20,7 @@ pub struct Semantic<'a> {
 pub struct State {
     pub(crate) values: super::values::State,
     pub(crate) calls: super::calls::State,
+    pub(crate) narrowing_places: super::narrowing::State,
     pub(crate) effects: Rc<super::effects::State>,
     pub(crate) name_queries: Rc<crate::expr::queries::NamesMemo>,
     pub(crate) modules: super::modules::queries::State,
@@ -74,7 +75,7 @@ impl Session {
         let failed = self.question.budget.limited();
         let cut = self.question.budget.cut();
         let discarded = semantic.values.finish(epoch, failed, cut) + semantic.calls.finish(epoch, failed, cut)
-            + semantic.attributes.finish(epoch, failed, cut, |_| true);
+            + semantic.narrowing_places.finish(epoch, failed, cut) + semantic.attributes.finish(epoch, failed, cut, |_| true);
         if failed {
             if let Some(profile) = world.profile() {
                 crate::engine::Profile::add(&profile.semantic_budget_limits, 1);

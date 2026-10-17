@@ -13,6 +13,20 @@ pub struct Narrowing<'a> {
     pub(crate) semantic: &'a Semantic<'a>,
 }
 
+/// The places writes name, by write target: every read refined in a body
+/// asks about each of its writes, and a member target's place reads its
+/// recipe conditions (semantic questions) to find.
+#[derive(Default)]
+pub(crate) struct State {
+    written: super::memo::Memo<Leaf, Known<Place>>,
+}
+
+impl State {
+    pub(super) fn finish(&self, epoch: super::memo::Epoch, failed: bool, cut: u64) -> u64 {
+        self.written.finish(epoch, failed, cut, super::memo::Settled::settled)
+    }
+}
+
 impl Narrowing<'_> {
     pub fn refine(&self, at: Leaf, base: NodeValue) -> NodeValue {
         let Known::Yes(at) = self.semantic.leaf(at) else { return NodeValue::Unknown };
@@ -180,7 +194,8 @@ impl Narrowing<'_> {
     /// arguments (writing a parameter changes the parameter, not what the
     /// caller passed).
     fn written_place(&self, at: Leaf) -> Known<Place> {
-        self.find_place(at, false)
+        let Known::Yes(at) = self.semantic.leaf(at) else { return Known::Unknown };
+        self.semantic.values().memoized(&self.semantic.narrowing_places.written, at, || self.find_place(at, false))
     }
 
     fn find_place(&self, mut at: Leaf, through_arguments: bool) -> Known<Place> {
