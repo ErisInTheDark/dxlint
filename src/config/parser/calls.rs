@@ -18,7 +18,11 @@ impl Parser<'_> {
                 let result = self.unwrap_value()?;
                 Some(Item::Signature { parameters, receiver, result })
             }
-            "signatures" => self.unwrap_value().map(Item::Sources),
+            "signatures" => {
+                let source = self.unwrap_value()?;
+                let result = if self.word("returns") { Some(self.unwrap_value()?) } else { None };
+                Some(Item::Sources(source, result))
+            }
             "calls" | "constructs" => {
                 let callee = self.unwrap_value()?;
                 if !self.word("with") {

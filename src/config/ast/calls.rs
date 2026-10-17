@@ -7,7 +7,11 @@ pub type Path = Vec<Name>;
 #[derive(Clone, Debug)]
 pub enum Item {
     Signature { parameters: Path, receiver: Option<Path>, result: Unwrap },
-    Sources(Unwrap),
+    /// `signatures <value> [returns <result>]`: the call signatures of the
+    /// value's declarations, each giving `result` (evaluated at the owner)
+    /// instead of its own when present (a derived class's inherited
+    /// constructors make the derived instance).
+    Sources(Unwrap, Option<Unwrap>),
     /// `calls callee with arguments [this receiver]`: without `this`, the
     /// receiver is not checked against a signature's declared one.
     Invoke { callee: Unwrap, arguments: Path, construct: bool, receiver: Option<Unwrap> },

@@ -17,7 +17,25 @@ pub(super) fn expected(at: Leaf, values: &Values<'_>) -> Known<Option<NodeValue>
         Known::Yes(None) => {}
         answer => return answer,
     }
-    if kind.calls.invokes.is_empty() { return Known::Yes(None) }
+    if kind.calls.invokes.is_empty() {
+        // An argument may sit one level down (a tagged template's
+        // substitutions live in its template): the grandparent invokes.
+        let grandparent = match values.semantic.parent(parent) {
+            Known::Yes(Some(grandparent)) => grandparent,
+            Known::Yes(None) => return Known::Yes(None),
+            Known::Unknown => return Known::Unknown,
+        };
+        // A grandparent of no named kind invokes nothing.
+        let Some(outer) = super::kind(grandparent, values) else { return Known::Yes(None) };
+        if outer.calls.invokes.is_empty() { return Known::Yes(None) }
+        return argument_expected(grandparent, outer, at, values);
+    }
+    argument_expected(parent, kind, at, values)
+}
+
+/// The expected value of `at` as an argument of the invocation `parent`
+/// (its parameter in the selected signature); none when it isn't one.
+fn argument_expected(parent: Leaf, kind: &crate::grammar::names::KindNames, at: Leaf, values: &Values<'_>) -> Known<Option<NodeValue>> {
     // Only arguments get an expected type from the selected signature; the
     // callee must not ask for that selection (an IIFE would ask itself).
     let mut argument = false;

@@ -172,6 +172,11 @@ in ts_declarator { in init expects type }
   `returned` effects aimed at the node's scope. Optional `receiver <path>`
   (between parameters and `returns`) names the declared `this` parameter:
   no item = unknown, a path reaching none = known to have none.
+- `signatures <value> [returns <result>]`: the signatures of the value's
+  declarations; with `returns`, each gives `result` (evaluated at this
+  owner) instead of its own, e.g. a derived class without a constructor:
+  `signatures extends returns scope members from it`. Through several such
+  owners the outermost's result wins.
 - `calls <callee> with <field>` / `constructs ...`: the callee unwraps to
   candidates; those that fit `callable` (or `constructible`) with a
   signature are overloads, tried in declaration order: the first whose

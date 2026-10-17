@@ -174,6 +174,12 @@ pub(crate) struct State {
     /// Entries of the `Known` memos being computed ([`Values::memoized`]),
     /// by memo and key hash, innermost last.
     pending: std::cell::RefCell<Vec<(usize, u64)>>,
+    /// Pending entries something read while they were still being computed:
+    /// the heads of cycles.
+    cycle_heads: std::cell::RefCell<crate::fx_hash::FxHashSet<(usize, u64)>>,
+    /// Whether a cycle head is being computed again: heads inside it don't
+    /// retry too, so the extra work stays one recomputation.
+    retrying: std::cell::Cell<bool>,
     widened: Memo<Leaf, NodeValue>,
     traits: Memo<(Leaf, u16), Known<bool>>,
     optional: Memo<Leaf, Known<bool>>,
@@ -257,8 +263,11 @@ impl Values<'_> {
     /// (cutting recursion) and such a read counts as a cycle read. An
     /// unknown answer computed after a cycle read is not kept: it may only
     /// reflect the unfinished cycle, and keeping it would make later answers
-    /// depend on which question happened to reach the cycle first.
-    pub(super) fn memoized<K, T>(&self, memo: &Memo<K, Known<T>>, key: K, compute: impl FnOnce() -> Known<T>) -> Known<T>
+    /// depend on which question happened to reach the cycle first. The head
+    /// of a cycle that comes out unknown is computed once more, now that the
+    /// answers inside its cycle are settled: its answer can then be kept
+    /// instead of every later ask recomputing the whole cycle.
+    pub(super) fn memoized<K, T>(&self, memo: &Memo<K, Known<T>>, key: K, compute: impl Fn() -> Known<T>) -> Known<T>
     where K: Clone + Eq + std::hash::Hash, T: Clone {
         use std::hash::BuildHasher;
         let state = &self.semantic.values;
@@ -266,13 +275,20 @@ impl Values<'_> {
         if let Some(answer) = memo.get(&key) {
             if matches!(answer, Known::Unknown) && state.pending.borrow().contains(&tag) {
                 state.cycle_reads.set(state.cycle_reads.get() + 1);
+                state.cycle_heads.borrow_mut().insert(tag);
             }
             return answer;
         }
         memo.insert(self.semantic.epoch, key.clone(), Known::Unknown);
         state.pending.borrow_mut().push(tag);
         let started = state.cycle_reads.get();
-        let answer = compute();
+        let mut answer = compute();
+        if matches!(answer, Known::Unknown) && state.cycle_heads.borrow_mut().remove(&tag) && !state.retrying.get() {
+            state.retrying.set(true);
+            answer = compute();
+            state.retrying.set(false);
+        }
+        state.cycle_heads.borrow_mut().remove(&tag);
         state.pending.borrow_mut().pop();
         if matches!(answer, Known::Unknown) && state.cycle_reads.get() > started {
             memo.remove(self.semantic.epoch, &key);

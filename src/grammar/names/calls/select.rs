@@ -6,6 +6,9 @@ use crate::grammar::names::values::{Key, Values};
 pub(super) struct Candidate {
     chosen: Chosen,
     compatible: Known<bool>,
+    /// False when the signature's type arguments couldn't be bound (its
+    /// result would still name unbound formals).
+    instantiated: bool,
 }
 
 pub(super) type Answer = Known<Option<Vec<Vec<Known<Candidate>>>>>;
@@ -128,7 +131,13 @@ pub(super) fn selection(call: Leaf, values: &Values<'_>) -> Known<Option<Selecti
         // The only candidate not ruled out is the signature the call
         // resolves to, even when an argument (an untyped callback) can't be
         // checked against it yet: TypeScript types such arguments from it.
-        let alone = open.next().is_none();
+        // The same signature reached twice (in another frame) is no rival.
+        let same = |other: &Known<Candidate>| match (&first, other) {
+            (Some(Known::Yes(first)), Known::Yes(other)) => first.chosen.header.site.target == other.chosen.header.site.target
+                && first.chosen.header.signature == other.chosen.header.signature,
+            _ => false,
+        };
+        let alone = open.all(|other| same(&other));
         match first {
             Some(Known::Yes(candidate)) => {
                 selected.choices.push(candidate.chosen);
@@ -151,9 +160,13 @@ pub(super) fn outputs(call: Leaf, values: &Values<'_>) -> Known<Option<NodeValue
     if groups.is_empty() { return Known::Unknown }
     let mut results = Vec::new();
     for group in groups {
-        let result = match proven(&group) {
-            Some(candidate) => super::result::header_result(candidate.chosen.header, values),
-            None => agreement(&group, values),
+        // A lone signature types the call even when an argument doesn't fit
+        // it (as in `selection`): `new Make()` missing an argument is still a
+        // `Make`.
+        let result = match (proven(&group), &group[..]) {
+            (Some(candidate), _) => super::result::header_result(candidate.chosen.header, values),
+            (None, [Known::Yes(candidate)]) if candidate.instantiated => super::result::header_result(candidate.chosen.header, values),
+            (None, _) => agreement(&group, values),
         };
         let Known::Yes(NodeValue::Alternatives(arms)) = result else { return Known::Unknown };
         for arm in arms {
@@ -212,6 +225,7 @@ fn candidate(header: Header, call: Leaf, arguments: &[Leaf], receiver: Option<&N
             return Known::Yes(Candidate {
                 chosen: Chosen { header, mapping: Vec::new() },
                 compatible: Known::Yes(false),
+                instantiated: false,
             });
         }
     }
@@ -290,13 +304,13 @@ fn candidate(header: Header, call: Leaf, arguments: &[Leaf], receiver: Option<&N
                 if compatible == Known::Yes(true) { compatible = fits }
                 header
             }
-            Known::Yes(None) => return Known::Yes(Candidate { chosen: Chosen { header, mapping }, compatible: Known::Yes(false) }),
+            Known::Yes(None) => return Known::Yes(Candidate { chosen: Chosen { header, mapping }, compatible: Known::Yes(false), instantiated: false }),
             Known::Unknown => return Known::Unknown,
         };
         for (parameter, _) in &mut mapping { parameter.frame = header.site.frame }
         header
     };
-    Known::Yes(Candidate { chosen: Chosen { header, mapping }, compatible })
+    Known::Yes(Candidate { chosen: Chosen { header, mapping }, compatible, instantiated: true })
 }
 
 pub(super) fn argument_sites(binding: Leaf, values: &Values<'_>) -> Known<Option<Vec<Leaf>>> {

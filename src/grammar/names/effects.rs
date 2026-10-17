@@ -184,6 +184,9 @@ pub struct Execution {
     reachable: OnceCell<Vec<bool>>,
     /// The nodes whose guards may narrow reads here ([`Self::guard_owners`]).
     guards: OnceCell<Vec<NodeRef>>,
+    /// Steps reachable from the entry around each guard's entry set, as
+    /// bitsets ([`Self::guarded`]).
+    reachable_avoiding: RefCell<FxHashMap<Box<[StepId]>, std::sync::Arc<[u64]>>>,
     completion: Option<Completion>,
 }
 
@@ -249,7 +252,7 @@ impl Execution {
             }
         }
         Execution { entry, steps, edges, sites, fields, writes, binding_writes, binding_reads, write_leaves,
-            reachable: OnceCell::new(), guards: OnceCell::new(), completion: None }
+            reachable: OnceCell::new(), guards: OnceCell::new(), reachable_avoiding: RefCell::default(), completion: None }
     }
 
     pub fn write_leaves(&self) -> &[StepId] {
@@ -269,15 +272,26 @@ impl Execution {
     }
 
     /// Whether every path from the entry to each of `steps` passes one of
-    /// `avoiding` (as [`Self::reaches`] from the entry being false for all),
-    /// in one walk that stops at the first step reached.
+    /// `avoiding` (as [`Self::reaches`] from the entry being false for all).
+    /// The steps reachable around each entry set are walked once and kept:
+    /// every read in the execution asks about the same few guards.
     pub fn guarded(&self, steps: &[StepId], avoiding: &[StepId], budget: &Budget) -> Known<bool> {
         if steps.iter().any(|&step| step as usize >= self.steps.len()) { return Known::Unknown }
-        match self.walk(self.entry, avoiding, |step| steps.contains(&step), budget) {
-            Known::Yes(Walk::Found) => Known::Yes(false),
-            Known::Yes(Walk::Seen(_)) => Known::Yes(true),
-            Known::Unknown => Known::Unknown,
-        }
+        let cached = self.reachable_avoiding.borrow().get(avoiding).cloned();
+        let seen = match cached {
+            Some(seen) => seen,
+            None => {
+                let Known::Yes(Walk::Seen(seen)) = self.walk(self.entry, avoiding, |_| false, budget) else { return Known::Unknown };
+                let mut bits = vec![0u64; seen.len().div_ceil(64)];
+                for (step, &reached) in seen.iter().enumerate() {
+                    if reached { bits[step / 64] |= 1 << (step % 64) }
+                }
+                let bits: std::sync::Arc<[u64]> = bits.into();
+                self.reachable_avoiding.borrow_mut().insert(avoiding.into(), bits.clone());
+                bits
+            }
+        };
+        Known::Yes(steps.iter().all(|&step| seen[step as usize / 64] & (1 << (step % 64)) == 0))
     }
 
     fn with_completion(mut self, normal: Vec<StepId>, exits: Vec<(StepId, Exit)>) -> Self {

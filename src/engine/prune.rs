@@ -202,7 +202,10 @@ fn item_names(item: &NameItem, out: &mut HashSet<String>) {
                 if let Some(receiver) = receiver { path_names(receiver, out); }
                 value_names(result, out);
             }
-            calls::Item::Sources(value) => value_names(value, out),
+            calls::Item::Sources(value, result) => {
+                value_names(value, out);
+                if let Some(result) = result { value_names(result, out); }
+            }
             calls::Item::Invoke { callee, arguments, construct: _, receiver } => {
                 value_names(callee, out);
                 path_names(arguments, out);

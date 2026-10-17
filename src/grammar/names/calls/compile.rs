@@ -9,7 +9,7 @@ use crate::grammar::names::Value;
 #[derive(Clone, Debug)]
 pub enum Item {
     Signature(Signature),
-    Sources(Value),
+    Sources(Value, Option<Value>),
     Invoke(Invoke),
     Expected(Expected),
     DiscardsResult,
@@ -34,7 +34,10 @@ pub fn lower(
             receiver: match receiver { Some(receiver) => Some(path(receiver, errors)?), None => None },
             result: value(result, errors)?,
         }),
-        ParsedItem::Sources(source) => Item::Sources(value(source, errors)?),
+        ParsedItem::Sources(source, result) => Item::Sources(
+            value(source, errors)?,
+            match result { Some(result) => Some(value(result, errors)?), None => None },
+        ),
         ParsedItem::Invoke { callee, arguments, construct, receiver } => Item::Invoke(Invoke {
             callee: value(callee, errors)?,
             arguments: path(arguments, errors)?,
@@ -60,7 +63,11 @@ impl KindCalls {
     pub fn push(&mut self, item: Item, when: Option<u32>) {
         match item {
             Item::Signature(item) => self.signatures.push(Conditional { item, when }),
-            Item::Sources(item) => self.sources.push(Conditional { item, when }),
+            Item::Sources(item, result) => {
+                self.source_results.resize(self.sources.len(), None);
+                self.sources.push(Conditional { item, when });
+                self.source_results.push(result);
+            }
             Item::Invoke(item) => self.invokes.push(Conditional { item, when }),
             Item::Expected(item) => self.expected.push(Conditional { item, when }),
             Item::DiscardsResult => self.discards.push(when),

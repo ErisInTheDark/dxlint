@@ -186,6 +186,11 @@ enum Command {
         /// library files)
         #[arg(long)]
         dependencies: bool,
+        /// With --dependencies: these configs in one process, each preceded
+        /// by a `{"config": <path>, "ok": <bool>}` line (its rule lines
+        /// follow when ok)
+        #[arg(long, num_args = 1.., requires = "dependencies")]
+        configs: Vec<PathBuf>,
     },
     /// Explain a name from the configuration: a rule, layer, field,
     /// attribute, macro, group, option, builtin, fact, function or keyword,
@@ -289,7 +294,21 @@ where
             Ok(_) => 2,
             Err(code) => code,
         },
-        Some(Command::Rules { dependencies }) => match load(&mut output, config) {
+        Some(Command::Rules { dependencies: true, configs }) if !configs.is_empty() => {
+            let mut failed = false;
+            for path in configs {
+                let loaded = load(&mut output, &ConfigArg { config: Some(path.clone()) });
+                let ok = matches!(&loaded, Ok(Project { config_ok: true, .. }));
+                let quoted = serde_json::to_string(&path.to_string_lossy()).expect("path as json");
+                output.out(format_args!("{{\"config\":{quoted},\"ok\":{ok}}}"));
+                match loaded {
+                    Ok(p) if ok => { failed |= info::rule_dependencies(&mut output, &p.linter, p.symbols.as_deref().expect("tooling symbols")) != 0 }
+                    _ => failed = true,
+                }
+            }
+            if failed { 2 } else { 0 }
+        }
+        Some(Command::Rules { dependencies, .. }) => match load(&mut output, config) {
             Ok(Project { config_ok: false, .. }) if dependencies => 2,
             Ok(p) if dependencies => info::rule_dependencies(&mut output, &p.linter, p.symbols.as_deref().expect("tooling symbols")),
             Ok(p) => info::rules(&mut output, &p.linter),

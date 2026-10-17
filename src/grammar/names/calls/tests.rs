@@ -173,7 +173,8 @@ fn missing_descriptors_and_unknown_conditions_do_not_become_acceptance_proofs() 
     assert_eq!(accepts(&value(3), &value(0), &semantic.values()), Known::Unknown);
     tables.exclusive.clear();
     let semantic = Semantic::new(&world, &tables, &question);
-    assert_eq!(accepts(&value(0), &value(0), &semantic.values()), Known::Unknown);
+    // The same value is accepted without any descriptor (reflexivity).
+    assert_eq!(accepts(&value(0), &value(0), &semantic.values()), Known::Yes(true));
 }
 
 #[test]

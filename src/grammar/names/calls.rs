@@ -96,6 +96,9 @@ pub struct Match {
 pub struct Header {
     pub site: Leaf,
     pub signature: u32,
+    /// Reached through `signatures .. returns ..` of this owner and its
+    /// source index: the owner's result replaces the signature's own.
+    pub delegate: Option<(Leaf, u32)>,
 }
 
 #[derive(Clone, Debug)]
@@ -115,6 +118,9 @@ pub struct Selection {
 pub struct KindCalls {
     pub signatures: Vec<Conditional<Signature>>,
     pub sources: Vec<Conditional<Value>>,
+    /// Per source (same index), the `returns` result overriding its
+    /// signatures' own; missing entries have none.
+    pub source_results: Vec<Option<Value>>,
     pub invokes: Vec<Conditional<Invoke>>,
     pub expected: Vec<Conditional<Expected>>,
     pub discards: Vec<Option<u32>>,
@@ -258,6 +264,8 @@ impl Calls<'_> {
                 return known;
             }
             let Some(_nest) = self.question.budget.nest() else { return Known::Unknown };
+            // The same value always accepts itself, whatever its parts.
+            if expected == actual && *expected != NodeValue::Unknown && self.question.budget.step() { return Known::Yes(true) }
             let depth = state.accepting.borrow().len();
             state.accepting.borrow_mut().push(unbound);
             let outer = state.assumed.replace(None);

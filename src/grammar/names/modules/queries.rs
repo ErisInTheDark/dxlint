@@ -159,12 +159,30 @@ impl<'a> Queries<'a> {
     }
 
     fn definition_uncounted(&self, name: NodeRef, class: u64) -> Answer {
+        /// How far above an undeclared name a `resolves` item may sit
+        /// (specifier, clause, statement).
+        const UNDECLARED_RESOLVE_DEPTH: usize = 3;
         self.cached(Request::Definition(name, class), || {
             let world = self.semantic.world;
             let names = world.names(name.file).ok_or(())?;
             let tree = world.tree(name.file).ok_or(())?;
             let declaration = names.declaration_in(name.node, class);
-            let Some(&(_, owner, _, _)) = names.declared.get(&declaration) else { return Ok(None) };
+            // A name nothing declares can still resolve through its own
+            // syntax: a re-export (`export { x } from "m"`) binds no local
+            // name but names the module's member. Look a few levels up for a
+            // `resolves` item binding it.
+            let owner = match names.declared.get(&declaration) {
+                Some(&(_, owner, _, _)) => owner,
+                None if declaration == name.node => {
+                    let mut owner = declaration;
+                    for _ in 0..UNDECLARED_RESOLVE_DEPTH {
+                        let Some(parent) = tree.parent(owner) else { break };
+                        owner = parent;
+                    }
+                    owner
+                }
+                None => return Ok(None),
+            };
             let mut at = declaration;
             let mut handled = false;
             let mut targets = Vec::new();

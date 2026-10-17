@@ -257,6 +257,15 @@ impl<'a, 'world> Run<'a, 'world> {
                 return self.capture(slot, &NodeValue::Alternatives(vec![expected.to_vec()]), false);
             }
         }
+        if self.positions.is_empty() && expected == actual { return Known::Yes(true) }
+        if let ([expected], [actual]) = (expected, actual) {
+            match self.products(*expected, *actual) {
+                Known::Yes(Some(answer)) => return Known::Yes(answer),
+                Known::Yes(None) => {}
+                Known::Unknown => return Known::Unknown,
+            }
+            if self.positions.is_empty() && self.same_instantiation(*expected, *actual) { return Known::Yes(true) }
+        }
         let target = universal_target(expected, values);
         if target == Known::Yes(true) { return Known::Yes(true) }
         let source = universal_source(actual, values);
@@ -294,6 +303,10 @@ impl<'a, 'world> Run<'a, 'world> {
             match values.member_shape(leaf) {
                 Known::Yes(true) => {
                     described = true;
+                    // A shape (even `{}`) needs a value that has members:
+                    // a nullable one has none to read.
+                    let nullable = values.tables.vocabulary.trait_bit("nullable");
+                    if nullable != 0 && values.always(&actual_value, nullable) == Known::Yes(true) { return Known::Yes(false) }
                     match self.members(&NodeValue::leaf(leaf), &actual_value) {
                         Known::Yes(false) => return Known::Yes(false),
                         Known::Unknown => unknown = true,
@@ -311,6 +324,64 @@ impl<'a, 'world> Run<'a, 'world> {
             Known::Unknown => unknown = true,
         }
         if unknown || !described { Known::Unknown } else { Known::Yes(true) }
+    }
+
+    /// Whether both are instances of the same generic declaration with
+    /// arguments that accept each other both ways (`Map<string, string>`
+    /// reached from two sites): the same type, whatever its members say.
+    fn same_instantiation(&mut self, expected: Leaf, actual: Leaf) -> bool {
+        let values = self.values;
+        // A modified value (`Readonly<T>`) reports its source's carrier.
+        if matches!(expected.target, Target::Modified(_)) || matches!(actual.target, Target::Modified(_)) { return false }
+        let (Known::Yes(Some(left)), Known::Yes(Some(right))) = (values.carrier(expected), values.carrier(actual)) else { return false };
+        if left.declaration != right.declaration || left.arguments.len() != right.arguments.len() { return false }
+        left.arguments.iter().zip(&right.arguments).all(|(left, right)| left == right
+            || self.relate(left, right) == Known::Yes(true) && self.relate(right, left) == Known::Yes(true))
+    }
+
+    /// Arrays and tuples relate by their elements: an array accepts any
+    /// product whose every element its item accepts (an empty one too); a
+    /// tuple accepts a tuple of its length, position by position. A readonly
+    /// product never fits a mutable one. None when either isn't a product.
+    fn products(&mut self, expected: Leaf, actual: Leaf) -> Known<Option<bool>> {
+        let values = self.values;
+        let (Known::Yes(Some(expected)), Known::Yes(Some(actual))) = (values.product_info(expected), values.product_info(actual)) else {
+            return match (values.product_info(expected), values.product_info(actual)) {
+                (Known::Unknown, _) | (_, Known::Unknown) => Known::Unknown,
+                _ => Known::Yes(None),
+            };
+        };
+        if actual.readonly && !expected.readonly { return Known::Yes(Some(false)) }
+        let open = |element: &crate::grammar::names::question::ProductElement| element.repeated || element.values;
+        let mut unknown = false;
+        if !expected.elements.is_empty() && expected.elements.iter().all(open) {
+            let item = values.combine(expected.elements.iter().map(|element| element.value.clone()), false);
+            for element in &actual.elements {
+                if !values.question.budget.step() { return Known::Unknown }
+                match self.relate(&item, &element.value) {
+                    Known::Yes(false) => return Known::Yes(Some(false)),
+                    Known::Unknown => unknown = true,
+                    Known::Yes(true) => {}
+                }
+            }
+            return if unknown { Known::Unknown } else { Known::Yes(Some(true)) };
+        }
+        if expected.elements.iter().any(open) || actual.elements.iter().any(open) { return Known::Yes(None) }
+        if actual.elements.len() > expected.elements.len() { return Known::Yes(Some(false)) }
+        for (position, slot) in expected.elements.iter().enumerate() {
+            if !values.question.budget.step() { return Known::Unknown }
+            let Some(element) = actual.elements.get(position) else {
+                if slot.optional { continue }
+                return Known::Yes(Some(false));
+            };
+            if element.optional && !slot.optional { return Known::Yes(Some(false)) }
+            match self.relate(&slot.value, &element.value) {
+                Known::Yes(false) => return Known::Yes(Some(false)),
+                Known::Unknown => unknown = true,
+                Known::Yes(true) => {}
+            }
+        }
+        if unknown { Known::Unknown } else { Known::Yes(Some(true)) }
     }
 
     fn members(&mut self, expected: &NodeValue, actual: &NodeValue) -> Known<bool> {

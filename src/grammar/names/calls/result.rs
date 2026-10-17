@@ -21,7 +21,7 @@ pub(super) fn result(at: Leaf, values: &Values<'_>) -> Known<Option<NodeValue>> 
             Known::Unknown => return Known::Unknown,
             Known::Yes(true) => {}
         }
-        let header = Header { site: at, signature: index as u32 };
+        let header = Header { site: at, signature: index as u32, delegate: None };
         let Known::Yes(result) = header_result(header, values) else { return Known::Unknown };
         if !append(&mut results, result, values) { return Known::Unknown }
         found = true;
@@ -51,8 +51,18 @@ pub(super) fn result(at: Leaf, values: &Values<'_>) -> Known<Option<NodeValue>> 
 }
 
 pub(super) fn header_result(header: Header, values: &Values<'_>) -> Known<NodeValue> {
-    let Some((site, signature)) = super::signature(header, values) else { return Known::Unknown };
-    match values.evaluate(site, &signature.result) {
+    let result = match header.delegate {
+        Some((owner, index)) => {
+            let Some(kind) = kind(owner, values) else { return Known::Unknown };
+            let Some(Some(result)) = kind.calls.source_results.get(index as usize) else { return Known::Unknown };
+            values.evaluate(owner, result)
+        }
+        None => {
+            let Some((site, signature)) = super::signature(header, values) else { return Known::Unknown };
+            values.evaluate(site, &signature.result)
+        }
+    };
+    match result {
         NodeValue::Unknown => Known::Unknown,
         result => Known::Yes(result),
     }

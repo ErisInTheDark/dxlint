@@ -18,10 +18,11 @@ impl Values<'_> {
                     Known::Unknown => uncertain = true,
                 }
             }
-            if possible {
+            // Keeping an alternative the write may not reach only widens the
+            // answer; dropping the whole value for it lost every read after a
+            // write of a type with generic methods (`const p = make()`).
+            if possible || uncertain {
                 retained.push(declaration.clone());
-            } else if uncertain {
-                return NodeValue::Unknown;
             }
         }
         NodeValue::Alternatives(retained)

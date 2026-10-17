@@ -13,7 +13,17 @@ pub(crate) struct State {
     graphs: RefCell<FxHashMap<Leaf, Known<Rc<Execution>>>>,
     reads: RefCell<FxHashMap<Leaf, Known<Rc<Reads>>>>,
     entry_owners: RefCell<FxHashMap<Leaf, Leaf>>,
+    /// Per file, every write's target in tree order (for `unwritten`).
+    file_writes: RefCell<FxHashMap<u32, Rc<[FileWrite]>>>,
     discarded: RefCell<Option<Discarded>>,
+}
+
+/// One write found walking a file: its target, or a node whose writes
+/// can't be read (nothing after it is looked at).
+#[derive(Clone, Copy)]
+enum FileWrite {
+    Target(NodeRef),
+    Unreadable,
 }
 
 #[derive(Default)]
@@ -159,25 +169,46 @@ impl Effects<'_> {
         let Some(tree) = self.semantic.world.tree(node.file) else { return Known::Unknown };
         let Some(names) = self.semantic.world.names(node.file) else { return Known::Unknown };
         if !names.declared.contains_key(&node.node) { return Known::Unknown }
-        let runtime = super::source::Runtime::new(self.semantic);
-        let mut visited = FxHashSet::default();
-        for id in 0..tree.nodes.len() {
+        let Known::Yes(writes) = self.file_writes(binding, tree.nodes.len()) else { return Known::Unknown };
+        for &write in writes.iter() {
             if !self.semantic.question.budget.step() { return Known::Unknown }
-            let at = Leaf { target: Target::Node(NodeRef { node: id as u32, ..node }), ..binding };
-            let Some(at) = self.semantic.leaf(at).known() else { return Known::Unknown };
-            if !visited.insert(at) { continue }
-            let Some(writes) = runtime.writes(at, None).known() else { return Known::Unknown };
-            for (_, _, write) in writes {
-                let Some(target) = write.event.target else { return Known::Unknown };
-                if target.value == node { continue }
-                match replaces(Leaf { target: Target::Node(target.value), ..binding }) {
-                    Known::Yes(true) => return Known::Yes(false),
-                    Known::Yes(false) => {}
-                    Known::Unknown => return Known::Unknown,
-                }
+            let FileWrite::Target(target) = write else { return Known::Unknown };
+            if target == node { continue }
+            match replaces(Leaf { target: Target::Node(target), ..binding }) {
+                Known::Yes(true) => return Known::Yes(false),
+                Known::Yes(false) => {}
+                Known::Unknown => return Known::Unknown,
             }
         }
         Known::Yes(true)
+    }
+
+    /// Every write in `at`'s file (root frame), in tree order, walked once
+    /// per file: each closure read's unwritten proof asks about one binding,
+    /// and walking the whole file per read made big files quadratic.
+    fn file_writes(&self, at: Leaf, nodes: usize) -> Known<Rc<[FileWrite]>> {
+        let Target::Node(file) = at.target else { return Known::Unknown };
+        if let Some(writes) = self.semantic.effects.file_writes.borrow().get(&file.file) { return Known::Yes(writes.clone()) }
+        let runtime = super::source::Runtime::new(self.semantic);
+        let mut visited = FxHashSet::default();
+        let mut writes = Vec::new();
+        'nodes: for id in 0..nodes {
+            if !self.semantic.question.budget.step() { return Known::Unknown }
+            let node = Leaf { target: Target::Node(NodeRef { node: id as u32, ..file }), ..at };
+            let Some(node) = self.semantic.leaf(node).known() else { writes.push(FileWrite::Unreadable); break };
+            if !visited.insert(node) { continue }
+            let Some(found) = runtime.writes(node, None).known() else { writes.push(FileWrite::Unreadable); break };
+            for (_, _, write) in found {
+                match write.event.target {
+                    Some(target) => writes.push(FileWrite::Target(target.value)),
+                    None => { writes.push(FileWrite::Unreadable); break 'nodes }
+                }
+            }
+        }
+        if self.semantic.question.budget.exhausted() { return Known::Unknown }
+        let writes: Rc<[FileWrite]> = writes.into();
+        self.semantic.effects.file_writes.borrow_mut().insert(file.file, writes.clone());
+        Known::Yes(writes)
     }
 
     pub fn enclosing(&self, entry: Leaf) -> Known<Option<Creation>> {

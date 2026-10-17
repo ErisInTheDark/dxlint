@@ -98,9 +98,14 @@ pub(super) fn constrained_arguments(at: Leaf, through: Option<Leaf>, formals: &[
         let Some(bound) = bound else { continue };
         match values.calls().accepts(&bound, argument) {
             Known::Yes(true) => {}
-            Known::Unknown => return Known::Unknown,
+            Known::Unknown if locked[position] => return Known::Unknown,
             Known::Yes(false) if locked[position] => return Known::Yes(None),
-            Known::Yes(false) => { arguments[position] = Some(bound); changed = true; }
+            // An inferred argument its constraint doesn't (provably) accept
+            // falls back to the constraint, as TypeScript does: the call
+            // keeps its declared contract (`takes<T extends E>(x: T)` with
+            // `takes(1)` checks `1` against `E`). Whether the argument fits
+            // is decided against that contract afterwards.
+            Known::Unknown | Known::Yes(false) => { arguments[position] = Some(bound); changed = true; }
         }
     }
     if changed {

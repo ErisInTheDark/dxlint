@@ -429,9 +429,13 @@ impl<'a, 'world> Run<'a, 'world> {
                 results.push(combine(self.values, conjunction, true));
             }
         }
+        // A contextual callable's result comes from the arms that can be
+        // called: `null | (() => T)` gives `T` (as TypeScript's contextual
+        // signature skips non-callable arms).
+        let callable_arms_only = query == super::super::RESULT;
         let answer = if results.is_empty() {
             if spread { Answer { exists: true, value: NodeValue::never() } } else { Answer::absent() }
-        } else if absent != 0 {
+        } else if absent != 0 && !callable_arms_only {
             Answer::unknown()
         } else {
             Answer { exists: true, value: combine(self.values, results, false) }
