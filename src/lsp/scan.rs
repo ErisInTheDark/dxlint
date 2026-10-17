@@ -111,7 +111,7 @@ pub fn relint(linters: Linters, files: Vec<PathBuf>, shared: Arc<Shared>, out: O
             return;
         }
     }
-    std::thread::spawn(move || loop {
+    lint_thread(move || loop {
         let (path, linters) = {
             let mut relint = shared.relint.lock().expect("lock");
             match relint.queue.pop_front() {
@@ -230,7 +230,12 @@ fn worth_walking(linters: &Linters, dir: &Path) -> bool {
 pub fn start(linters: Linters, roots: Vec<PathBuf>, tabs: Vec<PathBuf>, shared: Arc<Shared>, out: Outbox, progress: bool) {
     let generation = shared.generation.fetch_add(1, Ordering::SeqCst) + 1;
     *shared.priority.lock().expect("lock") = Priority { generation, queue: tabs.into() };
-    std::thread::spawn(move || Scan::new(linters, shared, out, progress, generation).run(&roots));
+    lint_thread(move || Scan::new(linters, shared, out, progress, generation).run(&roots));
+}
+
+/// A thread that lints: worker-sized stack, as deep questions need.
+fn lint_thread(work: impl FnOnce() + Send + 'static) {
+    std::thread::Builder::new().stack_size(crate::engine::WORKER_STACK).spawn(work).expect("lint thread");
 }
 
 struct Scan {
@@ -340,13 +345,13 @@ impl Scan {
         let take = || self.shared.next_priority(self.generation).or_else(|| files.get(next.fetch_add(1, Ordering::Relaxed)).cloned());
         std::thread::scope(|s| {
             for _ in 0..workers {
-                s.spawn(|| {
+                std::thread::Builder::new().stack_size(crate::engine::WORKER_STACK).spawn_scoped(s, || {
                     let _pool = crate::alloc::own_pool();
                     while self.current() {
                         let Some(path) = take() else { break };
                         self.lint(&path);
                     }
-                });
+                }).expect("lint worker");
             }
         });
     }

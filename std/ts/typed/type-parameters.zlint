@@ -34,6 +34,8 @@ fn type_parameter_part(part, target, returned, from_class, seen) =
     || count(part.uncertain_traits) > 0
     || any(part.traits, trait => contains(["any", "error", "unknown"], trait)) then { known: false, uses: [] }
   else if part.product != null && count(part.product.elements) == 0 then { known: true, uses: [] }
+  else if count(part.carrier.arguments) > 0 && part.handle != null && contains(seen, part.handle)
+    then { known: false, uses: [] }
   else if count(part.carrier.arguments) > 0 then {
     value multiple: from_class || (if part.carrier.description.kind == "template" then false
       else if part.product != null then returned && !part.product.readonly
@@ -41,8 +43,8 @@ fn type_parameter_part(part, target, returned, from_class, seen) =
         then returned && part.carrier.description.name == "Array" else true)
     value uses: type_parameter_usages(map(part.carrier.arguments,
       argument => if argument.value_handle != null
-        then type_parameter_handle(argument, target, returned, from_class, seen)
-        else type_parameter_parts(argument, target, returned, from_class, seen)))
+        then type_parameter_handle(argument, target, returned, from_class, seen [part.handle])
+        else type_parameter_parts(argument, target, returned, from_class, seen [part.handle])))
     value { known: uses.known, uses: if multiple then uses.uses uses.uses else uses.uses }
   } else if any(part.traits, trait => contains(["structural", "callable"], trait))
     && !any(part.traits, trait => contains(["constructible", "intersection"], trait))
@@ -64,11 +66,19 @@ fn type_parameter_arm(parts, target, returned, from_class, seen) =
   map (part) part.usage
 })
 fn type_parameter_parts(parts, target, returned, from_class, seen) =
-  if parts == null then { known: false, uses: [] }
-  else if count(parts) == 0 then { known: true, uses: [] } else {
-    value arms: map(parts, arm => type_parameter_arm(arm, target, returned, from_class, seen))
-    value largest: max(map(arms, arm => count(arm.uses)))
-    value { known: all(arms, arm => arm.known), uses: find(arms, arm => count(arm.uses) == largest).uses ?? [] }
+  if parts == null || count(seen) > 8 then { known: false, uses: [] }
+  else {
+    value states: walk({ index: 0, known: true, uses: [] }, state =>
+      if !state.known || state.index >= count(parts) then [] else {
+        value arm: type_parameter_arm(get(parts, state.index), target, returned, from_class, seen)
+        value [{
+          index: state.index + 1,
+          known: arm.known,
+          uses: if count(arm.uses) > count(state.uses) then arm.uses else state.uses,
+        }]
+      })
+    value result: last(states)
+    value { known: result.known, uses: if result.known then result.uses else [] }
   }
 fn type_parameter_value(parts, target, returned, from_class) = type_parameter_parts(parts, target, returned, from_class, [])
 fn type_parameter_handle(source, target, returned, from_class, seen) = {
