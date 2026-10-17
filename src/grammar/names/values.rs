@@ -309,8 +309,10 @@ impl Values<'_> {
     }
 
     /// A trait answer the leaf's shape alone settles, without the memo: a
-    /// trait set's own bits, or a node whose kind declares no fit (and no
-    /// open fit) for the trait at all, which most trait questions are.
+    /// trait set's own bits; a node whose kind fits the trait without
+    /// condition (as [`Self::direct_fits`] would find); or one whose kind
+    /// declares no fit (and no open fit) for it at all. Only conditional fits
+    /// are worth a memo entry.
     fn fixed_trait(&self, leaf: Leaf, trait_id: u16) -> Option<Known<bool>> {
         if trait_id >= 64 { return None }
         match leaf.target {
@@ -318,7 +320,12 @@ impl Values<'_> {
             Target::Node(node) => {
                 let data = self.world.tree(node.file)?.nodes.get(node.node as usize)?;
                 let Some(kind) = self.tables.kinds.get(data.matcher as usize) else { return Some(Known::Yes(false)) };
-                let declared = kind.fits.iter().any(|&(bits, _, _)| bits & (1 << trait_id) != 0);
+                let mut declared = false;
+                for &(bits, views, when) in &kind.fits {
+                    if bits & (1 << trait_id) == 0 { continue }
+                    if views == 0 && when.is_none() { return Some(Known::Yes(true)) }
+                    declared = true;
+                }
                 (!declared && kind.open_fits.is_empty()).then_some(Known::Yes(false))
             }
             _ => None,
