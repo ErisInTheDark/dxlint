@@ -49,9 +49,21 @@ impl Values<'_> {
         let mut possible = Vec::new();
         let mut absorbing = Vec::new();
         let mut dynamic = false;
+        let single = alternatives.len() == 1;
         'alternative: for alternative in alternatives {
+            let trait_set = |leaf: &Leaf| matches!(leaf.target, super::Target::Traits(_));
+            // A lone value is never absorbed by another alternative and can
+            // only contradict itself through its own trait bits: the common
+            // case asks no trait question at all.
+            if single && alternative.len() == 1 && !trait_set(&alternative[0]) {
+                possible.push(alternative);
+                continue;
+            }
             let mut proven = 0;
-            for &leaf in &alternative {
+            // One node site can't prove two exclusive traits by itself; only
+            // an intersection (or a trait set) can contradict.
+            let contradicts = alternative.len() > 1 || alternative.first().is_some_and(trait_set);
+            for &leaf in alternative.iter().filter(|_| contradicts) {
                 for trait_id in 0..64 {
                     if mask & (1 << trait_id) == 0 { continue }
                     if !self.question.budget.step() { return NodeValue::Unknown }

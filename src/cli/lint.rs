@@ -260,6 +260,7 @@ pub(super) fn prepared(output: &mut Output<'_>, args: LintArgs, project: &mut Pr
                     let (queue, next, working) = (&queue, &next, &working);
                     let run = &run;
                     std::thread::Builder::new().stack_size(crate::engine::WORKER_STACK).spawn_scoped(w, move || {
+                        let _pool = crate::alloc::own_pool();
                         while let Some((_, path)) = queue.get(next.fetch_add(1, std::sync::atomic::Ordering::Relaxed)) {
                             if tx.send(lint_file(linter, run, cache, path, fix)).is_err() {
                                 break;

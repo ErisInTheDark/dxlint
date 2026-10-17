@@ -341,6 +341,7 @@ impl Scan {
         std::thread::scope(|s| {
             for _ in 0..workers {
                 s.spawn(|| {
+                    let _pool = crate::alloc::own_pool();
                     while self.current() {
                         let Some(path) = take() else { break };
                         self.lint(&path);

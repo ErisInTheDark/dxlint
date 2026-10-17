@@ -1,14 +1,16 @@
 //! The binary's allocator: small blocks come from size-class free lists in
-//! sharded pools, everything else from the system allocator.
+//! pools, everything else from the system allocator.
 //!
 //! Linting allocates millions of short-lived small values (records, lists,
 //! texts, tree vectors). On Windows the system allocator is one process heap
 //! every worker thread contends on, and memory it returns to the OS faults
-//! back in for the next file. Here each thread takes its own pool (shards are
-//! handed out round-robin, so concurrent workers rarely share one), a freed
-//! block goes back to the freeing thread's pool, and pool memory is kept for
-//! reuse. Blocks a thread leaves behind stay in its pool for the next thread
-//! given that shard.
+//! back in for the next file. A freed block goes back to the freeing
+//! thread's pool, and pool memory is kept for reuse.
+//!
+//! A worker thread owns a pool outright for as long as it holds [`own_pool`]'s
+//! guard: its allocations take no lock at all. The guard hands the pool on to
+//! the next worker when it ends. Other threads share mutex-guarded shards
+//! (handed out round-robin, so they rarely share one).
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
@@ -76,6 +78,45 @@ static NEXT_SHARD: AtomicUsize = AtomicUsize::new(0);
 thread_local! {
     /// This thread's shard, plus one (zero: not yet chosen).
     static SHARD: Cell<usize> = const { Cell::new(0) };
+    /// The pool this thread owns ([`own_pool`]), or null.
+    static OWNED: Cell<*mut Pool> = const { Cell::new(null_mut()) };
+}
+
+struct Parked(*mut Pool);
+
+// Parked pools belong to no thread until one takes them.
+unsafe impl Send for Parked {}
+
+/// Pools whose owners finished, kept for the next worker.
+static PARKED: Mutex<Vec<Parked>> = Mutex::new(Vec::new());
+
+/// Gives this thread a pool of its own until the guard drops; small
+/// allocations on it then take no lock.
+pub fn own_pool() -> OwnedPool {
+    let parked = PARKED.lock().unwrap_or_else(|e| e.into_inner()).pop();
+    let pool = parked.map_or_else(|| Box::into_raw(Box::new(Pool::new())), |parked| parked.0);
+    let previous = OWNED.with(|owned| owned.replace(pool));
+    OwnedPool { pool, previous, thread: std::marker::PhantomData }
+}
+
+/// A thread's ownership of a pool ([`own_pool`]).
+pub struct OwnedPool {
+    pool: *mut Pool,
+    previous: *mut Pool,
+    /// Ownership stays on the thread that took it.
+    thread: std::marker::PhantomData<*mut Pool>,
+}
+
+impl Drop for OwnedPool {
+    fn drop(&mut self) {
+        OWNED.with(|owned| owned.set(self.previous));
+        PARKED.lock().unwrap_or_else(|e| e.into_inner()).push(Parked(self.pool));
+    }
+}
+
+/// This thread's owned pool, or null.
+fn owned() -> *mut Pool {
+    OWNED.try_with(Cell::get).unwrap_or(null_mut())
 }
 
 fn shard() -> &'static Mutex<Pool> {
@@ -107,8 +148,13 @@ unsafe impl GlobalAlloc for Pooled {
     #[inline(never)]
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         match class(layout) {
-            // SAFETY: the pool hands out blocks of the class size.
-            Some(c) => unsafe { shard().lock().unwrap_or_else(|e| e.into_inner()).take(c) },
+            Some(c) => {
+                let owned = owned();
+                // SAFETY: an owned pool is only touched by its owning thread;
+                // either pool hands out blocks of the class size.
+                if !owned.is_null() { return unsafe { (*owned).take(c) } }
+                unsafe { shard().lock().unwrap_or_else(|e| e.into_inner()).take(c) }
+            }
             // SAFETY: forwarded unchanged.
             None => unsafe { System.alloc(layout) },
         }
@@ -133,8 +179,13 @@ unsafe impl GlobalAlloc for Pooled {
     #[inline(never)]
     unsafe fn dealloc(&self, block: *mut u8, layout: Layout) {
         match class(layout) {
-            // SAFETY: `block` came from `alloc` with this layout, so from a pool.
-            Some(c) => unsafe { shard().lock().unwrap_or_else(|e| e.into_inner()).give(c, block) },
+            Some(c) => {
+                let owned = owned();
+                // SAFETY: `block` came from `alloc` with this layout, so from a
+                // pool; an owned pool is only touched by its owning thread.
+                if !owned.is_null() { return unsafe { (*owned).give(c, block) } }
+                unsafe { shard().lock().unwrap_or_else(|e| e.into_inner()).give(c, block) }
+            }
             // SAFETY: forwarded unchanged.
             None => unsafe { System.dealloc(block, layout) },
         }
@@ -206,5 +257,36 @@ mod tests {
             assert!((0..48).all(|k| *z.add(k) == 0));
             a.dealloc(z, layout(48, 8));
         }
+    }
+
+    #[test]
+    fn owned_pools_pass_between_workers_without_handing_out_live_blocks() {
+        let l = layout(64, 8);
+        // A block allocated under one worker's pool, still live after it ends.
+        let kept = std::thread::spawn(move || {
+            let _pool = own_pool();
+            unsafe {
+                let freed = Pooled.alloc(l);
+                Pooled.dealloc(freed, l);
+                let kept = Pooled.alloc(l);
+                kept.write_bytes(7, 64);
+                kept as usize
+            }
+        }).join().expect("first worker");
+        // The next worker may take that pool over: none of its blocks overlap
+        // the live one.
+        std::thread::spawn(move || {
+            let _pool = own_pool();
+            unsafe {
+                let blocks: Vec<*mut u8> = (0..64).map(|_| Pooled.alloc(l)).collect();
+                for &block in &blocks {
+                    assert_ne!(block as usize, kept);
+                    block.write_bytes(1, 64);
+                }
+                assert!((0..64).all(|k| *(kept as *mut u8).add(k) == 7));
+                for block in blocks { Pooled.dealloc(block, l) }
+                Pooled.dealloc(kept as *mut u8, l);
+            }
+        }).join().expect("second worker");
     }
 }

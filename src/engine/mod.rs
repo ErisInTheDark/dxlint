@@ -618,6 +618,7 @@ impl Linter {
                                     let run = Run { active: mask, ..run };
                                     // Reads are tracked per thread: pass them on.
                                     std::thread::Builder::new().stack_size(WORKER_STACK).spawn_scoped(s, move || {
+                                        let _pool = crate::alloc::own_pool();
                                         reads::track(|| {
                                             let facts = self.native_facts(index, tree, &run, (path, rel), state);
                                             let mut part = Vec::new();

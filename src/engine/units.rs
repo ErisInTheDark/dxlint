@@ -98,10 +98,13 @@ impl Linter {
         let next = std::sync::atomic::AtomicUsize::new(0);
         std::thread::scope(|scope| {
             for _ in 0..workers {
-                scope.spawn(|| worker(&mut std::iter::from_fn(|| loop {
-                    let path = paths.get(next.fetch_add(1, std::sync::atomic::Ordering::Relaxed))?;
-                    if let Some(unit) = self.unit(path, Some(run)) { return Some(unit) }
-                })));
+                scope.spawn(|| {
+                    let _pool = crate::alloc::own_pool();
+                    worker(&mut std::iter::from_fn(|| loop {
+                        let path = paths.get(next.fetch_add(1, std::sync::atomic::Ordering::Relaxed))?;
+                        if let Some(unit) = self.unit(path, Some(run)) { return Some(unit) }
+                    }))
+                });
             }
         });
     }
