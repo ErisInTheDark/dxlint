@@ -300,11 +300,29 @@ impl Values<'_> {
 
     pub fn fits(&self, leaf: Leaf, trait_id: u16) -> Known<bool> {
         let Known::Yes(leaf) = self.semantic.leaf(leaf) else { return Known::Unknown };
+        if let Some(answer) = self.fixed_trait(leaf, trait_id) { return answer }
         let key = (leaf, trait_id);
         if self.semantic.values.traits.get(&key).is_none() && (trait_id >= 64 || !self.question.budget.step()) {
             return Known::Unknown;
         }
         self.memoized(&self.semantic.values.traits, key, || self.direct_trait(leaf, trait_id))
+    }
+
+    /// A trait answer the leaf's shape alone settles, without the memo: a
+    /// trait set's own bits, or a node whose kind declares no fit (and no
+    /// open fit) for the trait at all, which most trait questions are.
+    fn fixed_trait(&self, leaf: Leaf, trait_id: u16) -> Option<Known<bool>> {
+        if trait_id >= 64 { return None }
+        match leaf.target {
+            Target::Traits(bits) => Some(Known::Yes(bits & (1 << trait_id) != 0)),
+            Target::Node(node) => {
+                let data = self.world.tree(node.file)?.nodes.get(node.node as usize)?;
+                let Some(kind) = self.tables.kinds.get(data.matcher as usize) else { return Some(Known::Yes(false)) };
+                let declared = kind.fits.iter().any(|&(bits, _, _)| bits & (1 << trait_id) != 0);
+                (!declared && kind.open_fits.is_empty()).then_some(Known::Yes(false))
+            }
+            _ => None,
+        }
     }
 
     fn direct_trait(&self, leaf: Leaf, trait_id: u16) -> Known<bool> {
