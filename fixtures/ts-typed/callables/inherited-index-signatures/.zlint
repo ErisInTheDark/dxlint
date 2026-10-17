@@ -1,0 +1,4 @@
+import .ts
+rule no-misused-promises:void-inherited-methods
+ignore "node_modules/**"
+ignore "tsconfig.json"
