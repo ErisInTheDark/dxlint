@@ -143,6 +143,48 @@ fn assertion_same_scalar_type(source, target) = {
     && all(left, arm => count(arm) > 0 && contains(right, arm))
     && all(right, arm => count(arm) > 0 && contains(left, arm))
 }
+fn assertion_type_parameter(n) = {
+  value bare: ts_value_bare_type(n)
+  value declarations: if bare is ts_type_reference && count(bare.type_argument.nodes) == 0
+    then name_binding(bare.name.node).declarations else []
+  value if count(declarations) == 1 && first(declarations).parent is ts_type_parameter
+    then first(declarations).parent.node else null
+}
+fn assertion_parameter_constraint(parameter) = {
+  value base: { value parameter; walk (current) assertion_type_parameter(current.constraint.node); last }
+  value constraint: base.constraint.node
+  value parts: value_parts(constraint)
+  value top: parts != null && count(parts) > 0 && all(parts, arm => count(arm.parts) == 1
+    && (first(arm.parts).traits == ["unknown"] || first(arm.parts).traits == ["any"]))
+  value {type: constraint, unconstrained: base != null && (constraint == null || top)}
+}
+fn assertion_relation_parts_known(arms) = arms != null
+  && all(arms, arm => count(arm.parts) > 0 && all(arm.parts, part => assertion_part_known(part)
+    || part.traits == ["parameter"] && part.carrier_known && part.carrier.description.kind == "parameter"))
+fn assertion_parameter_present(arms, parameter) = {
+  value site: declaration_identity(parameter)
+  value site != null && all(arms, arm => any(arm.parts, part => part.carrier_known
+    && part.carrier.file == site.file && part.carrier.node == site.node))
+}
+fn assertion_unsafe_narrowing(n) = {
+  value source: value_parts(n.expression.node)
+  value target: value_parts(n.type.node)
+  value parameter: assertion_type_parameter(n.type.node)
+  value accepted: value_accepts(n.type.node, n.expression.node, "value", "value")
+  value constraint: assertion_parameter_constraint(parameter)
+  value declaration: first(name_binding(unparenthesised_node(n.expression.node)).declarations).parent.node
+  value source_parameter: assertion_type_parameter(declaration.type.node)
+  value source_constraint: assertion_parameter_constraint(source_parameter)
+  value label: if parameter != null then parameter.name.text else ts_value_print_handle(n.type.node)
+  value if !assertion_relation_parts_known(source) || !assertion_relation_parts_known(target)
+    || accepted == true || parameter != null && assertion_parameter_present(source, parameter) then null
+    else if parameter != null && constraint.unconstrained then {kind: "unconstrained", label: label}
+    else if parameter != null && value_accepts(constraint.type, n.expression.node, "value", "value") == true
+      then {kind: "constraint", label: label}
+    else if accepted == false || source_parameter != null && source_constraint.unconstrained
+      && assertion_parts_known(target) then {kind: "narrow", label: label}
+    else null
+}
 fn assertion_subject(n, ignored) = {
   value n.expression.node
   walk (current) {

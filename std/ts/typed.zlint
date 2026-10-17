@@ -515,10 +515,10 @@ in ts_as, ts_type_assertion rule no-unsafe-type-assertion {
   when operand != null && annotation != null
   let from_any !assignment_empty_map(expression.node) && (assignment_unsafe(operand, annotation, node) || annotation == [] && ts_value_category(operand) != null)
   let to_any (operand == [] || ts_value_trait(operand, "unknown")) && ts_value_category(annotation) != null || assignment_unsafe(annotation, operand, node)
-  let narrow !from_any && !to_any && assertion_parts_known(value_parts(expression.node)) && assertion_parts_known(value_parts(type.node)) && value_accepts(type.node, expression.node, "value", "value") == false
-  let label if from_any then if ts_value_category(operand) == "error" then "error typed" else "`any`" else if to_any then if ts_value_category(annotation) == "error" then "error typed" else "`any`" else ts_value_print_handle(type.node)
-  when from_any || to_any || narrow && !re_test(label, /\bunknown\b/)
-  warn if from_any then "Unsafe assertion from {label} detected: consider using type guards or a safer assertion." else if to_any then "Unsafe assertion to {label} detected: consider using a more specific type to ensure safety." else "Unsafe type assertion: type '{label}' is more narrow than the original type."
+  let narrowing if from_any || to_any then null else assertion_unsafe_narrowing(node)
+  let label if from_any then if ts_value_category(operand) == "error" then "error typed" else "`any`" else if to_any then if ts_value_category(annotation) == "error" then "error typed" else "`any`" else narrowing.label
+  when from_any || to_any || narrowing != null && !re_test(label, /\bunknown\b/)
+  warn if from_any then "Unsafe assertion from {label} detected: consider using type guards or a safer assertion." else if to_any then "Unsafe assertion to {label} detected: consider using a more specific type to ensure safety." else if narrowing.kind == "narrow" then "Unsafe type assertion: type '{label}' is more narrow than the original type." else if narrowing.kind == "unconstrained" then "Unsafe type assertion: '{label}' could be instantiated with an arbitrary type which could be unrelated to the original type." else "Unsafe type assertion: the original type is assignable to the constraint of type '{label}', but '{label}' could be instantiated with a different subtype of its constraint."
 }
 
 in ts_member let object_string_array_type ts_value_string_array(object.node)
