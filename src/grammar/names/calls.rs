@@ -207,9 +207,7 @@ impl Calls<'_> {
             let key = (value.clone(), kind);
             let memo = &self.semantic.calls.headers;
             let values = self.semantic.values();
-            if memo.get(&key).is_some() { return values.memoized(memo, key, || Known::Unknown) }
-            let Some(_nest) = self.question.budget.nest() else { return Known::Unknown };
-            values.memoized(memo, key, || headers::headers(value, kind, &values))
+            values.memoized_with(memo, key, || self.question.budget.nest(), || headers::headers(value, kind, &values))
         })
     }
 
@@ -234,10 +232,8 @@ impl Calls<'_> {
             let Known::Yes(call) = self.semantic.leaf(call) else { return Known::Unknown };
             let memo = &self.semantic.calls.candidates;
             let values = self.semantic.values();
-            if memo.get(&call).is_some() { return values.memoized(memo, call, || Known::Unknown) }
-            if !self.question.budget.step() { return Known::Unknown }
-            let Some(_nest) = self.question.budget.nest() else { return Known::Unknown };
-            values.memoized(memo, call, || select::candidates(call, &values))
+            values.memoized_with(memo, call, || self.question.budget.step().then(|| self.question.budget.nest()).flatten(),
+                || select::candidates(call, &values))
         })
     }
 
@@ -391,10 +387,8 @@ impl Calls<'_> {
         let key = (at, question);
         let memo = &self.semantic.calls.values;
         let values = self.semantic.values();
-        if memo.get(&key).is_some() { return values.memoized(memo, key, || Known::Unknown) }
-        if !self.question.budget.step() { return Known::Unknown }
-        let Some(_nest) = self.question.budget.nest() else { return Known::Unknown };
-        values.memoized(memo, key, || match question {
+        values.memoized_with(memo, key, || self.question.budget.step().then(|| self.question.budget.nest()).flatten(),
+            || match question {
             ValueQuestion::Result => result::result(at, &self.semantic.values()),
             ValueQuestion::Expected => expected::expected(at, &self.semantic.values()),
         })

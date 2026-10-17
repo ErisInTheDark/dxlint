@@ -61,7 +61,9 @@ impl Hasher for FxHasher {
 
     #[inline]
     fn finish(&self) -> u64 {
-        self.hash
+        // The final multiply mixes into the high bits; hash tables index
+        // buckets by the low ones (as rustc-hash 2 does).
+        self.hash.rotate_left(26)
     }
 }
 

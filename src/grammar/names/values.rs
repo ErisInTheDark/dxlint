@@ -269,16 +269,28 @@ impl Values<'_> {
     /// instead of every later ask recomputing the whole cycle.
     pub(super) fn memoized<K, T>(&self, memo: &Memo<K, Known<T>>, key: K, compute: impl Fn() -> Known<T>) -> Known<T>
     where K: Clone + Eq + std::hash::Hash, T: Clone {
+        self.memoized_with(memo, key, || Some(()), compute)
+    }
+
+    /// [`Self::memoized`], where computing a missing answer first needs
+    /// `enter` (a budget step or nesting guard, held while computing): an
+    /// answer already kept costs one lookup and no budget.
+    pub(super) fn memoized_with<K, T, G>(&self, memo: &Memo<K, Known<T>>, key: K, enter: impl FnOnce() -> Option<G>,
+        compute: impl Fn() -> Known<T>) -> Known<T>
+    where K: Clone + Eq + std::hash::Hash, T: Clone {
         use std::hash::BuildHasher;
         let state = &self.semantic.values;
+        let kept = memo.get(&key);
+        if let Some(answer @ Known::Yes(_)) = kept { return answer }
         let tag = (memo as *const Memo<K, Known<T>> as usize, crate::fx_hash::FxBuild::default().hash_one(&key));
-        if let Some(answer) = memo.get(&key) {
-            if matches!(answer, Known::Unknown) && state.pending.borrow().contains(&tag) {
+        if kept.is_some() {
+            if state.pending.borrow().contains(&tag) {
                 state.cycle_reads.set(state.cycle_reads.get() + 1);
                 state.cycle_heads.borrow_mut().insert(tag);
             }
-            return answer;
+            return Known::Unknown;
         }
+        let Some(_entered) = enter() else { return Known::Unknown };
         memo.insert(self.semantic.epoch, key.clone(), Known::Unknown);
         state.pending.borrow_mut().push(tag);
         let started = state.cycle_reads.get();
@@ -301,11 +313,8 @@ impl Values<'_> {
     pub fn fits(&self, leaf: Leaf, trait_id: u16) -> Known<bool> {
         let Known::Yes(leaf) = self.semantic.leaf(leaf) else { return Known::Unknown };
         if let Some(answer) = self.fixed_trait(leaf, trait_id) { return answer }
-        let key = (leaf, trait_id);
-        if self.semantic.values.traits.get(&key).is_none() && (trait_id >= 64 || !self.question.budget.step()) {
-            return Known::Unknown;
-        }
-        self.memoized(&self.semantic.values.traits, key, || self.direct_trait(leaf, trait_id))
+        self.memoized_with(&self.semantic.values.traits, (leaf, trait_id),
+            || (trait_id < 64 && self.question.budget.step()).then_some(()), || self.direct_trait(leaf, trait_id))
     }
 
     /// A trait answer the leaf's shape alone settles, without the memo: a

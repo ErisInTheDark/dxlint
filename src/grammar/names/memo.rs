@@ -85,10 +85,17 @@ impl<K: Clone + Eq + Hash, V: Clone> Memo<K, V> {
             writes.undo.clear();
             writes.epoch = epoch;
         }
-        if entries.get(&key).is_none_or(|entry| entry.epoch != epoch) {
-            writes.undo.push((key.clone(), entries.get(&key).cloned()));
+        let entry = Entry { epoch, value, order: next_write() };
+        match entries.entry(key) {
+            std::collections::hash_map::Entry::Occupied(mut slot) => {
+                if slot.get().epoch != epoch { writes.undo.push((slot.key().clone(), Some(slot.get().clone()))) }
+                slot.insert(entry);
+            }
+            std::collections::hash_map::Entry::Vacant(slot) => {
+                writes.undo.push((slot.key().clone(), None));
+                slot.insert(entry);
+            }
         }
-        entries.insert(key, Entry { epoch, value, order: next_write() });
     }
 
     /// Forgets `key` (undone like an insert if the root fails).

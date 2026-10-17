@@ -28,7 +28,26 @@ struct Run<'a, 'world> {
 }
 
 pub(super) fn values(values: &Values<'_>, leaf: Leaf) -> NodeValue {
+    if values.world.profile().is_none() {
+        if !values.question.budget.step() { return NodeValue::Unknown }
+        let Known::Yes(leaf) = values.semantic.leaf(leaf) else { return NodeValue::Unknown };
+        if let Some(value) = kept(values, leaf) { return value }
+        let mut run = Run { values, tasks: Vec::new(), answers: Vec::new() };
+        run.evaluate_leaf(leaf);
+        return run.run();
+    }
     Run { values, tasks: vec![Task::Leaf(leaf)], answers: Vec::new() }.run()
+}
+
+/// The kept value of canonical `leaf`, if any; reading one still being
+/// evaluated counts as a cycle read.
+fn kept(values: &Values<'_>, leaf: Leaf) -> Option<NodeValue> {
+    let state = &values.semantic.values;
+    let value = state.values.get(&leaf)?;
+    if value == NodeValue::Unknown && state.evaluating.borrow().iter().any(|&(active, _)| active == leaf) {
+        state.cycle_reads.set(state.cycle_reads.get() + 1);
+    }
+    Some(value)
 }
 
 pub(super) fn evaluate(values: &Values<'_>, at: Leaf, expression: &Value) -> NodeValue {
@@ -146,14 +165,16 @@ impl<'a, 'world> Run<'a, 'world> {
             self.answers.push(Answer::unknown());
             return;
         };
-        let state = &self.values.semantic.values;
-        if let Some(value) = state.values.get(&leaf) {
-            if value == NodeValue::Unknown && state.evaluating.borrow().iter().any(|&(active, _)| active == leaf) {
-                state.cycle_reads.set(state.cycle_reads.get() + 1);
-            }
+        if let Some(value) = kept(self.values, leaf) {
             self.answers.push(Answer { exists: true, value });
             return;
         }
+        self.evaluate_leaf(leaf);
+    }
+
+    /// Starts evaluating canonical `leaf`, which has no kept value.
+    fn evaluate_leaf(&mut self, leaf: Leaf) {
+        let state = &self.values.semantic.values;
         state.values.insert(self.values.semantic.epoch, leaf, NodeValue::Unknown);
         state.evaluating.borrow_mut().push((leaf, state.cycle_reads.get()));
         let Target::Node(_) = leaf.target else {
