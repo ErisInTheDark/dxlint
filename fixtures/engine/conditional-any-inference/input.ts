@@ -1,0 +1,5 @@
+declare function fn<T extends boolean>(options: {
+  a: T extends true ? never : unknown;
+} & { b: T }): void;
+fn({ a: true, b: true as any });
+fn<any>({ a: true, b: true as any });

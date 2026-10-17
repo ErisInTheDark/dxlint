@@ -23,6 +23,7 @@ pub struct State {
     pub(crate) effects: Rc<super::effects::State>,
     pub(crate) name_queries: Rc<crate::expr::queries::NamesMemo>,
     pub(crate) modules: super::modules::queries::State,
+    pub(crate) narrowing: super::narrowing::State,
     /// Semantic attributes read inside questions, by what their answer can
     /// depend on: complete answers only.
     attributes: super::memo::Memo<AttributeKey, crate::vm::V>,
@@ -74,6 +75,7 @@ impl Session {
         let failed = self.question.budget.limited();
         let cut = self.question.budget.cut();
         let discarded = semantic.values.finish(epoch, failed, cut) + semantic.calls.finish(epoch, failed, cut)
+            + semantic.narrowing.finish(epoch, failed, cut)
             + semantic.attributes.finish(epoch, failed, cut, |_| true);
         if failed {
             if let Some(profile) = world.profile() {

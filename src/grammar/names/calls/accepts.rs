@@ -392,10 +392,12 @@ impl<'a, 'world> Run<'a, 'world> {
         let Known::Yes(rows) = self.values.shape_members(expected) else { return Known::Unknown };
         let mut unknown = false;
         // An index signature (`Record<string, never>`) constrains every
-        // named member the actual value has in its key domain.
+        // named member the actual value has in its key domain. An actual
+        // whose members can't be listed (an open parameter) is related
+        // through its own indexers below.
         let indexers: Vec<_> = rows.iter().flatten().filter(|member| matches!(member.key, Key::Domain(_))).cloned().collect();
-        if !indexers.is_empty() {
-            let Known::Yes(actual_rows) = self.values.shape_members(actual) else { return Known::Unknown };
+        let actual_rows = if indexers.is_empty() { None } else { self.values.shape_members(actual).known() };
+        if let Some(actual_rows) = actual_rows {
             for indexer in &indexers {
                 for named in actual_rows.iter().flatten().filter(|named| !matches!(named.key, Key::Domain(_)) && indexer.key.may_alias(&named.key)) {
                     if !self.values.question.budget.step() { return Known::Unknown }

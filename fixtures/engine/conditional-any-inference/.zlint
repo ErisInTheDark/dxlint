@@ -1,0 +1,9 @@
+import .ts
+ignore "tsconfig.json"
+ignore "node_modules/typescript/lib/lib.fixture.d.ts"
+
+in ts_as rule dynamic-inference {
+  let expected value_constituents(value_expected_handle(node))
+  when ts_value_category(expected) != "any"
+  warn "A dynamic inferred argument must not become its constraint."
+}
