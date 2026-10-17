@@ -30,6 +30,7 @@ pub(super) static FUNCTIONS: &[QueryFunction] = &[
         Known::Unknown => Known::Unknown,
     } },
     QueryFunction { name: "value_union", arity: 2, call: |semantic, at, args| union(semantic, semantic.values().values(at), args) },
+    QueryFunction { name: "value_same", arity: 2, call: |semantic, at, args| same(semantic, semantic.values().values(at), args) },
     QueryFunction { name: "value_children", arity: 3, call: |semantic, at, args| children(semantic, semantic.values().values(at), args) },
     QueryFunction { name: "value_signatures", arity: 1, call: |semantic, at, args| signatures(semantic, semantic.values().values(at), args) },
     QueryFunction { name: "value_constructors", arity: 1, call: |semantic, at, args| constructors(semantic, semantic.values().values(at), args) },
@@ -47,6 +48,7 @@ pub(super) static FUNCTIONS: &[QueryFunction] = &[
     } },
     QueryFunction { name: "site_text", arity: 2, call: site_text },
     QueryFunction { name: "site_field", arity: 3, call: site_field },
+    QueryFunction { name: "site_parent", arity: 2, call: site_parent },
     QueryFunction { name: "declaration_origin", arity: 2, call: declaration_origin },
     QueryFunction { name: "declaration_value", arity: 2, call: declaration_value },
     QueryFunction { name: "value_sources", arity: 1, call: |semantic, at, _| sources(semantic, at) },
@@ -69,6 +71,7 @@ static HANDLES: &[HandleFunction] = &[
     HandleFunction { name: "value_parts", call: parts },
     HandleFunction { name: "value_alternatives", call: alternatives },
     HandleFunction { name: "value_union", call: union },
+    HandleFunction { name: "value_same", call: same },
     HandleFunction { name: "value_children", call: children },
     HandleFunction { name: "value_signatures", call: signatures },
     HandleFunction { name: "value_constructors", call: constructors },
@@ -116,6 +119,39 @@ pub fn handle_of(value: &Value<'_>) -> Option<Handle> {
 pub(super) fn handle(semantic: &Semantic<'_>, value: NodeValue) -> Value<'static> {
     let canonical = semantic.calls().without_incidental_frames(&value, true);
     Value::record(vec![(FIELD.into(), Value::Num(semantic.question.handle(canonical).number()))])
+}
+
+/// Whether the subject's value and the handle in `args[0]` are provably the
+/// same value: equal once incidental frames are dropped, or instances of
+/// one declaration whose arguments are the same (`Map<string, string>`
+/// from two sites). True or null; never false (sameness is only proven).
+fn same(semantic: &Semantic<'_>, value: NodeValue, args: &[Value<'static>]) -> Known<Value<'static>> {
+    let Some(other) = args.first().and_then(handle_of).and_then(|handle| semantic.question.handle_value(handle)) else { return Known::Unknown };
+    if same_value(semantic, &value, &other, SAME_DEPTH) { Known::Yes(Value::Bool(true)) } else { Known::Yes(Value::Null) }
+}
+
+/// How deep instantiation arguments are compared.
+const SAME_DEPTH: u8 = 8;
+
+fn same_value(semantic: &Semantic<'_>, left: &NodeValue, right: &NodeValue, depth: u8) -> bool {
+    use crate::grammar::names::question::Target;
+    if *left == NodeValue::Unknown || *right == NodeValue::Unknown || depth == 0 || !semantic.question.budget.step() { return false }
+    let calls = semantic.calls();
+    let (left, right) = (calls.without_incidental_frames(left, true), calls.without_incidental_frames(right, true));
+    if left == right { return true }
+    let (NodeValue::Alternatives(left), NodeValue::Alternatives(right)) = (&left, &right) else { return false };
+    let ([left], [right]) = (left.as_slice(), right.as_slice()) else { return false };
+    // Merged declarations (`interface Map` in several lib files) make one
+    // row of several leaves: they must pair up one by one.
+    if left.is_empty() || left.len() != right.len() { return false }
+    let values = semantic.values();
+    left.iter().zip(right).all(|(left, right)| {
+        // A modified value (`Readonly<T>`) shares its source's carrier.
+        if matches!(left.target, Target::Modified(_)) || matches!(right.target, Target::Modified(_)) { return false }
+        let (Known::Yes(Some(a)), Known::Yes(Some(b))) = (values.carrier(*left), values.carrier(*right)) else { return false };
+        a.declaration == b.declaration && a.arguments.len() == b.arguments.len()
+            && a.arguments.iter().zip(&b.arguments).all(|(a, b)| same_value(semantic, a, b, depth - 1))
+    })
 }
 
 /// The union of the subject's value and each handle in `args[0]`, as one
@@ -422,6 +458,20 @@ fn site_field(semantic: &Semantic<'_>, _: crate::grammar::names::question::Leaf,
         sites.push(site);
     }
     Known::Yes(Value::list(sites))
+}
+
+/// The parent of a `{file, node}` site, in any program file, as a site;
+/// null at the root or when not a site.
+fn site_parent(semantic: &Semantic<'_>, _: crate::grammar::names::question::Leaf, args: &[Value<'static>]) -> Known<Value<'static>> {
+    use crate::grammar::names::question::NodeRef;
+    let Some((file, node)) = args.first().and_then(site_of) else { return Known::Yes(Value::Null) };
+    let Some(tree) = semantic.world.tree(file) else { return Known::Unknown };
+    if tree.nodes.get(node as usize).is_none() { return Known::Yes(Value::Null) }
+    let Some(parent) = tree.parent(node) else { return Known::Yes(Value::Null) };
+    match site_record(semantic, NodeRef { file, node: parent }) {
+        Some(site) => Known::Yes(site),
+        None => Known::Unknown,
+    }
 }
 
 /// The value a `{file, node}` declaration site unwraps to, as a handle

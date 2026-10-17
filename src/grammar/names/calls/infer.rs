@@ -96,6 +96,7 @@ pub(super) fn constrained_arguments(at: Leaf, through: Option<Leaf>, formals: &[
         let Some(argument) = &arguments[position] else { continue };
         let Known::Yes(bound) = values.constraint(Leaf { frame, ..*formal }) else { return Known::Unknown };
         let Some(bound) = bound else { continue };
+        if dynamic_fits(&bound, argument, values) { continue }
         match values.calls().accepts(&bound, argument) {
             Known::Yes(true) => {}
             Known::Unknown if locked[position] => return Known::Unknown,
@@ -114,6 +115,7 @@ pub(super) fn constrained_arguments(at: Leaf, through: Option<Leaf>, formals: &[
             let Some(argument) = &arguments[position] else { continue };
             let Known::Yes(bound) = values.constraint(Leaf { frame, ..*formal }) else { return Known::Unknown };
             let Some(bound) = bound else { continue };
+            if dynamic_fits(&bound, argument, values) { continue }
             match values.calls().accepts(&bound, argument) {
                 Known::Yes(true) => {}
                 Known::Yes(false) if locked[position] => return Known::Yes(None),
@@ -122,6 +124,13 @@ pub(super) fn constrained_arguments(at: Leaf, through: Option<Leaf>, formals: &[
         }
     }
     Known::Yes(Some(arguments))
+}
+
+/// Whether `argument` is wholly dynamic (`any`) and `bound` isn't `never`:
+/// `any` satisfies every other constraint and stays the argument.
+fn dynamic_fits(bound: &NodeValue, argument: &NodeValue, values: &Values<'_>) -> bool {
+    *bound != NodeValue::never() && matches!(argument, NodeValue::Alternatives(arms) if !arms.is_empty()
+        && arms.iter().all(|arm| !arm.is_empty() && arm.iter().all(|&leaf| values.dynamic(leaf) == Known::Yes(true))))
 }
 
 fn copy_slots(slots: &[NodeValue], values: &Values<'_>) -> Known<Vec<NodeValue>> {

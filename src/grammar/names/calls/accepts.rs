@@ -1,7 +1,7 @@
 use super::{Match, Value};
 use crate::fx_hash::FxHashMap;
 use crate::grammar::names::question::{Known, Leaf, NodeValue, Target};
-use crate::grammar::names::values::Values;
+use crate::grammar::names::values::{Key, Values};
 
 pub(super) fn accepts(expected: &NodeValue, actual: &NodeValue, values: &Values<'_>) -> Known<bool> {
     let Known::Yes(mut run) = Run::new(values, &[], &[]) else { return Known::Unknown };
@@ -264,7 +264,11 @@ impl<'a, 'world> Run<'a, 'world> {
                 Known::Yes(None) => {}
                 Known::Unknown => return Known::Unknown,
             }
-            if self.positions.is_empty() && self.same_instantiation(*expected, *actual) { return Known::Yes(true) }
+        }
+        // Merged declarations make one row of several leaves: pair them up.
+        if self.positions.is_empty() && !expected.is_empty() && expected.len() == actual.len()
+            && expected.iter().zip(actual).all(|(expected, actual)| self.same_instantiation(*expected, *actual)) {
+            return Known::Yes(true);
         }
         let target = universal_target(expected, values);
         if target == Known::Yes(true) { return Known::Yes(true) }
@@ -387,6 +391,29 @@ impl<'a, 'world> Run<'a, 'world> {
     fn members(&mut self, expected: &NodeValue, actual: &NodeValue) -> Known<bool> {
         let Known::Yes(rows) = self.values.shape_members(expected) else { return Known::Unknown };
         let mut unknown = false;
+        // An index signature (`Record<string, never>`) constrains every
+        // named member the actual value has in its key domain.
+        let indexers: Vec<_> = rows.iter().flatten().filter(|member| matches!(member.key, Key::Domain(_))).cloned().collect();
+        if !indexers.is_empty() {
+            let Known::Yes(actual_rows) = self.values.shape_members(actual) else { return Known::Unknown };
+            for indexer in &indexers {
+                for named in actual_rows.iter().flatten().filter(|named| !matches!(named.key, Key::Domain(_)) && indexer.key.may_alias(&named.key)) {
+                    if !self.values.question.budget.step() { return Known::Unknown }
+                    let value = self.member_value(named);
+                    for source in &indexer.sources {
+                        let expected = match &source.value {
+                            Some(recipe) => self.recipe(source.site, recipe),
+                            None => self.raw_leaf(source.site),
+                        };
+                        match self.relate(&expected, &value) {
+                            Known::Yes(false) => return Known::Yes(false),
+                            Known::Unknown => unknown = true,
+                            Known::Yes(true) => {}
+                        }
+                    }
+                }
+            }
+        }
         for member in rows.into_iter().flatten() {
             let Known::Yes(available) = self.values.keyed_members(actual, &member.key) else { return Known::Unknown };
             for available in available {

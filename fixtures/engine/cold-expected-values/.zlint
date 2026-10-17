@@ -1,0 +1,13 @@
+import .ts
+
+in ts_arrow rule cold-callback-context {
+  when node is ts_call.argument || parent is ts_property && parent.key.text == "cb"
+  when value_has_expected(node) != true
+  warn "The first context read lost the callback contract."
+}
+
+in ts_number rule cold-element-context {
+  when parent is ts_array
+  when value_has_expected(node) != true
+  warn "The first context read lost the array element contract."
+}
