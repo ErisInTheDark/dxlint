@@ -1027,10 +1027,104 @@ impl<'a> Parser<'a> {
     /// where `cond` holds on the node.
     fn when_block(&mut self, ctx: &Context) {
         let kw = self.bump().expect("peeked");
+        if self.ts.peek_raw(0).is_some_and(|t| t.kind == Tk::LBrace) {
+            self.ts.next_raw();
+            return self.when_item_arms(ctx, &kw, |p, _| p.expr());
+        }
+        if self.subject_arms_ahead() {
+            let Some(subject) = self.e_join() else { return };
+            self.skip(false, true);
+            self.ts.next_raw();
+            self.skip(false, true);
+            self.ts.next_raw();
+            return self.when_item_arms(ctx, &kw, |p, t| {
+                let names = p.is_names(t)?;
+                let span = t.span.to(p.ts.last_span.unwrap_or(t.span));
+                Some(Expr { kind: ExprKind::Is(Box::new(subject.clone()), names), span })
+            });
+        }
         let Some(cond) = self.expr() else { return };
+        self.conditional_items(ctx, &kw, cond, "expected `{` after the condition: `when cond { declares ... }`");
+    }
+
+    /// Whether the line ahead is `when x is { ...`: `is` right before the
+    /// first `{` (a condition `x is ts_a {` names a kind there instead).
+    fn subject_arms_ahead(&mut self) -> bool {
+        let mut previous_is = false;
+        for n in 0.. {
+            let Some(t) = self.ts.peek_raw(n) else { return false };
+            match t.kind {
+                Tk::LBrace => return previous_is,
+                Tk::Newline | Tk::RBrace => return false,
+                _ => previous_is = t.is_ident("is"),
+            }
+        }
+        false
+    }
+
+    /// `when { a then { items } ... else then { items } }` after its `{`
+    /// (or `when x is { ts_a then { items } ... }`, `condition` reading an
+    /// arm's test from its first token): each arm's items hold where its
+    /// condition does and no earlier arm's.
+    fn when_item_arms(&mut self, ctx: &Context, kw: &Token, condition: impl Fn(&mut Self, &Token) -> Option<Expr>) {
+        let open = kw.clone();
+        let not = |cond: &Expr| Expr { kind: ExprKind::Unary(UnOp::Not, Box::new(cond.clone())), span: cond.span };
+        let and = |a: Expr, b: Expr| {
+            let span = a.span.to(b.span);
+            Expr { kind: ExprKind::Binary(BinOp::And, Box::new(a), Box::new(b)), span }
+        };
+        let mut earlier: Option<Expr> = None;
+        let mut closed = false;
+        loop {
+            self.skip(true, true);
+            let Some(t) = self.ts.peek_raw(0).cloned() else {
+                self.errors.push(ConfigError::new(open.span, "unclosed `when { ... }`"));
+                return;
+            };
+            if t.kind == Tk::RBrace {
+                self.ts.next_raw();
+                return;
+            }
+            if closed {
+                self.errors.push(ConfigError::new(t.span, "`else then` is the last arm of a `when { ... }`"));
+                return self.recover();
+            }
+            let cond = if t.is_ident("else") {
+                self.ts.next_raw();
+                closed = true;
+                None
+            } else {
+                let Some(cond) = condition(self, &t) else { return };
+                Some(cond)
+            };
+            self.skip(false, true);
+            if !self.ts.peek_raw(0).is_some_and(|t| t.is_ident("then")) {
+                self.error_here("expected `then { ... }` after a `when { ... }` arm's condition");
+                return;
+            }
+            self.ts.next_raw();
+            let guard = match (earlier.clone(), cond.clone()) {
+                (Some(earlier), Some(cond)) => and(earlier, cond),
+                (Some(earlier), None) => earlier,
+                (None, Some(cond)) => cond,
+                (None, None) => Expr { kind: ExprKind::Bool(true), span: t.span },
+            };
+            if let Some(cond) = &cond {
+                earlier = Some(match earlier.take() {
+                    Some(earlier) => and(earlier, not(cond)),
+                    None => not(cond),
+                });
+            }
+            self.conditional_items(ctx, kw, guard, "expected `{` after `then` in a `when { ... }` arm");
+        }
+    }
+
+    /// `{ items }` after a `when` condition: name and type items that hold
+    /// only where `cond` does.
+    fn conditional_items(&mut self, ctx: &Context, kw: &Token, cond: Expr, missing_open: &str) {
         self.skip(false, true);
         let Some(open) = self.ts.peek_raw(0).cloned().filter(|t| t.kind == Tk::LBrace) else {
-            self.error_here("expected `{` after the condition: `when cond { declares ... }`");
+            self.error_here(missing_open);
             return;
         };
         self.ts.next_raw();

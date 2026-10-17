@@ -33,7 +33,7 @@ Logic is macros; there is no `fn` keyword. To the author a macro behaves exactly
 - In template strings `{value?}` is sugar for `{value ?? ""}`: the explicit way to let absence print as nothing.
 - Paths: `a?.b` reads through a maybe-null `a` (null stays null); plain `a.b` on a maybe-null `a` is a config error. Today every `.` silently passes null through; the migration rewrites those reads to `?.` where the compiler can't prove presence.
 
-## `when` blocks (value and kind-subject forms implemented; boolean subject and item forms pending)
+## `when` blocks (value, kind-subject and name/type item arm forms implemented; boolean subject and rule-body forms pending)
 
 ````zlint
 when {

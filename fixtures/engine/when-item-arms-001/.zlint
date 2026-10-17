@@ -1,0 +1,23 @@
+# `when x is { ... }` and `when { ... }` item arms: the first holding arm's
+# items apply, `else then` where none does.
+lang js "*.ts"
+native ts
+
+in ts_binary {
+  when left is {
+    ts_identifier then { fits named }
+    ts_number then { fits numbered }
+    else then { fits other_left }
+  }
+  when {
+    operator == "+" then { fits plus }
+    operator == "+" || operator == "-" then { fits minus }
+    else then { fits other_operator }
+  }
+}
+in ts_binary rule named warn "named" { when node always named }
+in ts_binary rule numbered warn "numbered" { when node always numbered }
+in ts_binary rule other_left warn "other_left" { when node always other_left }
+in ts_binary rule plus warn "plus" { when node always plus }
+in ts_binary rule minus warn "minus" { when node always minus }
+in ts_binary rule other_operator warn "other_operator" { when node always other_operator }

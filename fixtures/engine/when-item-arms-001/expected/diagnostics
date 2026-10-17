@@ -1,0 +1,6 @@
+input.ts:1:1-1:6 named#0 named
+input.ts:1:1-1:6 plus#0 plus
+input.ts:2:1-2:6 minus#0 minus
+input.ts:2:1-2:6 numbered#0 numbered
+input.ts:3:1-3:8 other_left#0 other_left
+input.ts:3:1-3:8 other_operator#0 other_operator

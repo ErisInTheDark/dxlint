@@ -344,7 +344,7 @@ impl Parser<'_> {
 
     /// The layer or group names after `is` / `not` (`kw`): one, or several
     /// in parentheses.
-    fn is_names(&mut self, kw: &Token) -> Option<Vec<IsName>> {
+    pub(super) fn is_names(&mut self, kw: &Token) -> Option<Vec<IsName>> {
         self.skip(false, true);
         let mut names = Vec::new();
         match self.ts.peek_raw(0).map(|t| t.kind) {
@@ -389,7 +389,7 @@ impl Parser<'_> {
     }
 
     /// Values side by side are joined: `text "="`, `[a] [b]`.
-    fn e_join(&mut self) -> Option<Expr> {
+    pub(super) fn e_join(&mut self) -> Option<Expr> {
         let mut lhs = self.e_add()?;
         while self.joins_next() {
             let rhs = self.e_add()?;

@@ -42,6 +42,10 @@ in ts_logical {
 }
 ```
 
+`when { a then { items } ... else then { items } }` picks one group: the
+first arm whose condition holds (`else then` last, optional);
+`when x is { ts_a then { items } (ts_b, ts_c) then { items } }` picks by kind.
+
 Classes, traits and user effects are never listed separately: they exist
 because an item names them. A class or trait that is asked for but never
 declared or fitted is a config error, as is an `in nearest` scope class no

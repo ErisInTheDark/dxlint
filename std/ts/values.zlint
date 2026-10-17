@@ -363,10 +363,12 @@ in ts_declarator {
     identity node
   }
   when ts_value_iteration_binding {
-    when parent.parent.ts_value_iteration_string { unwraps type ?? trait string }
-    when !parent.parent.ts_value_iteration_string {
-      calls parent.parent.["next"] with ts_value_iteration_arguments
-      unwraps type ?? result.["value"]
+    when {
+      parent.parent.ts_value_iteration_string then { unwraps type ?? trait string }
+      else then {
+        calls parent.parent.["next"] with ts_value_iteration_arguments
+        unwraps type ?? result.["value"]
+      }
     }
   }
   when !ts_value_iteration_binding && !ts_value_unique_symbol && !ts_value_evolving_array && name is ts_identifier && parent.kind == "const" { unwraps type ?? init }
