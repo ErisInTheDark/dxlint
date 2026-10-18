@@ -204,7 +204,7 @@ mod places {
             let Known::Yes(subject) = narrowing.place(leaf(3)) else { panic!("binding place is known") };
             let base = NodeValue::Alternatives(vec![vec![leaf(14)], vec![leaf(12)]]);
             let use_site = flow.steps().last().unwrap().0;
-            let result = narrowing.assigned(&subject, &flow, &[use_site], FrameId::ROOT, base.clone());
+            let result = narrowing.assigned(&subject, &flow, leaf(0), &[use_site], base.clone());
             assert_eq!(result, if narrowed { NodeValue::leaf(leaf(14)) } else { base });
         }
         let question = QueryContext::default();
@@ -213,7 +213,7 @@ mod places {
         let Known::Yes(member) = narrowing.place(leaf(7)) else { panic!("member place is known") };
         let flow = super::graph(vec![super::entry(0), valued, super::entry(7)], &[&[1], &[2], &[]]);
         let base = NodeValue::Alternatives(vec![vec![leaf(14)], vec![leaf(12)]]);
-        assert_eq!(narrowing.assigned(&member, &flow, &[2], FrameId::ROOT, base.clone()), base);
+        assert_eq!(narrowing.assigned(&member, &flow, leaf(0), &[2], base.clone()), base);
     }
 
     impl TestWorld {

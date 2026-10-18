@@ -19,11 +19,28 @@ pub struct Narrowing<'a> {
 #[derive(Default)]
 pub(crate) struct State {
     written: super::memo::Memo<Leaf, Known<Place>>,
+    /// Per execution entry and written place, the write steps that can
+    /// replace it: every read of one variable in a body shares the scan.
+    candidates: super::memo::Memo<(Leaf, Place), std::rc::Rc<[super::effects::StepId]>>,
+    /// Per execution entry, its applicable guards ([`Narrowing::guards`]).
+    guards: super::memo::Memo<Leaf, std::rc::Rc<[Guard]>>,
+}
+
+/// One `in <field> propagates <proof>` item that holds at its owner.
+#[derive(Clone)]
+struct Guard {
+    owner: Leaf,
+    node: NodeRef,
+    /// Index into the owner kind's `propagates`.
+    item: usize,
+    path: Vec<u16>,
 }
 
 impl State {
     pub(super) fn finish(&self, epoch: super::memo::Epoch, failed: bool, cut: u64) -> u64 {
         self.written.finish(epoch, failed, cut, super::memo::Settled::settled)
+            + self.candidates.finish(epoch, failed, cut, |_| true)
+            + self.guards.finish(epoch, failed, cut, |_| true)
     }
 }
 
@@ -80,28 +97,48 @@ impl Narrowing<'_> {
         }
         if uses.is_empty() { return base }
         if !captured {
-            base = self.assigned(written, &execution, &uses, entry.frame, base);
+            base = self.assigned(written, &execution, entry, &uses, base);
         }
-        for &node in execution.guard_owners(|execution| self.guard_owners(execution)) {
+        let Some(guards) = self.guards(&execution, entry) else { return NodeValue::Unknown };
+        for guard in guards.iter() {
             if !self.semantic.question.budget.step() { return NodeValue::Unknown }
+            let entries = execution.field_entries(guard.node, &guard.path);
+            if execution.guarded(&uses, entries, &self.semantic.question.budget) == Known::Yes(true) {
+                let Some((_, proof, _)) = self.kind(guard.node).and_then(|kind| kind.propagates.get(guard.item)) else { continue };
+                let region = Region { execution: &execution, entries, uses: &uses, frame: entry.frame, captured };
+                base = self.apply_in(guard.owner, proof, subject, base, Some(&region));
+            }
+            if self.semantic.question.budget.exhausted() { return NodeValue::Unknown }
+        }
+        base
+    }
+
+    /// The guards whose conditions hold in `execution` (entered at
+    /// `entry`) and that guard some steps, decided once per execution: every
+    /// read there checks the same guards.
+    fn guards(&self, execution: &Execution, entry: Leaf) -> Option<std::rc::Rc<[Guard]>> {
+        let memo = &self.semantic.narrowing_places.guards;
+        if let Some(guards) = memo.get(&entry) { return Some(guards) }
+        let budget = &self.semantic.question.budget;
+        let mut guards = Vec::new();
+        for &node in execution.guard_owners(|execution| self.guard_owners(execution)) {
+            if !budget.step() { return None }
             let owner = Leaf { target: Target::Node(node), frame: entry.frame };
             let Known::Yes(owner) = self.semantic.leaf(owner) else { continue };
             let Some(kind) = self.kind(node) else { continue };
-            for (path, proof, when) in &kind.propagates {
-                if !self.semantic.question.budget.step() { return NodeValue::Unknown }
+            for (item, (path, _, when)) in kind.propagates.iter().enumerate() {
+                if !budget.step() { return None }
                 if when.is_some_and(|condition| self.semantic.world.condition(owner, condition, self.semantic) != Known::Yes(true)) {
                     continue;
                 }
-                let entries = execution.field_entries(node, path);
-                if entries.is_empty() { continue }
-                if execution.guarded(&uses, entries, &self.semantic.question.budget) == Known::Yes(true) {
-                    let region = Region { execution: &execution, entries, uses: &uses, frame: entry.frame, captured };
-                    base = self.apply_in(owner, proof, subject, base, Some(&region));
-                }
-                if self.semantic.question.budget.exhausted() { return NodeValue::Unknown }
+                if execution.field_entries(node, path).is_empty() { continue }
+                guards.push(Guard { owner, node, item, path: path.clone() });
             }
         }
-        base
+        if budget.exhausted() { return None }
+        let guards: std::rc::Rc<[Guard]> = guards.into();
+        memo.insert(self.semantic.epoch, entry, guards.clone());
+        Some(guards)
     }
 
     /// Every node entered in `execution` whose kind propagates guards, once
@@ -127,14 +164,29 @@ impl Narrowing<'_> {
             .and_then(|data| self.semantic.tables.kinds.get(data.matcher as usize))
     }
 
-    fn assigned(&self, subject: &Place, execution: &Execution, uses: &[StepId], frame: super::question::FrameId, base: NodeValue) -> NodeValue {
+    /// The write steps of `execution` (entered at `entry`) that can replace
+    /// `subject`, found once per execution and place.
+    fn write_candidates(&self, subject: &Place, execution: &Execution, entry: Leaf) -> Option<std::rc::Rc<[StepId]>> {
+        let memo = &self.semantic.narrowing_places.candidates;
+        let key = (entry, subject.clone());
+        if let Some(candidates) = memo.get(&key) { return Some(candidates) }
         let budget = &self.semantic.question.budget;
         let mut candidates = Vec::new();
         for &id in execution.write_leaves() {
-            if !budget.step() { return NodeValue::Unknown }
+            if !budget.step() { return None }
             let Some(event) = execution.step(id).and_then(|step| step.event()) else { continue };
-            if self.write_invalidates(event, subject, frame) { candidates.push(id) }
+            if self.write_invalidates(event, subject, entry.frame) { candidates.push(id) }
         }
+        if budget.exhausted() { return None }
+        let candidates: std::rc::Rc<[StepId]> = candidates.into();
+        memo.insert(self.semantic.epoch, key, candidates.clone());
+        Some(candidates)
+    }
+
+    fn assigned(&self, subject: &Place, execution: &Execution, entry: Leaf, uses: &[StepId], base: NodeValue) -> NodeValue {
+        let budget = &self.semantic.question.budget;
+        let frame = entry.frame;
+        let Some(candidates) = self.write_candidates(subject, execution, entry) else { return NodeValue::Unknown };
         let Known::Yes(Some(last)) = execution.last_steps(uses, &candidates, budget) else { return base };
         let values = self.semantic.values();
         let mut alternatives = Vec::new();
@@ -305,7 +357,7 @@ impl Region<'_> {
 }
 
 /// A narrowed place: a root binding and the member path below it.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct Place {
     root: Leaf,
     path: Vec<Key>,
