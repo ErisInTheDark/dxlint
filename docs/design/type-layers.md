@@ -130,6 +130,7 @@ struct, signature or literal type is the type; nothing is constructed.
 | `members <views> closed [inherits v]` | the scope's named-member list is complete (presence proofs may drop absent keys); every active base view must be closed too, and unresolved members or heritage never prove closed |
 | `flag <name> [when c]` (per kind) | a named fact about a declaration (`readonly`, `method`, `private`...), reported on member sources by `value_children`; a flag whose condition is unknown makes the site's flags unknown unless another item of the same name holds |
 | `widens v` (per kind) | the recipe `.widened` uses; without one, `.widened` is the normal value, keeping union/intersection structure |
+| `refers <path>` / `refers <path>.[<key>]` (per kind) | the place a reference names for narrowing and writes: the place of `path`, or its member `key`; read from syntax, so finding a place never asks type questions. Without one, the kind's lone applicable `unwraps` path or `from` recipe decides |
 
 Precedence follows TS: `a | b & c` is `a | (b & c)`.
 
@@ -321,7 +322,8 @@ Three declarations and one engine rule:
    ```
 4. **Engine:** a reference in a guarded region is narrowed only when it
    resolves to the same declaration as the tested operand and no `mutated`
-   effect on it lies between test and use (code paths).
+   effect on it lies between test and use (code paths). Member places
+   (`x.a`, `x[k]`) come from `refers`.
 
 ## Evaluation
 

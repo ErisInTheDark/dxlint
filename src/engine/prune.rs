@@ -219,7 +219,7 @@ fn item_names(item: &NameItem, out: &mut HashSet<String>) {
             calls::Item::DiscardsResult | calls::Item::Optional | calls::Item::Flag(_) |calls::Item::ParameterVariance(_) | calls::Item::InferLastOverload | calls::Item::ExactFirstOverload => {}
         },
         NameItem::Generics(path) | NameItem::Arguments(path) => path_names(path, out),
-        NameItem::Widens { value } | NameItem::Defines { value } | NameItem::Constrains { value } => value_names(value, out),
+        NameItem::Widens { value } | NameItem::Defines { value } | NameItem::Refers { value } | NameItem::Constrains { value } => value_names(value, out),
         NameItem::Pack(shape) => { out.insert(shape.text.clone()); }
         NameItem::Unwraps { value, .. }
         | NameItem::Members { classes: _, closed: _, inherits: value } => {

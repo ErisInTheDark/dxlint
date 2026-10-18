@@ -652,6 +652,7 @@ fn ts_value_optional_member(n, key) = {
     && any(row.sources, source => source.kind == "named"))
 }
 in ts_member {
+  refers object.[ts_value_member_key]
   let ts_value_member_key ts_value_key(property.node)
   let ts_value_member_nullish in_optional_chain == true && object could nullable
     || ts_value_optional_member(node, ts_value_member_key)
@@ -671,6 +672,7 @@ fn ts_value_unchecked_index(n) = {
       || source.kind == "ordinal" && !finite))
 }
 in ts_index {
+  refers object.[index]
   let ts_value_index_nullish in_optional_chain == true && object could nullable
     || ts_value_optional_member(node, index.node)
     || (if ts_compiler_option(node, "noUncheckedIndexedAccess") == true then ts_value_unchecked_index(node) else false)

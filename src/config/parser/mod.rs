@@ -35,7 +35,7 @@ const RESERVED: &[&str] = &[
 
 /// Items about names and effects (docs/design/type-layers.md); words only
 /// in item position on a layer.
-const NAME_ITEMS: &[&str] = &["scope", "declares", "resolves", "targets", "unwraps", "widens", "defines", "constrains", "assigned", "fits", "carries", "arguments", "indexed", "members", "member", "runs", "labels", "exports", "globals", "uses", "merges",
+const NAME_ITEMS: &[&str] = &["scope", "declares", "resolves", "targets", "unwraps", "widens", "defines", "refers", "constrains", "assigned", "fits", "carries", "arguments", "indexed", "members", "member", "runs", "labels", "exports", "globals", "uses", "merges",
     "signature", "signatures", "calls", "constructs", "discards", "identity", "optional", "flag", "variance", "generics", "overloads", "pack"];
 
 /// What the lines of a `{ ... }` block (or one `in ...` line) are about:
@@ -511,6 +511,10 @@ impl<'a> Parser<'a> {
             "defines" => {
                 let Some(value) = self.unwrap_value() else { return };
                 NameItem::Defines { value }
+            }
+            "refers" => {
+                let Some(value) = self.unwrap_value() else { return };
+                NameItem::Refers { value }
             }
             "constrains" => {
                 let Some(value) = self.unwrap_value() else { return };

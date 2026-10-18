@@ -194,6 +194,9 @@ pub enum NameItem {
     Unwraps { effect: Option<Name>, possible: bool, value: Option<Unwrap>, nearest: Vec<Name>, classes: Vec<Name> },
     Widens { value: Unwrap },
     Defines { value: Unwrap },
+    /// `refers <path>` or `refers <path>.[<key>]`: the place a reference
+    /// names (narrowing, writes), read from syntax alone.
+    Refers { value: Unwrap },
     Constrains { value: Unwrap },
     Pack(Name),
     /// `runs`, `labels`, `in <field> catches|runs after ...`: execution

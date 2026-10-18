@@ -114,6 +114,9 @@ pub struct KindNames {
     pub unwraps: Vec<Unwrapping>,
     pub widens: Vec<(Value, Option<u32>)>,
     pub defines: Vec<(Value, Option<u32>)>,
+    /// `refers`: the place a reference names; without one, its `unwraps`
+    /// recipe decides.
+    pub refers: Vec<(Value, Option<u32>)>,
     /// Traits (bits) the node directly has, each under its condition.
     pub fits: Vec<(u64, u64, Option<u32>)>,
     pub open_fits: Vec<(u64, Option<u32>)>,
@@ -522,6 +525,12 @@ impl Names {
                     let Some(value) = lower_value(value, &path, &mut vocab, errors, &mut requested_classes) else { continue };
                     for (&matcher, &when) in targets.iter().zip(&when) {
                         names.add(g, matcher, |kind| kind.defines.push((value.clone(), when)));
+                    }
+                }
+                NameItem::Refers { value } => {
+                    let Some(value) = lower_value(value, &path, &mut vocab, errors, &mut requested_classes) else { continue };
+                    for (&matcher, &when) in targets.iter().zip(&when) {
+                        names.add(g, matcher, |kind| kind.refers.push((value.clone(), when)));
                     }
                 }
                 NameItem::Constrains { value } => {

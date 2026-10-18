@@ -239,17 +239,24 @@ impl Narrowing<'_> {
             let Some(tree) = self.semantic.world.tree(node.file) else { return Known::Unknown };
             let Some(data) = tree.nodes.get(node.node as usize) else { return Known::Unknown };
             let Some(kind) = self.semantic.tables.kinds.get(data.matcher as usize) else { return Known::Unknown };
+            // `refers` names the place from syntax; the `unwraps` recipe
+            // only stands in where a kind declares none, as its conditions
+            // can ask whole type questions.
+            let fallback = kind.refers.is_empty();
+            let recipes = kind.refers.iter().map(|(value, when)| (value, *when))
+                .chain(kind.unwraps.iter()
+                    .filter(|item| fallback && item.effect.is_none())
+                    .filter_map(|item| Some((item.value.as_ref()?, item.when))));
             let mut recipe = None;
-            for item in &kind.unwraps {
+            for (value, when) in recipes {
                 if !self.semantic.question.budget.step() { return Known::Unknown }
-                if item.effect.is_some() || item.value.is_none() { continue }
-                match item.when.map_or(Known::Yes(true), |condition| self.semantic.world.condition(at, condition, self.semantic)) {
+                match when.map_or(Known::Yes(true), |condition| self.semantic.world.condition(at, condition, self.semantic)) {
                     Known::Yes(false) => continue,
                     Known::Unknown => return Known::Unknown,
                     Known::Yes(true) => {}
                 }
                 if recipe.is_some() { return Known::Unknown }
-                recipe = item.value.as_ref();
+                recipe = Some(value);
             }
             let (source, key) = match recipe {
                 Some(value @ Value::Path(_)) => (value, None),
