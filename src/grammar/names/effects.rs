@@ -145,12 +145,14 @@ pub struct Exit {
     pub value: Option<NodeRef>,
 }
 
+/// What a step is. Boxed payloads keep a step at 32 bytes: graphs hold one
+/// per node entry and exit, and only fields and events carry more.
 #[derive(Clone, Debug)]
 pub enum Point {
     Enter,
     Leave,
-    Field(Path),
-    Event(Event),
+    Field(Box<[u16]>),
+    Event(Box<Event>),
     Join,
 }
 
@@ -163,7 +165,7 @@ pub struct Step {
 impl Step {
     pub fn event(&self) -> Option<&Event> {
         match &self.point {
-            Point::Event(event) => Some(event),
+            Point::Event(event) => Some(&**event),
             _ => None,
         }
     }
@@ -172,9 +174,12 @@ impl Step {
 pub struct Execution {
     entry: StepId,
     steps: Vec<Step>,
-    edges: Vec<Vec<StepId>>,
-    sites: FxHashMap<NodeRef, Vec<StepId>>,
-    fields: FxHashMap<NodeRef, FxHashMap<Path, Vec<StepId>>>,
+    /// Each step's successors.
+    edges: Adjacency,
+    /// `(node, step)` of every enter and leave step, sorted.
+    sites: Vec<(NodeRef, StepId)>,
+    /// Field steps, sorted by node, then path, then step.
+    fields: Vec<StepId>,
     writes: FxHashMap<NodeRef, Vec<StepId>>,
     binding_writes: FxHashMap<NodeRef, crate::fx_hash::FxHashSet<StepId>>,
     binding_reads: FxHashMap<NodeRef, ReadSet>,
@@ -187,7 +192,58 @@ pub struct Execution {
     /// Steps reachable from the entry around each guard's entry set, as
     /// bitsets ([`Self::guarded`]).
     reachable_avoiding: RefCell<FxHashMap<Box<[StepId]>, std::sync::Arc<[u64]>>>,
+    /// Each step's predecessors, built on first use; `None` when an edge
+    /// leaves the graph.
+    predecessors: OnceCell<Option<Adjacency>>,
     completion: Option<Completion>,
+}
+
+/// Steps' neighbours, packed: step `s` has `steps[start[s]..start[s + 1]]`.
+struct Adjacency {
+    start: Vec<u32>,
+    steps: Vec<StepId>,
+}
+
+impl Adjacency {
+    fn successors(edges: &[Vec<StepId>]) -> Adjacency {
+        let mut start = Vec::with_capacity(edges.len() + 1);
+        start.push(0);
+        let mut steps = Vec::with_capacity(edges.iter().map(Vec::len).sum());
+        for next in edges {
+            steps.extend_from_slice(next);
+            start.push(steps.len() as u32);
+        }
+        Adjacency { start, steps }
+    }
+
+    /// The reverse of `successors`; `None` when an edge leaves the graph.
+    fn predecessors(successors: &Adjacency) -> Option<Adjacency> {
+        let count = successors.start.len() - 1;
+        let mut start = vec![0u32; count + 1];
+        for &next in &successors.steps {
+            *start.get_mut(next as usize + 1)? += 1;
+        }
+        for index in 1..start.len() { start[index] += start[index - 1] }
+        let mut fill = start.clone();
+        let mut steps = vec![0; successors.steps.len()];
+        for from in 0..count {
+            for &next in successors.of(from as StepId) {
+                steps[fill[next as usize] as usize] = from as StepId;
+                fill[next as usize] += 1;
+            }
+        }
+        Some(Adjacency { start, steps })
+    }
+
+    fn get(&self, step: StepId) -> Option<&[StepId]> {
+        let from = *self.start.get(step as usize)? as usize;
+        let to = *self.start.get(step as usize + 1)? as usize;
+        Some(&self.steps[from..to])
+    }
+
+    fn of(&self, step: StepId) -> &[StepId] {
+        self.get(step).unwrap_or_default()
+    }
 }
 
 #[derive(Default)]
@@ -217,8 +273,8 @@ struct ThroughVisit {
 
 impl Execution {
     pub(crate) fn new(entry: StepId, steps: Vec<Step>, edges: Vec<Vec<StepId>>) -> Execution {
-        let mut sites: FxHashMap<NodeRef, Vec<StepId>> = FxHashMap::default();
-        let mut fields: FxHashMap<NodeRef, FxHashMap<Path, Vec<StepId>>> = FxHashMap::default();
+        let mut sites: Vec<(NodeRef, StepId)> = Vec::new();
+        let mut fields: Vec<StepId> = Vec::new();
         let mut writes: FxHashMap<NodeRef, Vec<StepId>> = FxHashMap::default();
         let mut binding_writes: FxHashMap<NodeRef, crate::fx_hash::FxHashSet<StepId>> = FxHashMap::default();
         let mut binding_reads: FxHashMap<NodeRef, ReadSet> = FxHashMap::default();
@@ -228,8 +284,8 @@ impl Execution {
                 if event.kind == EventKind::Write && event.phase == Phase::Leave { write_leaves.push(index as StepId) }
             }
             match &step.point {
-                Point::Enter | Point::Leave => sites.entry(step.node).or_default().push(index as u32),
-                Point::Field(path) => fields.entry(step.node).or_default().entry(path.clone()).or_default().push(index as u32),
+                Point::Enter | Point::Leave => sites.push((step.node, index as StepId)),
+                Point::Field(_) => fields.push(index as StepId),
                 Point::Event(event) if event.kind == EventKind::Write => {
                     if let Some(target) = event.target {
                         writes.entry(target.value).or_default().push(index as StepId);
@@ -251,8 +307,12 @@ impl Execution {
                 _ => {}
             }
         }
+        sites.sort_unstable();
+        fields.sort_unstable_by(|&a, &b| Self::field_key(&steps, a).cmp(&Self::field_key(&steps, b)).then(a.cmp(&b)));
+        let edges = Adjacency::successors(&edges);
         Execution { entry, steps, edges, sites, fields, writes, binding_writes, binding_reads, write_leaves,
-            reachable: OnceCell::new(), guards: OnceCell::new(), reachable_avoiding: RefCell::default(), completion: None }
+            reachable: OnceCell::new(), guards: OnceCell::new(), reachable_avoiding: RefCell::default(),
+            predecessors: OnceCell::new(), completion: None }
     }
 
     pub fn write_leaves(&self) -> &[StepId] {
@@ -294,6 +354,13 @@ impl Execution {
         Known::Yes(steps.iter().all(|&step| seen[step as usize / 64] & (1 << (step % 64)) == 0))
     }
 
+    /// The entry, steps and successor lists `new` was given.
+    #[cfg(test)]
+    fn into_parts(self) -> (StepId, Vec<Step>, Vec<Vec<StepId>>) {
+        let edges = (0..self.steps.len() as StepId).map(|step| self.edges.of(step).to_vec()).collect();
+        (self.entry, self.steps, edges)
+    }
+
     fn with_completion(mut self, normal: Vec<StepId>, exits: Vec<(StepId, Exit)>) -> Self {
         self.completion = Some(Completion { normal, exits });
         self
@@ -312,17 +379,37 @@ impl Execution {
     }
 
     pub fn successors(&self, id: StepId) -> Option<&[StepId]> {
-        self.edges.get(id as usize).map(Vec::as_slice)
+        self.edges.get(id)
+    }
+
+    /// The enter and leave steps of `node`, in step order.
+    fn node_steps(&self, node: NodeRef) -> impl Iterator<Item = StepId> + '_ {
+        let from = self.sites.partition_point(|&(site, _)| site < node);
+        let to = from + self.sites[from..].partition_point(|&(site, _)| site == node);
+        self.sites[from..to].iter().map(|&(_, id)| id)
     }
 
     pub fn sites(&self, node: NodeRef, phase: Phase) -> impl Iterator<Item = StepId> + '_ {
-        self.sites.get(&node).into_iter().flatten().copied().filter(move |&id| {
+        self.node_steps(node).filter(move |&id| {
             matches!((&self.steps[id as usize].point, phase), (Point::Enter, Phase::Enter) | (Point::Leave, Phase::Leave))
         })
     }
 
+    /// The node and path of field step `id` (empty path for other steps).
+    fn field_key(steps: &[Step], id: StepId) -> (NodeRef, &[u16]) {
+        let step = &steps[id as usize];
+        let path: &[u16] = match &step.point {
+            Point::Field(path) => path,
+            _ => &[],
+        };
+        (step.node, path)
+    }
+
     pub fn field_entries(&self, node: NodeRef, path: &[u16]) -> &[StepId] {
-        self.fields.get(&node).and_then(|fields| fields.get(path)).map_or(&[], Vec::as_slice)
+        let key = (node, path);
+        let from = self.fields.partition_point(|&id| Self::field_key(&self.steps, id) < key);
+        let to = from + self.fields[from..].partition_point(|&id| Self::field_key(&self.steps, id) == key);
+        &self.fields[from..to]
     }
 
     pub fn write_steps(&self, target: NodeRef) -> &[StepId] {
@@ -367,15 +454,11 @@ impl Execution {
 
     pub fn completes_through(&self, effect: EffectId, effects: &[EffectId], budget: &Budget) -> Known<bool> {
         let Some(completion) = &self.completion else { return Known::Unknown };
-        for step in completion.normal.iter().copied()
-            .chain(completion.exits.iter().filter(|(_, exit)| effects.contains(&exit.effect)).map(|(step, _)| *step)) {
-            match self.reaches_through(self.entry, step, &[], |event| event.kind == EventKind::Effect(effect), budget) {
-                Known::Yes(true) => return Known::Yes(true),
-                Known::Yes(false) => {}
-                Known::Unknown => return Known::Unknown,
-            }
-        }
-        Known::Yes(false)
+        let targets: Vec<StepId> = completion.normal.iter().copied()
+            .chain(completion.exits.iter().filter(|(_, exit)| effects.contains(&exit.effect)).map(|(step, _)| *step))
+            .collect();
+        if targets.is_empty() { return Known::Yes(false) }
+        self.reaches_any_through(self.entry, &targets, &[], |event| event.kind == EventKind::Effect(effect), budget)
     }
 
     fn reachable_steps(&self, budget: &Budget) -> Known<&[bool]> {
@@ -392,7 +475,7 @@ impl Execution {
 
     pub fn reachable(&self, node: NodeRef, budget: &Budget) -> Known<bool> {
         let Some(seen) = self.reachable_steps(budget).known() else { return Known::Unknown };
-        Known::Yes(self.sites.get(&node).is_some_and(|sites| sites.iter().any(|&step| seen[step as usize])))
+        Known::Yes(self.node_steps(node).any(|step| seen[step as usize]))
     }
 
     pub fn reaches(&self, from: StepId, to: StepId, avoiding: &[StepId], budget: &Budget) -> Known<bool> {
@@ -528,6 +611,10 @@ impl Execution {
         Known::Yes(false)
     }
 
+    /// The reachable `candidates` some path takes last before reaching one of
+    /// `uses` (no other candidate after it); `None` when a reachable use can
+    /// be reached from the entry passing no candidate. One backward walk from
+    /// the uses, stopping at candidates.
     pub fn last_steps(&self, uses: &[StepId], candidates: &[StepId], budget: &Budget) -> Known<Option<Vec<StepId>>> {
         for &step in uses.iter().chain(candidates) {
             if !budget.step() || self.step(step).is_none() { return Known::Unknown }
@@ -535,36 +622,49 @@ impl Execution {
         let Some(seen) = self.reachable_steps(budget).known() else { return Known::Unknown };
         let uses: Vec<_> = uses.iter().copied().filter(|&step| seen[step as usize]).collect();
         if uses.is_empty() { return Known::Yes(None) }
-        for &use_at in &uses {
-            match self.reaches(self.entry, use_at, candidates, budget) {
-                Known::Yes(true) => return Known::Yes(None),
-                Known::Yes(false) => {}
-                Known::Unknown => return Known::Unknown,
+        let Some(predecessors) = self.predecessors() else { return Known::Unknown };
+        let mut candidate = vec![false; self.steps.len()];
+        for &step in candidates { candidate[step as usize] = true }
+        let mut visited = vec![false; self.steps.len()];
+        let mut last_before = vec![false; self.steps.len()];
+        let mut pending: Vec<StepId> = uses.iter().copied().filter(|&step| !candidate[step as usize]).collect();
+        while let Some(step) = pending.pop() {
+            if !budget.step() { return Known::Unknown }
+            if std::mem::replace(&mut visited[step as usize], true) { continue }
+            if step == self.entry { return Known::Yes(None) }
+            for &previous in predecessors.of(step) {
+                if !budget.step() { return Known::Unknown }
+                if candidate[previous as usize] {
+                    last_before[previous as usize] = true;
+                } else if !visited[previous as usize] {
+                    pending.push(previous);
+                }
             }
         }
         let mut last = Vec::new();
-        for &candidate in candidates {
-            if !budget.step() { return Known::Unknown }
-            if !seen[candidate as usize] || last.contains(&candidate) { continue }
-            let Some(next) = self.successors(candidate) else { return Known::Unknown };
-            let mut found = false;
-            for &next in next {
-                for &use_at in &uses {
-                    match self.reaches(next, use_at, candidates, budget) {
-                        Known::Yes(true) => { found = true; break }
-                        Known::Yes(false) => {}
-                        Known::Unknown => return Known::Unknown,
-                    }
-                }
-                if found { break }
-            }
-            if found { last.push(candidate) }
+        for &step in candidates {
+            if seen[step as usize] && last_before[step as usize] && !last.contains(&step) { last.push(step) }
         }
         Known::Yes(Some(last))
     }
 
+    /// Each step's predecessors, built once; `None` when an edge leaves the
+    /// graph.
+    fn predecessors(&self) -> Option<&Adjacency> {
+        self.predecessors.get_or_init(|| Adjacency::predecessors(&self.edges)).as_ref()
+    }
+
     pub fn reaches_through(&self, from: StepId, to: StepId, barriers: &[StepId], event: impl Fn(&Event) -> bool, budget: &Budget) -> Known<bool> {
-        if from as usize >= self.steps.len() || to as usize >= self.steps.len() { return Known::Unknown }
+        self.reaches_any_through(from, &[to], barriers, event, budget)
+    }
+
+    /// Whether some path from `from` passes an `event` step and then reaches
+    /// one of `targets` without crossing a barrier (`from` itself may be
+    /// one): [`Self::reaches_through`] for many targets in one walk.
+    pub fn reaches_any_through(&self, from: StepId, targets: &[StepId], barriers: &[StepId], event: impl Fn(&Event) -> bool, budget: &Budget) -> Known<bool> {
+        if from as usize >= self.steps.len() || targets.iter().any(|&to| to as usize >= self.steps.len()) { return Known::Unknown }
+        let mut target = vec![false; self.steps.len()];
+        for &to in targets { target[to as usize] = true }
         let mut seen = vec![ThroughVisit::default(); self.steps.len()];
         for &barrier in barriers {
             if !budget.step() || barrier as usize >= self.steps.len() { return Known::Unknown }
@@ -580,8 +680,8 @@ impl Execution {
             let visit = if matched { &mut seen[step as usize].with_event } else { &mut seen[step as usize].without_event };
             if *visit { continue }
             *visit = true;
-            if step == to && matched { return Known::Yes(true) }
-            let Some(edges) = self.edges.get(step as usize) else { return Known::Unknown };
+            if matched && target[step as usize] { return Known::Yes(true) }
+            let Some(edges) = self.edges.get(step) else { return Known::Unknown };
             for &next in edges {
                 if !budget.step() || next as usize >= self.steps.len() { return Known::Unknown }
                 pending.push((next, matched));
@@ -604,7 +704,7 @@ impl Execution {
             if blocked[step as usize] || seen[step as usize] { continue }
             seen[step as usize] = true;
             if found(step) { return Known::Yes(Walk::Found) }
-            let Some(edges) = self.edges.get(step as usize) else { return Known::Unknown };
+            let Some(edges) = self.edges.get(step) else { return Known::Unknown };
             for &next in edges {
                 if !budget.step() || next as usize >= self.steps.len() { return Known::Unknown }
                 if !seen[next as usize] { pending.push(next) }
@@ -671,39 +771,41 @@ mod tests {
         assert_eq!(graph.reachable(NodeRef::here(2), &Budget::default()), Known::Yes(true));
     }
 
+    /// `graph` with step `step` replaced by `event`.
+    fn with_point(graph: Execution, step: StepId, event: Event) -> Execution {
+        let (entry, mut steps, edges) = graph.into_parts();
+        steps[step as usize].point = Point::Event(Box::new(event));
+        Execution::new(entry, steps, edges)
+    }
+
     fn with_write(graph: Execution, step: StepId) -> Execution {
-        let mut steps = graph.steps;
-        steps[step as usize].point = Point::Event(Event {
+        with_point(graph, step, Event {
             kind: EventKind::Write,
             site: NodeRef::here(step),
             target: Some(Target { value: NodeRef::here(99), binding: Some(NodeRef::here(99)) }),
             value: None,
             written: None,
             phase: Phase::Leave,
-        });
-        Execution::new(graph.entry, steps, graph.edges)
+        })
     }
 
-    fn with_writes(graph: Execution, writes: &[(StepId, u32)]) -> Execution {
-        let mut steps = graph.steps;
+    fn with_writes(mut graph: Execution, writes: &[(StepId, u32)]) -> Execution {
         for &(step, target) in writes {
-            steps[step as usize].point = Point::Event(Event {
+            graph = with_point(graph, step, Event {
                 kind: EventKind::Write, site: NodeRef::here(step),
                 target: Some(Target { value: NodeRef::here(target), binding: Some(NodeRef::here(99)) }),
                 value: None, written: None, phase: Phase::Leave,
             });
         }
-        Execution::new(graph.entry, steps, graph.edges)
+        graph
     }
 
     fn with_read(graph: Execution, step: StepId) -> Execution {
-        let mut steps = graph.steps;
-        steps[step as usize].point = Point::Event(Event {
+        with_point(graph, step, Event {
             kind: EventKind::Read, site: NodeRef::here(step),
             target: Some(Target { value: NodeRef::here(step), binding: Some(NodeRef::here(99)) }),
             value: None, written: None, phase: Phase::Enter,
-        });
-        Execution::new(graph.entry, steps, graph.edges)
+        })
     }
 
     fn read_catalogue(nodes: &[u32]) -> controller::Reads {
@@ -741,12 +843,10 @@ mod tests {
     }
 
     fn with_event(graph: Execution, step: StepId, effect: EffectId) -> Execution {
-        let mut steps = graph.steps;
-        steps[step as usize].point = Point::Event(Event {
+        with_point(graph, step, Event {
             kind: EventKind::Effect(effect), site: NodeRef::here(step),
             target: None, value: None, written: None, phase: Phase::Leave,
-        });
-        Execution::new(graph.entry, steps, graph.edges)
+        })
     }
 
     #[test]
@@ -802,9 +902,7 @@ mod tests {
 
     #[test]
     fn completion_queries_keep_event_paths_and_selected_exits_separate() {
-        let mut graph = with_write(graph(&[&[1, 2], &[3], &[4], &[], &[]]), 1);
-        let Point::Event(event) = &mut graph.steps[1].point else { unreachable!() };
-        event.kind = EventKind::Effect(9);
+        let graph = with_event(graph(&[&[1, 2], &[3], &[4], &[], &[]]), 1, 9);
         let graph = graph.with_completion(vec![3], vec![(4, Exit {
             effect: 7, site: NodeRef::here(4), target: None, value: None,
         })]);
@@ -819,15 +917,11 @@ mod tests {
     #[test]
     fn prior_events_include_children_and_previous_rounds_but_not_the_current_event() {
         for (end, repeated) in [(&[][..], false), (&[0][..], true)] {
-            let mut graph = with_write(graph(&[&[1], &[2], &[3], &[4], end]), 1);
-            let Point::Event(event) = &mut graph.steps[1].point else { unreachable!() };
-            event.kind = EventKind::Effect(9);
-            let event = Event {
+            let graph = with_event(graph(&[&[1], &[2], &[3], &[4], end]), 1, 9);
+            let graph = with_point(graph, 3, Event {
                 kind: EventKind::Effect(9), site: NodeRef::here(0),
                 target: None, value: None, written: None, phase: Phase::Leave,
-            };
-            graph.steps[3].point = Point::Event(event);
-            let graph = Execution::new(graph.entry, graph.steps, graph.edges);
+            });
             assert_eq!(graph.prior_event(NodeRef::here(0), 9, &Budget::default()), Known::Yes(true));
             assert_eq!(graph.prior_event(NodeRef::here(1), 9, &Budget::default()), Known::Yes(repeated));
             assert_eq!(graph.prior_event(NodeRef::here(0), 9, &Budget::new(0)), Known::Unknown);

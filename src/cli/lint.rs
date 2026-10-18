@@ -355,6 +355,12 @@ pub(super) fn prepared(output: &mut Output<'_>, args: LintArgs, project: &mut Pr
         ));
         let phases: Vec<String> = build_phases.iter().map(|(name, time)| format!("{name} {:.1}", time.as_secs_f64() * 1000.0)).collect();
         output.err(format_args!("  config build phases (ms): {}", phases.join(", ")));
+        if crate::alloc::heap::on() {
+            let (owners, peak) = crate::alloc::heap::report();
+            let mib = |bytes: isize| bytes as f64 / 1048576.0;
+            let rows: Vec<String> = owners.iter().map(|(name, at_peak, now)| format!("{name} {:.1} ({:.1} at end)", mib(*at_peak), mib(*now))).collect();
+            output.err(format_args!("  heap at peak {:.1} MiB by owner: {}", mib(peak as isize), rows.join(", ")));
+        }
     }
     // A broken config still lints with what built, but never passes.
     if !*config_ok {

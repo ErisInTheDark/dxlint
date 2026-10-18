@@ -29,6 +29,7 @@ impl State {
 
 impl Narrowing<'_> {
     pub fn refine(&self, at: Leaf, base: NodeValue) -> NodeValue {
+        let _site = self.semantic.world.profile().map(|_| crate::engine::StepSite::enter("narrowing.refine"));
         let Known::Yes(at) = self.semantic.leaf(at) else { return NodeValue::Unknown };
         let refined = self.refine_graph(at, base);
         if self.semantic.question.budget.exhausted() { NodeValue::Unknown } else { refined }
@@ -293,12 +294,10 @@ impl Region<'_> {
                 Known::Unknown => return Known::Unknown,
                 Known::Yes(true) => {}
             }
-            for &site in self.uses {
-                match self.execution.reaches_through(entry, site, self.entries, &writes, budget) {
-                    Known::Yes(true) => return Known::Yes(false),
-                    Known::Unknown => return Known::Unknown,
-                    Known::Yes(false) => {}
-                }
+            match self.execution.reaches_any_through(entry, self.uses, self.entries, &writes, budget) {
+                Known::Yes(true) => return Known::Yes(false),
+                Known::Unknown => return Known::Unknown,
+                Known::Yes(false) => {}
             }
         }
         Known::Yes(true)

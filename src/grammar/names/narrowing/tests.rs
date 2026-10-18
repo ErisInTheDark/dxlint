@@ -7,20 +7,20 @@ fn entry(node: u32) -> Step {
 }
 
 fn field(node: u32) -> Step {
-    Step { node: NodeRef::here(node), point: Point::Field(vec![7]) }
+    Step { node: NodeRef::here(node), point: Point::Field(Box::new([7])) }
 }
 
 fn write(node: u32, binding: u32) -> Step {
     Step {
         node: NodeRef::here(node),
-        point: Point::Event(Event {
+        point: Point::Event(Box::new(Event {
             kind: EventKind::Write,
             site: NodeRef::here(node),
             target: Some(Target { value: NodeRef::here(binding), binding: Some(NodeRef::here(binding)) }),
             value: None,
             written: None,
             phase: Phase::Leave,
-        }),
+        })),
     }
 }
 

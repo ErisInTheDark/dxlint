@@ -136,17 +136,98 @@ fn class(layout: Layout) -> Option<usize> {
     (layout.size() <= SMALL && layout.align() <= QUANTUM).then(|| layout.size().max(1).div_ceil(QUANTUM) - 1)
 }
 
+/// Heap accounting by owner, on when the process starts with
+/// `ZLINT_HEAP_STATS` set (decided at the first allocation, so every block
+/// is accounted or none is): every block carries a 16-byte header naming
+/// the owner live at its allocation, so a free subtracts from that owner.
+pub mod heap {
+    use std::cell::Cell;
+    use std::sync::atomic::{AtomicIsize, AtomicU8, AtomicUsize, Ordering};
+
+    pub const OWNERS: [&str; 6] = ["other", "units", "names", "semantic", "effects", "rules"];
+    pub const UNITS: usize = 1;
+    pub const NAMES: usize = 2;
+    pub const SEMANTIC: usize = 3;
+    pub const EFFECTS: usize = 4;
+    pub const RULES: usize = 5;
+    /// 0 undecided, 1 off, 2 on.
+    static MODE: AtomicU8 = AtomicU8::new(0);
+    static LIVE: [AtomicIsize; 6] = [const { AtomicIsize::new(0) }; 6];
+    static TOTAL: AtomicIsize = AtomicIsize::new(0);
+    static PEAK: AtomicUsize = AtomicUsize::new(0);
+    /// [`LIVE`] when [`PEAK`] was last raised.
+    static AT_PEAK: [AtomicIsize; 6] = [const { AtomicIsize::new(0) }; 6];
+
+    thread_local! {
+        static OWNER: Cell<u8> = const { Cell::new(0) };
+    }
+
+    #[cfg(windows)]
+    extern "system" {
+        fn GetEnvironmentVariableA(name: *const u8, buffer: *mut u8, size: u32) -> u32;
+    }
+    #[cfg(not(windows))]
+    extern "C" {
+        fn getenv(name: *const std::ffi::c_char) -> *const std::ffi::c_char;
+    }
+
+    /// Reads the switch without allocating (std's env access would recurse
+    /// into the allocator).
+    fn requested() -> bool {
+        // SAFETY: NUL-terminated names; Windows writes nothing for size 0.
+        #[cfg(windows)]
+        unsafe { GetEnvironmentVariableA(c"ZLINT_HEAP_STATS".as_ptr().cast(), std::ptr::null_mut(), 0) != 0 }
+        #[cfg(not(windows))]
+        unsafe { !getenv(c"ZLINT_HEAP_STATS".as_ptr()).is_null() }
+    }
+
+    pub fn on() -> bool {
+        match MODE.load(Ordering::Relaxed) {
+            0 => {
+                let on = requested();
+                MODE.store(if on { 2 } else { 1 }, Ordering::Relaxed);
+                on
+            }
+            mode => mode == 2,
+        }
+    }
+
+    /// Allocations on this thread count against `owner` until it drops.
+    pub struct Owner(u8);
+    impl Owner {
+        pub fn enter(owner: usize) -> Owner {
+            Owner(OWNER.try_with(|current| current.replace(owner as u8)).unwrap_or(0))
+        }
+    }
+    impl Drop for Owner {
+        fn drop(&mut self) { let _ = OWNER.try_with(|current| current.set(self.0)); }
+    }
+
+    pub(super) fn current() -> u8 { OWNER.try_with(Cell::get).unwrap_or(0) }
+
+    pub(super) fn add(owner: u8, bytes: isize) {
+        LIVE[owner as usize].fetch_add(bytes, Ordering::Relaxed);
+        let total = TOTAL.fetch_add(bytes, Ordering::Relaxed) + bytes;
+        if bytes > 0 && total as usize > PEAK.load(Ordering::Relaxed) {
+            PEAK.store(total as usize, Ordering::Relaxed);
+            for (at, live) in AT_PEAK.iter().zip(&LIVE) { at.store(live.load(Ordering::Relaxed), Ordering::Relaxed) }
+        }
+    }
+
+    /// `(owner, live bytes at the peak, live bytes now)` and the peak.
+    pub fn report() -> (Vec<(&'static str, isize, isize)>, usize) {
+        (OWNERS.iter().enumerate().map(|(index, &name)| (name, AT_PEAK[index].load(Ordering::Relaxed), LIVE[index].load(Ordering::Relaxed))).collect(),
+            PEAK.load(Ordering::Relaxed))
+    }
+}
+
+/// Header for accounted blocks: the owner and the requested size.
+const HEADER: usize = 16;
+
 pub struct Pooled;
 
-// Never inlined: calls to the global allocator carry allocation semantics
-// the optimiser reasons with (calls elided, moved to the stack, returned
-// memory assumed fresh). Release builds with LTO, which could inline these
-// bodies across crates, aborted on a failed small allocation, while builds
-// without LTO did not; the exact interaction was not pinned down. Behind an
-// opaque call the pools are only ever touched by the code below.
-unsafe impl GlobalAlloc for Pooled {
-    #[inline(never)]
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+impl Pooled {
+    unsafe fn raw_alloc(&self, layout: Layout) -> *mut u8 {
         match class(layout) {
             Some(c) => {
                 let owned = owned();
@@ -160,8 +241,60 @@ unsafe impl GlobalAlloc for Pooled {
         }
     }
 
+    unsafe fn raw_dealloc(&self, block: *mut u8, layout: Layout) {
+        match class(layout) {
+            Some(c) => {
+                let owned = owned();
+                // SAFETY: `block` came from `raw_alloc` with this layout, so
+                // from a pool; an owned pool is only touched by its owner.
+                if !owned.is_null() { return unsafe { (*owned).give(c, block) } }
+                unsafe { shard().lock().unwrap_or_else(|e| e.into_inner()).give(c, block) }
+            }
+            // SAFETY: forwarded unchanged.
+            None => unsafe { System.dealloc(block, layout) },
+        }
+    }
+
+    /// The layout an accounted block of `layout` takes (header first).
+    fn accounted(layout: Layout) -> Option<Layout> {
+        if layout.align() > HEADER { return None }
+        Layout::from_size_align(layout.size() + HEADER, HEADER).ok()
+    }
+}
+
+// Never inlined: calls to the global allocator carry allocation semantics
+// the optimiser reasons with (calls elided, moved to the stack, returned
+// memory assumed fresh). Release builds with LTO, which could inline these
+// bodies across crates, aborted on a failed small allocation, while builds
+// without LTO did not; the exact interaction was not pinned down. Behind an
+// opaque call the pools are only ever touched by the code below.
+unsafe impl GlobalAlloc for Pooled {
+    #[inline(never)]
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        if let Some(outer) = Self::accounted(layout).filter(|_| heap::on()) {
+            // SAFETY: the header sits in front of the caller's bytes, inside
+            // the block, which is HEADER-aligned.
+            unsafe {
+                let block = self.raw_alloc(outer);
+                if block.is_null() { return block }
+                let owner = heap::current();
+                *block = owner;
+                heap::add(owner, layout.size() as isize);
+                return block.add(HEADER);
+            }
+        }
+        // SAFETY: forwarded unchanged.
+        unsafe { self.raw_alloc(layout) }
+    }
+
     #[inline(never)]
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+        if heap::on() {
+            // SAFETY: as `alloc`; then zeroed over the requested size.
+            let block = unsafe { self.alloc(layout) };
+            if !block.is_null() { unsafe { block.write_bytes(0, layout.size()) } }
+            return block;
+        }
         match class(layout) {
             Some(_) => {
                 // SAFETY: as `alloc`; then zeroed over the requested size.
@@ -178,17 +311,16 @@ unsafe impl GlobalAlloc for Pooled {
 
     #[inline(never)]
     unsafe fn dealloc(&self, block: *mut u8, layout: Layout) {
-        match class(layout) {
-            Some(c) => {
-                let owned = owned();
-                // SAFETY: `block` came from `alloc` with this layout, so from a
-                // pool; an owned pool is only touched by its owning thread.
-                if !owned.is_null() { return unsafe { (*owned).give(c, block) } }
-                unsafe { shard().lock().unwrap_or_else(|e| e.into_inner()).give(c, block) }
+        if let Some(outer) = Self::accounted(layout).filter(|_| heap::on()) {
+            // SAFETY: accounted blocks start HEADER bytes before `block`.
+            unsafe {
+                let start = block.sub(HEADER);
+                heap::add(*start, -(layout.size() as isize));
+                return self.raw_dealloc(start, outer);
             }
-            // SAFETY: forwarded unchanged.
-            None => unsafe { System.dealloc(block, layout) },
         }
+        // SAFETY: forwarded unchanged.
+        unsafe { self.raw_dealloc(block, layout) }
     }
 
     #[inline(never)]
@@ -196,6 +328,17 @@ unsafe impl GlobalAlloc for Pooled {
         // SAFETY: `layout.align()` is a valid alignment and the caller keeps
         // `new_size` within isize after rounding.
         let new_layout = unsafe { Layout::from_size_align_unchecked(new_size, layout.align()) };
+        if heap::on() {
+            // SAFETY: a fresh accounted block, filled from the old one.
+            unsafe {
+                let moved = self.alloc(new_layout);
+                if !moved.is_null() {
+                    std::ptr::copy_nonoverlapping(block, moved, layout.size().min(new_size));
+                    self.dealloc(block, layout);
+                }
+                return moved;
+            }
+        }
         match (class(layout), class(new_layout)) {
             (Some(a), Some(b)) if a == b => block,
             // SAFETY: both sides use the system allocator.

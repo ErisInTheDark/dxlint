@@ -54,6 +54,8 @@ pub struct Budget {
     left: Cell<u32>,
     depth: Cell<u32>,
     limited: Cell<bool>,
+    /// Whether steps are attributed for `--profile` ([`crate::engine::Profile::count_step`]).
+    traced: Cell<bool>,
     /// The memo write order when the question first hit a limit
     /// (`u64::MAX` while it hasn't): answers memoised before it are
     /// complete.
@@ -77,7 +79,11 @@ impl Budget {
     pub const DEPTH: u32 = 256;
 
     pub fn new(units: u32) -> Budget {
-        Budget { left: Cell::new(units), depth: Cell::new(0), limited: Cell::new(false), cut: Cell::new(u64::MAX) }
+        Budget { left: Cell::new(units), depth: Cell::new(0), limited: Cell::new(false), traced: Cell::new(false), cut: Cell::new(u64::MAX) }
+    }
+
+    pub(crate) fn trace(&self, on: bool) {
+        self.traced.set(on);
     }
 
     fn limit(&self) {
@@ -96,6 +102,7 @@ impl Budget {
 
     /// Spends one unit; `false` when the budget is gone.
     pub fn step(&self) -> bool {
+        if self.traced.get() { crate::engine::Profile::count_step() }
         match self.left.get() {
             0 => { self.limit(); false }
             n => {

@@ -14,6 +14,10 @@ thread_local! {
     /// computations are nested right now (a fact may read another fact).
     static FACT_TIME: Cell<(u64, u32)> = const { Cell::new((0, 0)) };
     static SEMANTIC_QUERY: Cell<Option<&'static str>> = const { Cell::new(None) };
+    /// The innermost engine computation spending budget ([`StepSite`]).
+    static STEP_SITE: Cell<&'static str> = const { Cell::new("") };
+    /// Budget steps by (semantic query, step site), flushed per root.
+    static STEP_COUNTS: RefCell<FxHashMap<(&'static str, &'static str), u64>> = RefCell::new(FxHashMap::default());
     /// Per open self-timed region (outermost first), the time its nested
     /// regions took so far.
     static NESTED_TIME: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
@@ -141,6 +145,8 @@ pub struct Profile {
     /// matcher, and the steps they spent.
     pub cut_root_calls: Vec<AtomicU64>,
     pub cut_root_steps: Vec<AtomicU64>,
+    /// Budget steps by (semantic query, step site) ([`Profile::count_step`]).
+    pub step_sites: Mutex<FxHashMap<(&'static str, &'static str), u64>>,
     /// Per attribute (`let`): reads including memo hits, total and self
     /// time, so a shared let's cost shows on the let, not on whichever
     /// rule read it first.
@@ -263,6 +269,21 @@ impl Drop for SemanticQueryScope {
     }
 }
 
+/// Budget steps taken while held count against `site` (innermost wins).
+pub struct StepSite(&'static str);
+
+impl StepSite {
+    pub fn enter(site: &'static str) -> StepSite {
+        StepSite(STEP_SITE.with(|current| current.replace(site)))
+    }
+}
+
+impl Drop for StepSite {
+    fn drop(&mut self) {
+        STEP_SITE.with(|current| current.set(self.0));
+    }
+}
+
 pub enum EffectBuild {
     Graph,
     ReadCatalogue,
@@ -359,6 +380,7 @@ impl Profile {
             value_calls: counters(matchers),
             cut_root_calls: counters(matchers),
             cut_root_steps: counters(matchers),
+            step_sites: Mutex::default(),
             overlay_nanos: counters(matchers),
             overlay_nodes: counters(matchers),
             rule_nanos: counters(rules),
@@ -472,6 +494,20 @@ impl Profile {
     /// when outermost, against this thread's fact clock.
     pub fn time_fact<T>(&self, fact: usize, compute: impl FnOnce() -> T) -> T {
         shared(&self.fact_nanos[fact], &self.fact_calls[fact], compute)
+    }
+
+    /// One budget step, against the current semantic query and step site.
+    pub fn count_step() {
+        let query = SEMANTIC_QUERY.with(Cell::get).unwrap_or("-");
+        let site = STEP_SITE.with(Cell::get);
+        STEP_COUNTS.with(|counts| *counts.borrow_mut().entry((query, site)).or_default() += 1);
+    }
+
+    /// Moves this thread's step counts into the profile.
+    pub fn flush_steps(&self) {
+        let counts = STEP_COUNTS.with(|counts| std::mem::take(&mut *counts.borrow_mut()));
+        let mut shared = self.step_sites.lock().expect("step sites lock");
+        for (key, steps) in counts { *shared.entry(key).or_default() += steps }
     }
 
     pub fn record_cut_root(&self, matcher: usize, steps: u64) {

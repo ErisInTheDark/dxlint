@@ -121,6 +121,7 @@ impl<'a, 'world> Run<'a, 'world> {
     }
 
     fn run_answer(mut self) -> Answer {
+        let _site = self.values.world.profile().map(|_| crate::engine::StepSite::enter("values.evaluate"));
         while let Some(task) = self.tasks.pop() {
             if !matches!(&task, Task::Profile(_)) && !self.values.question.budget.step() {
                 return Answer::unknown();

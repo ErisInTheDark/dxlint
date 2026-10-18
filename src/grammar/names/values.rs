@@ -291,6 +291,7 @@ impl Values<'_> {
             return Known::Unknown;
         }
         let Some(_entered) = enter() else { return Known::Unknown };
+        let _site = self.world.profile().map(|_| crate::engine::StepSite::enter(std::any::type_name::<(K, T)>()));
         memo.insert(self.semantic.epoch, key.clone(), Known::Unknown);
         state.pending.borrow_mut().push(tag);
         let started = state.cycle_reads.get();

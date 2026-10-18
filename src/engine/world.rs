@@ -932,7 +932,10 @@ impl World for Files<'_> {
             self.0.mark_unknown();
             return None;
         }
-        let names = ctx.names();
+        let names = {
+            let _owner = crate::alloc::heap::Owner::enter(crate::alloc::heap::NAMES);
+            ctx.names()
+        };
         if names.complete { Some(names) } else {
             self.0.mark_unknown();
             None

@@ -118,7 +118,7 @@ impl<S: Source> Builder<'_, S> {
     fn step(&mut self, node: NodeRef, phase: Phase, event: Option<Event>) -> StepId {
         let id = self.steps.len() as StepId;
         let point = match event {
-            Some(event) => Point::Event(event),
+            Some(event) => Point::Event(Box::new(event)),
             None => match phase { Phase::Enter => Point::Enter, Phase::Leave => Point::Leave },
         };
         self.steps.push(Step { node, point });
@@ -199,7 +199,7 @@ impl<S: Source> Builder<'_, S> {
             .chain(at_phase().filter(|effect| effect.control.is_some() && !effect.possible));
         for effect in ordered {
             if !self.question.budget.step() { return None }
-            let at = self.point(node, Point::Event(effect.event.clone()));
+            let at = self.point(node, Point::Event(Box::new(effect.event.clone())));
             let mut before = std::mem::take(&mut fragment.normal);
             self.connect(&before, at);
             if let Some(control) = effect.control {
@@ -357,7 +357,7 @@ impl<S: Source> Builder<'_, S> {
                 }
                 Task::Field { node, path, body, out } => {
                     let mut fragment = self.take(body);
-                    let entry = self.point(node, Point::Field(path));
+                    let entry = self.point(node, Point::Field(path.into()));
                     if let Some(body) = fragment.entry { self.connect(&[entry], body); }
                     fragment.entry = Some(entry);
                     self.slots[out] = Some(fragment);
@@ -471,6 +471,8 @@ impl<S: Source> Builder<'_, S> {
 }
 
 pub fn execution(source: &impl Source, entry: Leaf, question: &QueryContext) -> Known<super::Execution> {
+    let _owner = crate::alloc::heap::Owner::enter(crate::alloc::heap::EFFECTS);
+    let _site = crate::engine::StepSite::enter("effects.build");
     let mut builder = Builder { source, question, steps: Vec::new(), edges: Vec::new(), slots: Vec::new(), tasks: Vec::new() };
     let out = builder.slot();
     builder.tasks.push(Task::Node { node: entry, out });

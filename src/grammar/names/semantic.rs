@@ -59,9 +59,11 @@ pub(crate) struct Session {
 
 impl Session {
     pub(crate) fn run<R>(&self, world: &dyn World, tables: &Names, run: impl FnOnce(&Semantic<'_>) -> Known<R>) -> Known<R> {
+        let _owner = crate::alloc::heap::Owner::enter(crate::alloc::heap::SEMANTIC);
         let revision = world.revision();
         if self.revision.replace(revision) != revision { self.state.replace(Rc::default()); }
         self.question.budget.restart();
+        self.question.budget.trace(world.profile().is_some());
         let epoch = self.epoch.get().next();
         self.epoch.set(epoch);
         let semantic = Semantic { world, tables, question: &self.question, epoch, state: self.state.borrow().clone() };
@@ -72,6 +74,7 @@ impl Session {
                 u64::from(super::question::Budget::DEFAULT),
                 self.question.budget.limited(),
             );
+            profile.flush_steps();
         }
         let failed = self.question.budget.limited();
         let cut = self.question.budget.cut();

@@ -28,7 +28,7 @@ pub use build::{build, build_for_lint, Built};
 pub use diagnostic::{Diagnostic, Edit, Fix, ENGINE_RULE};
 pub use fix::{apply_fixes, Fixed};
 pub use frontend::Stale;
-pub use profile::{EffectBuild, Profile, Query};
+pub use profile::{EffectBuild, Profile, Query, StepSite};
 pub(crate) use profile::ValueEvaluation;
 
 use crate::config::ast::{FixTarget, Report, Severity};
@@ -739,6 +739,7 @@ impl Linter {
 
     /// Runs every active rule on the nodes of `tree` they target.
     fn check_tree<'a>(&'a self, tree: &'a Tree, run: &Run<'a>, programs: &'a program::Snapshot, native: Option<&'a (dyn Native + 'a)>, out: &mut Vec<Diagnostic>) {
+        let _owner = crate::alloc::heap::Owner::enter(crate::alloc::heap::RULES);
         // Nodes run in document order, so a rule's indentation fix of a line
         // is known before it checks the lines below. Per rule: what one rule
         // fixes never changes what another sees, so rules can run apart.

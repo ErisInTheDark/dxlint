@@ -555,6 +555,14 @@ pub fn profile(output: &mut Output<'_>, linter: &Linter, format: super::Format, 
             output.err(format_args!("  {:>11.1} ms {:>11.1} ms self {calls:>11} calls  {CYAN}{name}{CYAN:#}", ms(nanos), ms(own)));
         }
     }
+    let mut sites: Vec<_> = p.step_sites.lock().expect("step sites lock").iter().map(|(&key, &steps)| (steps, key)).collect();
+    sites.sort_by_key(|row| std::cmp::Reverse(row.0));
+    if !sites.is_empty() {
+        output.err(format_args!("\n  {BOLD}budget steps{BOLD:#} {DIM}by semantic query and innermost computation (self), top 30{DIM:#}"));
+        for (steps, (query, site)) in sites.into_iter().take(30) {
+            output.err(format_args!("  {steps:>13} steps  {CYAN}{query}{CYAN:#}  {site}"));
+        }
+    }
     let mut cut: Vec<_> = linter.grammar.matchers.iter().enumerate()
         .map(|(index, matcher)| (Profile::get(&p.cut_root_steps[index]), Profile::get(&p.cut_root_calls[index]), matcher.name.as_str()))
         .filter(|(_, calls, _)| *calls > 0).collect();

@@ -119,6 +119,7 @@ impl Linter {
             return (hash, Some(unit));
         }
         let parse = || -> Option<Arc<Unit>> {
+            let _owner = crate::alloc::heap::Owner::enter(crate::alloc::heap::UNITS);
             let rel = self.relative(path);
             let lang = self.grammar.lang_for(&rel)?;
             let front = self.grammar.natives.iter().position(|front| front.frontend.accepts(path));
