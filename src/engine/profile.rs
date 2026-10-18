@@ -137,6 +137,10 @@ pub struct Profile {
     pub value_nanos: Vec<AtomicU64>,
     pub value_self_nanos: Vec<AtomicU64>,
     pub value_calls: Vec<AtomicU64>,
+    /// Root questions cut short by their budget, by the asking node's
+    /// matcher, and the steps they spent.
+    pub cut_root_calls: Vec<AtomicU64>,
+    pub cut_root_steps: Vec<AtomicU64>,
     /// Per attribute (`let`): reads including memo hits, total and self
     /// time, so a shared let's cost shows on the let, not on whichever
     /// rule read it first.
@@ -353,6 +357,8 @@ impl Profile {
             value_nanos: counters(matchers),
             value_self_nanos: counters(matchers),
             value_calls: counters(matchers),
+            cut_root_calls: counters(matchers),
+            cut_root_steps: counters(matchers),
             overlay_nanos: counters(matchers),
             overlay_nodes: counters(matchers),
             rule_nanos: counters(rules),
@@ -466,6 +472,13 @@ impl Profile {
     /// when outermost, against this thread's fact clock.
     pub fn time_fact<T>(&self, fact: usize, compute: impl FnOnce() -> T) -> T {
         shared(&self.fact_nanos[fact], &self.fact_calls[fact], compute)
+    }
+
+    pub fn record_cut_root(&self, matcher: usize, steps: u64) {
+        if let (Some(calls), Some(spent)) = (self.cut_root_calls.get(matcher), self.cut_root_steps.get(matcher)) {
+            Self::add(calls, 1);
+            Self::add(spent, steps);
+        }
     }
 
     /// Counts a root question cut short by its budget against the semantic

@@ -236,8 +236,16 @@ impl<'a> LintWorld<'a> {
         let at = Leaf { target, frame: FrameId::ROOT };
         let answer = self.semantic.run(&files, &self.ctx.grammar.names, |semantic| {
             let Known::Yes(at) = semantic.leaf(at) else { return Known::Unknown };
-            let Some(_nested) = semantic.question.budget.nest() else { return Known::Unknown };
-            self.evaluating(Some(ActiveQuestion { semantic, at }), uncertainty, || run(semantic, at))
+            let answer = match semantic.question.budget.nest() {
+                Some(_nested) => self.evaluating(Some(ActiveQuestion { semantic, at }), uncertainty, || run(semantic, at)),
+                None => Known::Unknown,
+            };
+            let budget = &semantic.question.budget;
+            if let (Some(profile), true, Some(tree)) = (self.ctx.profile, budget.limited(), World::tree(&files, file)) {
+                let used = u64::from(crate::grammar::names::question::Budget::DEFAULT - budget.remaining());
+                profile.record_cut_root(tree.node(node).matcher as usize, used);
+            }
+            answer
         });
         if matches!(answer, Known::Unknown) { self.mark_unknown(); }
         answer
