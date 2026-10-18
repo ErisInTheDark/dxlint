@@ -56,9 +56,12 @@ pub(super) fn candidates(call: Leaf, values: &Values<'_>) -> Answer {
 /// whether one was.
 fn pass(set: &[Header], call: Leaf, arguments: &[Leaf], receiver: Option<&NodeValue>, exact: bool, values: &Values<'_>) -> Known<(Vec<Known<Candidate>>, bool)> {
     let mut group = Vec::new();
+    // A lone overload is the call's contract whether or not its arguments
+    // fit (`selection`, `outputs`), so nothing reads its compatibility.
+    let decide = set.len() > 1;
     for &header in set {
         if !values.question.budget.step() { return Known::Unknown }
-        let candidate = candidate(header, call, arguments, receiver, exact, values);
+        let candidate = candidate(header, call, arguments, receiver, exact, decide, values);
         let proven = matches!(&candidate, Known::Yes(candidate) if candidate.compatible == Known::Yes(true));
         group.push(candidate);
         if proven { return Known::Yes((group, true)) }
@@ -202,7 +205,9 @@ fn agreement(group: &[Known<Candidate>], values: &Values<'_>) -> Known<NodeValue
     agreed.map_or(Known::Unknown, Known::Yes)
 }
 
-fn candidate(header: Header, call: Leaf, arguments: &[Leaf], receiver: Option<&NodeValue>, exact: bool, values: &Values<'_>) -> Known<Candidate> {
+/// One overload against the call's arguments; `decide`: whether its
+/// compatibility is asked (else it stays unknown, unchecked).
+fn candidate(header: Header, call: Leaf, arguments: &[Leaf], receiver: Option<&NodeValue>, exact: bool, decide: bool, values: &Values<'_>) -> Known<Candidate> {
     let declaration = header;
     let Some(owner) = node(header.site, values) else { return Known::Unknown };
     let Some(kind) = kind(header.site, values) else { return Known::Unknown };
@@ -234,9 +239,9 @@ fn candidate(header: Header, call: Leaf, arguments: &[Leaf], receiver: Option<&N
     let header = Header { site: Leaf { frame, ..header.site }, ..header };
     let Known::Yes(parameters) = values.follow(header.site, &signature.item.parameters) else { return Known::Unknown };
     let mut mapping = Vec::new();
-    let mut compatible = Known::Yes(true);
+    let mut compatible = if decide { Known::Yes(true) } else { Known::Unknown };
     // A declared receiver must accept the one the call passes.
-    if let Some(receiver) = receiver {
+    if let Some(receiver) = receiver.filter(|_| decide) {
         let answer = match values.calls().receiver(header) {
             Known::Yes(Some(declared)) => values.calls().accepts(&values.values(declared), receiver),
             Known::Yes(None) => Known::Yes(true),
@@ -265,7 +270,7 @@ fn candidate(header: Header, call: Leaf, arguments: &[Leaf], receiver: Option<&N
             captured.push(actual);
         }
         mapping.push((parameter, captured));
-        if actuals.is_empty() && !is_rest {
+        if decide && actuals.is_empty() && !is_rest {
             match values.optional(parameter) {
                 Known::Yes(false) => compatible = Known::Yes(false),
                 Known::Unknown if compatible != Known::Yes(false) => compatible = Known::Unknown,
@@ -273,7 +278,7 @@ fn candidate(header: Header, call: Leaf, arguments: &[Leaf], receiver: Option<&N
             }
         }
         // Inferred parameters are checked once instantiated.
-        if needs_inference { continue }
+        if needs_inference || !decide { continue }
         for (offset, &actual) in actuals.iter().enumerate() {
             let expected = if is_rest {
                 values.member(&values.values(parameter), &Key::Ordinal(offset as u32))
@@ -293,7 +298,7 @@ fn candidate(header: Header, call: Leaf, arguments: &[Leaf], receiver: Option<&N
             }
         }
     }
-    if !has_rest && arguments.len() > parameters.len() {
+    if decide && !has_rest && arguments.len() > parameters.len() {
         compatible = Known::Yes(false);
     }
     let header = if formals.is_empty() {
