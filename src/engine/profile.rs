@@ -184,6 +184,8 @@ pub struct Profile {
     pub semantic_budget_steps_total: AtomicU64,
     pub semantic_budget_steps_max: AtomicU64,
     pub semantic_budget_steps_over_half: AtomicU64,
+    /// Steps spent in root questions their budget cut short.
+    pub semantic_budget_steps_limited: AtomicU64,
     pub semantic_state_discards: AtomicU64,
     pub semantic_memo_discards: AtomicU64,
     pub program_catalogue_builds: AtomicU64,
@@ -540,8 +542,9 @@ impl Profile {
         timed(&self.module_plans_nanos, &self.module_plans_calls, run)
     }
 
-    pub fn record_semantic_budget(&self, used: u64, limit: u64) {
+    pub fn record_semantic_budget(&self, used: u64, limit: u64, limited: bool) {
         Self::add(&self.semantic_budget_steps_total, used);
+        if limited { Self::add(&self.semantic_budget_steps_limited, used); }
         self.semantic_budget_steps_max.fetch_max(used, Ordering::Relaxed);
         if used > limit / 2 { Self::add(&self.semantic_budget_steps_over_half, 1); }
     }

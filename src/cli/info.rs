@@ -482,8 +482,9 @@ pub fn profile(output: &mut Output<'_>, linter: &Linter, format: super::Format, 
         Profile::get(&p.semantic_memo_discards)
     ));
     output.err(format_args!(
-        "  semantic budget: {} steps total, {} max per root question, {} questions over half budget",
+        "  semantic budget: {} steps total ({} in roots cut short), {} max per root question, {} questions over half budget",
         Profile::get(&p.semantic_budget_steps_total),
+        Profile::get(&p.semantic_budget_steps_limited),
         Profile::get(&p.semantic_budget_steps_max),
         Profile::get(&p.semantic_budget_steps_over_half)
     ));

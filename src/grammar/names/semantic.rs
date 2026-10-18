@@ -70,6 +70,7 @@ impl Session {
             profile.record_semantic_budget(
                 u64::from(super::question::Budget::DEFAULT - self.question.budget.remaining()),
                 u64::from(super::question::Budget::DEFAULT),
+                self.question.budget.limited(),
             );
         }
         let failed = self.question.budget.limited();
