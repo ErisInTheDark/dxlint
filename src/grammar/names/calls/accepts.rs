@@ -264,6 +264,7 @@ impl<'a, 'world> Run<'a, 'world> {
                 Known::Yes(None) => {}
                 Known::Unknown => return Known::Unknown,
             }
+            if !self.positions.is_empty() && self.related_arguments(*expected, *actual) { return Known::Yes(true) }
         }
         // Merged declarations make one row of several leaves: pair them up.
         if self.positions.is_empty() && !expected.is_empty() && expected.len() == actual.len()
@@ -328,6 +329,22 @@ impl<'a, 'world> Run<'a, 'world> {
             Known::Unknown => unknown = true,
         }
         if unknown || !described { Known::Unknown } else { Known::Yes(true) }
+    }
+
+    /// Two instantiations of one generic declaration, inferred from their
+    /// type arguments pair by pair (TypeScript's inference from type
+    /// arguments) instead of their whole member structure. False (with the
+    /// captures as they were) when a pair doesn't relate: the structure
+    /// decides then.
+    fn related_arguments(&mut self, expected: Leaf, actual: Leaf) -> bool {
+        let values = self.values;
+        if matches!(expected.target, Target::Modified(_)) || matches!(actual.target, Target::Modified(_)) { return false }
+        let (Known::Yes(Some(left)), Known::Yes(Some(right))) = (values.carrier(expected), values.carrier(actual)) else { return false };
+        if left.declaration != right.declaration || left.arguments.is_empty() || left.arguments.len() != right.arguments.len() { return false }
+        let saved = self.candidates.clone();
+        let related = left.arguments.iter().zip(&right.arguments).all(|(left, right)| self.relate(left, right) == Known::Yes(true));
+        if !related { self.candidates = saved }
+        related
     }
 
     /// Whether both are instances of the same generic declaration with

@@ -1,0 +1,3 @@
+input.ts:1:15-1:19 element-narrowing#0 false
+input.ts:2:5-2:6 element-narrowing#0 false
+input.ts:8:7-8:11 element-narrowing#0 false

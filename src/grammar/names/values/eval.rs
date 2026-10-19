@@ -176,6 +176,18 @@ impl<'a, 'world> Run<'a, 'world> {
     /// Starts evaluating canonical `leaf`, which has no kept value.
     fn evaluate_leaf(&mut self, leaf: Leaf) {
         let state = &self.values.semantic.values;
+        // A node already being evaluated many times further out, each time
+        // in another frame, is regressing (narrowing a read re-reads the
+        // same read through a fresh frame), as TypeScript stops excessively
+        // deep instantiation: answer unknown instead of nesting until the
+        // budget runs out. Real nesting of one declaration (`Readonly<
+        // Readonly<T>>`) stays well below the limit.
+        const NESTING: usize = 8;
+        if state.evaluating.borrow().iter().filter(|(active, _)| active.target == leaf.target).nth(NESTING - 1).is_some() {
+            state.cycle_reads.set(state.cycle_reads.get() + 1);
+            self.answers.push(Answer::unknown());
+            return;
+        }
         state.values.insert(self.values.semantic.epoch, leaf, NodeValue::Unknown);
         state.evaluating.borrow_mut().push((leaf, state.cycle_reads.get()));
         let Target::Node(_) = leaf.target else {

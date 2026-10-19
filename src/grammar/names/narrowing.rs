@@ -66,7 +66,7 @@ impl Narrowing<'_> {
     }
 
     fn refine_graph(&self, at: Leaf, mut base: NodeValue) -> NodeValue {
-        let Known::Yes((subject, written)) = self.find_place(at, true) else { return base };
+        let Known::Yes((subject, written)) = self.find_place(at, true, true) else { return base };
         let effects = self.semantic.effects();
         let Known::Yes(entry) = effects.entry_for(at) else { return base };
         // No guard that can reach this read tests its binding, and no write
@@ -323,6 +323,13 @@ impl Narrowing<'_> {
         if event.kind != EventKind::Write || event.phase != Phase::Leave { return false }
         let Some(target) = event.target else { return true };
         let at = Leaf { target: Target::Node(target.value), frame };
+        // Another binding, or a path longer than the tested one, can't
+        // replace it whatever its keys are: decided before evaluating any
+        // computed key (`input.cells[z * size + x] = ...` would type `z`,
+        // whose reads narrow through these same writes).
+        if let Known::Yes((shape, _)) = self.find_place(at, false, false) {
+            if shape.root != tested.root || shape.path.len() > tested.path.len() { return false }
+        }
         match self.written_place(at) {
             Known::Yes(written) => written.invalidates(tested),
             Known::Unknown => true,
@@ -353,7 +360,7 @@ impl Narrowing<'_> {
     /// The binding and member path `at` names; a parameter read through its
     /// call is followed to the argument it was bound to.
     fn place(&self, at: Leaf) -> Known<Place> {
-        self.find_place(at, true).map(|(place, _)| place)
+        self.find_place(at, true, true).map(|(place, _)| place)
     }
 
     /// The binding a write replaces: lexical, never through a call's
@@ -362,12 +369,24 @@ impl Narrowing<'_> {
     fn written_place(&self, at: Leaf) -> Known<Place> {
         let Known::Yes(at) = self.semantic.leaf(at) else { return Known::Unknown };
         self.semantic.values().memoized(&self.semantic.narrowing_places.written, at,
-            || self.find_place(at, false).map(|(place, _)| place))
+            || self.find_place(at, false, true).map(|(place, _)| place))
+    }
+
+    /// Whether the key expression `key` (of an element access at `at`) is a
+    /// binding nothing in its file writes.
+    fn constant_key(&self, at: Leaf, key: &Value) -> bool {
+        let Known::Yes(sites) = self.semantic.values().sites(at, key) else { return false };
+        let [site] = sites.as_slice() else { return false };
+        let Known::Yes((place, _)) = self.find_place(*site, false, false) else { return false };
+        place.path.is_empty() && self.semantic.effects()
+            .unwritten(place.root, &|target| self.writes_binding(target, place.root)) == Known::Yes(true)
     }
 
     /// The place `at` names (through call arguments when asked) and the
-    /// lexical place a write there replaces: one walk for both.
-    fn find_place(&self, mut at: Leaf, through_arguments: bool) -> Known<(Place, Place)> {
+    /// lexical place a write there replaces: one walk for both. Without
+    /// `keys`, computed keys are not evaluated: the path only has the
+    /// right length (each key stands as any key).
+    fn find_place(&self, mut at: Leaf, through_arguments: bool, keys: bool) -> Known<(Place, Place)> {
         let values = self.semantic.values();
         let mut path = Vec::new();
         let mut lexical = None;
@@ -433,8 +452,17 @@ impl Narrowing<'_> {
             let Known::Yes(sites) = values.sites(at, source) else { return Known::Unknown };
             let [next] = sites.as_slice() else { return Known::Unknown };
             if let Some(key) = key {
-                let Known::Yes(key) = values.key(at, key) else { return Known::Unknown };
-                path.push(key);
+                if keys {
+                    let Known::Yes(found) = values.key(at, key) else { return Known::Unknown };
+                    // A read through a wide key names one place only while
+                    // the key can't change (TypeScript narrows `obj[key]`
+                    // for a constant `key` only): `text[i]` with a
+                    // reassigned `i` is not narrowed.
+                    if through_arguments && matches!(found, Key::Domain(_)) && !self.constant_key(at, key) { return Known::Unknown }
+                    path.push(found);
+                } else {
+                    path.push(Key::Domain(crate::config::ast::values::KeyDomain::Text));
+                }
             }
             at = *next;
         }

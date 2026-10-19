@@ -1,0 +1,10 @@
+import .ts
+
+# `text[i]` with a wide key names no one place: `i` changes between the
+# guards, so neither guard narrows the read (never `never`).
+in ts_declarator rule element-narrowing {
+  let read init.node
+  report at name.node
+  info "{ read always object && !(read could object) }"
+}
+rule element-narrowing
