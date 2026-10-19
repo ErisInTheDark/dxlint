@@ -69,16 +69,28 @@ impl Narrowing<'_> {
         let Known::Yes((subject, written)) = self.find_place(at, true) else { return base };
         let effects = self.semantic.effects();
         let Known::Yes(entry) = effects.entry_for(at) else { return base };
-        // A lone declared alternative no write changes, and no guard that can
-        // reach this read tests its binding: nothing can narrow it, so no
-        // flow graph. A guard reaches it from inside the read's own body, or
-        // around the read (a closure created in the guarded region).
-        if !matches!(&base, NodeValue::Alternatives(rows) if rows.len() > 1) {
-            if let (Target::Node(read), Target::Node(root), Target::Node(body)) = (at.target, written.root.target, entry.target) {
-                if let Some(roots) = self.tested_roots(read.file) {
-                    let reaches = |&owner: &u32| body.file != read.file
-                        || self.within(owner, body.node, read.file) || self.within(read.node, owner, read.file);
-                    if !roots.get(&root).is_some_and(|owners| owners.iter().any(reaches)) { return base }
+        // No guard that can reach this read tests its binding, and no write
+        // can change it (a lone declared alternative is what any write picks;
+        // a binding the file never writes keeps every alternative): nothing
+        // can narrow it, so no flow graph. A guard can reach a read inside
+        // the body the guard runs in (its own statements, early exits, and
+        // closures created there).
+        if let (Target::Node(read), Target::Node(root), Target::Node(body)) = (at.target, written.root.target, entry.target) {
+            if let Some(roots) = self.tested_roots(read.file) {
+                let reaches = |&owner: &u32| {
+                    if body.file != read.file || self.within(owner, body.node, read.file) { return true }
+                    let guard = Leaf { target: Target::Node(NodeRef { file: read.file, node: owner }), frame: at.frame };
+                    match effects.entry_for(guard) {
+                        Known::Yes(Leaf { target: Target::Node(runs_in), .. }) => runs_in.file != read.file || self.within(read.node, runs_in.node, read.file),
+                        _ => true,
+                    }
+                };
+                if !roots.get(&root).is_some_and(|owners| owners.iter().any(reaches)) {
+                    let lone = !matches!(&base, NodeValue::Alternatives(rows) if rows.len() > 1);
+                    if lone || (subject.path.is_empty() && written.path.is_empty()
+                        && effects.unwritten(written.root, &|target| self.writes_binding(target, written.root)) == Known::Yes(true)) {
+                        return base;
+                    }
                 }
             }
         }
