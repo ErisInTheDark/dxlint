@@ -2,7 +2,7 @@
 //! (docs/design/type-layers.md). Owner: Violet.
 
 use super::memo::{Epoch, Memo};
-use super::question::{Known, Leaf, NodeRef, NodeValue, Target};
+use super::question::{FrameId, Known, Leaf, NodeRef, NodeValue, Target};
 use super::semantic::Semantic;
 use super::Value;
 
@@ -314,6 +314,11 @@ impl Values<'_> {
     pub fn fits(&self, leaf: Leaf, trait_id: u16) -> Known<bool> {
         let Known::Yes(leaf) = self.semantic.leaf(leaf) else { return Known::Unknown };
         if let Some(answer) = self.fixed_trait(leaf, trait_id) { return answer }
+        // A scope's fits are what its declaration declares: one answer for
+        // every instantiation (frame) of it.
+        if matches!(leaf.target, Target::Scope(_)) && leaf.frame != FrameId::ROOT {
+            return self.fits(Leaf { frame: FrameId::ROOT, ..leaf }, trait_id);
+        }
         self.memoized_with(&self.semantic.values.traits, (leaf, trait_id),
             || (trait_id < 64 && self.question.budget.step()).then_some(()), || self.direct_trait(leaf, trait_id))
     }
@@ -327,19 +332,31 @@ impl Values<'_> {
         if trait_id >= 64 { return None }
         match leaf.target {
             Target::Traits(bits) => Some(Known::Yes(bits & (1 << trait_id) != 0)),
-            Target::Node(node) => {
-                let data = self.world.tree(node.file)?.nodes.get(node.node as usize)?;
-                let Some(kind) = self.tables.kinds.get(data.matcher as usize) else { return Some(Known::Yes(false)) };
-                let mut declared = false;
-                for &(bits, views, when) in &kind.fits {
-                    if bits & (1 << trait_id) == 0 { continue }
-                    if views == 0 && when.is_none() { return Some(Known::Yes(true)) }
-                    declared = true;
-                }
-                (!declared && kind.open_fits.is_empty()).then_some(Known::Yes(false))
+            Target::Node(node) => self.fixed_fits(node, None, trait_id),
+            // A scope's fits are its owner's, filtered by the scope's classes.
+            Target::Scope(scope) => {
+                let info = self.world.names(scope.file)?.scopes.get(scope.scope as usize)?;
+                self.fixed_fits(NodeRef { file: scope.file, node: info.node }, Some(info.classes), trait_id)
             }
             _ => None,
         }
+    }
+
+    /// [`Self::direct_fits`] where no condition decides: a fit applying
+    /// without one, or no fit (nor open fit) applying at all. View-filtered
+    /// fits apply only to a scope whose `classes` meet their views.
+    fn fixed_fits(&self, node: NodeRef, classes: Option<u64>, trait_id: u16) -> Option<Known<bool>> {
+        let data = self.world.tree(node.file)?.nodes.get(node.node as usize)?;
+        let Some(kind) = self.tables.kinds.get(data.matcher as usize) else { return Some(Known::Yes(false)) };
+        let applies = |views: u64| views == 0 || classes.is_some_and(|classes| classes & views != 0);
+        let mut declared = false;
+        for &(bits, views, when) in &kind.fits {
+            if bits & (1 << trait_id) == 0 || !applies(views) { continue }
+            if when.is_none() { return Some(Known::Yes(true)) }
+            declared = true;
+        }
+        let open = kind.open_fits.iter().any(|&(views, _)| applies(views));
+        (!declared && !open).then_some(Known::Yes(false))
     }
 
     fn direct_trait(&self, leaf: Leaf, trait_id: u16) -> Known<bool> {

@@ -27,6 +27,9 @@ pub(crate) struct State {
     /// Per execution entry, region entry steps and tested place: the steps
     /// a write to the place reaches inside the region ([`Region::valid`]).
     written_through: super::memo::Memo<(Leaf, Box<[super::effects::StepId]>, Place), std::rc::Rc<[u64]>>,
+    /// Per file, the binding roots its guards' proofs can test
+    /// ([`Narrowing::tested_roots`]); `None` when they can't be told.
+    tested: super::memo::Memo<u32, Option<std::rc::Rc<crate::fx_hash::FxHashSet<NodeRef>>>>,
 }
 
 /// One `in <field> propagates <proof>` item that holds at its owner.
@@ -45,6 +48,7 @@ impl State {
             + self.candidates.finish(epoch, failed, cut, |_| true)
             + self.guards.finish(epoch, failed, cut, |_| true)
             + self.written_through.finish(epoch, failed, cut, |_| true)
+            + self.tested.finish(epoch, failed, cut, |_| true)
     }
 }
 
@@ -58,6 +62,13 @@ impl Narrowing<'_> {
 
     fn refine_graph(&self, at: Leaf, mut base: NodeValue) -> NodeValue {
         let Known::Yes((subject, written)) = self.find_place(at, true) else { return base };
+        // A lone declared alternative no write changes, and no guard in the
+        // file tests this binding: nothing can narrow it, so no flow graph.
+        if !matches!(&base, NodeValue::Alternatives(rows) if rows.len() > 1) {
+            if let (Target::Node(read), Target::Node(root)) = (at.target, written.root.target) {
+                if self.tested_roots(read.file).is_some_and(|roots| !roots.contains(&root)) { return base }
+            }
+        }
         let effects = self.semantic.effects();
         let Known::Yes(entry) = effects.entry_for(at) else { return base };
         let mut contexts = vec![(entry, at)];
@@ -144,6 +155,63 @@ impl Narrowing<'_> {
         let guards: std::rc::Rc<[Guard]> = guards.into();
         memo.insert(self.semantic.epoch, entry, guards.clone());
         Some(guards)
+    }
+
+    /// The lexical binding roots any guard in `file` can test: the roots of
+    /// every name inside the sites its `propagates` proofs read, found once
+    /// per file from syntax and names. `None` when a proof can't be followed.
+    fn tested_roots(&self, file: u32) -> Option<std::rc::Rc<crate::fx_hash::FxHashSet<NodeRef>>> {
+        let memo = &self.semantic.narrowing_places.tested;
+        if let Some(roots) = memo.get(&file) { return roots }
+        let roots = self.collect_tested_roots(file).map(std::rc::Rc::new);
+        if self.semantic.question.budget.exhausted() { return None }
+        memo.insert(self.semantic.epoch, file, roots.clone());
+        roots
+    }
+
+    fn collect_tested_roots(&self, file: u32) -> Option<crate::fx_hash::FxHashSet<NodeRef>> {
+        let tree = self.semantic.world.tree(file)?;
+        let names = self.semantic.world.names(file)?;
+        let values = self.semantic.values();
+        let mut roots = crate::fx_hash::FxHashSet::default();
+        let mut paths = Vec::new();
+        for (id, data) in tree.nodes.iter().enumerate() {
+            let Some(kind) = self.semantic.tables.kinds.get(data.matcher as usize) else { continue };
+            if kind.propagates.is_empty() { continue }
+            let owner = Leaf { target: Target::Node(NodeRef { file, node: id as u32 }), frame: super::question::FrameId::ROOT };
+            for (_, proof, _) in &kind.propagates {
+                paths.clear();
+                if !proof_paths(proof, &mut paths) { return None }
+                for path in &paths {
+                    let Known::Yes(sites) = values.follow(owner, path) else { return None };
+                    for site in sites {
+                        let Target::Node(site) = site.target else { return None };
+                        if site.file != file { return None }
+                        let mut pending = vec![site.node];
+                        while let Some(node) = pending.pop() {
+                            let named = names.merged.contains_key(&node) || names.declaration.contains_key(&node)
+                                || names.declared.contains_key(&node);
+                            if named {
+                                let at = Leaf { target: Target::Node(NodeRef { file, node }), frame: super::question::FrameId::ROOT };
+                                match self.written_place(at) {
+                                    Known::Yes(place) => match place.root.target {
+                                        Target::Node(root) => { roots.insert(root); }
+                                        _ => return None,
+                                    },
+                                    // A name that names no place tests none.
+                                    Known::Unknown if !self.semantic.question.budget.exhausted() => {}
+                                    Known::Unknown => return None,
+                                }
+                            }
+                            if let Some(data) = tree.nodes.get(node as usize) {
+                                pending.extend(data.children.iter().map(|edge| edge.node));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Some(roots)
     }
 
     /// Every node entered in `execution` whose kind propagates guards, once
@@ -336,6 +404,19 @@ impl Narrowing<'_> {
             }
             at = *next;
         }
+    }
+}
+
+/// The field paths a `propagates` proof reads its tested sites through;
+/// false for a proof shape whose sites can't be told from paths.
+fn proof_paths<'a>(proof: &'a Value, paths: &mut Vec<&'a [u16]>) -> bool {
+    match proof {
+        Value::Path(path) => { paths.push(path); true }
+        Value::Not(inner) => proof_paths(inner, paths),
+        Value::Union(parts) | Value::Intersection(parts) => parts.iter().all(|part| proof_paths(part, paths)),
+        Value::Excludes { from: Some(from), .. } | Value::Includes { from: Some(from), .. } | Value::Has { from: Some(from), .. } =>
+            proof_paths(from, paths),
+        _ => false,
     }
 }
 

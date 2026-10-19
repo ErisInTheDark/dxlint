@@ -116,18 +116,37 @@ impl<'a> Semantic<'a> {
     }
 
     /// The innermost frame in `frame`'s chain that can matter to `node`: one
-    /// instantiating a declaration of the node's own file. Formals are only
-    /// visible in their own file, so frames of other files' owners bind
-    /// nothing the node reads; dropping them keeps one memo entry per node
-    /// (library types especially) instead of one per unrelated instantiation.
-    /// Owners in the same file are kept: their formals may be declared
-    /// around the owner (a constructor instantiates its class's parameters).
+    /// whose owner's formals `node` can see. Formals are visible only inside
+    /// the declarations (around the owner) that declare generics, so frames
+    /// of owners elsewhere bind nothing the node reads; dropping
+    /// them keeps one memo entry per node (enum members, literals, library
+    /// types) instead of one per unrelated instantiation.
     fn relevant_frame(&self, mut frame: super::question::FrameId, node: NodeRef) -> super::question::FrameId {
         while let Some(binding) = self.question.get(frame) {
-            if binding.owner.file == node.file { return frame }
+            if binding.owner.file == node.file && self.sees_formals(binding.owner, node) { return frame }
             frame = binding.parent;
         }
         frame
+    }
+
+    /// Whether `node` lies inside the outermost ancestor-or-self of `owner`
+    /// declaring generics: the owner's formals may be declared by an
+    /// enclosing declaration (a constructor instantiates its class's
+    /// parameters). True when there is none.
+    fn sees_formals(&self, owner: NodeRef, node: NodeRef) -> bool {
+        let Some(tree) = self.world.tree(owner.file) else { return true };
+        let mut scope = None;
+        let mut cursor = Some(owner.node);
+        while let Some(id) = cursor {
+            let declares = tree.nodes.get(id as usize)
+                .and_then(|data| self.tables.kinds.get(data.matcher as usize))
+                .is_some_and(|kind| !kind.generics.is_empty());
+            if declares { scope = Some(id) }
+            cursor = tree.parent(id);
+        }
+        let Some(scope) = scope else { return true };
+        let (Some(outer), Some(inner)) = (tree.nodes.get(scope as usize), tree.nodes.get(node.node as usize)) else { return true };
+        outer.start <= inner.start && inner.end <= outer.end
     }
 
     pub fn parent(&self, at: Leaf) -> Known<Option<Leaf>> {
