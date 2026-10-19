@@ -24,6 +24,9 @@ pub(crate) struct State {
     candidates: super::memo::Memo<(Leaf, Place), std::rc::Rc<[super::effects::StepId]>>,
     /// Per execution entry, its applicable guards ([`Narrowing::guards`]).
     guards: super::memo::Memo<Leaf, std::rc::Rc<[Guard]>>,
+    /// Per execution entry, region entry steps and tested place: the steps
+    /// a write to the place reaches inside the region ([`Region::valid`]).
+    written_through: super::memo::Memo<(Leaf, Box<[super::effects::StepId]>, Place), std::rc::Rc<[u64]>>,
 }
 
 /// One `in <field> propagates <proof>` item that holds at its owner.
@@ -41,6 +44,7 @@ impl State {
         self.written.finish(epoch, failed, cut, super::memo::Settled::settled)
             + self.candidates.finish(epoch, failed, cut, |_| true)
             + self.guards.finish(epoch, failed, cut, |_| true)
+            + self.written_through.finish(epoch, failed, cut, |_| true)
     }
 }
 
@@ -100,12 +104,13 @@ impl Narrowing<'_> {
             base = self.assigned(written, &execution, entry, &uses, base);
         }
         let Some(guards) = self.guards(&execution, entry) else { return NodeValue::Unknown };
+        let _site = self.semantic.world.profile().map(|_| crate::engine::StepSite::enter("narrowing.guards"));
         for guard in guards.iter() {
             if !self.semantic.question.budget.step() { return NodeValue::Unknown }
             let entries = execution.field_entries(guard.node, &guard.path);
             if execution.guarded(&uses, entries, &self.semantic.question.budget) == Known::Yes(true) {
                 let Some((_, proof, _)) = self.kind(guard.node).and_then(|kind| kind.propagates.get(guard.item)) else { continue };
-                let region = Region { execution: &execution, entries, uses: &uses, frame: entry.frame, captured };
+                let region = Region { execution: &execution, entry, entries, uses: &uses, captured };
                 base = self.apply_in(guard.owner, proof, subject, base, Some(&region));
             }
             if self.semantic.question.budget.exhausted() { return NodeValue::Unknown }
@@ -184,9 +189,12 @@ impl Narrowing<'_> {
     }
 
     fn assigned(&self, subject: &Place, execution: &Execution, entry: Leaf, uses: &[StepId], base: NodeValue) -> NodeValue {
+        let _site = self.semantic.world.profile().map(|_| crate::engine::StepSite::enter("narrowing.assigned"));
         let budget = &self.semantic.question.budget;
         let frame = entry.frame;
         let Some(candidates) = self.write_candidates(subject, execution, entry) else { return NodeValue::Unknown };
+        // Unwritten in the body: the entry reaches every use without a write.
+        if candidates.is_empty() { return base }
         let Known::Yes(Some(last)) = execution.last_steps(uses, &candidates, budget) else { return base };
         let values = self.semantic.values();
         let mut alternatives = Vec::new();
@@ -329,30 +337,45 @@ impl Narrowing<'_> {
 
 struct Region<'a> {
     execution: &'a Execution,
+    /// The execution's entry (its frame is the region's).
+    entry: Leaf,
     entries: &'a [StepId],
     uses: &'a [StepId],
-    frame: super::question::FrameId,
     captured: bool,
 }
 
 impl Region<'_> {
     fn valid(&self, narrowing: &Narrowing<'_>, tested: &Place) -> Known<bool> {
+        let _site = narrowing.semantic.world.profile().map(|_| crate::engine::StepSite::enter("narrowing.valid"));
         if self.captured && !tested.path.is_empty() { return Known::Yes(false) }
-        let writes = |event: &Event| narrowing.write_invalidates(event, tested, self.frame);
+        // Nothing in the body writes the tested place: no path can.
+        let Some(candidates) = narrowing.write_candidates(tested, self.execution, self.entry) else { return Known::Unknown };
         let budget = &narrowing.semantic.question.budget;
+        let mut starts = Vec::new();
         for &entry in self.entries {
             match self.execution.reached(entry, budget) {
-                Known::Yes(false) => continue,
-                Known::Unknown => return Known::Unknown,
-                Known::Yes(true) => {}
-            }
-            match self.execution.reaches_any_through(entry, self.uses, self.entries, &writes, budget) {
-                Known::Yes(true) => return Known::Yes(false),
-                Known::Unknown => return Known::Unknown,
                 Known::Yes(false) => {}
+                Known::Unknown => return Known::Unknown,
+                Known::Yes(true) => starts.push(entry),
             }
         }
-        Known::Yes(true)
+        if candidates.is_empty() || starts.is_empty() { return Known::Yes(true) }
+        // The steps a write reaches inside the region, once per region and
+        // tested place: every read there checks its own steps.
+        let memo = &narrowing.semantic.narrowing_places.written_through;
+        let key = (self.entry, Box::<[StepId]>::from(self.entries), tested.clone());
+        let reached = match memo.get(&key) {
+            Some(reached) => reached,
+            None => {
+                let writes = |event: &Event| narrowing.write_invalidates(event, tested, self.entry.frame);
+                let Known::Yes(reached) = self.execution.reached_through(&starts, self.entries, writes, budget) else { return Known::Unknown };
+                if budget.exhausted() { return Known::Unknown }
+                let reached: std::rc::Rc<[u64]> = reached.into();
+                memo.insert(narrowing.semantic.epoch, key, reached.clone());
+                reached
+            }
+        };
+        Known::Yes(!self.uses.iter().any(|&step| reached[step as usize / 64] & (1 << (step % 64)) != 0))
     }
 }
 

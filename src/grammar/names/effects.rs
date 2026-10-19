@@ -195,7 +195,108 @@ pub struct Execution {
     /// Each step's predecessors, built on first use; `None` when an edge
     /// leaves the graph.
     predecessors: OnceCell<Option<Adjacency>>,
+    /// Built on the first single-entry guard query ([`Self::guarded`]).
+    dominators: OnceCell<Dominators>,
     completion: Option<Completion>,
+}
+
+/// The dominator tree of an execution's reachable steps, as pre/post
+/// numbers: `a` dominates `b` when `b`'s interval nests in `a`'s.
+struct Dominators {
+    /// `u32::MAX` for steps the entry never reaches.
+    pre: Vec<u32>,
+    post: Vec<u32>,
+}
+
+impl Dominators {
+    /// Graph steps one budget unit pays for while building: each step is
+    /// visited a few times, a bit test each, nowhere near a semantic step.
+    const STEPS_PER_UNIT: u32 = 32;
+
+    fn new(entry: StepId, successors: &Adjacency, predecessors: &Adjacency, budget: &Budget) -> Option<Dominators> {
+        let count = successors.start.len() - 1;
+        let mut visits = 0u32;
+        let mut spend = || { visits += 1; visits % Self::STEPS_PER_UNIT != 1 || budget.step() };
+        // Reverse postorder of the reachable steps.
+        const UNSEEN: u32 = u32::MAX;
+        let mut order_of = vec![UNSEEN; count];
+        let mut postorder = Vec::new();
+        let mut stack: Vec<(StepId, usize)> = vec![(entry, 0)];
+        let mut entered = vec![false; count];
+        entered[entry as usize] = true;
+        while let Some(&mut (step, ref mut next)) = stack.last_mut() {
+            if !spend() { return None }
+            let edges = successors.of(step);
+            if let Some(&child) = edges.get(*next) {
+                *next += 1;
+                if !std::mem::replace(entered.get_mut(child as usize)?, true) { stack.push((child, 0)) }
+            } else {
+                postorder.push(step);
+                stack.pop();
+            }
+        }
+        let rpo: Vec<StepId> = postorder.iter().rev().copied().collect();
+        for (index, &step) in rpo.iter().enumerate() { order_of[step as usize] = index as u32 }
+        // Cooper, Harvey and Kennedy: iterate immediate dominators to a fixpoint.
+        let mut idom = vec![UNSEEN; count];
+        idom[entry as usize] = entry;
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for &step in rpo.iter().skip(1) {
+                let mut new = UNSEEN;
+                for &previous in predecessors.of(step) {
+                    if !spend() { return None }
+                    if idom[previous as usize] == UNSEEN { continue }
+                    new = if new == UNSEEN { previous } else {
+                        let (mut a, mut b) = (previous, new);
+                        while a != b {
+                            while order_of[a as usize] > order_of[b as usize] { a = idom[a as usize] }
+                            while order_of[b as usize] > order_of[a as usize] { b = idom[b as usize] }
+                        }
+                        a
+                    };
+                }
+                if new != UNSEEN && idom[step as usize] != new {
+                    idom[step as usize] = new;
+                    changed = true;
+                }
+            }
+        }
+        // Number the tree depth first.
+        let mut children = vec![Vec::new(); count];
+        for &step in rpo.iter().skip(1) {
+            let parent = idom[step as usize];
+            if parent == UNSEEN { return None }
+            children[parent as usize].push(step);
+        }
+        let mut pre = vec![UNSEEN; count];
+        let mut post = vec![UNSEEN; count];
+        let mut clock = 0u32;
+        let mut stack: Vec<(StepId, usize)> = vec![(entry, 0)];
+        pre[entry as usize] = 0;
+        while let Some(&mut (step, ref mut next)) = stack.last_mut() {
+            if let Some(&child) = children[step as usize].get(*next) {
+                *next += 1;
+                clock += 1;
+                pre[child as usize] = clock;
+                stack.push((child, 0));
+            } else {
+                clock += 1;
+                post[step as usize] = clock;
+                stack.pop();
+            }
+        }
+        Some(Dominators { pre, post })
+    }
+
+    /// Whether every path from the entry to `step` passes `guard`: `step`
+    /// is unreachable, or `guard` dominates it.
+    fn guards(&self, guard: StepId, step: StepId) -> bool {
+        let (step, guard) = (step as usize, guard as usize);
+        if self.pre[step] == u32::MAX { return true }
+        self.pre[guard] != u32::MAX && self.pre[guard] <= self.pre[step] && self.post[step] <= self.post[guard]
+    }
 }
 
 /// Steps' neighbours, packed: step `s` has `steps[start[s]..start[s + 1]]`.
@@ -312,7 +413,7 @@ impl Execution {
         let edges = Adjacency::successors(&edges);
         Execution { entry, steps, edges, sites, fields, writes, binding_writes, binding_reads, write_leaves,
             reachable: OnceCell::new(), guards: OnceCell::new(), reachable_avoiding: RefCell::default(),
-            predecessors: OnceCell::new(), completion: None }
+            predecessors: OnceCell::new(), dominators: OnceCell::new(), completion: None }
     }
 
     pub fn write_leaves(&self) -> &[StepId] {
@@ -337,6 +438,12 @@ impl Execution {
     /// every read in the execution asks about the same few guards.
     pub fn guarded(&self, steps: &[StepId], avoiding: &[StepId], budget: &Budget) -> Known<bool> {
         if steps.iter().any(|&step| step as usize >= self.steps.len()) { return Known::Unknown }
+        // One entry step guards exactly what it dominates.
+        if let [guard] = avoiding {
+            if *guard as usize >= self.steps.len() { return Known::Unknown }
+            let Some(dominators) = self.dominators(budget) else { return Known::Unknown };
+            return Known::Yes(steps.iter().all(|&step| dominators.guards(*guard, step)));
+        }
         let cached = self.reachable_avoiding.borrow().get(avoiding).cloned();
         let seen = match cached {
             Some(seen) => seen,
@@ -654,6 +761,43 @@ impl Execution {
         self.predecessors.get_or_init(|| Adjacency::predecessors(&self.edges)).as_ref()
     }
 
+    /// The dominator tree, kept once a build finishes within `budget`.
+    fn dominators(&self, budget: &Budget) -> Option<&Dominators> {
+        if let Some(dominators) = self.dominators.get() { return Some(dominators) }
+        let dominators = Dominators::new(self.entry, &self.edges, self.predecessors()?, budget)?;
+        Some(self.dominators.get_or_init(|| dominators))
+    }
+
+    /// The steps some path from one of `starts` reaches after passing an
+    /// `event` step without crossing a barrier (a start may be one), as a
+    /// bitset: [`Self::reaches_any_through`] from every start, for every
+    /// target at once.
+    pub fn reached_through(&self, starts: &[StepId], barriers: &[StepId], event: impl Fn(&Event) -> bool, budget: &Budget) -> Known<Vec<u64>> {
+        if starts.iter().chain(barriers).any(|&step| step as usize >= self.steps.len()) { return Known::Unknown }
+        let mut seen = vec![ThroughVisit::default(); self.steps.len()];
+        for &barrier in barriers {
+            if !budget.step() { return Known::Unknown }
+            seen[barrier as usize].barrier = true;
+        }
+        let mut reached = vec![0u64; self.steps.len().div_ceil(64)];
+        let mut pending: Vec<(StepId, bool, bool)> = starts.iter().map(|&step| (step, false, true)).collect();
+        while let Some((step, matched, start)) = pending.pop() {
+            if !budget.step() { return Known::Unknown }
+            if !start && seen[step as usize].barrier { continue }
+            let matched = matched || self.steps[step as usize].event().is_some_and(&event);
+            let visit = if matched { &mut seen[step as usize].with_event } else { &mut seen[step as usize].without_event };
+            if *visit { continue }
+            *visit = true;
+            if matched { reached[step as usize / 64] |= 1 << (step % 64) }
+            let Some(edges) = self.edges.get(step) else { return Known::Unknown };
+            for &next in edges {
+                if !budget.step() || next as usize >= self.steps.len() { return Known::Unknown }
+                pending.push((next, matched, false));
+            }
+        }
+        Known::Yes(reached)
+    }
+
     pub fn reaches_through(&self, from: StepId, to: StepId, barriers: &[StepId], event: impl Fn(&Event) -> bool, budget: &Budget) -> Known<bool> {
         self.reaches_any_through(from, &[to], barriers, event, budget)
     }
@@ -746,12 +890,34 @@ mod tests {
     #[test]
     fn guard_reachability_matches_reaches_for_every_entry_set() {
         let graph = graph(&[&[1, 2], &[3], &[3], &[]]);
-        assert_eq!(graph.guarded(&[3], &[1], &Budget::new(1)), Known::Unknown);
+        assert_eq!(graph.guarded(&[3], &[1], &Budget::new(0)), Known::Unknown);
         assert_eq!(graph.guarded(&[3], &[1], &Budget::default()), Known::Yes(false));
         assert_eq!(graph.guarded(&[3], &[1, 2], &Budget::default()), Known::Yes(true));
         assert_eq!(graph.guarded(&[2, 3], &[1], &Budget::default()), Known::Yes(false));
         assert_eq!(graph.guarded(&[3], &[1, 2], &Budget::default()), Known::Yes(true));
         assert_eq!(graph.guarded(&[9], &[1, 2], &Budget::default()), Known::Unknown);
+    }
+
+    #[test]
+    fn single_guards_agree_with_walks_around_them() {
+        let graphs: [&[&[StepId]]; 4] = [
+            &[&[1, 2], &[3], &[3], &[4], &[]],
+            &[&[1], &[2, 4], &[3], &[1], &[5], &[]],
+            &[&[1, 2], &[3], &[3, 4], &[5], &[5], &[], &[6]],
+            &[&[1], &[2, 3], &[1], &[4], &[1, 5], &[]],
+        ];
+        for edges in graphs {
+            let graph = graph(edges);
+            for guard in 0..edges.len() as StepId {
+                for step in 0..edges.len() as StepId {
+                    let walked = match graph.reaches(0, step, &[guard], &Budget::default()) {
+                        Known::Yes(reached) => !reached,
+                        Known::Unknown => panic!("small walk finishes"),
+                    };
+                    assert_eq!(graph.guarded(&[step], &[guard], &Budget::default()), Known::Yes(walked), "guard {guard} step {step} in {edges:?}");
+                }
+            }
+        }
     }
 
     #[test]

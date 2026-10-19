@@ -152,7 +152,7 @@ mod places {
                 vec![super::entry(0), super::field(0), super::write(8, binding), super::entry(3)],
                 &[&[1], &[2], &[3], &[]],
             );
-            let region = Region { execution: &flow, entries: &[1], uses: &[3], frame: FrameId::ROOT, captured: false };
+            let region = Region { execution: &flow, entry: leaf(0), entries: &[1], uses: &[3], captured: false };
             assert_eq!(region.valid(&narrowing, &tested), Known::Yes(valid));
             let Known::Yes(root) = narrowing.place(leaf(3)) else { panic!("binding place is known") };
             assert_eq!(region.valid(&narrowing, &root), Known::Yes(binding != 1));
@@ -179,7 +179,7 @@ mod places {
                 vec![super::entry(0), super::field(0), super::write(8, 5), super::entry(3)],
                 &[&[1], &[2], &[3], &[]],
             );
-            let region = Region { execution: &flow, entries: &[1], uses: &[3], frame: FrameId::ROOT, captured: false };
+            let region = Region { execution: &flow, entry: leaf(0), entries: &[1], uses: &[3], captured: false };
             assert_eq!(region.valid(&semantic.narrowing(), &Place { root, path: vec![key] }), Known::Yes(valid));
         }
     }
