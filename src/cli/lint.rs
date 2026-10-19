@@ -265,6 +265,7 @@ pub(super) fn prepared(output: &mut Output<'_>, args: LintArgs, project: &mut Pr
                             if tx.send(lint_file(linter, run, cache, path, fix)).is_err() {
                                 break;
                             }
+                            crate::alloc::trim();
                         }
                         working.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
                     }).expect("lint worker thread");

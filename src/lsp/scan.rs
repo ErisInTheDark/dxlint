@@ -350,6 +350,7 @@ impl Scan {
                     while self.current() {
                         let Some(path) = take() else { break };
                         self.lint(&path);
+                        crate::alloc::trim();
                     }
                 }).expect("lint worker");
             }

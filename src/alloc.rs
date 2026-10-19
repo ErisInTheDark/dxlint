@@ -1,74 +1,321 @@
-//! The binary's allocator: small blocks come from size-class free lists in
+//! The binary's allocator: small blocks come from one-size pages owned by
 //! pools, everything else from the system allocator.
 //!
 //! Linting allocates millions of short-lived small values (records, lists,
 //! texts, tree vectors). On Windows the system allocator is one process heap
-//! every worker thread contends on, and memory it returns to the OS faults
-//! back in for the next file. A freed block goes back to the freeing
-//! thread's pool, and pool memory is kept for reuse.
+//! every worker thread contends on. A worker thread owns a pool outright for
+//! as long as it holds [`own_pool`]'s guard: its allocations take no lock at
+//! all. The guard hands the pool on to the next worker when it ends. Other
+//! threads share mutex-guarded shards (handed out round-robin, so they rarely
+//! share one).
 //!
-//! A worker thread owns a pool outright for as long as it holds [`own_pool`]'s
-//! guard: its allocations take no lock at all. The guard hands the pool on to
-//! the next worker when it ends. Other threads share mutex-guarded shards
-//! (handed out round-robin, so they rarely share one).
+//! Pools take 64 KiB pages from one shared store; a page holds blocks of one
+//! size. A page whose blocks are all free goes back to the store, where any
+//! pool can take it for any size: memory one file's peak needed for small
+//! records serves the next file's lists, instead of every worker keeping its
+//! high-water mark for every size at once. A block freed by a thread that does
+//! not hold its page's pool goes on the page's remote list; the owner takes
+//! those back when the page runs dry and when it [`trim`]s.
+//!
+//! Pages are never returned to the system: the peak is what costs, and wasm
+//! memory cannot shrink anyway.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 use std::ptr::null_mut;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 /// Blocks up to this size (in 16-byte classes) are pooled.
 const SMALL: usize = 2048;
 const QUANTUM: usize = 16;
 const CLASSES: usize = SMALL / QUANTUM;
-/// Bytes a pool takes from the system at a time.
-const CHUNK: usize = 256 * 1024;
+/// Pages are aligned to their size, so a block finds its page by masking.
+const PAGE: usize = 64 * 1024;
+/// Bytes the store takes from the system at a time.
+const SEGMENT: usize = 4 * 1024 * 1024;
 const SHARDS: usize = 64;
 
-struct Pool {
-    /// Per class, a linked list threaded through the free blocks.
-    free: [*mut u8; CLASSES],
+/// A page's header, at its start; blocks follow.
+struct Page {
+    /// Free blocks, linked through their first word (owner only).
+    free: *mut u8,
+    /// Start of the never-used tail (owner only).
     bump: *mut u8,
-    end: *mut u8,
+    /// Blocks freed by other threads, for the owner to take back.
+    remote: AtomicPtr<u8>,
+    /// The owning pool; fixed while any of the page's blocks is live.
+    owner: AtomicPtr<Pool>,
+    /// Blocks handed out and not yet taken back (owner only).
+    used: usize,
+    size: usize,
+    /// On its class's full list rather than the available one.
+    full: bool,
+    prev: *mut Page,
+    next: *mut Page,
 }
 
-// Pools are only touched under their mutex.
+const PAGE_HEADER: usize = std::mem::size_of::<Page>().next_multiple_of(QUANTUM);
+
+impl Page {
+    fn of(block: *mut u8) -> *mut Page {
+        block.map_addr(|address| address & !(PAGE - 1)).cast()
+    }
+
+    /// Moves the remote frees onto the free list.
+    ///
+    /// # Safety
+    /// Only the owning pool's holder may call this.
+    unsafe fn collect(page: *mut Page) {
+        // SAFETY: remote blocks are this page's, freed and linked by `give_remote`.
+        unsafe {
+            let mut block = (*page).remote.swap(null_mut(), Ordering::Acquire);
+            while !block.is_null() {
+                let next = *block.cast::<*mut u8>();
+                *block.cast::<*mut u8>() = (*page).free;
+                (*page).free = block;
+                (*page).used -= 1;
+                block = next;
+            }
+        }
+    }
+
+    /// A block from the page, or null when it has none left.
+    ///
+    /// # Safety
+    /// Only the owning pool's holder may call this.
+    unsafe fn pop(page: *mut Page) -> *mut u8 {
+        // SAFETY: the free list and the tail lie inside the page.
+        unsafe {
+            if (*page).free.is_null() {
+                let size = (*page).size;
+                if page.cast::<u8>().add(PAGE).offset_from((*page).bump) as usize >= size {
+                    let block = (*page).bump;
+                    (*page).bump = block.add(size);
+                    (*page).used += 1;
+                    return block;
+                }
+                Page::collect(page);
+                if (*page).free.is_null() { return null_mut() }
+            }
+            let block = (*page).free;
+            (*page).free = *block.cast::<*mut u8>();
+            (*page).used += 1;
+            block
+        }
+    }
+
+    /// Frees `block` from a thread that does not hold the page's pool.
+    ///
+    /// # Safety
+    /// `block` is a live block of `page`.
+    unsafe fn give_remote(page: *mut Page, block: *mut u8) {
+        // SAFETY: the page outlives its live blocks; only the first word of
+        // the freed block is written.
+        unsafe {
+            let remote = &(*page).remote;
+            let mut head = remote.load(Ordering::Relaxed);
+            loop {
+                *block.cast::<*mut u8>() = head;
+                match remote.compare_exchange_weak(head, block, Ordering::Release, Ordering::Relaxed) {
+                    Ok(_) => return,
+                    Err(current) => head = current,
+                }
+            }
+        }
+    }
+}
+
+/// Unused pages, linked through `next`.
+struct Store(*mut Page);
+
+// The store is only touched under its mutex.
+unsafe impl Send for Store {}
+
+static STORE: Mutex<Store> = Mutex::new(Store(null_mut()));
+
+impl Store {
+    fn lock() -> std::sync::MutexGuard<'static, Store> {
+        STORE.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// A page for `owner`'s blocks of `size`, or null when the system is out.
+    unsafe fn take(owner: *mut Pool, size: usize) -> *mut Page {
+        let mut page = {
+            let mut store = Store::lock();
+            let head = store.0;
+            // SAFETY: stored pages keep their `next` link.
+            if !head.is_null() { store.0 = unsafe { (*head).next } }
+            head
+        };
+        if page.is_null() {
+            // SAFETY: SEGMENT is a non-zero multiple of the PAGE alignment.
+            let segment = unsafe { System.alloc(Layout::from_size_align_unchecked(SEGMENT, PAGE)) };
+            if segment.is_null() { return null_mut() }
+            let mut store = Store::lock();
+            for index in 1..SEGMENT / PAGE {
+                // SAFETY: each page lies inside the segment just allocated.
+                unsafe {
+                    let spare = segment.add(index * PAGE).cast::<Page>();
+                    (&raw mut (*spare).next).write(store.0);
+                    store.0 = spare;
+                }
+            }
+            page = segment.cast();
+        }
+        // SAFETY: the page is unused memory of PAGE bytes, PAGE-aligned.
+        unsafe {
+            page.write(Page {
+                free: null_mut(),
+                bump: page.cast::<u8>().add(PAGE_HEADER),
+                remote: AtomicPtr::new(null_mut()),
+                owner: AtomicPtr::new(owner),
+                used: 0,
+                size,
+                full: false,
+                prev: null_mut(),
+                next: null_mut(),
+            });
+        }
+        page
+    }
+
+    /// Takes back a page none of whose blocks is live.
+    unsafe fn give(page: *mut Page) {
+        let mut store = Store::lock();
+        // SAFETY: the page is no pool's any more.
+        unsafe { (*page).next = store.0 };
+        store.0 = page;
+    }
+}
+
+/// A doubly linked list of one class's pages.
+#[derive(Clone, Copy)]
+struct Pages(*mut Page);
+
+impl Pages {
+    unsafe fn push(&mut self, page: *mut Page) {
+        // SAFETY: both pages belong to this list's pool.
+        unsafe {
+            (*page).prev = null_mut();
+            (*page).next = self.0;
+            if !self.0.is_null() { (*self.0).prev = page }
+        }
+        self.0 = page;
+    }
+
+    /// Inserts `page` behind the head, so the page being allocated from stays first.
+    unsafe fn push_second(&mut self, page: *mut Page) {
+        if self.0.is_null() { return unsafe { self.push(page) } }
+        // SAFETY: as `push`.
+        unsafe {
+            let next = (*self.0).next;
+            (*page).prev = self.0;
+            (*page).next = next;
+            if !next.is_null() { (*next).prev = page }
+            (*self.0).next = page;
+        }
+    }
+
+    unsafe fn unlink(&mut self, page: *mut Page) {
+        // SAFETY: `page` is on this list.
+        unsafe {
+            let (prev, next) = ((*page).prev, (*page).next);
+            if prev.is_null() { self.0 = next } else { (*prev).next = next }
+            if !next.is_null() { (*next).prev = prev }
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Class {
+    /// Pages that may have room; the head is allocated from.
+    available: Pages,
+    /// Pages that ran out; their frees bring them back.
+    full: Pages,
+}
+
+struct Pool {
+    classes: [Class; CLASSES],
+}
+
+// Pools are only touched by their owning thread or under their mutex.
 unsafe impl Send for Pool {}
 
 impl Pool {
     const fn new() -> Self {
-        Pool { free: [null_mut(); CLASSES], bump: null_mut(), end: null_mut() }
+        Pool { classes: [Class { available: Pages(null_mut()), full: Pages(null_mut()) }; CLASSES] }
     }
 
     unsafe fn take(&mut self, class: usize) -> *mut u8 {
-        let head = self.free[class];
-        if !head.is_null() {
-            // SAFETY: a free block's first word holds the next free block.
-            self.free[class] = unsafe { *(head as *mut *mut u8) };
-            return head;
-        }
-        let size = (class + 1) * QUANTUM;
-        if (self.end as usize) - (self.bump as usize) < size {
-            // SAFETY: CHUNK is a valid non-zero size with QUANTUM alignment.
-            let chunk = unsafe { System.alloc(Layout::from_size_align_unchecked(CHUNK, QUANTUM)) };
-            if chunk.is_null() {
-                return null_mut();
+        let me: *mut Pool = self;
+        let pages = &mut self.classes[class];
+        loop {
+            let page = pages.available.0;
+            // SAFETY: this pool owns its listed pages.
+            unsafe {
+                if page.is_null() {
+                    let page = Store::take(me, (class + 1) * QUANTUM);
+                    if page.is_null() { return null_mut() }
+                    pages.available.push(page);
+                    continue;
+                }
+                let block = Page::pop(page);
+                if !block.is_null() { return block }
+                pages.available.unlink(page);
+                (*page).full = true;
+                pages.full.push(page);
             }
-            self.bump = chunk;
-            // SAFETY: within the chunk just allocated.
-            self.end = unsafe { chunk.add(CHUNK) };
         }
-        let block = self.bump;
-        // SAFETY: `size` bytes remain before `end`.
-        self.bump = unsafe { block.add(size) };
-        block
     }
 
-    unsafe fn give(&mut self, class: usize, block: *mut u8) {
-        // SAFETY: blocks are at least QUANTUM bytes and pointer-aligned.
-        unsafe { *(block as *mut *mut u8) = self.free[class] };
-        self.free[class] = block;
+    /// Frees `block` of `page`, which this pool owns.
+    unsafe fn give(&mut self, page: *mut Page, block: *mut u8) {
+        // SAFETY: this pool owns `page`; `block` is one of its live blocks.
+        unsafe {
+            *block.cast::<*mut u8>() = (*page).free;
+            (*page).free = block;
+            (*page).used -= 1;
+            let pages = &mut self.classes[(*page).size / QUANTUM - 1];
+            if (*page).full {
+                pages.full.unlink(page);
+                (*page).full = false;
+                pages.available.push_second(page);
+            } else if (*page).used == 0 && pages.available.0 != page {
+                pages.available.unlink(page);
+                Store::give(page);
+            }
+        }
+    }
+
+    /// Takes back remote frees and hands empty pages to the store.
+    unsafe fn trim(&mut self) {
+        for pages in &mut self.classes {
+            // SAFETY: this pool owns its listed pages.
+            unsafe {
+                let mut page = pages.full.0;
+                while !page.is_null() {
+                    let next = (*page).next;
+                    Page::collect(page);
+                    if !(*page).free.is_null() {
+                        pages.full.unlink(page);
+                        (*page).full = false;
+                        if (*page).used == 0 { Store::give(page) } else { pages.available.push_second(page) }
+                    }
+                    page = next;
+                }
+                let mut page = pages.available.0;
+                while !page.is_null() {
+                    let next = (*page).next;
+                    Page::collect(page);
+                    if (*page).used == 0 {
+                        pages.available.unlink(page);
+                        Store::give(page);
+                    }
+                    page = next;
+                }
+            }
+        }
     }
 }
 
@@ -99,6 +346,14 @@ pub fn own_pool() -> OwnedPool {
     OwnedPool { pool, previous, thread: std::marker::PhantomData }
 }
 
+/// Hands this thread's owned pool's empty pages back to the shared store
+/// (call between files: what one file freed then serves any size).
+pub fn trim() {
+    let owned = owned();
+    // SAFETY: an owned pool is only touched by its owning thread.
+    if !owned.is_null() { unsafe { (*owned).trim() } }
+}
+
 /// A thread's ownership of a pool ([`own_pool`]).
 pub struct OwnedPool {
     pool: *mut Pool,
@@ -109,6 +364,7 @@ pub struct OwnedPool {
 
 impl Drop for OwnedPool {
     fn drop(&mut self) {
+        trim();
         OWNED.with(|owned| owned.set(self.previous));
         PARKED.lock().unwrap_or_else(|e| e.into_inner()).push(Parked(self.pool));
     }
@@ -244,12 +500,20 @@ impl Pooled {
 
     unsafe fn raw_dealloc(&self, block: *mut u8, layout: Layout) {
         match class(layout) {
-            Some(c) => {
-                let owned = owned();
+            Some(_) => {
+                let page = Page::of(block);
                 // SAFETY: `block` came from `raw_alloc` with this layout, so
-                // from a pool; an owned pool is only touched by its owner.
-                if !owned.is_null() { return unsafe { (*owned).give(c, block) } }
-                unsafe { shard().lock().unwrap_or_else(|e| e.into_inner()).give(c, block) }
+                // from a live page; a pool is only touched by its holder.
+                unsafe {
+                    let owner = (*page).owner.load(Ordering::Relaxed);
+                    let owned = owned();
+                    if !owned.is_null() {
+                        if owner == owned { return (*owned).give(page, block) }
+                        return Page::give_remote(page, block);
+                    }
+                    let mut shard = shard().lock().unwrap_or_else(|e| e.into_inner());
+                    if owner == &raw mut *shard { shard.give(page, block) } else { Page::give_remote(page, block) }
+                }
             }
             // SAFETY: forwarded unchanged.
             None => unsafe { System.dealloc(block, layout) },
@@ -290,24 +554,14 @@ unsafe impl GlobalAlloc for Pooled {
 
     #[inline(never)]
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        if heap::on() {
+        if heap::on() || class(layout).is_some() {
             // SAFETY: as `alloc`; then zeroed over the requested size.
             let block = unsafe { self.alloc(layout) };
             if !block.is_null() { unsafe { block.write_bytes(0, layout.size()) } }
             return block;
         }
-        match class(layout) {
-            Some(_) => {
-                // SAFETY: as `alloc`; then zeroed over the requested size.
-                let block = unsafe { self.alloc(layout) };
-                if !block.is_null() {
-                    unsafe { block.write_bytes(0, layout.size()) };
-                }
-                block
-            }
-            // SAFETY: forwarded unchanged.
-            None => unsafe { System.alloc_zeroed(layout) },
-        }
+        // SAFETY: forwarded unchanged.
+        unsafe { System.alloc_zeroed(layout) }
     }
 
     #[inline(never)]
@@ -432,5 +686,27 @@ mod tests {
                 Pooled.dealloc(kept as *mut u8, l);
             }
         }).join().expect("second worker");
+    }
+
+    #[test]
+    fn freed_pages_serve_other_sizes_whichever_thread_freed_their_blocks() {
+        std::thread::spawn(|| {
+            let _pool = own_pool();
+            let small = layout(32, 8);
+            let blocks: Vec<usize> = (0..4 * PAGE / 32).map(|_| unsafe { Pooled.alloc(small) } as usize).collect();
+            let pages: std::collections::HashSet<usize> = blocks.iter().map(|&block| block & !(PAGE - 1)).collect();
+            let (local, remote) = blocks.split_at(blocks.len() / 2);
+            for &block in local { unsafe { Pooled.dealloc(block as *mut u8, small) } }
+            let remote = remote.to_vec();
+            std::thread::spawn(move || {
+                for block in remote { unsafe { Pooled.dealloc(block as *mut u8, small) } }
+            }).join().expect("freeing thread");
+            trim();
+            let large = layout(1024, 16);
+            let reused: Vec<*mut u8> = (0..4 * PAGE / 1024).map(|_| unsafe { Pooled.alloc(large) }).collect();
+            let landed = reused.iter().filter(|&&block| pages.contains(&(block as usize & !(PAGE - 1)))).count();
+            for block in reused { unsafe { Pooled.dealloc(block, large) } }
+            assert!(landed > 0, "no page freed by 32-byte blocks served 1024-byte blocks");
+        }).join().expect("worker");
     }
 }
