@@ -144,19 +144,20 @@ pub mod heap {
     use std::cell::Cell;
     use std::sync::atomic::{AtomicIsize, AtomicU8, AtomicUsize, Ordering};
 
-    pub const OWNERS: [&str; 6] = ["other", "units", "names", "semantic", "effects", "rules"];
+    pub const OWNERS: [&str; 7] = ["other", "units", "names", "semantic", "effects", "rules", "modules"];
     pub const UNITS: usize = 1;
     pub const NAMES: usize = 2;
     pub const SEMANTIC: usize = 3;
     pub const EFFECTS: usize = 4;
     pub const RULES: usize = 5;
+    pub const MODULES: usize = 6;
     /// 0 undecided, 1 off, 2 on.
     static MODE: AtomicU8 = AtomicU8::new(0);
-    static LIVE: [AtomicIsize; 6] = [const { AtomicIsize::new(0) }; 6];
+    static LIVE: [AtomicIsize; 7] = [const { AtomicIsize::new(0) }; 7];
     static TOTAL: AtomicIsize = AtomicIsize::new(0);
     static PEAK: AtomicUsize = AtomicUsize::new(0);
     /// [`LIVE`] when [`PEAK`] was last raised.
-    static AT_PEAK: [AtomicIsize; 6] = [const { AtomicIsize::new(0) }; 6];
+    static AT_PEAK: [AtomicIsize; 7] = [const { AtomicIsize::new(0) }; 7];
 
     thread_local! {
         static OWNER: Cell<u8> = const { Cell::new(0) };

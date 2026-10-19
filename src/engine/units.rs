@@ -23,7 +23,7 @@ pub(super) struct ParsePlan<'a> {
 }
 
 pub(super) struct Unit {
-    pub path: PathBuf,
+    pub path: reads::DepPath,
     pub rel: String,
     pub lang: usize,
     pub text: Arc<str>,
@@ -84,7 +84,8 @@ impl Linter {
             Some(run) => run.unit(revision, path, || self.load_unit(path, run.text(revision, path))),
             None => self.load_unit(path, reads::read_unrecorded(path)),
         };
-        reads::note(reads::Dep::Text(path.to_owned(), hash));
+        let recorded = unit.as_ref().map_or_else(|| reads::dep_path(path), |unit| unit.path.clone());
+        reads::note(reads::Dep::Text(recorded, hash));
         unit
     }
 
@@ -126,7 +127,7 @@ impl Linter {
             let tokens = front.and_then(|index| self.unit_token_kinds.get(index)).map_or(&[][..], Vec::as_slice);
             let plan = ParsePlan { lang, front, layers: true, overlays: &self.unit_overlays, child_layers: self.unit_child_layers, tokens };
             let parsed = self.parse(path, &text, plan).ok()?;
-            let unit = Arc::new(Unit { path: path.to_owned(), rel: rel.to_string_lossy().replace('\\', "/"), lang, text, parsed, names: OnceLock::new(), lines: OnceLock::new() });
+            let unit = Arc::new(Unit { path: reads::dep_path(path), rel: rel.to_string_lossy().replace('\\', "/"), lang, text, parsed, names: OnceLock::new(), lines: OnceLock::new() });
             self.units.lock().expect("unit cache").insert(path.to_owned(), unit.clone());
             Some(unit)
         };

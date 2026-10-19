@@ -464,14 +464,14 @@ impl<'a> Files<'a> {
     /// `path`'s text, recorded: the linted text for the linted file.
     fn source_text(self, path: &Path) -> Option<Arc<str>> {
         if path == self.0.path {
-            super::reads::note(super::reads::Dep::Text(path.to_owned(), self.linted_hash()));
+            super::reads::note(super::reads::Dep::Text(super::reads::dep_path(path), self.linted_hash()));
             return Some(self.0.ctx.source.into());
         }
         let (text, hash) = match self.0.snapshot {
             Some(snapshot) => snapshot.text(self.0.revision(), path),
             None => super::reads::read_unrecorded(path),
         };
-        super::reads::note(super::reads::Dep::Text(path.to_owned(), hash));
+        super::reads::note(super::reads::Dep::Text(super::reads::dep_path(path), hash));
         text
     }
 
@@ -578,8 +578,7 @@ impl<'a> Files<'a> {
         let mut merged = vec![scope];
         if name.is_none() && scope.file != 0 {
             if let Known::Yes(Some(index)) = self.timed("modules.scopes.augmentations", || self.augmentations(selected, classes, &catalog, semantic)) {
-                let path = World::path(&self, scope.file).map(Path::to_owned);
-                let found = path.and_then(|path| index.get(&(path, scope.scope)).cloned()).unwrap_or_default();
+                let found = self.shared_path(scope.file).and_then(|path| index.get(&(path, scope.scope)).cloned()).unwrap_or_default();
                 let candidates: Option<Vec<ScopeRef>> = found.iter()
                     .map(|(path, scope)| self.0.file(path).filter(|&file| file != 0).map(|file| ScopeRef { file, scope: *scope }))
                     .collect();
@@ -624,7 +623,7 @@ impl<'a> Files<'a> {
             Some(shared) => Some(shared),
             None => {
                 let built = super::reads::Cached::compute(|| {
-                    super::reads::note(super::reads::Dep::Text(self.0.path.to_owned(), self.linted_hash()));
+                    super::reads::note(super::reads::Dep::Text(super::reads::dep_path(self.0.path), self.linted_hash()));
                     self.build_augmentations(classes, catalog, semantic)
                 });
                 match built.value {
@@ -680,15 +679,14 @@ impl<'a> Files<'a> {
             Some(snapshot) => snapshot.is_file(self.0.revision(), path),
             None => super::reads::is_file_unrecorded(path),
         };
-        super::reads::note(super::reads::Dep::IsFile(path.to_owned(), found));
+        super::reads::note(super::reads::Dep::IsFile(super::reads::dep_path(path), found));
         found
     }
 
     /// A run unit's path, for questions about it shared across worlds; `None`
     /// for the linted file (see [`World::shared_modules`]).
-    fn shared_path(self, file: u32) -> Option<PathBuf> {
-        if file == 0 { return None }
-        World::path(&self, file).map(Path::to_owned)
+    fn shared_path(self, file: u32) -> Option<super::reads::DepPath> {
+        Some(self.0.views.get(file.checked_sub(1)?)?.unit.path.clone())
     }
 
     /// The run-shared answer to `question` under this world's program,
@@ -706,7 +704,7 @@ impl<'a> Files<'a> {
             }
         }
         let answer = super::reads::Cached::compute(|| {
-            super::reads::note(super::reads::Dep::Text(self.0.path.to_owned(), linted));
+            super::reads::note(super::reads::Dep::Text(super::reads::dep_path(self.0.path), linted));
             compute()
         });
         self.timed("modules.resolve.shared.record", || super::reads::note_group(&answer.reads));
@@ -756,8 +754,8 @@ impl<'a> Files<'a> {
 
     fn stable_targets(self, targets: &[Target]) -> Option<Arc<[super::program::StableTarget]>> {
         targets.iter().map(|target| match *target {
-            Target::Node(node) if node.file != 0 => Some(super::program::StableTarget::Node(World::path(&self, node.file)?.to_owned(), node.node)),
-            Target::Scope(scope) if scope.file != 0 => Some(super::program::StableTarget::Scope(World::path(&self, scope.file)?.to_owned(), scope.scope)),
+            Target::Node(node) => Some(super::program::StableTarget::Node(self.shared_path(node.file)?, node.node)),
+            Target::Scope(scope) => Some(super::program::StableTarget::Scope(self.shared_path(scope.file)?, scope.scope)),
             _ => None,
         }).collect()
     }
@@ -786,7 +784,7 @@ impl<'a> Files<'a> {
             let current_hash = super::reads::hash_bytes(self.0.ctx.source.as_bytes());
             let load = || self.0.linter.programs.catalog(key.clone(), self.0.ctx.profile, |dep| {
                 if let super::reads::Dep::Text(path, hash) = dep {
-                    if path == self.0.path && *hash != current_hash { return false }
+                    if **path == *self.0.path && *hash != current_hash { return false }
                 }
                 self.0.linter.holds(dep)
             }, || match self.0.complete_attribute(|| {
@@ -978,7 +976,7 @@ impl World for Files<'_> {
         // or name), so imports are shared by directory, the linted file's too.
         let answer = super::reads::Cached::compute(|| match World::path(self, ctx.file_id).and_then(Path::parent) {
             Some(directory) => {
-                let question = super::program::StableQuestion::Resolve { directory: directory.to_owned(), specifier: specifier.into() };
+                let question = super::program::StableQuestion::Resolve { directory: super::reads::dep_path(directory), specifier: specifier.into() };
                 let shared = self.timed("modules.resolve.shared", || self.shared(question, &mut || match resolve() {
                     Known::Yes(scope) => Known::Yes(scope.into_iter().map(Target::Scope).collect()),
                     Known::Unknown => Known::Unknown,
@@ -1111,7 +1109,7 @@ impl Host for Files<'_> {
 
     fn path(&self, file: u32) -> Known<PathBuf> {
         if file == 0 { return Known::Yes(self.0.path.to_owned()); }
-        self.0.views.get(file.saturating_sub(1)).map_or(Known::Unknown, |view| Known::Yes(view.unit.path.clone()))
+        self.0.views.get(file.saturating_sub(1)).map_or(Known::Unknown, |view| Known::Yes(view.unit.path.to_path_buf()))
     }
 
     fn text(&self, path: &Path, _: &QueryContext) -> Known<Option<String>> {
@@ -1120,7 +1118,7 @@ impl Host for Files<'_> {
             Some(snapshot) => snapshot.text(self.0.revision(), path),
             None => super::reads::read_unrecorded(path),
         };
-        super::reads::note(super::reads::Dep::Text(path.to_owned(), hash));
+        super::reads::note(super::reads::Dep::Text(super::reads::dep_path(path), hash));
         Known::Yes(text.map(|text| text.to_string()))
     }
 
@@ -1143,7 +1141,7 @@ impl Host for Files<'_> {
             return parse_metadata(Host::text(self, path, question).known().ok_or(())?.as_deref());
         };
         let (text, hash) = snapshot.text(self.0.revision(), path);
-        super::reads::note(super::reads::Dep::Text(path.to_owned(), hash));
+        super::reads::note(super::reads::Dep::Text(super::reads::dep_path(path), hash));
         match text {
             Some(text) => snapshot.metadata(path, hash, &text).map(Some).ok_or(()),
             None => Ok(None),
@@ -1597,7 +1595,7 @@ mod tests {
                 let file = files.0.file(path).expect("unit loads");
                 assert_eq!(World::text(&files, file), Some("(before)"));
             }));
-            assert!(deps.any(&mut |dep| matches!(dep, reads::Dep::Text(p, _) if p == path)));
+            assert!(deps.any(&mut |dep| matches!(dep, reads::Dep::Text(p, _) if **p == *path)));
             assert!(!deps.any(&mut |dep| !linter.holds(dep)));
             reads::set_buffer(path, "(after)");
             assert!(deps.any(&mut |dep| !linter.holds(dep)));
@@ -1647,7 +1645,7 @@ mod tests {
         let (again, deps) = reads::track(|| linter.unit(path, Some(&run)).unwrap());
         assert!(std::sync::Arc::ptr_eq(&first, &again), "a run keeps the unit it validated");
         let first_hash = reads::hash_bytes(first.text.as_bytes());
-        assert!(deps.any(&mut |dep| matches!(dep, reads::Dep::Text(p, hash) if p == path && *hash == first_hash)));
+        assert!(deps.any(&mut |dep| matches!(dep, reads::Dep::Text(p, hash) if **p == *path && *hash == first_hash)));
         assert!(deps.any(&mut |dep| !linter.holds(dep)), "the replayed read still detects the edit for caching");
         let fresh = linter.unit(path, Some(&super::super::program::Snapshot::default())).unwrap();
         assert_eq!(&*fresh.text, "(after)");

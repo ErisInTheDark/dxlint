@@ -243,12 +243,12 @@ pub(super) struct ModuleKey {
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub(super) enum StableQuestion {
-    Publication { kind: crate::grammar::names::modules::index::PublicationKind, path: PathBuf, scope: u32, name: Box<str>, class: u64 },
+    Publication { kind: crate::grammar::names::modules::index::PublicationKind, path: reads::DepPath, scope: u32, name: Box<str>, class: u64 },
     Global { name: Box<str>, class: u64 },
     /// Every scope merged into module scope `scope` of `path`.
-    Scopes { path: PathBuf, scope: u32 },
+    Scopes { path: reads::DepPath, scope: u32 },
     /// The module scope `specifier` names, imported from a file in `directory`.
-    Resolve { directory: PathBuf, specifier: Box<str> },
+    Resolve { directory: reads::DepPath, specifier: Box<str> },
     /// Every augmentation of the program's module scopes in `classes`.
     Augmentations { classes: u64 },
 }
@@ -259,13 +259,13 @@ pub(super) enum StableQuestion {
 pub(super) type Survey = Arc<[(PathBuf, Option<Arc<str>>, bool)]>;
 
 /// Module scope (path, scope) -> the scopes that augment it.
-pub(super) type Augmentations = FxHashMap<(PathBuf, u32), Vec<(PathBuf, u32)>>;
+pub(super) type Augmentations = FxHashMap<(reads::DepPath, u32), Vec<(reads::DepPath, u32)>>;
 
 /// A module answer's target with its file by path.
 #[derive(Clone)]
 pub(super) enum StableTarget {
-    Node(PathBuf, u32),
-    Scope(PathBuf, u32),
+    Node(reads::DepPath, u32),
+    Scope(reads::DepPath, u32),
 }
 
 /// One file's run unit: its text hash and the unit, when it parses.

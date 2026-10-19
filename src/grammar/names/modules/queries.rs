@@ -148,6 +148,7 @@ impl<'a> Queries<'a> {
     }
 
     fn profiled<T>(&self, query: &'static str, run: impl FnOnce() -> T) -> T {
+        let _owner = crate::alloc::heap::Owner::enter(crate::alloc::heap::MODULES);
         match self.semantic.world.profile() {
             Some(profile) => profile.time_semantic_query(query, run),
             None => run(),

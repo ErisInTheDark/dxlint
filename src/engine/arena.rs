@@ -53,7 +53,7 @@ impl<'a> Arena<'a> {
                 let unit = &view.unit;
                 let front = unit.parsed.front?;
                 let run = Run { path: &unit.path, lang: unit.lang, text: &unit.text, lines: unit.lines(), file: &unit.rel, active: &[] };
-                Some(self.linter.native_facts(front, &unit.parsed.tree, &run, (&unit.path, std::path::Path::new(&unit.rel)), unit.parsed.state.clone()))
+                Some(self.linter.native_facts(front, &unit.parsed.tree, &run, (&*unit.path, std::path::Path::new(&unit.rel)), unit.parsed.state.clone()))
             };
             match &self.linter.profile {
                 Some(profile) => profile.time_semantic_query("units.native", build),

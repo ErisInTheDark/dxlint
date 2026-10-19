@@ -12,23 +12,40 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock, RwLock};
 use crate::grammar::names::modules::resolution::DiscoveryRequest;
 
+/// A path a [`Dep`] names, interned: a run records the same few thousand
+/// paths in millions of reads, so each is stored once.
+pub type DepPath = Arc<Path>;
+
+/// The interned [`DepPath`] for `path`.
+pub fn dep_path(path: &Path) -> DepPath {
+    static PATHS: OnceLock<RwLock<HashSet<DepPath>>> = OnceLock::new();
+    let paths = PATHS.get_or_init(Default::default);
+    if let Some(found) = paths.read().expect("dep paths").get(path) { return found.clone() }
+    let mut paths = paths.write().expect("dep paths");
+    if let Some(found) = paths.get(path) { return found.clone() }
+    let interned: DepPath = Arc::from(path);
+    paths.insert(interned.clone());
+    interned
+}
+
 /// One thing a lint read, with what it read.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Dep {
     /// A file's content hash ([`MISSING`] when unreadable).
-    Text(PathBuf, u64),
-    IsFile(PathBuf, bool),
-    IsDir(PathBuf, bool),
+    Text(DepPath, u64),
+    IsFile(DepPath, bool),
+    IsDir(DepPath, bool),
     /// A directory's entry names, hashed.
-    List(PathBuf, u64),
+    List(DepPath, u64),
     /// Another file's summary: its content hash and summary fingerprint
     /// ([`MISSING`] for both when there is none). Still holds when the
     /// content changed but the fingerprint did not.
-    Summary(PathBuf, u64, u64),
+    Summary(DepPath, u64, u64),
     /// The files below a directory a [`Discovery`] (by name) finds.
-    Discovered(&'static str, PathBuf, u64),
-    /// A policy-filtered discovery, retaining its request for cache replay.
-    Requested(&'static str, DiscoveryRequest, u64),
+    Discovered(&'static str, DepPath, u64),
+    /// A policy-filtered discovery, retaining its request for cache replay
+    /// (shared: inline, it would size every dep).
+    Requested(&'static str, Arc<DiscoveryRequest>, u64),
 }
 
 impl Dep {
@@ -276,7 +293,7 @@ fn file_exists(path: &Path) -> bool {
 /// A file's text, recorded.
 pub fn read(path: &Path) -> Option<Arc<str>> {
     let (text, hash) = content(path);
-    note(Dep::Text(path.to_path_buf(), hash));
+    note(Dep::Text(dep_path(path), hash));
     text
 }
 
@@ -337,13 +354,13 @@ pub fn is_file_listed(path: &Path, listing: &Listing) -> bool {
 
 pub fn is_file(path: &Path) -> bool {
     let found = file_exists(path);
-    note(Dep::IsFile(path.to_path_buf(), found));
+    note(Dep::IsFile(dep_path(path), found));
     found
 }
 
 pub fn is_dir(path: &Path) -> bool {
     let found = directory_exists(path);
-    note(Dep::IsDir(path.to_path_buf(), found));
+    note(Dep::IsDir(dep_path(path), found));
     found
 }
 
@@ -367,7 +384,7 @@ fn listing(dir: &Path) -> (Vec<String>, u64) {
 /// A directory's entry names, sorted.
 pub fn list(dir: &Path) -> Vec<String> {
     let (names, hash) = listing(dir);
-    note(Dep::List(dir.to_path_buf(), hash));
+    note(Dep::List(dep_path(dir), hash));
     names
 }
 
@@ -393,7 +410,7 @@ static PROGRAM_FILES: Discovery = Discovery { name: "engine:program-inputs", wan
 pub(crate) fn requested(request: &DiscoveryRequest) -> Option<Vec<PathBuf>> {
     let found = request_walk(request);
     let hash = found.as_ref().map_or(MISSING, |(_, hash)| *hash);
-    note(Dep::Requested(PROGRAM_FILES.name, request.clone(), hash));
+    note(Dep::Requested(PROGRAM_FILES.name, Arc::new(request.clone()), hash));
     found.map(|(paths, _)| paths)
 }
 
@@ -495,7 +512,7 @@ fn walk(d: &Discovery, dir: &Path, jobs: usize) -> (Vec<PathBuf>, u64) {
 pub fn discover(d: &'static Discovery, dir: &Path, jobs: usize) -> Vec<PathBuf> {
     let (found, hash) = walk(d, dir, jobs);
     walks().write().expect("walks lock").insert((d.name, dir.to_path_buf()), Arc::new(found.iter().cloned().collect()));
-    note(Dep::Discovered(d.name, dir.to_path_buf(), hash));
+    note(Dep::Discovered(d.name, dep_path(dir), hash));
     found
 }
 
@@ -615,21 +632,21 @@ mod tests {
             note_group(&shared);
             is_dir(&dir);
         });
-        assert_eq!(reads.deps, vec![Dep::IsDir(dir, false)]);
+        assert_eq!(reads.deps, vec![Dep::IsDir(dep_path(&dir), false)]);
         assert_eq!(reads.groups.len(), 1);
-        assert!(reads.any(&mut |d| *d == Dep::IsFile(file.clone(), false)));
+        assert!(reads.any(&mut |d| *d == Dep::IsFile(dep_path(&file), false)));
         // Outside any scope nothing is recorded (and nothing breaks).
-        note(Dep::IsDir(PathBuf::from("x"), true));
+        note(Dep::IsDir(dep_path(Path::new("x")), true));
     }
 
     #[test]
     fn buffers_read_instead_of_the_disk() {
         let path = std::env::temp_dir().join(format!("zlint-buffer-{}.ts", std::process::id()));
-        assert!(!Dep::IsFile(path.clone(), true).holds(|_| 0));
+        assert!(!Dep::IsFile(dep_path(&path), true).holds(|_| 0));
         set_buffer(&path, "declare global {}");
         let (text, reads) = track(|| read(&path));
         assert_eq!(text.as_deref(), Some("declare global {}"));
-        assert!(reads.deps[0].holds(|_| 0) && Dep::IsFile(path.clone(), true).holds(|_| 0));
+        assert!(reads.deps[0].holds(|_| 0) && Dep::IsFile(dep_path(&path), true).holds(|_| 0));
         drop_buffer(&path);
         assert!(!reads.deps[0].holds(|_| 0));
     }

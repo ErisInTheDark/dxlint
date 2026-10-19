@@ -527,7 +527,8 @@ impl<'a> Reader<'a> {
 
     fn dep(&mut self) -> Option<Dep> {
         let tag = self.u8()?;
-        let path = self.path()?;
+        let raw = self.path()?;
+        let path = super::reads::dep_path(&raw);
         let a = self.u64()?;
         Some(match tag {
             0 => Dep::Text(path, a),
@@ -539,7 +540,8 @@ impl<'a> Reader<'a> {
             5 => Dep::Discovered(super::reads::discovery_name(&self.str()?)?, path, a),
             6 => {
                 let name = super::reads::discovery_name(&self.str()?)?;
-                Dep::Requested(name, crate::grammar::names::modules::resolution::DiscoveryRequest { root: path, include: self.string_list()?, exclude: self.string_list()?, extensions: self.string_list()? }, a)
+                let request = crate::grammar::names::modules::resolution::DiscoveryRequest { root: raw, include: self.string_list()?, exclude: self.string_list()?, extensions: self.string_list()? };
+                Dep::Requested(name, std::sync::Arc::new(request), a)
             }
             _ => return None,
         })
