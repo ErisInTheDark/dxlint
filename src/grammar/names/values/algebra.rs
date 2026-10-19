@@ -43,6 +43,21 @@ impl Values<'_> {
         if unknown { Known::Unknown } else { Known::Yes(false) }
     }
 
+    /// The traits `leaf` can fit at all: a trait set's bits, or every trait
+    /// its kind declares a fit for (open fits never prove one); all traits
+    /// where only evaluation can tell (products, modified values, scopes).
+    fn possible_traits(&self, leaf: Leaf) -> u64 {
+        let Known::Yes(leaf) = self.semantic.leaf(leaf) else { return u64::MAX };
+        match leaf.target {
+            super::Target::Traits(bits) => bits,
+            super::Target::Node(node) => self.world.tree(node.file)
+                .and_then(|tree| tree.nodes.get(node.node as usize))
+                .map_or(u64::MAX, |data| self.tables.kinds.get(data.matcher as usize)
+                    .map_or(0, |kind| kind.fits.iter().fold(0, |all, &(bits, _, _)| all | bits))),
+            _ => u64::MAX,
+        }
+    }
+
     pub(crate) fn normalize(&self, value: NodeValue) -> NodeValue {
         let NodeValue::Alternatives(alternatives) = value else { return NodeValue::Unknown };
         let mask = self.tables.exclusive.iter().fold(0, |all, group| all | group);
@@ -63,9 +78,15 @@ impl Values<'_> {
             // One node site can't prove two exclusive traits by itself; only
             // an intersection (or a trait set) can contradict.
             let contradicts = alternative.len() > 1 || alternative.first().is_some_and(trait_set);
-            for &leaf in alternative.iter().filter(|_| contradicts) {
+            let fittable: Vec<u64> = alternative.iter().filter(|_| contradicts).map(|&leaf| self.possible_traits(leaf)).collect();
+            // Only a group two of whose traits some leaf may fit can
+            // contradict: the others' (often typed) fits are never asked.
+            let union = fittable.iter().fold(0, |all, bits| all | bits);
+            let checked = self.tables.exclusive.iter().filter(|&&group| (union & group).count_ones() > 1)
+                .fold(0, |all, group| all | group) & mask;
+            for (&leaf, fittable) in alternative.iter().zip(fittable) {
                 for trait_id in 0..64 {
-                    if mask & (1 << trait_id) == 0 { continue }
+                    if checked & fittable & (1 << trait_id) == 0 { continue }
                     if !self.question.budget.step() { return NodeValue::Unknown }
                     if self.fits(leaf, trait_id) == Known::Yes(true) {
                         proven |= 1 << trait_id;

@@ -234,6 +234,8 @@ impl<'a> LintWorld<'a> {
         }
         let files = Files(self);
         let at = Leaf { target, frame: FrameId::ROOT };
+        let _root = self.ctx.profile.and(World::tree(&files, file))
+            .map(|tree| crate::engine::Profile::root_scope(tree.node(node).matcher as usize));
         let answer = self.semantic.run(&files, &self.ctx.grammar.names, |semantic| {
             let Known::Yes(at) = semantic.leaf(at) else { return Known::Unknown };
             let answer = match semantic.question.budget.nest() {
@@ -241,9 +243,9 @@ impl<'a> LintWorld<'a> {
                 None => Known::Unknown,
             };
             let budget = &semantic.question.budget;
-            if let (Some(profile), true, Some(tree)) = (self.ctx.profile, budget.limited(), World::tree(&files, file)) {
+            if let (Some(profile), Some(tree)) = (self.ctx.profile, World::tree(&files, file)) {
                 let used = u64::from(crate::grammar::names::question::Budget::DEFAULT - budget.remaining());
-                profile.record_cut_root(tree.node(node).matcher as usize, used);
+                profile.record_root(tree.node(node).matcher as usize, used, budget.limited());
             }
             answer
         });

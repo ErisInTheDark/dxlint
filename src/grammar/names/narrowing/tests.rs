@@ -206,6 +206,9 @@ mod places {
             let use_site = flow.steps().last().unwrap().0;
             let result = narrowing.assigned(&subject, &flow, leaf(0), &[use_site], base.clone());
             assert_eq!(result, if narrowed { NodeValue::leaf(leaf(14)) } else { base });
+            // A lone declared alternative is what every write picks.
+            let lone = NodeValue::leaf(leaf(12));
+            assert_eq!(narrowing.assigned(&subject, &flow, leaf(0), &[use_site], lone.clone()), lone);
         }
         let question = QueryContext::default();
         let semantic = Semantic::new(&world, &tables, &question);

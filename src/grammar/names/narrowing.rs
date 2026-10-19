@@ -190,6 +190,10 @@ impl Narrowing<'_> {
 
     fn assigned(&self, subject: &Place, execution: &Execution, entry: Leaf, uses: &[StepId], base: NodeValue) -> NodeValue {
         let _site = self.semantic.world.profile().map(|_| crate::engine::StepSite::enter("narrowing.assigned"));
+        // Writes only pick among the declared alternatives (as TypeScript
+        // narrows assignments to union declared types only): one alternative
+        // stays whatever was written.
+        if !matches!(&base, NodeValue::Alternatives(rows) if rows.len() > 1) { return base }
         let budget = &self.semantic.question.budget;
         let frame = entry.frame;
         let Some(candidates) = self.write_candidates(subject, execution, entry) else { return NodeValue::Unknown };

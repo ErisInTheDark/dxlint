@@ -73,17 +73,40 @@ impl Narrowing<'_> {
                     };
                     let mut parts = Vec::new();
                     let mut opaque = false;
+                    // Relevance before conditions: a positive test's atom that
+                    // cannot test the subject adds nothing whether its
+                    // condition holds or not, so its (typed) condition is
+                    // never asked.
+                    let mut sources: Vec<(Option<&Value>, bool)> = Vec::new();
                     for item in &kind.unwraps {
                         if !self.semantic.question.budget.step() { return NodeValue::Unknown }
                         if item.effect != Some(truthy) { continue }
+                        if let Some(from) = item.value.as_ref().and_then(atom_source) {
+                            let relevant = match sources.iter().find(|(source, _)| *source == from) {
+                                Some(&(_, relevant)) => relevant,
+                                None => {
+                                    let relevant = matches!(self.projection(at, from, &context, None), Known::Yes(_));
+                                    sources.push((from, relevant));
+                                    relevant
+                                }
+                            };
+                            // A negative test with an undecided atom proves
+                            // nothing, even one about another place.
+                            if !relevant {
+                                if negative && item.when.map_or(Known::Yes(true),
+                                    |condition| self.semantic.world.condition(at, condition, self.semantic)) == Known::Unknown {
+                                    opaque = true;
+                                }
+                                continue;
+                            }
+                        }
                         match item.when.map_or(Known::Yes(true), |condition| self.semantic.world.condition(at, condition, self.semantic)) {
                             Known::Yes(false) => continue,
                             Known::Unknown => { opaque = true; continue }
                             Known::Yes(true) => {}
                         }
                         match &item.value {
-                            Some(value) if self.relevant_atom(at, value, &context) => parts.push(value),
-                            Some(_) => {}
+                            Some(value) => parts.push(value),
                             None => opaque = true,
                         }
                     }
@@ -176,15 +199,6 @@ impl Narrowing<'_> {
             sites.extend(results);
         }
         if sites.is_empty() { Known::Unknown } else { Known::Yes(Some(sites)) }
-    }
-
-    fn relevant_atom(&self, at: Leaf, mut proof: &Value, context: &ProofContext<'_>) -> bool {
-        while let Value::Not(inner) = proof { proof = inner; }
-        let from = match proof {
-            Value::Excludes { from, .. } | Value::Includes { from, .. } | Value::Has { from, .. } => from.as_deref(),
-            _ => return true,
-        };
-        matches!(self.projection(at, from, context, None), Known::Yes(_))
     }
 
     fn projection(&self, at: Leaf, from: Option<&Value>, context: &ProofContext<'_>, key: Option<&Key>) -> Known<Vec<Key>> {
@@ -352,5 +366,15 @@ impl Narrowing<'_> {
             }
             false
         }))
+    }
+}
+
+/// The value an atomic proof tests (`None` inside: the tested node itself);
+/// `None` for compound proofs, which test through their parts.
+fn atom_source(mut proof: &Value) -> Option<Option<&Value>> {
+    while let Value::Not(inner) = proof { proof = inner; }
+    match proof {
+        Value::Excludes { from, .. } | Value::Includes { from, .. } | Value::Has { from, .. } => Some(from.as_deref()),
+        _ => None,
     }
 }

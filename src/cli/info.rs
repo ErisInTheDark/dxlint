@@ -555,7 +555,10 @@ pub fn profile(output: &mut Output<'_>, linter: &Linter, format: super::Format, 
             output.err(format_args!("  {:>11.1} ms {:>11.1} ms self {calls:>11} calls  {CYAN}{name}{CYAN:#}", ms(nanos), ms(own)));
         }
     }
-    let mut sites: Vec<_> = p.step_sites.lock().expect("step sites lock").iter().map(|(&key, &steps)| (steps, key)).collect();
+    let step_keys = p.step_sites.lock().expect("step sites lock").clone();
+    let mut by_site = std::collections::HashMap::<(&str, &str), u64>::new();
+    for (&(_, query, site), &steps) in &step_keys { *by_site.entry((query, site)).or_default() += steps }
+    let mut sites: Vec<_> = by_site.into_iter().map(|(key, steps)| (steps, key)).collect();
     sites.sort_by_key(|row| std::cmp::Reverse(row.0));
     if !sites.is_empty() {
         output.err(format_args!("\n  {BOLD}budget steps{BOLD:#} {DIM}by semantic query and innermost computation (self), top 30{DIM:#}"));
@@ -563,14 +566,39 @@ pub fn profile(output: &mut Output<'_>, linter: &Linter, format: super::Format, 
             output.err(format_args!("  {steps:>13} steps  {CYAN}{query}{CYAN:#}  {site}"));
         }
     }
-    let mut cut: Vec<_> = linter.grammar.matchers.iter().enumerate()
-        .map(|(index, matcher)| (Profile::get(&p.cut_root_steps[index]), Profile::get(&p.cut_root_calls[index]), matcher.name.as_str()))
-        .filter(|(_, calls, _)| *calls > 0).collect();
-    cut.sort_by_key(|row| std::cmp::Reverse(row.0));
+    let roots = p.roots.lock().expect("roots lock").clone();
+    let kind = |matcher: usize| linter.grammar.matchers.get(matcher).map_or("?", |matcher| matcher.name.as_str());
+    let mut asked: Vec<_> = roots.iter().map(|(&(query, matcher), &row)| (row, query, matcher)).collect();
+    asked.sort_by_key(|(row, ..)| std::cmp::Reverse(row.steps));
+    if !asked.is_empty() {
+        output.err(format_args!("\n  {BOLD}root questions{BOLD:#} {DIM}by semantic query and asking node's kind, top 25 by steps; mean = steps per answer{DIM:#}"));
+        for &(row, query, matcher) in asked.iter().take(25) {
+            output.err(format_args!("  {:>13} steps {:>9} roots {:>9} mean {:>7} cut  {CYAN}{query}{CYAN:#} at {}",
+                row.steps, row.roots, row.steps / row.roots.max(1), row.cut, kind(matcher)));
+        }
+        for &(row, query, matcher) in asked.iter().take(4) {
+            let mut inside: Vec<_> = step_keys.iter().filter(|((root, ..), _)| *root == (query, matcher))
+                .map(|(&(_, nested, site), &steps)| (steps, nested, site)).collect();
+            inside.sort_by_key(|row| std::cmp::Reverse(row.0));
+            output.err(format_args!("\n  {BOLD}inside{BOLD:#} {CYAN}{query}{CYAN:#} at {} {DIM}({} roots): steps by nested query and site, top 12{DIM:#}",
+                kind(matcher), row.roots));
+            for (steps, nested, site) in inside.into_iter().take(12) {
+                output.err(format_args!("  {steps:>13} steps  {CYAN}{nested}{CYAN:#}  {site}"));
+            }
+        }
+    }
+    let mut cut = std::collections::BTreeMap::<usize, (u64, u64)>::new();
+    for (&(_, matcher), row) in &roots {
+        let entry = cut.entry(matcher).or_default();
+        entry.0 += row.cut_steps;
+        entry.1 += row.cut;
+    }
+    let mut cut: Vec<_> = cut.into_iter().filter(|(_, (_, calls))| *calls > 0).collect();
+    cut.sort_by_key(|(_, (steps, _))| std::cmp::Reverse(*steps));
     if !cut.is_empty() {
         output.err(format_args!("\n  {BOLD}roots cut short{BOLD:#} {DIM}by the asking node's kind, top 15 by steps spent{DIM:#}"));
-        for (steps, calls, name) in cut.into_iter().take(15) {
-            output.err(format_args!("  {steps:>13} steps {calls:>9} roots  {CYAN}{name}{CYAN:#}"));
+        for (matcher, (steps, calls)) in cut.into_iter().take(15) {
+            output.err(format_args!("  {steps:>13} steps {calls:>9} roots  {CYAN}{}{CYAN:#}", kind(matcher)));
         }
     }
     let mut names: Vec<_> = p.semantic_queries.iter()

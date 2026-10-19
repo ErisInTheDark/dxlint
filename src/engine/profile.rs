@@ -16,8 +16,10 @@ thread_local! {
     static SEMANTIC_QUERY: Cell<Option<&'static str>> = const { Cell::new(None) };
     /// The innermost engine computation spending budget ([`StepSite`]).
     static STEP_SITE: Cell<&'static str> = const { Cell::new("") };
-    /// Budget steps by (semantic query, step site), flushed per root.
-    static STEP_COUNTS: RefCell<FxHashMap<(&'static str, &'static str), u64>> = RefCell::new(FxHashMap::default());
+    /// The root question being answered: its query and asking matcher.
+    static ROOT: Cell<Option<RootKind>> = const { Cell::new(None) };
+    /// Budget steps by [`StepKey`], flushed per root.
+    static STEP_COUNTS: RefCell<FxHashMap<StepKey, u64>> = RefCell::new(FxHashMap::default());
     /// Per open self-timed region (outermost first), the time its nested
     /// regions took so far.
     static NESTED_TIME: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
@@ -141,12 +143,11 @@ pub struct Profile {
     pub value_nanos: Vec<AtomicU64>,
     pub value_self_nanos: Vec<AtomicU64>,
     pub value_calls: Vec<AtomicU64>,
-    /// Root questions cut short by their budget, by the asking node's
-    /// matcher, and the steps they spent.
-    pub cut_root_calls: Vec<AtomicU64>,
-    pub cut_root_steps: Vec<AtomicU64>,
+    /// Root questions by (semantic query, asking node's matcher)
+    /// ([`Profile::record_root`]).
+    pub roots: Mutex<FxHashMap<(&'static str, usize), RootSteps>>,
     /// Budget steps by (semantic query, step site) ([`Profile::count_step`]).
-    pub step_sites: Mutex<FxHashMap<(&'static str, &'static str), u64>>,
+    pub step_sites: Mutex<FxHashMap<StepKey, u64>>,
     /// Per attribute (`let`): reads including memo hits, total and self
     /// time, so a shared let's cost shows on the let, not on whichever
     /// rule read it first.
@@ -269,6 +270,29 @@ impl Drop for SemanticQueryScope {
     }
 }
 
+/// A root question's semantic query and asking node's matcher.
+pub type RootKind = (&'static str, usize);
+/// Budget steps are counted by (root question, semantic query, step site).
+pub type StepKey = (RootKind, &'static str, &'static str);
+
+pub struct RootScope(Option<RootKind>);
+
+impl Drop for RootScope {
+    fn drop(&mut self) {
+        ROOT.with(|root| root.set(self.0));
+    }
+}
+
+/// Root questions of one (query, asking kind): how many, the steps they
+/// spent, and how many of those (and their steps) their budget cut short.
+#[derive(Clone, Copy, Default)]
+pub struct RootSteps {
+    pub roots: u64,
+    pub steps: u64,
+    pub cut: u64,
+    pub cut_steps: u64,
+}
+
 /// Budget steps taken while held count against `site` (innermost wins).
 pub struct StepSite(&'static str);
 
@@ -378,8 +402,7 @@ impl Profile {
             value_nanos: counters(matchers),
             value_self_nanos: counters(matchers),
             value_calls: counters(matchers),
-            cut_root_calls: counters(matchers),
-            cut_root_steps: counters(matchers),
+            roots: Mutex::default(),
             step_sites: Mutex::default(),
             overlay_nanos: counters(matchers),
             overlay_nodes: counters(matchers),
@@ -496,11 +519,20 @@ impl Profile {
         shared(&self.fact_nanos[fact], &self.fact_calls[fact], compute)
     }
 
-    /// One budget step, against the current semantic query and step site.
+    /// One budget step, against the root question, the current semantic
+    /// query and step site.
     pub fn count_step() {
+        let root = ROOT.with(Cell::get).unwrap_or(("-", usize::MAX));
         let query = SEMANTIC_QUERY.with(Cell::get).unwrap_or("-");
         let site = STEP_SITE.with(Cell::get);
-        STEP_COUNTS.with(|counts| *counts.borrow_mut().entry((query, site)).or_default() += 1);
+        STEP_COUNTS.with(|counts| *counts.borrow_mut().entry((root, query, site)).or_default() += 1);
+    }
+
+    /// Steps counted while held belong to a root question asked by the
+    /// current semantic query at a node of `matcher`.
+    pub fn root_scope(matcher: usize) -> RootScope {
+        let query = SEMANTIC_QUERY.with(Cell::get).unwrap_or("-");
+        RootScope(ROOT.with(|root| root.replace(Some((query, matcher)))))
     }
 
     /// Moves this thread's step counts into the profile.
@@ -510,10 +542,17 @@ impl Profile {
         for (key, steps) in counts { *shared.entry(key).or_default() += steps }
     }
 
-    pub fn record_cut_root(&self, matcher: usize, steps: u64) {
-        if let (Some(calls), Some(spent)) = (self.cut_root_calls.get(matcher), self.cut_root_steps.get(matcher)) {
-            Self::add(calls, 1);
-            Self::add(spent, steps);
+    /// One root question asked at a node of `matcher`, against the semantic
+    /// query asking it: the steps it spent and whether its budget cut it.
+    pub fn record_root(&self, matcher: usize, steps: u64, cut: bool) {
+        let query = SEMANTIC_QUERY.with(Cell::get).unwrap_or("-");
+        let mut roots = self.roots.lock().expect("roots lock");
+        let row = roots.entry((query, matcher)).or_default();
+        row.roots += 1;
+        row.steps += steps;
+        if cut {
+            row.cut += 1;
+            row.cut_steps += steps;
         }
     }
 
