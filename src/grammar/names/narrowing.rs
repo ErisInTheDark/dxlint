@@ -27,10 +27,15 @@ pub(crate) struct State {
     /// Per execution entry, region entry steps and tested place: the steps
     /// a write to the place reaches inside the region ([`Region::valid`]).
     written_through: super::memo::Memo<(Leaf, Box<[super::effects::StepId]>, Place), std::rc::Rc<[u64]>>,
-    /// Per file, the binding roots its guards' proofs can test
-    /// ([`Narrowing::tested_roots`]); `None` when they can't be told.
-    tested: super::memo::Memo<u32, Option<std::rc::Rc<crate::fx_hash::FxHashSet<NodeRef>>>>,
+    /// Per file, the binding roots its guards' proofs can test, with those
+    /// guards' owner nodes ([`Narrowing::tested_roots`]); `None` when they
+    /// can't be told.
+    tested: super::memo::Memo<u32, Option<std::rc::Rc<TestedRoots>>>,
 }
+
+/// Binding root -> the guard owners (node ids, in the root's file) whose
+/// proofs may test it.
+type TestedRoots = crate::fx_hash::FxHashMap<NodeRef, Vec<u32>>;
 
 /// One `in <field> propagates <proof>` item that holds at its owner.
 #[derive(Clone)]
@@ -62,15 +67,21 @@ impl Narrowing<'_> {
 
     fn refine_graph(&self, at: Leaf, mut base: NodeValue) -> NodeValue {
         let Known::Yes((subject, written)) = self.find_place(at, true) else { return base };
-        // A lone declared alternative no write changes, and no guard in the
-        // file tests this binding: nothing can narrow it, so no flow graph.
-        if !matches!(&base, NodeValue::Alternatives(rows) if rows.len() > 1) {
-            if let (Target::Node(read), Target::Node(root)) = (at.target, written.root.target) {
-                if self.tested_roots(read.file).is_some_and(|roots| !roots.contains(&root)) { return base }
-            }
-        }
         let effects = self.semantic.effects();
         let Known::Yes(entry) = effects.entry_for(at) else { return base };
+        // A lone declared alternative no write changes, and no guard that can
+        // reach this read tests its binding: nothing can narrow it, so no
+        // flow graph. A guard reaches it from inside the read's own body, or
+        // around the read (a closure created in the guarded region).
+        if !matches!(&base, NodeValue::Alternatives(rows) if rows.len() > 1) {
+            if let (Target::Node(read), Target::Node(root), Target::Node(body)) = (at.target, written.root.target, entry.target) {
+                if let Some(roots) = self.tested_roots(read.file) {
+                    let reaches = |&owner: &u32| body.file != read.file
+                        || self.within(owner, body.node, read.file) || self.within(read.node, owner, read.file);
+                    if !roots.get(&root).is_some_and(|owners| owners.iter().any(reaches)) { return base }
+                }
+            }
+        }
         let mut contexts = vec![(entry, at)];
         if subject.path.is_empty() {
             let mut enclosing = Vec::new();
@@ -157,10 +168,11 @@ impl Narrowing<'_> {
         Some(guards)
     }
 
-    /// The lexical binding roots any guard in `file` can test: the roots of
-    /// every name inside the sites its `propagates` proofs read, found once
-    /// per file from syntax and names. `None` when a proof can't be followed.
-    fn tested_roots(&self, file: u32) -> Option<std::rc::Rc<crate::fx_hash::FxHashSet<NodeRef>>> {
+    /// The lexical binding roots any guard in `file` can test, with the
+    /// guards: the roots of every name inside the sites `propagates` proofs
+    /// read, found once per file from syntax and names. `None` when a proof
+    /// can't be followed.
+    fn tested_roots(&self, file: u32) -> Option<std::rc::Rc<TestedRoots>> {
         let memo = &self.semantic.narrowing_places.tested;
         if let Some(roots) = memo.get(&file) { return roots }
         let roots = self.collect_tested_roots(file).map(std::rc::Rc::new);
@@ -169,11 +181,18 @@ impl Narrowing<'_> {
         roots
     }
 
-    fn collect_tested_roots(&self, file: u32) -> Option<crate::fx_hash::FxHashSet<NodeRef>> {
+    /// Whether node `inner` lies within node `outer` (both in `file`).
+    fn within(&self, inner: u32, outer: u32, file: u32) -> bool {
+        let Some(tree) = self.semantic.world.tree(file) else { return true };
+        let (Some(inner), Some(outer)) = (tree.nodes.get(inner as usize), tree.nodes.get(outer as usize)) else { return true };
+        outer.start <= inner.start && inner.end <= outer.end
+    }
+
+    fn collect_tested_roots(&self, file: u32) -> Option<TestedRoots> {
         let tree = self.semantic.world.tree(file)?;
         let names = self.semantic.world.names(file)?;
         let values = self.semantic.values();
-        let mut roots = crate::fx_hash::FxHashSet::default();
+        let mut roots = TestedRoots::default();
         let mut paths = Vec::new();
         for (id, data) in tree.nodes.iter().enumerate() {
             let Some(kind) = self.semantic.tables.kinds.get(data.matcher as usize) else { continue };
@@ -195,7 +214,10 @@ impl Narrowing<'_> {
                                 let at = Leaf { target: Target::Node(NodeRef { file, node }), frame: super::question::FrameId::ROOT };
                                 match self.written_place(at) {
                                     Known::Yes(place) => match place.root.target {
-                                        Target::Node(root) => { roots.insert(root); }
+                                        Target::Node(root) => {
+                                            let owners = roots.entry(root).or_default();
+                                            if owners.last() != Some(&(id as u32)) { owners.push(id as u32) }
+                                        }
                                         _ => return None,
                                     },
                                     // A name that names no place tests none.

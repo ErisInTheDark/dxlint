@@ -646,11 +646,7 @@ in ts_property_signature {
 in ts_method_signature {
   declares member key keyed ts_value_key(it) in nearest members hoisted
 }
-fn ts_value_optional_member(n, key) = {
-  value lookup: value_lookup(n.object.node, key)
-  value lookup != null && any(lookup.alternatives, row => row.matched && row.required == false
-    && any(row.sources, source => source.kind == "named"))
-}
+fn ts_value_optional_member(n, key) = value_member_optional(n.object.node, key) == true
 in ts_member {
   refers object.[ts_value_member_key]
   let ts_value_member_key ts_value_key(property.node)

@@ -253,8 +253,10 @@ pub(super) enum StableQuestion {
     Augmentations { classes: u64 },
 }
 
-/// A program's inputs with their texts (`None`: unreadable).
-pub(super) type Survey = Arc<[(PathBuf, Option<Arc<str>>)]>;
+/// A program's inputs with their texts (`None`: unreadable) and whether the
+/// text holds a name-independent publication hint (so it may publish any
+/// global name).
+pub(super) type Survey = Arc<[(PathBuf, Option<Arc<str>>, bool)]>;
 
 /// Module scope (path, scope) -> the scopes that augment it.
 pub(super) type Augmentations = FxHashMap<(PathBuf, u32), Vec<(PathBuf, u32)>>;

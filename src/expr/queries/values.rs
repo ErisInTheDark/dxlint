@@ -15,6 +15,7 @@ pub(super) static FUNCTIONS: &[QueryFunction] = &[
     QueryFunction { name: "member_call_parameters", arity: 2, call: member_parameters },
     QueryFunction { name: "value_member", arity: 2, call: member },
     QueryFunction { name: "value_lookup", arity: 2, call: lookup },
+    QueryFunction { name: "value_member_optional", arity: 2, call: member_optional },
     QueryFunction { name: "value_key", arity: 1, call: value_key },
     QueryFunction { name: "value_keys", arity: 1, call: value_keys },
     QueryFunction { name: "value_has_member", arity: 3, call: has_member },
@@ -229,6 +230,19 @@ fn lookup(semantic: &Semantic<'_>, at: Leaf, args: &[Value<'static>]) -> Known<V
     let Some(argument) = args.first() else { return Known::Unknown };
     let Known::Yes(key) = query_key(semantic, at, argument) else { return Known::Unknown };
     lookup_in(semantic, semantic.values().values(at), &key)
+}
+
+/// Whether some alternative of `at`'s value has member `key` as a declared
+/// (named) member that is not required: `value_lookup`'s answer to that one
+/// question, without projecting the member's value.
+fn member_optional(semantic: &Semantic<'_>, at: Leaf, args: &[Value<'static>]) -> Known<Value<'static>> {
+    let Some(argument) = args.first() else { return Known::Unknown };
+    let Known::Yes(key) = query_key(semantic, at, argument) else { return Known::Unknown };
+    let values = semantic.values();
+    let Known::Yes(rows) = values.keyed_members(&values.values(at), &key) else { return Known::Unknown };
+    let optional = rows.iter().flatten().any(|member| member.required == Known::Yes(false)
+        && member.sources.iter().any(|source| matches!(source.origin, MemberOrigin::Named)));
+    Known::Yes(Value::Bool(optional))
 }
 
 pub(super) fn lookup_in(semantic: &Semantic<'_>, value: NodeValue, key: &Key) -> Known<Value<'static>> {

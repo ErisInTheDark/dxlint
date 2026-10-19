@@ -494,13 +494,19 @@ impl<'a> Files<'a> {
                     (Some(snapshot), true) if self.shares(snapshot) => {
                         let Known::Yes((program, _)) = self.program_identity(selected) else { return Known::Unknown };
                         let settings = selected as *const Settings as usize;
-                        let survey = self.timed("modules.roots.survey", || snapshot.survey((settings, program), || paths.iter().map(|path| (path.clone(), self.source_text(path))).collect()));
+                        // Hints don't depend on the name: each text is checked
+                        // for them once per program, not once per name.
+                        let survey = self.timed("modules.roots.survey", || snapshot.survey((settings, program), || paths.iter().map(|path| {
+                            let text = self.source_text(path);
+                            let hinted = text.as_deref().is_none_or(|text| selected.globals.name_hints.iter().any(|hint| text.contains(&**hint)));
+                            (path.clone(), text, hinted)
+                        }).collect()));
                         let shared = snapshot.candidates((settings, program, Box::from(name)), || {
                             let sources = survey.get();
                             let finder = memchr::memmem::Finder::new(name.as_bytes());
-                            let hinted = |text: &str| finder.find(text.as_bytes()).is_some()
-                                || selected.globals.name_hints.iter().any(|hint| text.contains(&**hint));
-                            sources.iter().filter(|(_, text)| text.as_deref().is_none_or(hinted)).map(|(path, _)| path.clone()).collect()
+                            sources.iter()
+                                .filter(|(_, text, hinted)| *hinted || text.as_deref().is_some_and(|text| finder.find(text.as_bytes()).is_some()))
+                                .map(|(path, ..)| path.clone()).collect()
                         });
                         Known::Yes(shared.get())
                     }
