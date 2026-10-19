@@ -153,6 +153,7 @@ pub(super) fn selection(call: Leaf, values: &Values<'_>) -> Known<Option<Selecti
 }
 
 pub(super) fn outputs(call: Leaf, values: &Values<'_>) -> Known<Option<NodeValue>> {
+    if let Some(result) = agreed_outputs(call, values) { return Known::Yes(Some(result)) }
     let groups = match values.calls().candidates(call) {
         Known::Yes(Some(groups)) => groups,
         Known::Yes(None) => return Known::Yes(None),
@@ -178,6 +179,50 @@ pub(super) fn outputs(call: Leaf, values: &Values<'_>) -> Known<Option<NodeValue
         }
     }
     Known::Yes(Some(NodeValue::Alternatives(results)))
+}
+
+/// The call's result when every overload it could select has the very same
+/// one (no type parameters to infer): which overload the arguments pick
+/// can't change it, so none is selected. `None`: selection decides.
+fn agreed_outputs(call: Leaf, values: &Values<'_>) -> Option<NodeValue> {
+    let kind = kind(call, values)?;
+    // Explicit type arguments rule out overloads without type parameters.
+    if !values.declared_arguments(call).known()?.unwrap_or_default().is_empty() { return None }
+    for invoke in &kind.calls.invokes {
+        match invoke.when.map_or(Known::Yes(true), |when| values.world.condition(call, when, values.semantic)) {
+            Known::Yes(false) => continue,
+            Known::Unknown => return None,
+            Known::Yes(true) => {}
+        }
+        let callee = values.evaluate(call, &invoke.item.callee);
+        let invoke_kind = if invoke.item.construct { InvokeKind::Construct } else { InvokeKind::Call };
+        let sets = values.calls().headers(&callee, invoke_kind).known()?;
+        if sets.is_empty() { return None }
+        let mut results = Vec::new();
+        for set in sets {
+            let mut agreed: Option<NodeValue> = None;
+            for header in set {
+                if !super::infer::formals(header.site, values).known()?.is_empty() { return None }
+                // The frame a selected overload is read in (as `candidate`).
+                let owner = node(header.site, values)?;
+                let classes = values.question.owner_classes(header.site.frame, owner).known()?;
+                let frame = values.question.bind_slots(header.site.frame, owner, Some(call), Vec::new(), classes);
+                let header = Header { site: Leaf { frame, ..header.site }, ..header };
+                let result = super::result::header_result(header, values).known()?;
+                // The very same result only: mutually assignable results
+                // (`void`, `undefined`) still tell overloads apart.
+                match &agreed {
+                    None => agreed = Some(result),
+                    Some(previous) if previous == &result => {}
+                    Some(_) => return None,
+                }
+            }
+            let NodeValue::Alternatives(arms) = agreed? else { return None };
+            results.extend(arms);
+        }
+        return Some(NodeValue::Alternatives(results));
+    }
+    None
 }
 
 fn proven(group: &[Known<Candidate>]) -> Option<&Candidate> {
