@@ -1,0 +1,10 @@
+import .ts
+
+# `!(player.skill instanceof SkillManager)` narrows the member, not a
+# non-union `player`: reads of `player` inside keep `Player` (never `never`).
+in ts_declarator rule member-narrowing {
+  let read init.node
+  report at name.node
+  info "{ read always object && !(read could object) }"
+}
+rule member-narrowing

@@ -236,6 +236,8 @@ impl Narrowing<'_> {
 
     fn excludes(&self, at: Leaf, from: Option<&Value>, context: &ProofContext<'_>, base: NodeValue, traits: u64, negative: bool) -> NodeValue {
         let Known::Yes(path) = self.projection(at, from, context, None) else { return base };
+        if lone_through_member(&path, &base) { return base }
+        let fallback = (!path.is_empty()).then(|| base.clone());
         let values = self.semantic.values();
         let NodeValue::Alternatives(alternatives) = base else { return NodeValue::Unknown };
         let mut kept = Vec::new();
@@ -261,13 +263,15 @@ impl Narrowing<'_> {
             }
             if keep { kept.push(alternative) }
         }
-        NodeValue::Alternatives(kept)
+        through_member(fallback, kept)
     }
 
     fn includes(&self, at: Leaf, from: Option<&Value>, context: &ProofContext<'_>, base: NodeValue, value: &Value, negative: bool) -> NodeValue {
         let Known::Yes(path) = self.projection(at, from, context, None) else { return base };
+        if lone_through_member(&path, &base) { return base }
         let expected = self.semantic.values().evaluate(at, value);
         if matches!(expected, NodeValue::Unknown) { return base }
+        let fallback = (!path.is_empty()).then(|| base.clone());
         let NodeValue::Alternatives(alternatives) = base else {
             return if !negative && path.is_empty() { expected } else { NodeValue::Unknown };
         };
@@ -297,7 +301,7 @@ impl Narrowing<'_> {
             }
             if self.semantic.question.budget.exhausted() { return NodeValue::Unknown }
         }
-        NodeValue::Alternatives(kept)
+        through_member(fallback, kept)
     }
 
     fn has(&self, at: Leaf, from: Option<&Value>, context: &ProofContext<'_>, base: NodeValue, key: &Value, negative: bool) -> NodeValue {
@@ -305,6 +309,8 @@ impl Narrowing<'_> {
         let Known::Yes(key) = values.key(at, key) else { return base };
         if !negative && !matches!(key, Key::Text(_)) { return base }
         let Known::Yes(path) = self.projection(at, from, context, Some(&key)) else { return base };
+        if lone_through_member(&path, &base) { return base }
+        let fallback = (!path.is_empty()).then(|| base.clone());
         let NodeValue::Alternatives(alternatives) = base else { return NodeValue::Unknown };
         let mut kept = Vec::new();
         for alternative in alternatives {
@@ -320,7 +326,7 @@ impl Narrowing<'_> {
             if !excluded { kept.push(alternative) }
             if self.semantic.question.budget.exhausted() { return NodeValue::Unknown }
         }
-        NodeValue::Alternatives(kept)
+        through_member(fallback, kept)
     }
 
     fn literal(&self, alternative: &[Leaf]) -> Option<crate::expr::Value<'static>> {
@@ -366,6 +372,23 @@ impl Narrowing<'_> {
             }
             false
         }))
+    }
+}
+
+/// A test of a member (`x.y instanceof C` read as narrowing `x`) only picks
+/// among `x`'s alternatives, as TypeScript narrows only unions by their
+/// properties: a lone alternative stays as it is.
+fn lone_through_member(path: &[Key], base: &NodeValue) -> bool {
+    !path.is_empty() && !matches!(base, NodeValue::Alternatives(rows) if rows.len() > 1)
+}
+
+/// The alternatives a member test kept; when it ruled out every one (the
+/// member test says nothing the object's own value can show), the object
+/// keeps its value (`fallback`) instead of becoming `never`.
+fn through_member(fallback: Option<NodeValue>, kept: Vec<Vec<Leaf>>) -> NodeValue {
+    match fallback {
+        Some(base) if kept.is_empty() => base,
+        _ => NodeValue::Alternatives(kept),
     }
 }
 

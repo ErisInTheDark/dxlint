@@ -1,0 +1,2 @@
+input.ts:6:15-6:21 member-narrowing#0 false
+input.ts:8:7-8:11 member-narrowing#0 false
