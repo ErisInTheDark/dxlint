@@ -739,8 +739,11 @@ impl Values<'_> {
             if !self.question.budget.step() { return NodeValue::Unknown }
             let Target::Node(node) = target else { return NodeValue::Unknown };
             let Known::Yes(owner) = self.declaration_owner(node) else { return NodeValue::Unknown };
-            let through = match at.target { Target::Node(_) => Some(at), _ => None };
-            let frame = self.question.bind_definition(at.frame, owner, through, Some(args.clone()), classes);
+            let shared = if args.is_empty() { self.shared_frame(owner, classes) } else { None };
+            let frame = shared.unwrap_or_else(|| {
+                let through = match at.target { Target::Node(_) => Some(at), _ => None };
+                self.question.bind_definition(at.frame, owner, through, Some(args.clone()), classes)
+            });
             values.push(self.values(Leaf { target: Target::Node(owner), frame }));
         }
         eval::combine(self, values, true)
@@ -866,11 +869,17 @@ impl Values<'_> {
     /// view matters): a 2,000-member enum is evaluated once, not per
     /// reference.
     fn definition_frame(&self, parent: super::question::FrameId, owner: NodeRef, through: Leaf, classes: u64) -> super::question::FrameId {
-        if self.world.tree(owner.file).is_some() && self.semantic.generic_scope(owner).is_none() {
-            return self.question.bind_definition(super::question::FrameId::ROOT, owner, None, None, classes);
-        }
+        if let Some(shared) = self.shared_frame(owner, classes) { return shared }
         let through = match through.target { Target::Node(_) => Some(through), _ => None };
         self.question.bind_definition(parent, owner, through, None, classes)
+    }
+
+    /// The one frame every reach of `owner` (with view `classes`) shares
+    /// when no type parameters are around it: nothing it holds depends on
+    /// where it was reached from. `None` for owners that may instantiate.
+    pub(super) fn shared_frame(&self, owner: NodeRef, classes: u64) -> Option<super::question::FrameId> {
+        (self.world.tree(owner.file).is_some() && self.semantic.generic_scope(owner).is_none())
+            .then(|| self.question.bind_definition(super::question::FrameId::ROOT, owner, None, None, classes))
     }
 
     fn find_bound_argument(&self, formal: Leaf) -> Known<Option<NodeValue>> {

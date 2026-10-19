@@ -590,7 +590,8 @@ impl Values<'_> {
                         (target, NodeRef { file: scope.file, node: info.node })
                     },
                 };
-                let frame = self.question.bind_definition(at.frame, owner, None, None, classes);
+                let frame = self.shared_frame(owner, classes)
+                    .unwrap_or_else(|| self.question.bind_definition(at.frame, owner, None, None, classes));
                 sources.push(MemberSource::normal(Leaf { target, frame }));
             }
             if !sources.is_empty() {
