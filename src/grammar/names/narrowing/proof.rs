@@ -177,7 +177,7 @@ impl Narrowing<'_> {
                             NodeValue::Unknown => unknown = true,
                         }
                     }
-                    results.push(if unknown { NodeValue::Unknown } else { NodeValue::Alternatives(alternatives) });
+                    results.push(if unknown { NodeValue::Unknown } else { NodeValue::rows(alternatives) });
                 }
             }
         }
@@ -242,7 +242,7 @@ impl Narrowing<'_> {
         let NodeValue::Alternatives(alternatives) = base else { return NodeValue::Unknown };
         let mut kept = Vec::new();
         for alternative in alternatives {
-            let projected = self.projected(NodeValue::Alternatives(vec![alternative.clone()]), &path);
+            let projected = self.projected(NodeValue::rows(vec![alternative.clone()]), &path);
             if !negative && self.wholly_top(&projected) {
                 kept.push(alternative);
                 continue;
@@ -277,7 +277,7 @@ impl Narrowing<'_> {
         };
         let mut kept = Vec::new();
         for alternative in alternatives {
-            let actual = self.projected(NodeValue::Alternatives(vec![alternative.clone()]), &path);
+            let actual = self.projected(NodeValue::rows(vec![alternative.clone()]), &path);
             let included = self.included(&expected, &actual);
             if self.semantic.question.budget.exhausted() { return NodeValue::Unknown }
             if negative {
@@ -289,7 +289,7 @@ impl Narrowing<'_> {
                     let NodeValue::Alternatives(refined) = &expected else { unreachable!() };
                     for refinement in refined {
                         if !self.semantic.question.budget.step() { return NodeValue::Unknown }
-                        let narrowed = NodeValue::Alternatives(vec![refinement.clone()]);
+                        let narrowed = NodeValue::rows(vec![refinement.clone()]);
                         if self.proven_disjoint(&narrowed, &actual) { continue }
                         let mut intersection = alternative.clone();
                         intersection.extend(refinement.iter().copied());
@@ -315,7 +315,7 @@ impl Narrowing<'_> {
         let mut kept = Vec::new();
         for alternative in alternatives {
             if !self.semantic.question.budget.step() { return NodeValue::Unknown }
-            let projected = self.projected(NodeValue::Alternatives(vec![alternative.clone()]), &path);
+            let projected = self.projected(NodeValue::rows(vec![alternative.clone()]), &path);
             let excluded = match values.members(&projected) {
                 Known::Yes(rows) if negative => !rows.is_empty() && rows.iter().all(|row| row.iter()
                     .any(|member| member.key == key && member.required == Known::Yes(true))),
@@ -357,8 +357,8 @@ impl Narrowing<'_> {
             if let (Some(actual), Some(expected)) = (self.literal(actual), self.literal(expected)) {
                 if actual != expected { return true }
             }
-            let actual = NodeValue::Alternatives(vec![actual.clone()]);
-            let expected = NodeValue::Alternatives(vec![expected.clone()]);
+            let actual = NodeValue::rows(vec![actual.clone()]);
+            let expected = NodeValue::rows(vec![expected.clone()]);
             for &group in &self.semantic.tables.exclusive {
                 for actual_id in 0..64 {
                     let actual_bit = 1 << actual_id;
@@ -388,7 +388,7 @@ fn lone_through_member(path: &[Key], base: &NodeValue) -> bool {
 fn through_member(fallback: Option<NodeValue>, kept: Vec<Vec<Leaf>>) -> NodeValue {
     match fallback {
         Some(base) if kept.is_empty() => base,
-        _ => NodeValue::Alternatives(kept),
+        _ => NodeValue::rows(kept),
     }
 }
 

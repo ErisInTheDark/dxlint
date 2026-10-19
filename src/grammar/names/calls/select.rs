@@ -178,7 +178,7 @@ pub(super) fn outputs(call: Leaf, values: &Values<'_>) -> Known<Option<NodeValue
             results.push(arm);
         }
     }
-    Known::Yes(Some(NodeValue::Alternatives(results)))
+    Known::Yes(Some(NodeValue::rows(results)))
 }
 
 /// The call's result when every overload it could select has the very same
@@ -220,7 +220,7 @@ fn agreed_outputs(call: Leaf, values: &Values<'_>) -> Option<NodeValue> {
             let NodeValue::Alternatives(arms) = agreed? else { return None };
             results.extend(arms);
         }
-        return Some(NodeValue::Alternatives(results));
+        return Some(NodeValue::rows(results));
     }
     None
 }

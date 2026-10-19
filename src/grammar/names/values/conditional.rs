@@ -66,7 +66,7 @@ impl Values<'_> {
         for arm in arms {
             if !self.question.budget.step() { return NodeValue::Unknown }
             let mut arguments = vec![None; count];
-            arguments[position] = Some(NodeValue::Alternatives(vec![arm]));
+            arguments[position] = Some(NodeValue::rows(vec![arm]));
             let frame = self.question.bind_overlay(at.frame, owner, arguments, classes);
             branches.push(self.select_arm(Leaf { frame, ..at }, selection));
         }

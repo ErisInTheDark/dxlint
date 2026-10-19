@@ -1,4 +1,5 @@
 use super::{Known, Leaf, NodeValue, Values};
+use super::super::question::{Normal, Rows};
 
 impl Values<'_> {
     pub fn expand(&self, value: &NodeValue) -> NodeValue {
@@ -72,6 +73,8 @@ impl Values<'_> {
 
     fn normalize_rows(&self, value: NodeValue, contradictions: bool) -> NodeValue {
         let NodeValue::Alternatives(alternatives) = value else { return NodeValue::Unknown };
+        let level = if contradictions { Normal::Full } else { Normal::Union };
+        if alternatives.normal() >= level { return NodeValue::Alternatives(alternatives) }
         let mask = self.tables.exclusive.iter().fold(0, |all, group| all | group);
         let mut possible = Vec::new();
         let mut absorbing = Vec::new();
@@ -139,6 +142,6 @@ impl Values<'_> {
         let mut rows = if absorbing.is_empty() { possible } else { absorbing };
         let mut seen = crate::fx_hash::FxHashSet::default();
         rows.retain(|row| seen.insert(row.clone()));
-        NodeValue::Alternatives(rows)
+        NodeValue::Alternatives(Rows::normalized(rows, level))
     }
 }

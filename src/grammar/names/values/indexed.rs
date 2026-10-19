@@ -181,7 +181,7 @@ impl Values<'_> {
                 let source = match binding {
                     Some((owner, position, count, classes)) => {
                         let mut arguments = vec![None; count];
-                        arguments[position] = Some(NodeValue::Alternatives(rows));
+                        arguments[position] = Some(NodeValue::rows(rows));
                         Leaf { frame: self.question.bind_overlay(at.frame, owner, arguments, classes), ..at }
                     }
                     None => at,

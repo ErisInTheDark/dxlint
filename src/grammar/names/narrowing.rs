@@ -315,7 +315,7 @@ impl Narrowing<'_> {
             let NodeValue::Alternatives(rows) = values.reduce(&base, &written) else { return base };
             alternatives.extend(rows);
         }
-        NodeValue::Alternatives(alternatives)
+        NodeValue::rows(alternatives)
     }
 
     /// Whether `event` replaces (part of) `tested`, a written place.

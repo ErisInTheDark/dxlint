@@ -202,7 +202,7 @@ mod places {
             let semantic = Semantic::new(&world, &tables, &question);
             let narrowing = semantic.narrowing();
             let Known::Yes(subject) = narrowing.place(leaf(3)) else { panic!("binding place is known") };
-            let base = NodeValue::Alternatives(vec![vec![leaf(14)], vec![leaf(12)]]);
+            let base = NodeValue::rows(vec![vec![leaf(14)], vec![leaf(12)]]);
             let use_site = flow.steps().last().unwrap().0;
             let result = narrowing.assigned(&subject, &flow, leaf(0), &[use_site], base.clone());
             assert_eq!(result, if narrowed { NodeValue::leaf(leaf(14)) } else { base });
@@ -215,7 +215,7 @@ mod places {
         let narrowing = semantic.narrowing();
         let Known::Yes(member) = narrowing.place(leaf(7)) else { panic!("member place is known") };
         let flow = super::graph(vec![super::entry(0), valued, super::entry(7)], &[&[1], &[2], &[]]);
-        let base = NodeValue::Alternatives(vec![vec![leaf(14)], vec![leaf(12)]]);
+        let base = NodeValue::rows(vec![vec![leaf(14)], vec![leaf(12)]]);
         assert_eq!(narrowing.assigned(&member, &flow, leaf(0), &[2], base.clone()), base);
     }
 
@@ -362,7 +362,7 @@ mod places {
         let semantic = Semantic::new(&world, &tables, &question);
         let narrowing = semantic.narrowing();
         let subject = Place { root: leaf(1), path: vec![] };
-        let base = NodeValue::Alternatives(vec![vec![leaf(11)], vec![leaf(12)]]);
+        let base = NodeValue::rows(vec![vec![leaf(11)], vec![leaf(12)]]);
         let positive = narrowing.apply(leaf(3), &Value::Path(vec![]), &subject, base.clone());
         let negative = narrowing.apply(leaf(3), &Value::Not(Box::new(Value::Path(vec![]))), &subject, base.clone());
         assert_eq!(semantic.values().always(&positive, 1 << 1), Known::Yes(true));
@@ -389,7 +389,7 @@ mod places {
     }
 
     fn candidates() -> NodeValue {
-        NodeValue::Alternatives([11, 12, 13].map(|node| vec![leaf(node)]).to_vec())
+        NodeValue::rows([11, 12, 13].map(|node| vec![leaf(node)]).to_vec())
     }
 
     fn branch_tables() -> Names {
@@ -759,7 +759,7 @@ mod places {
         let question = QueryContext::default();
         let semantic = Semantic::new(&world, &tables, &question);
         let subject = Place { root: leaf(1), path: vec![] };
-        let before = NodeValue::Alternatives(vec![vec![leaf(11)], vec![leaf(12)]]);
+        let before = NodeValue::rows(vec![vec![leaf(11)], vec![leaf(12)]]);
         let proof = Value::Includes { value: Box::new(Value::Path(vec![3])), from: None };
         let positive = semantic.narrowing().apply(leaf(3), &proof, &subject, before.clone());
         let negative_proof = Value::Not(Box::new(proof.clone()));

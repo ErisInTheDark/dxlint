@@ -249,12 +249,12 @@ impl<'a, 'world> Run<'a, 'world> {
         if !values.question.budget.step() { return Known::Unknown }
         if expected.len() == 1 {
             if let Some(slot) = self.slot(expected[0]) {
-                return self.capture(slot, &NodeValue::Alternatives(vec![actual.to_vec()]), true);
+                return self.capture(slot, &NodeValue::rows(vec![actual.to_vec()]), true);
             }
         }
         if actual.len() == 1 {
             if let Some(slot) = self.slot(actual[0]) {
-                return self.capture(slot, &NodeValue::Alternatives(vec![expected.to_vec()]), false);
+                return self.capture(slot, &NodeValue::rows(vec![expected.to_vec()]), false);
             }
         }
         if self.positions.is_empty() && expected == actual { return Known::Yes(true) }
@@ -275,8 +275,8 @@ impl<'a, 'world> Run<'a, 'world> {
         let source = universal_source(actual, values);
         if source == Known::Yes(true) { return Known::Yes(true) }
         if target == Known::Unknown || source == Known::Unknown { return Known::Unknown }
-        let expected_value = NodeValue::Alternatives(vec![expected.to_vec()]);
-        let actual_value = NodeValue::Alternatives(vec![actual.to_vec()]);
+        let expected_value = NodeValue::rows(vec![expected.to_vec()]);
+        let actual_value = NodeValue::rows(vec![actual.to_vec()]);
         let mut described = false;
         let mut unknown = false;
         let categories = values.tables.exclusive.iter().fold(0, |all, group| all | group);

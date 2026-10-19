@@ -26,7 +26,7 @@ pub(super) fn result(at: Leaf, values: &Values<'_>) -> Known<Option<NodeValue>> 
         if !append(&mut results, result, values) { return Known::Unknown }
         found = true;
     }
-    if found { return Known::Yes(Some(NodeValue::Alternatives(results))) }
+    if found { return Known::Yes(Some(NodeValue::rows(results))) }
     let mut seen = FxHashSet::default();
     for source in &kind.calls.sources {
         if !values.question.budget.step() { return Known::Unknown }
@@ -47,7 +47,7 @@ pub(super) fn result(at: Leaf, values: &Values<'_>) -> Known<Option<NodeValue>> 
             }
         }
     }
-    Known::Yes(found.then_some(NodeValue::Alternatives(results)))
+    Known::Yes(found.then_some(NodeValue::rows(results)))
 }
 
 pub(super) fn header_result(header: Header, values: &Values<'_>) -> Known<NodeValue> {

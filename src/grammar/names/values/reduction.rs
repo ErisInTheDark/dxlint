@@ -25,13 +25,13 @@ impl Values<'_> {
                 retained.push(declaration.clone());
             }
         }
-        NodeValue::Alternatives(retained)
+        NodeValue::rows(retained)
     }
 
     fn overlap(&self, declared: &[Leaf], written: &[Leaf]) -> Known<bool> {
         let mut joint = declared.to_vec();
         joint.extend_from_slice(written);
-        match self.normalize(NodeValue::Alternatives(vec![joint])) {
+        match self.normalize(NodeValue::rows(vec![joint])) {
             NodeValue::Alternatives(rows) if rows.is_empty() => return Known::Yes(false),
             NodeValue::Unknown => return Known::Unknown,
             _ => {}
@@ -45,8 +45,8 @@ impl Values<'_> {
             if left == right { return Known::Yes(true) }
             if scalar_identity(&left) && scalar_identity(&right) { return Known::Yes(false) }
         }
-        let declared = NodeValue::Alternatives(vec![declared.to_vec()]);
-        let written = NodeValue::Alternatives(vec![written.to_vec()]);
+        let declared = NodeValue::rows(vec![declared.to_vec()]);
+        let written = NodeValue::rows(vec![written.to_vec()]);
         let calls = self.semantic.calls();
         if calls.accepts(&declared, &written) == Known::Yes(true)
             || calls.accepts(&written, &declared) == Known::Yes(true) {

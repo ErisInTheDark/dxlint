@@ -256,16 +256,107 @@ pub struct Leaf {
 /// out or something could not be read.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum NodeValue {
-    Alternatives(Vec<Vec<Leaf>>),
+    Alternatives(Rows),
     Unknown,
 }
 
 impl NodeValue {
     pub fn never() -> NodeValue {
-        NodeValue::Alternatives(Vec::new())
+        NodeValue::rows(Vec::new())
     }
     pub fn leaf(leaf: Leaf) -> NodeValue {
-        NodeValue::Alternatives(vec![vec![leaf]])
+        NodeValue::rows(vec![vec![leaf]])
+    }
+    pub fn rows(rows: Vec<Vec<Leaf>>) -> NodeValue {
+        NodeValue::Alternatives(Rows::from(rows))
+    }
+}
+
+/// A value's alternatives, shared: one declared type (a 2,000-member enum)
+/// reaches every node that reads it, so passing it on copies a pointer.
+/// Remembers how far it is already normalized, so passing it on also
+/// never normalizes it again.
+#[derive(Clone, Debug)]
+pub struct Rows {
+    rows: std::sync::Arc<Vec<Vec<Leaf>>>,
+    normal: Normal,
+}
+
+/// How much of normalization a value's rows already went through.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Normal {
+    Raw,
+    /// Duplicates and absorbing tops settled.
+    Union,
+    /// Also contradictory intersections removed.
+    Full,
+}
+
+impl Rows {
+    pub fn normal(&self) -> Normal {
+        self.normal
+    }
+
+    pub fn normalized(rows: Vec<Vec<Leaf>>, normal: Normal) -> Rows {
+        Rows { rows: std::sync::Arc::new(rows), normal }
+    }
+
+    /// The same rows, known to be normalized at least to `normal`.
+    pub fn settled(self, normal: Normal) -> Rows {
+        Rows { normal: self.normal.max(normal), ..self }
+    }
+
+    pub fn into_vec(self) -> Vec<Vec<Leaf>> {
+        std::sync::Arc::unwrap_or_clone(self.rows)
+    }
+}
+
+impl From<Vec<Vec<Leaf>>> for Rows {
+    fn from(rows: Vec<Vec<Leaf>>) -> Rows {
+        Rows::normalized(rows, Normal::Raw)
+    }
+}
+
+impl FromIterator<Vec<Leaf>> for Rows {
+    fn from_iter<I: IntoIterator<Item = Vec<Leaf>>>(rows: I) -> Rows {
+        Rows::from(rows.into_iter().collect::<Vec<_>>())
+    }
+}
+
+impl std::ops::Deref for Rows {
+    type Target = Vec<Vec<Leaf>>;
+    fn deref(&self) -> &Vec<Vec<Leaf>> {
+        &self.rows
+    }
+}
+
+impl PartialEq for Rows {
+    fn eq(&self, other: &Rows) -> bool {
+        std::sync::Arc::ptr_eq(&self.rows, &other.rows) || self.rows == other.rows
+    }
+}
+
+impl Eq for Rows {}
+
+impl std::hash::Hash for Rows {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.rows.hash(state)
+    }
+}
+
+impl IntoIterator for Rows {
+    type Item = Vec<Leaf>;
+    type IntoIter = std::vec::IntoIter<Vec<Leaf>>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.into_vec().into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a Rows {
+    type Item = &'a Vec<Leaf>;
+    type IntoIter = std::slice::Iter<'a, Vec<Leaf>>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.rows.iter()
     }
 }
 

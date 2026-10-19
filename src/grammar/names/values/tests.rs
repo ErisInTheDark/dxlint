@@ -128,7 +128,7 @@ fn declared_universal_values_absorb_joins_and_leave_refinements_intact() {
         assert_eq!(eval::combine(&values, [NodeValue::leaf(scalar), NodeValue::leaf(universal)], false), NodeValue::leaf(universal));
         assert_eq!(eval::combine(&values, [NodeValue::Unknown, NodeValue::leaf(universal)], false), NodeValue::leaf(universal));
         assert_eq!(eval::combine(&values, [NodeValue::Unknown, NodeValue::leaf(universal)], true), NodeValue::Unknown);
-        assert_eq!(values.expand(&NodeValue::Alternatives(vec![vec![leaf(99)], vec![universal]])), NodeValue::leaf(universal));
+        assert_eq!(values.expand(&NodeValue::rows(vec![vec![leaf(99)], vec![universal]])), NodeValue::leaf(universal));
     }
     for inputs in [[top, dynamic], [dynamic, top]] {
         assert_eq!(eval::combine(&values, inputs.map(NodeValue::leaf), false), NodeValue::leaf(dynamic));
@@ -338,14 +338,14 @@ fn named_keys_win_over_indexers_and_unbounded_keys_keep_the_source_frame() {
         vec![Leaf { frame, ..leaf(0) }, Leaf { frame, ..leaf(3) }],
         vec![Leaf { frame, ..leaf(3) }, Leaf { frame, ..leaf(0) }],
     ] {
-        let intersection = NodeValue::Alternatives(vec![row]);
+        let intersection = NodeValue::rows(vec![row]);
         assert_eq!(values.member(&intersection, &named), NodeValue::leaf(Leaf { target: Target::Traits(4), frame }));
         let Known::Yes(rows) = values.keyed_members(&intersection, &named) else { panic!("named member was lost") };
         let member = rows[0].as_ref().expect("named member");
         assert_eq!(member.required, Known::Yes(true));
         assert!(member.sources.iter().all(|source| source.origin == MemberOrigin::Named));
     }
-    assert_eq!(values.has_member(&NodeValue::Alternatives(vec![vec![leaf(99)], vec![Leaf { frame, ..leaf(0) }]]), &named),
+    assert_eq!(values.has_member(&NodeValue::rows(vec![vec![leaf(99)], vec![Leaf { frame, ..leaf(0) }]]), &named),
         Known::Yes(true));
     for key in [Key::Text("other".into()), Key::Domain(KeyDomain::Text), Key::Domain(KeyDomain::Ordinal)] {
         assert_eq!(values.member(&value, &key), NodeValue::leaf(Leaf { target: Target::Traits(8), frame }));
@@ -451,7 +451,7 @@ fn symbol_keys_need_the_declared_domain_and_keep_real_declaration_identity() {
     assert_eq!(values.value_key(&NodeValue::leaf(leaf(0))), Known::Unknown);
     assert_eq!(values.value_key(&NodeValue::leaf(leaf(1))), Known::Yes(Key::Symbol(NodeRef::here(1))));
     assert_eq!(values.value_key(&NodeValue::leaf(leaf(2))), Known::Yes(Key::Symbol(NodeRef::here(2))));
-    assert_eq!(values.value_key(&NodeValue::Alternatives(vec![vec![leaf(1)], vec![leaf(2)]])),
+    assert_eq!(values.value_key(&NodeValue::rows(vec![vec![leaf(1)], vec![leaf(2)]])),
         Known::Yes(Key::Domain(KeyDomain::Symbol)));
     assert_eq!(values.value_key(&NodeValue::leaf(Leaf { target: Target::Traits(2), frame: FrameId::ROOT })),
         Known::Yes(Key::Domain(KeyDomain::Symbol)));
@@ -617,7 +617,7 @@ fn conditional_recipes_choose_only_proven_branches() {
 fn generic_slots_skip_unrelated_owners_and_keep_the_actual_value_frames() {
     let (world, tables) = generic_world();
     let question = QueryContext::default();
-    let actual = NodeValue::Alternatives(vec![vec![leaf(0), leaf(3)], vec![leaf(2)]]);
+    let actual = NodeValue::rows(vec![vec![leaf(0), leaf(3)], vec![leaf(2)]]);
     let owner = question.bind(FrameId::ROOT, NodeRef::here(0), None, Some(vec![NodeValue::Unknown, actual.clone()]));
     let unrelated = question.bind(owner, NodeRef::here(3), None, Some(vec![NodeValue::never()]));
     let semantic = Semantic::new(&world, &tables, &question);
@@ -633,7 +633,7 @@ fn distribution_overlays_preserve_other_slots_but_inference_frames_do_not_inheri
     let question = QueryContext::default();
     let owner = NodeRef::here(0);
     let first = NodeValue::leaf(leaf(3));
-    let second = NodeValue::Alternatives(vec![vec![leaf(0), leaf(3)], vec![leaf(2)]]);
+    let second = NodeValue::rows(vec![vec![leaf(0), leaf(3)], vec![leaf(2)]]);
     let outer = question.bind_definition(FrameId::ROOT, owner, None,
         Some(vec![first.clone(), second.clone()]), 2);
     let unrelated = question.bind_definition(outer, NodeRef::here(3), None, None, 4);
@@ -664,7 +664,7 @@ fn conditional_distribution_rebinds_each_whole_arm_and_keeps_never_empty() {
         dynamic_both: false,
     }));
     for input in [
-        NodeValue::Alternatives(vec![
+        NodeValue::rows(vec![
             vec![
                 Leaf { target: Target::Traits(1), frame: FrameId::ROOT },
                 Leaf { target: Target::Traits(8), frame: FrameId::ROOT },
@@ -820,7 +820,7 @@ fn product_optional_elements_keep_whole_values_and_nested_rest_order() {
     let frame = question.bind(FrameId::ROOT, NodeRef::here(0), Some(leaf(1)), None);
     let semantic = Semantic::new(&world, &tables, &question);
     let values = semantic.values();
-    let first = NodeValue::Alternatives(vec![vec![
+    let first = NodeValue::rows(vec![vec![
         Leaf { frame, ..leaf(0) }, Leaf { target: Target::Traits(16), frame },
     ], vec![Leaf { frame, ..leaf(1) }]]);
     let second = NodeValue::leaf(Leaf { frame, ..leaf(1) });
@@ -1189,10 +1189,10 @@ fn alternatives_require_every_branch_but_intersections_can_prove_a_trait() {
     let question = QueryContext::default();
     let semantic = Semantic::new(&world, &tables, &question);
     let values = semantic.values();
-    let union = NodeValue::Alternatives(vec![vec![leaf(0)], vec![leaf(1)]]);
+    let union = NodeValue::rows(vec![vec![leaf(0)], vec![leaf(1)]]);
     assert_eq!(values.could(&union, 1), Known::Yes(true));
     assert_eq!(values.always(&union, 1), Known::Yes(false));
-    let intersection = NodeValue::Alternatives(vec![vec![leaf(0), leaf(1)]]);
+    let intersection = NodeValue::rows(vec![vec![leaf(0), leaf(1)]]);
     assert_eq!(values.always(&intersection, 1 | 2), Known::Yes(true));
     assert_eq!(values.could(&intersection, 1 | 2), Known::Yes(true));
 }
@@ -1236,7 +1236,7 @@ fn unwrapping_a_list_keeps_its_union_alternatives() {
     let question = QueryContext::default();
     let semantic = Semantic::new(&world, &tables, &question);
     let values = semantic.values();
-    assert_eq!(values.values(leaf(0)), NodeValue::Alternatives(vec![vec![leaf(1)], vec![leaf(2)]]));
+    assert_eq!(values.values(leaf(0)), NodeValue::rows(vec![vec![leaf(1)], vec![leaf(2)]]));
 }
 
 #[test]

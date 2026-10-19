@@ -174,7 +174,7 @@ fn alternatives(semantic: &Semantic<'_>, value: NodeValue, _: &[Value<'static>])
     let mut arms = Vec::with_capacity(rows.len());
     for row in rows {
         if row.is_empty() || !semantic.question.budget.step() { return Known::Unknown }
-        arms.push(handle(semantic, NodeValue::Alternatives(vec![row])));
+        arms.push(handle(semantic, NodeValue::rows(vec![row])));
     }
     Known::Yes(Value::list(arms))
 }
@@ -186,7 +186,7 @@ fn parts(semantic: &Semantic<'_>, value: NodeValue, _: &[Value<'static>]) -> Kno
     let mut arms = Vec::with_capacity(rows.len());
     for row in rows {
         if row.is_empty() || !semantic.question.budget.step() { return Known::Unknown }
-        let arm = NodeValue::Alternatives(vec![row.clone()]);
+        let arm = NodeValue::rows(vec![row.clone()]);
         let projected = project_with(semantic, arm.clone(), &mut |semantic, argument| Known::Yes(handle(semantic, argument)));
         let Known::Yes(Value::List(projected)) = projected else { return Known::Unknown };
         let Some(Value::List(constituents)) = projected.first() else { return Known::Unknown };
@@ -268,7 +268,7 @@ fn children(semantic: &Semantic<'_>, value: NodeValue, args: &[Value<'static>]) 
                 Known::Unknown => return Known::Unknown,
             }
         }
-        let owning = NodeValue::Alternatives(vec![owning]);
+        let owning = NodeValue::rows(vec![owning]);
         let listed = match &owning {
             NodeValue::Alternatives(rows) if rows[0].is_empty() => Vec::new(),
             _ => {

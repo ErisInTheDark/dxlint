@@ -471,8 +471,8 @@ impl<'a, 'world> Run<'a, 'world> {
     fn excludes(&self, value: NodeValue, traits: u64) -> NodeValue {
         let NodeValue::Alternatives(alternatives) = value else { return NodeValue::Unknown };
         let mut kept = Vec::new();
-        for alternative in alternatives {
-            let row = NodeValue::Alternatives(vec![alternative]);
+        for alternative in &alternatives {
+            let row = NodeValue::rows(vec![alternative.clone()]);
             let mut excluded = Known::Yes(false);
             for bit in (0..u64::BITS).map(|i| 1u64 << i).filter(|bit| traits & bit != 0) {
                 if !self.values.question.budget.step() { return NodeValue::Unknown }
@@ -487,14 +487,13 @@ impl<'a, 'world> Run<'a, 'world> {
             }
             match excluded {
                 Known::Yes(true) => {}
-                Known::Yes(false) => {
-                    let NodeValue::Alternatives(mut row) = row else { unreachable!() };
-                    kept.append(&mut row);
-                }
+                Known::Yes(false) => kept.push(alternative.clone()),
                 Known::Unknown => return NodeValue::Unknown,
             }
         }
-        NodeValue::Alternatives(kept)
+        // Nothing excluded: the value passes on as it was (shared, normalized).
+        if kept.len() == alternatives.len() { return NodeValue::Alternatives(alternatives) }
+        NodeValue::rows(kept)
     }
 
     fn combine(&mut self, count: usize, intersection: bool) {
@@ -635,6 +634,19 @@ fn returned(values: &Values<'_>, owner: Leaf, default: Option<&Value>) -> Known<
 }
 
 pub(super) fn combine(values: &Values<'_>, inputs: impl IntoIterator<Item = NodeValue>, intersection: bool) -> NodeValue {
+    let mut inputs = inputs.into_iter().peekable();
+    let first = inputs.next();
+    // One input is its own union, and its own intersection when no row
+    // repeats a leaf: it passes on shared, normalized at most once.
+    if let (Some(NodeValue::Alternatives(rows)), None) = (&first, inputs.peek()) {
+        if !intersection {
+            return values.normalize_union(NodeValue::Alternatives(rows.clone()));
+        }
+        if rows.normal() == super::super::question::Normal::Full && rows.iter().all(|row| row.len() <= 1) {
+            return NodeValue::Alternatives(rows.clone());
+        }
+    }
+    let inputs = first.into_iter().chain(inputs);
     let mut result = if intersection { vec![Vec::new()] } else { Vec::new() };
     let mut unknown = false;
     for input in inputs {
@@ -671,9 +683,9 @@ pub(super) fn combine(values: &Values<'_>, inputs: impl IntoIterator<Item = Node
         }
     }
     let result = if intersection {
-        values.normalize(NodeValue::Alternatives(result))
+        values.normalize(NodeValue::rows(result))
     } else {
-        values.normalize_union(NodeValue::Alternatives(result))
+        values.normalize_union(NodeValue::rows(result))
     };
     if !unknown { return result }
     if !intersection {

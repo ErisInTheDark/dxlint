@@ -158,7 +158,7 @@ fn categories_accept_matching_values_and_reject_incompatible_union_arms() {
     let values = semantic.values();
     assert_eq!(accepts(&value(0), &value(0), &values), Known::Yes(true));
     assert_eq!(accepts(&value(0), &value(1), &values), Known::Yes(false));
-    let union = NodeValue::Alternatives(vec![vec![leaf(0)], vec![leaf(1)]]);
+    let union = NodeValue::rows(vec![vec![leaf(0)], vec![leaf(1)]]);
     assert_eq!(accepts(&value(0), &union, &values), Known::Yes(false));
     assert_eq!(accepts(&union, &value(1), &values), Known::Yes(true));
 }
@@ -300,7 +300,7 @@ fn overload_sets_preserve_union_alternatives_and_intersection_declarations() {
     }
     let question = QueryContext::default();
     let semantic = Semantic::new(&world, &tables, &question);
-    let union = NodeValue::Alternatives(vec![vec![leaf(0)], vec![leaf(1)]]);
+    let union = NodeValue::rows(vec![vec![leaf(0)], vec![leaf(1)]]);
     let Known::Yes(sets) = semantic.calls().headers(&union, InvokeKind::Call) else { panic!("known overload sets") };
     assert_eq!(sets.len(), 2);
     assert!(sets[0].iter().all(|header| header.site == leaf(0)));
@@ -309,7 +309,7 @@ fn overload_sets_preserve_union_alternatives_and_intersection_declarations() {
 
     tables.exclusive.clear();
     let semantic = Semantic::new(&world, &tables, &question);
-    let intersection = NodeValue::Alternatives(vec![vec![leaf(0), leaf(1)]]);
+    let intersection = NodeValue::rows(vec![vec![leaf(0), leaf(1)]]);
     let Known::Yes(sets) = semantic.calls().headers(&intersection, InvokeKind::Call) else { panic!("known combined overloads") };
     assert_eq!(sets.len(), 1);
     assert!(sets[0].iter().any(|header| header.site == leaf(0)));
