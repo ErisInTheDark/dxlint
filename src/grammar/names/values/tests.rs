@@ -305,7 +305,6 @@ fn declaration_views_keep_the_requested_class_at_the_real_owner_only() {
         let [declaration] = declarations.as_slice() else { panic!("declaration was duplicated") };
         assert_eq!(values.values(*declaration),
             NodeValue::leaf(Leaf { target: Target::Traits(traits), frame: declaration.frame }));
-        assert_eq!(question.get(declaration.frame).expect("reference frame").through, Some(leaf(reference)));
     }
 }
 
@@ -1057,9 +1056,6 @@ fn selected_definitions_keep_raw_members_and_the_requested_view() {
     let frame = question.get(selected.frame).expect("selected frame");
     assert_eq!(frame.owner, NodeRef::here(1));
     assert_eq!(frame.classes, 0);
-    assert_eq!(frame.parent, caller);
-    assert_eq!(frame.through, Some(at));
-    assert!(question.get(frame.parent).expect("caller frame").args.is_some());
     let scalar = world.grammar.names.vocabulary.trait_bit("scalar");
     assert_eq!(values.values(*selected),
         NodeValue::leaf(Leaf { target: Target::Traits(scalar), frame: selected.frame }));

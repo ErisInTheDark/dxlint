@@ -399,6 +399,9 @@ fn selected_header_through_keeps_caller_generics_separate_from_callee_environmen
     nodes[4].children.extend([Edge { label: 31, node: 13 }, Edge { label: 50, node: 12 }]);
     nodes[5].children[0].node = 11;
     nodes[5].children.push(Edge { label: 40, node: 16 });
+    // The caller (node 4) stays in the tree: its type parameters are found
+    // through their declaring ancestor.
+    nodes[5].children.push(Edge { label: 99, node: 4 });
     nodes[13].children.push(Edge { label: 42, node: 15 });
     nodes[16].children.push(Edge { label: 42, node: 14 });
     world.tree = Tree::from_native(nodes, 5);

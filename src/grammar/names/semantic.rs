@@ -135,6 +135,16 @@ impl<'a> Semantic<'a> {
     /// parameters). True when there is none.
     fn sees_formals(&self, owner: NodeRef, node: NodeRef) -> bool {
         let Some(tree) = self.world.tree(owner.file) else { return true };
+        let Some(scope) = self.generic_scope(owner) else { return true };
+        let (Some(outer), Some(inner)) = (tree.nodes.get(scope as usize), tree.nodes.get(node.node as usize)) else { return true };
+        outer.start <= inner.start && inner.end <= outer.end
+    }
+
+    /// The outermost ancestor-or-self of `owner` declaring generics: where
+    /// the formals an instantiation of `owner` binds are visible. `None`
+    /// when there is none (or the tree is not loaded).
+    pub(crate) fn generic_scope(&self, owner: NodeRef) -> Option<u32> {
+        let tree = self.world.tree(owner.file)?;
         let mut scope = None;
         let mut cursor = Some(owner.node);
         while let Some(id) = cursor {
@@ -144,9 +154,7 @@ impl<'a> Semantic<'a> {
             if declares { scope = Some(id) }
             cursor = tree.parent(id);
         }
-        let Some(scope) = scope else { return true };
-        let (Some(outer), Some(inner)) = (tree.nodes.get(scope as usize), tree.nodes.get(node.node as usize)) else { return true };
-        outer.start <= inner.start && inner.end <= outer.end
+        scope
     }
 
     pub fn parent(&self, at: Leaf) -> Known<Option<Leaf>> {

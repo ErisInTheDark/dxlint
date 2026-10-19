@@ -195,6 +195,12 @@ pub(crate) struct State {
 impl State {
     pub(super) fn finish(&self, epoch: Epoch, failed: bool, cut: u64) -> u64 {
         use super::memo::Settled;
+        // A root cut short leaves the evaluations it was inside open: none
+        // is in progress once the root ends.
+        self.evaluating.borrow_mut().clear();
+        self.pending.borrow_mut().clear();
+        self.cycle_heads.borrow_mut().clear();
+        self.retrying.set(false);
         self.values.finish(epoch, failed, cut, Settled::settled) + self.widened.finish(epoch, failed, cut, Settled::settled)
             + self.traits.finish(epoch, failed, cut, Settled::settled) + self.optional.finish(epoch, failed, cut, Settled::settled)
             + self.identities.finish(epoch, failed, cut, Settled::settled) + self.members.finish(epoch, failed, cut, Settled::settled)
@@ -774,9 +780,7 @@ impl Values<'_> {
                     let frame = if binding.is_some_and(|frame| frame.args.is_some() || frame.through.is_some()) {
                         site.frame
                     } else {
-                        let classes = binding.map_or(0, |frame| frame.classes);
-                        let through = match through.target { Target::Node(_) => Some(through), _ => None };
-                        self.question.bind_definition(site.frame, owner, through, None, classes)
+                        self.definition_frame(site.frame, owner, through, binding.map_or(0, |frame| frame.classes))
                     };
                     let definition = Leaf { target, frame };
                     if !definitions.contains(&definition) { definitions.push(definition) }
@@ -850,11 +854,23 @@ impl Values<'_> {
                     (target, NodeRef { file: scope.file, node: info.node })
                 }
             };
-            let through = match through.target { Target::Node(_) => Some(through), _ => None };
-            let frame = self.question.bind_definition(leaf.frame, owner, through, None, classes.unwrap_or(0));
+            let frame = self.definition_frame(leaf.frame, owner, through, classes.unwrap_or(0));
             leaves.push(Leaf { target, frame });
         }
         Known::Yes(leaves)
+    }
+
+    /// The frame a reference (`through`, under `parent`) reads `owner` in,
+    /// with view `classes`. A declaration with no type parameters around it
+    /// instantiates nothing, so every reference shares one frame (only the
+    /// view matters): a 2,000-member enum is evaluated once, not per
+    /// reference.
+    fn definition_frame(&self, parent: super::question::FrameId, owner: NodeRef, through: Leaf, classes: u64) -> super::question::FrameId {
+        if self.world.tree(owner.file).is_some() && self.semantic.generic_scope(owner).is_none() {
+            return self.question.bind_definition(super::question::FrameId::ROOT, owner, None, None, classes);
+        }
+        let through = match through.target { Target::Node(_) => Some(through), _ => None };
+        self.question.bind_definition(parent, owner, through, None, classes)
     }
 
     fn find_bound_argument(&self, formal: Leaf) -> Known<Option<NodeValue>> {
