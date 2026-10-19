@@ -470,18 +470,26 @@ impl<S: Source> Builder<'_, S> {
     }
 }
 
+#[cfg(test)]
 pub fn execution(source: &impl Source, entry: Leaf, question: &QueryContext) -> Known<super::Execution> {
+    execution_sized(source, entry, question).0
+}
+
+/// The execution graph of `entry`, and how many steps the build created
+/// (also when it gave up: a measure of the body's size).
+pub fn execution_sized(source: &impl Source, entry: Leaf, question: &QueryContext) -> (Known<super::Execution>, usize) {
     let _owner = crate::alloc::heap::Owner::enter(crate::alloc::heap::EFFECTS);
     let _site = crate::engine::StepSite::enter("effects.build");
     let mut builder = Builder { source, question, steps: Vec::new(), edges: Vec::new(), slots: Vec::new(), tasks: Vec::new() };
     let out = builder.slot();
     builder.tasks.push(Task::Node { node: entry, out });
-    if builder.run().is_none() { return Known::Unknown }
+    if builder.run().is_none() { return (Known::Unknown, builder.steps.len()) }
+    let built = builder.steps.len();
     let fragment = builder.take(out);
-    let Some(entry) = fragment.entry else { return Known::Unknown };
-    Known::Yes(super::Execution::new(entry, builder.steps, builder.edges).with_completion(
+    let Some(entry) = fragment.entry else { return (Known::Unknown, built) };
+    (Known::Yes(super::Execution::new(entry, builder.steps, builder.edges).with_completion(
         fragment.normal, fragment.pending.into_iter().map(|pending| (pending.at, pending.exit)).collect(),
-    ))
+    )), built)
 }
 
 #[cfg(test)]

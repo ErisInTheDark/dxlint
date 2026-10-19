@@ -59,6 +59,18 @@ impl Values<'_> {
     }
 
     pub(crate) fn normalize(&self, value: NodeValue) -> NodeValue {
+        self.normalize_rows(value, true)
+    }
+
+    /// [`Self::normalize`] for a union of values: a union makes no new
+    /// intersection, so its rows aren't checked for contradictions (the
+    /// leaf that settles the union normalizes it fully); only absorbing tops
+    /// and duplicates are settled.
+    pub(crate) fn normalize_union(&self, value: NodeValue) -> NodeValue {
+        self.normalize_rows(value, false)
+    }
+
+    fn normalize_rows(&self, value: NodeValue, contradictions: bool) -> NodeValue {
         let NodeValue::Alternatives(alternatives) = value else { return NodeValue::Unknown };
         let mask = self.tables.exclusive.iter().fold(0, |all, group| all | group);
         let mut possible = Vec::new();
@@ -77,7 +89,7 @@ impl Values<'_> {
             let mut proven = 0;
             // One node site can't prove two exclusive traits by itself; only
             // an intersection (or a trait set) can contradict.
-            let contradicts = alternative.len() > 1 || alternative.first().is_some_and(trait_set);
+            let contradicts = contradictions && (alternative.len() > 1 || alternative.first().is_some_and(trait_set));
             let fittable: Vec<u64> = alternative.iter().filter(|_| contradicts).map(|&leaf| self.possible_traits(leaf)).collect();
             // Only a group two of whose traits some leaf may fit can
             // contradict: the others' (often typed) fits are never asked.

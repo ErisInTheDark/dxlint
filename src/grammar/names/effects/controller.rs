@@ -16,6 +16,9 @@ pub(crate) struct State {
     /// Per file, every write's target in tree order (for `unwritten`).
     file_writes: RefCell<FxHashMap<u32, Rc<[FileWrite]>>>,
     discarded: RefCell<Option<Discarded>>,
+    /// Bodies whose graph build ran a nearly whole question budget out
+    /// ([`Effects::execution`]); kept across roots (never rolled back).
+    outgrown: RefCell<FxHashSet<Leaf>>,
 }
 
 /// One write found walking a file: its target, or a node whose writes
@@ -281,9 +284,22 @@ impl Effects<'_> {
         let Some(entry) = self.semantic.leaf(entry).known() else { return Known::Unknown };
         let state = &self.semantic.effects.graphs;
         if let Some(graph) = state.borrow().get(&entry) { return graph.clone() }
+        let budget = &self.semantic.question.budget;
+        // A body whose graph outgrew a nearly whole budget outgrows every
+        // later one: its question ends the same way, without the rebuild.
+        if self.semantic.effects.outgrown.borrow().contains(&entry) {
+            budget.exhaust();
+            return Known::Unknown;
+        }
+        let available = budget.remaining();
         state.borrow_mut().insert(entry, Known::Unknown);
         let source = super::source::Runtime::new(self.semantic);
-        let build = || super::build::execution(&source, entry, self.semantic.question);
+        let built = std::cell::Cell::new(0);
+        let build = || {
+            let (graph, size) = super::build::execution_sized(&source, entry, self.semantic.question);
+            built.set(size);
+            graph
+        };
         let graph = match self.semantic.world.profile() {
             Some(profile) => {
                 let rebuild = self.semantic.effects.discarded.borrow_mut()
@@ -304,6 +320,14 @@ impl Effects<'_> {
             Known::Yes(graph) => Known::Yes(Rc::new(graph)),
             Known::Unknown => Known::Unknown,
         };
+        // The build itself must be what ran out: a body big enough that its
+        // own steps took a large share of the budget (not a nested question
+        // that burned it).
+        let default = u64::from(crate::grammar::names::question::Budget::DEFAULT);
+        if matches!(graph, Known::Unknown) && budget.exhausted()
+            && u64::from(available) * 10 >= default * 9 && (built.get() as u64) * 4 >= default {
+            self.semantic.effects.outgrown.borrow_mut().insert(entry);
+        }
         state.borrow_mut().insert(entry, graph.clone());
         graph
     }

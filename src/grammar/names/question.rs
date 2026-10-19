@@ -112,6 +112,12 @@ impl Budget {
         }
     }
 
+    /// Spends the rest of the budget: the question ends as one that ran out.
+    pub fn exhaust(&self) {
+        self.left.set(0);
+        self.limit();
+    }
+
     /// See [`Budget::cut`] (the field).
     pub(crate) fn cut(&self) -> u64 {
         if self.limited() && self.cut.get() == u64::MAX { 0 } else { self.cut.get() }

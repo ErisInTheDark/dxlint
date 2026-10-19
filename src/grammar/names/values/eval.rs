@@ -670,7 +670,11 @@ pub(super) fn combine(values: &Values<'_>, inputs: impl IntoIterator<Item = Node
             }
         }
     }
-    let result = values.normalize(NodeValue::Alternatives(result));
+    let result = if intersection {
+        values.normalize(NodeValue::Alternatives(result))
+    } else {
+        values.normalize_union(NodeValue::Alternatives(result))
+    };
     if !unknown { return result }
     if !intersection {
         if let NodeValue::Alternatives(rows) = &result {
