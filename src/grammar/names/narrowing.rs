@@ -311,7 +311,7 @@ impl Narrowing<'_> {
             let at = Leaf { target: Target::Node(target.value), frame };
             if self.written_place(at) != Known::Yes(subject.clone()) { return base }
             let Some(written) = &event.written else { return base };
-            let written = values.evaluate(written.owner, &written.recipe);
+            let written = values.evaluate(execution.owner(written, frame), &written.recipe);
             let NodeValue::Alternatives(rows) = values.reduce(&base, &written) else { return base };
             alternatives.extend(rows);
         }

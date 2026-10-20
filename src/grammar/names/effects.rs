@@ -198,6 +198,10 @@ pub struct Execution {
     /// Built on the first single-entry guard query ([`Self::guarded`]).
     dominators: OnceCell<Dominators>,
     completion: Option<Completion>,
+    /// The frame the graph was built in. Bodies built in other frames to
+    /// the same graph share it ([`Execution::same_as`]); written owners in
+    /// this frame stand for the asking entry's ([`Execution::owner`]).
+    frame: super::question::FrameId,
 }
 
 /// The dominator tree of an execution's reachable steps, as pre/post
@@ -300,6 +304,7 @@ impl Dominators {
 }
 
 /// Steps' neighbours, packed: step `s` has `steps[start[s]..start[s + 1]]`.
+#[derive(PartialEq)]
 struct Adjacency {
     start: Vec<u32>,
     steps: Vec<StepId>,
@@ -355,6 +360,7 @@ struct ReadSet {
     used: RefCell<FxHashMap<StepId, bool>>,
 }
 
+#[derive(PartialEq)]
 struct Completion {
     normal: Vec<StepId>,
     exits: Vec<(StepId, Exit)>,
@@ -413,7 +419,37 @@ impl Execution {
         let edges = Adjacency::successors(&edges);
         Execution { entry, steps, edges, sites, fields, writes, binding_writes, binding_reads, write_leaves,
             reachable: OnceCell::new(), guards: OnceCell::new(), reachable_avoiding: RefCell::default(),
-            predecessors: OnceCell::new(), dominators: OnceCell::new(), completion: None }
+            predecessors: OnceCell::new(), dominators: OnceCell::new(), completion: None, frame: super::question::FrameId::ROOT }
+    }
+
+    pub(crate) fn built_in(mut self, frame: super::question::FrameId) -> Self {
+        self.frame = frame;
+        self
+    }
+
+    /// Where `written`'s value is evaluated for an entry in `frame`.
+    pub fn owner(&self, written: &Written, frame: super::question::FrameId) -> super::question::Leaf {
+        if written.owner.frame == self.frame { super::question::Leaf { frame, ..written.owner } } else { written.owner }
+    }
+
+    /// Whether `other` (another frame's build of the same body) is the same
+    /// graph, written owners in each one's own frame matching.
+    pub(crate) fn same_as(&self, other: &Execution) -> bool {
+        let owner = |written: &Written, graph: &Execution| (written.owner.target, (written.owner.frame != graph.frame).then_some(written.owner.frame));
+        let same_event = |a: &Event, b: &Event| a.kind == b.kind && a.site == b.site && a.target == b.target && a.value == b.value
+            && a.phase == b.phase && match (&a.written, &b.written) {
+                (None, None) => true,
+                (Some(x), Some(y)) => std::sync::Arc::ptr_eq(&x.recipe, &y.recipe) && owner(x, self) == owner(y, other),
+                _ => false,
+            };
+        self.entry == other.entry && self.edges == other.edges && self.completion == other.completion
+            && self.steps.len() == other.steps.len()
+            && self.steps.iter().zip(&other.steps).all(|(a, b)| a.node == b.node && match (&a.point, &b.point) {
+                (Point::Enter, Point::Enter) | (Point::Leave, Point::Leave) | (Point::Join, Point::Join) => true,
+                (Point::Field(x), Point::Field(y)) => x == y,
+                (Point::Event(x), Point::Event(y)) => same_event(x, y),
+                _ => false,
+            })
     }
 
     pub fn write_leaves(&self) -> &[StepId] {
@@ -972,6 +1008,26 @@ mod tests {
             target: Some(Target { value: NodeRef::here(step), binding: Some(NodeRef::here(99)) }),
             value: None, written: None, phase: Phase::Enter,
         })
+    }
+
+    #[test]
+    fn builds_alike_in_other_frames_are_the_same_graph_with_values_in_the_asking_frame() {
+        use super::super::question::{FrameId, Leaf, Target as LeafTarget};
+        let recipe = std::sync::Arc::new(super::super::Value::Path(vec![1]));
+        let built = |frame: FrameId, owner: FrameId, value: u32| with_point(graph(&[&[1], &[]]), 1, Event {
+            kind: EventKind::Write, site: NodeRef::here(1),
+            target: Some(Target { value: NodeRef::here(value), binding: Some(NodeRef::here(99)) }), value: None,
+            written: Some(Written { owner: Leaf { target: LeafTarget::Node(NodeRef::here(1)), frame: owner }, recipe: recipe.clone() }),
+            phase: Phase::Leave,
+        }).built_in(frame);
+        let (first, second, other) = (FrameId(1), FrameId(2), FrameId(3));
+        let shared = built(first, first, 5);
+        assert!(shared.same_as(&built(second, second, 5)));
+        let Some(Point::Event(event)) = shared.step(1).map(|step| &step.point) else { panic!("write step") };
+        assert_eq!(shared.owner(event.written.as_ref().expect("written"), second).frame, second);
+        // An owner fixed outside the build's frame, or another write, is a different graph.
+        assert!(!shared.same_as(&built(second, other, 5)));
+        assert!(!shared.same_as(&built(second, second, 6)));
     }
 
     fn read_catalogue(nodes: &[u32]) -> controller::Reads {

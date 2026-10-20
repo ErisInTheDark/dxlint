@@ -11,6 +11,8 @@ use crate::grammar::names::semantic::Semantic;
 #[derive(Default)]
 pub(crate) struct State {
     graphs: RefCell<FxHashMap<Leaf, Known<Rc<Execution>>>>,
+    /// Each body's distinct graphs, shared by the frames that build alike.
+    variants: RefCell<FxHashMap<Target, Vec<Rc<Execution>>>>,
     reads: RefCell<FxHashMap<Leaf, Known<Rc<Reads>>>>,
     entry_owners: RefCell<FxHashMap<Leaf, Leaf>>,
     /// Per file, every write's target in tree order (for `unwritten`).
@@ -317,7 +319,7 @@ impl Effects<'_> {
             None => build(),
         };
         let graph = match graph {
-            Known::Yes(graph) => Known::Yes(Rc::new(graph)),
+            Known::Yes(graph) => Known::Yes(self.shared(entry, graph.built_in(entry.frame))),
             Known::Unknown => Known::Unknown,
         };
         // The build itself must be what ran out: a body big enough that its
@@ -329,6 +331,17 @@ impl Effects<'_> {
             self.semantic.effects.outgrown.borrow_mut().insert(entry);
         }
         state.borrow_mut().insert(entry, graph.clone());
+        graph
+    }
+
+    /// `graph`, or the same graph another frame's build of the body already
+    /// made: a body asked about in hundreds of frames mostly builds alike.
+    fn shared(&self, entry: Leaf, graph: Execution) -> Rc<Execution> {
+        let mut variants = self.semantic.effects.variants.borrow_mut();
+        let variants = variants.entry(entry.target).or_default();
+        if let Some(same) = variants.iter().find(|variant| variant.same_as(&graph)) { return same.clone() }
+        let graph = Rc::new(graph);
+        variants.push(graph.clone());
         graph
     }
 
@@ -939,8 +952,9 @@ mod tests {
             assert_eq!(writes[0].target.expect("write target").value, NodeRef::here(1));
             assert_eq!(writes[0].phase, super::super::Phase::Leave);
             let written = writes[0].written.as_ref().expect("written value recipe");
-            assert_eq!(written.owner, entry);
-            assert_eq!(semantic.values().sites(written.owner, &written.recipe), Known::Yes(vec![
+            let owner = graph.owner(written, entry.frame);
+            assert_eq!(owner, entry);
+            assert_eq!(semantic.values().sites(owner, &written.recipe), Known::Yes(vec![
                 Leaf { frame: entry.frame, ..leaf(2) },
             ]));
         }
