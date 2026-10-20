@@ -6,11 +6,29 @@ impl Values<'_> {
         let (NodeValue::Alternatives(declared), NodeValue::Alternatives(written)) = (declared, written) else {
             return NodeValue::Unknown;
         };
+        // Literal alternatives (enum members, literal types) overlap exactly
+        // when their values are equal: matched by value up front instead of
+        // normalizing every pair (a 77-member enum written back to itself
+        // took ~3,000 normalizations).
+        let scalar = |row: &[Leaf]| match self.row_identity(row) {
+            Known::Yes(Some(identity)) if scalar_identity(&identity) => Some(identity),
+            _ => None,
+        };
+        let written_scalars: Vec<Option<Identity>> = written.iter().map(|row| scalar(row)).collect();
         let mut retained = Vec::new();
         for declaration in declared {
             let mut possible = false;
             let mut uncertain = false;
-            for write in written {
+            let declared_scalar = scalar(declaration);
+            if let Some(identity) = &declared_scalar {
+                if written_scalars.iter().any(|written| written.as_ref() == Some(identity)) {
+                    retained.push(declaration.clone());
+                    continue;
+                }
+            }
+            for (write, written_scalar) in written.iter().zip(&written_scalars) {
+                // Two different literals never overlap.
+                if declared_scalar.is_some() && written_scalar.is_some() { continue }
                 if !self.question.budget.step() { return NodeValue::Unknown }
                 match self.overlap(declaration, write) {
                     Known::Yes(true) => { possible = true; break }
