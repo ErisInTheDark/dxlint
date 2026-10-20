@@ -115,6 +115,11 @@ pub(super) fn sites(values: &Values<'_>, at: Leaf, mut expression: &Value) -> Kn
     }
 }
 
+/// Spreads over more parts than this run on their own allowance.
+const SPREAD_DETACHED: usize = 64;
+/// Steps per part a detached spread may spend (each part's own value).
+const SPREAD_STEPS_PER_PART: u32 = 256;
+
 impl<'a, 'world> Run<'a, 'world> {
     fn run(self) -> NodeValue {
         self.run_answer().value
@@ -131,8 +136,19 @@ impl<'a, 'world> Run<'a, 'world> {
                 Task::Leaf(leaf) => self.leaf(leaf),
                 Task::Save(leaf) => {
                     if let Some(answer) = self.answers.last_mut() {
-                        answer.value = match self.values.question.budget.nest() {
-                            Some(_nested) => self.values.normalize(self.values.semantic.narrowing().refine(leaf, answer.value.clone())),
+                        let values = self.values;
+                        let save = |value: NodeValue| values.normalize(values.semantic.narrowing().refine(leaf, value));
+                        // A value of many alternatives (an enum's members) is
+                        // normalized once and kept: on an allowance for its
+                        // size, like the spread that built it.
+                        let rows = match &answer.value { NodeValue::Alternatives(rows) => rows.len(), _ => 0 };
+                        answer.value = match values.question.budget.nest() {
+                            Some(_nested) if rows > SPREAD_DETACHED => {
+                                let allowance = u32::try_from(rows).unwrap_or(u32::MAX).saturating_mul(SPREAD_STEPS_PER_PART);
+                                let value = answer.value.clone();
+                                values.question.budget.detached(allowance, || save(value)).unwrap_or(NodeValue::Unknown)
+                            }
+                            Some(_nested) => save(answer.value.clone()),
                             None => NodeValue::Unknown,
                         };
                         let value = answer.value.clone();
@@ -203,6 +219,21 @@ impl<'a, 'world> Run<'a, 'world> {
             }
             Known::Yes(Some(expression)) => {
                 self.tasks.push(Task::Save(leaf));
+                // A declaration spreading many parts (an enum's members) is
+                // evaluated once and kept for every later question: on an
+                // allowance for its size, not what the asking question has
+                // left (a 993-member enum was cut and redone question after
+                // question).
+                if let Value::Spread { path, value: None, .. } = expression {
+                    if let Known::Yes(sites) = self.values.follow(leaf, path) {
+                        if sites.len() > SPREAD_DETACHED {
+                            let allowance = u32::try_from(sites.len()).unwrap_or(u32::MAX).saturating_mul(SPREAD_STEPS_PER_PART);
+                            let value = self.values.question.budget.detached(allowance, || self.values.evaluate(leaf, expression));
+                            self.answers.push(value.map_or_else(Answer::unknown, |value| Answer { exists: true, value }));
+                            return;
+                        }
+                    }
+                }
                 self.tasks.push(Task::Expression(leaf, expression));
                 return;
             }
@@ -694,7 +725,13 @@ pub(super) fn combine(values: &Values<'_>, inputs: impl IntoIterator<Item = Node
             }
         }
     }
-    let result = if intersection {
+    let result = if intersection && result.len() > SPREAD_DETACHED {
+        // Checking each of many rows for contradictions (`E & C` for an
+        // enum `E`) is kept with the value it builds: on an allowance for
+        // its size, like the members themselves.
+        let allowance = u32::try_from(result.len()).unwrap_or(u32::MAX).saturating_mul(SPREAD_STEPS_PER_PART);
+        values.question.budget.detached(allowance, || values.normalize(NodeValue::rows(result))).unwrap_or(NodeValue::Unknown)
+    } else if intersection {
         values.normalize(NodeValue::rows(result))
     } else {
         values.normalize_union(NodeValue::rows(result))
