@@ -204,10 +204,8 @@ fn agreed_outputs(call: Leaf, values: &Values<'_>) -> Option<NodeValue> {
             for header in set {
                 if !super::infer::formals(header.site, values).known()?.is_empty() { return None }
                 // The frame a selected overload is read in (as `candidate`).
-                let owner = node(header.site, values)?;
-                let classes = values.question.owner_classes(header.site.frame, owner).known()?;
-                let frame = values.question.bind_slots(header.site.frame, owner, Some(call), Vec::new(), classes);
-                let header = Header { site: Leaf { frame, ..header.site }, ..header };
+                // A header with no type parameters reads its result in its
+                // own frame: one result per declaration, not per call site.
                 let result = super::result::header_result(header, values).known()?;
                 // The very same result only: mutually assignable results
                 // (`void`, `undefined`) still tell overloads apart.

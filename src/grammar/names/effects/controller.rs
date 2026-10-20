@@ -20,7 +20,7 @@ pub(crate) struct State {
     /// Per file, those writes resolved to the bindings they replace.
     written_bindings: RefCell<FxHashMap<u32, Rc<WrittenBindings>>>,
     discarded: RefCell<Option<Discarded>>,
-    /// Bodies whose graph build ran a nearly whole question budget out
+    /// Bodies whose graph build ran its own allowance out
     /// ([`Effects::execution`]); kept across roots (never rolled back).
     outgrown: RefCell<FxHashSet<Leaf>>,
 }
@@ -220,6 +220,8 @@ impl Effects<'_> {
     /// Steps per node a whole-file write walk may spend: a few per node
     /// for its write items and their conditions.
     const FILE_WALK_STEPS_PER_NODE: u32 = 64;
+    /// Steps per node of its file a graph build may spend.
+    const BUILD_STEPS_PER_NODE: u32 = 64;
 
     /// Every write in `at`'s file (root frame), in tree order, walked once
     /// per file: each closure read's unwritten proof asks about one binding,
@@ -336,15 +338,25 @@ impl Effects<'_> {
             budget.exhaust();
             return Known::Unknown;
         }
-        let available = budget.remaining();
         state.borrow_mut().insert(entry, Known::Unknown);
         let source = super::source::Runtime::new(self.semantic);
+        // Graphs are kept for every later question: a build runs on an
+        // allowance for its file's size, not on what the asking question
+        // has left (big bodies were cut and rebuilt question after question,
+        // and a small per-question budget could never build them).
+        let nodes = match entry.target {
+            Target::Node(node) => self.semantic.world.tree(node.file).map_or(0, |tree| tree.nodes.len()),
+            _ => 0,
+        };
+        let allowance = u32::try_from(nodes).unwrap_or(u32::MAX).saturating_mul(Self::BUILD_STEPS_PER_NODE)
+            .max(crate::grammar::names::question::Budget::DEFAULT);
+        let outgrew = std::cell::Cell::new(false);
         let built = std::cell::Cell::new(0);
-        let build = || {
+        let build = || budget.detached(allowance, || {
             let (graph, size) = super::build::execution_sized(&source, entry, self.semantic.question);
             built.set(size);
             graph
-        };
+        }).unwrap_or_else(|| { outgrew.set(true); Known::Unknown });
         let graph = match self.semantic.world.profile() {
             Some(profile) => {
                 let rebuild = self.semantic.effects.discarded.borrow_mut()
@@ -365,12 +377,9 @@ impl Effects<'_> {
             Known::Yes(graph) => Known::Yes(self.shared(entry, graph.built_in(entry.frame))),
             Known::Unknown => Known::Unknown,
         };
-        // The build itself must be what ran out: a body big enough that its
-        // own steps took a large share of the budget (not a nested question
-        // that burned it).
-        let default = u64::from(crate::grammar::names::question::Budget::per_question());
-        if matches!(graph, Known::Unknown) && budget.exhausted()
-            && u64::from(available) * 10 >= default * 9 && (built.get() as u64) * 4 >= default {
+        // Only a body whose own steps took a large share counts as outgrown
+        // (not a nested question that burned the allowance).
+        if outgrew.get() && built.get() as u64 * 4 >= u64::from(crate::grammar::names::question::Budget::DEFAULT) {
             self.semantic.effects.outgrown.borrow_mut().insert(entry);
         }
         state.borrow_mut().insert(entry, graph.clone());

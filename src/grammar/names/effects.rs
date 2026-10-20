@@ -192,6 +192,8 @@ pub struct Execution {
     /// Steps reachable from the entry around each guard's entry set, as
     /// bitsets ([`Self::guarded`]).
     reachable_avoiding: RefCell<FxHashMap<Box<[StepId]>, std::sync::Arc<[u64]>>>,
+    /// Reaching writes per candidate set ([`Self::reaching`]).
+    reaching: RefCell<FxHashMap<Box<[StepId]>, std::rc::Rc<[u64]>>>,
     /// Each step's predecessors, built on first use; `None` when an edge
     /// leaves the graph.
     predecessors: OnceCell<Option<Adjacency>>,
@@ -302,6 +304,9 @@ impl Dominators {
         self.pre[guard] != u32::MAX && self.pre[guard] <= self.pre[step] && self.post[step] <= self.post[guard]
     }
 }
+
+/// The bit [`Execution::reaching`] sets for "no write since the entry".
+const ENTRY_REACHES: u64 = 1 << 63;
 
 /// Steps' neighbours, packed: step `s` has `steps[start[s]..start[s + 1]]`.
 #[derive(PartialEq)]
@@ -418,7 +423,7 @@ impl Execution {
         fields.sort_unstable_by(|&a, &b| Self::field_key(&steps, a).cmp(&Self::field_key(&steps, b)).then(a.cmp(&b)));
         let edges = Adjacency::successors(&edges);
         Execution { entry, steps, edges, sites, fields, writes, binding_writes, binding_reads, write_leaves,
-            reachable: OnceCell::new(), guards: OnceCell::new(), reachable_avoiding: RefCell::default(),
+            reachable: OnceCell::new(), guards: OnceCell::new(), reachable_avoiding: RefCell::default(), reaching: RefCell::default(),
             predecessors: OnceCell::new(), dominators: OnceCell::new(), completion: None, frame: super::question::FrameId::ROOT }
     }
 
@@ -484,7 +489,8 @@ impl Execution {
         let seen = match cached {
             Some(seen) => seen,
             None => {
-                let Known::Yes(Walk::Seen(seen)) = self.walk(self.entry, avoiding, |_| false, budget) else { return Known::Unknown };
+                let Some(Known::Yes(Walk::Seen(seen))) = budget.detached(self.walk_allowance(),
+                    || self.walk(self.entry, avoiding, |_| false, budget)) else { return Known::Unknown };
                 let mut bits = vec![0u64; seen.len().div_ceil(64)];
                 for (step, &reached) in seen.iter().enumerate() {
                     if reached { bits[step / 64] |= 1 << (step % 64) }
@@ -608,12 +614,22 @@ impl Execution {
         if !budget.step() { return Known::Unknown }
         let seen = match self.reachable.get() {
             Some(seen) => seen,
-            None => match self.walk(self.entry, &[], |_| false, budget) {
-                Known::Yes(Walk::Seen(seen)) => self.reachable.get_or_init(|| seen),
+            // Kept on the graph for every later question: the walk gets an
+            // allowance for the graph's size, not what the asking question
+            // has left (big graphs were walked and dropped question after
+            // question).
+            None => match budget.detached(self.walk_allowance(), || self.walk(self.entry, &[], |_| false, budget)) {
+                Some(Known::Yes(Walk::Seen(seen))) => self.reachable.get_or_init(|| seen),
                 _ => return Known::Unknown,
             },
         };
         Known::Yes(seen)
+    }
+
+    /// Steps a whole-graph walk kept on the graph may spend.
+    pub(crate) fn walk_allowance(&self) -> u32 {
+        const STEPS_PER_GRAPH_STEP: u32 = 4;
+        u32::try_from(self.steps.len()).unwrap_or(u32::MAX).saturating_mul(STEPS_PER_GRAPH_STEP).max(Budget::DEFAULT)
     }
 
     pub fn reachable(&self, node: NodeRef, budget: &Budget) -> Known<bool> {
@@ -762,6 +778,32 @@ impl Execution {
         for &step in uses.iter().chain(candidates) {
             if !budget.step() || self.step(step).is_none() { return Known::Unknown }
         }
+        if candidates.len() < 64 {
+            if let Some(reaching) = self.reaching(candidates, budget) {
+                // Which writes (bit per candidate, the top bit for "none
+                // since the entry") reach the steps before each use.
+                let Some(predecessors) = self.predecessors() else { return Known::Unknown };
+                let mut before = 0u64;
+                let mut reached = false;
+                for &step in uses {
+                    if !budget.step() { return Known::Unknown }
+                    // Unreachable uses (no reaching set) don't count.
+                    if reaching[step as usize] == 0 { continue }
+                    reached = true;
+                    if candidates.contains(&step) { continue }
+                    if step == self.entry { return Known::Yes(None) }
+                    for &previous in predecessors.of(step) { before |= reaching[previous as usize] }
+                }
+                if !reached { return Known::Yes(None) }
+                if before & ENTRY_REACHES != 0 { return Known::Yes(None) }
+                let mut last = Vec::new();
+                for (index, &step) in candidates.iter().enumerate() {
+                    if before & (1 << index) != 0 && !last.contains(&step) { last.push(step) }
+                }
+                return Known::Yes(Some(last));
+            }
+            return Known::Unknown;
+        }
         let Some(seen) = self.reachable_steps(budget).known() else { return Known::Unknown };
         let uses: Vec<_> = uses.iter().copied().filter(|&step| seen[step as usize]).collect();
         if uses.is_empty() { return Known::Yes(None) }
@@ -791,6 +833,35 @@ impl Execution {
         Known::Yes(Some(last))
     }
 
+    /// Per step, which of `candidates` (bit per index) last wrote before
+    /// leaving it, [`ENTRY_REACHES`] when no write since the entry; zero for
+    /// steps the entry never reaches. One forward pass per candidate set,
+    /// kept on the graph: every read of a variable asks with the same
+    /// writes, and walking back from each read was the graph's size per read.
+    fn reaching(&self, candidates: &[StepId], budget: &Budget) -> Option<std::rc::Rc<[u64]>> {
+        if let Some(found) = self.reaching.borrow().get(candidates) { return Some(found.clone()) }
+        let computed = budget.detached(self.walk_allowance().saturating_mul(4), || {
+            let mut out = vec![0u64; self.steps.len()];
+            let gen = |step: StepId| candidates.iter().position(|&c| c == step).map(|index| 1u64 << index);
+            out[self.entry as usize] = gen(self.entry).unwrap_or(ENTRY_REACHES);
+            let mut pending = vec![self.entry];
+            while let Some(step) = pending.pop() {
+                let value = out[step as usize];
+                for &next in self.edges.of(step) {
+                    if !budget.step() { return None }
+                    let merged = match gen(next) { Some(bit) => bit, None => out[next as usize] | value };
+                    if merged != out[next as usize] {
+                        out[next as usize] = merged;
+                        pending.push(next);
+                    }
+                }
+            }
+            Some(std::rc::Rc::<[u64]>::from(out))
+        }).flatten()?;
+        self.reaching.borrow_mut().insert(candidates.into(), computed.clone());
+        Some(computed)
+    }
+
     /// Each step's predecessors, built once; `None` when an edge leaves the
     /// graph.
     fn predecessors(&self) -> Option<&Adjacency> {
@@ -800,7 +871,8 @@ impl Execution {
     /// The dominator tree, kept once a build finishes within `budget`.
     fn dominators(&self, budget: &Budget) -> Option<&Dominators> {
         if let Some(dominators) = self.dominators.get() { return Some(dominators) }
-        let dominators = Dominators::new(self.entry, &self.edges, self.predecessors()?, budget)?;
+        let predecessors = self.predecessors()?;
+        let dominators = budget.detached(self.walk_allowance(), || Dominators::new(self.entry, &self.edges, predecessors, budget))??;
         Some(self.dominators.get_or_init(|| dominators))
     }
 

@@ -63,7 +63,10 @@ pub(super) fn instantiate(header: Header, call: Leaf, mapping: &[(Leaf, Vec<Leaf
             Known::Yes(None) => return Known::Yes(None),
             Known::Unknown => return Known::Unknown,
         };
-        let frame = values.question.bind_slots(header.site.frame, owner, Some(call), slots, classes);
+        // Nothing to instantiate: the header's own frame, so a non-generic
+        // signature has one result for every call site, as in TypeScript.
+        let frame = if formals.is_empty() { header.site.frame }
+            else { values.question.bind_slots(header.site.frame, owner, Some(call), slots, classes) };
         let mut fits = Known::Yes(true);
         for (parameter, actuals) in mapping {
             let parameter = Leaf { frame, ..*parameter };

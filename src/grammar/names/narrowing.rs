@@ -532,8 +532,10 @@ impl Region<'_> {
             Some(reached) => reached,
             None => {
                 let writes = |event: &Event| narrowing.write_invalidates(event, tested, self.entry.frame);
-                let Known::Yes(reached) = self.execution.reached_through(&starts, self.entries, writes, budget) else { return Known::Unknown };
-                if budget.exhausted() { return Known::Unknown }
+                // Kept for every read in the region: a walk over the whole
+                // graph on an allowance for its size, not the asking read's.
+                let walk = budget.detached(self.execution.walk_allowance(), || self.execution.reached_through(&starts, self.entries, writes, budget));
+                let Some(Known::Yes(reached)) = walk else { return Known::Unknown };
                 let reached: std::rc::Rc<[u64]> = reached.into();
                 memo.insert(narrowing.semantic.epoch, key, reached.clone());
                 reached

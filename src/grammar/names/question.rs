@@ -138,6 +138,8 @@ impl Budget {
     /// Running out there still cuts the question short (its partial answers
     /// must not be kept as complete).
     pub(crate) fn detached<R>(&self, units: u32, work: impl FnOnce() -> R) -> Option<R> {
+        // A question with nothing left gets no more work done for it.
+        if self.exhausted() { self.limit(); return None }
         let started = super::memo::write_order();
         let (left, limited, cut) = (self.left.replace(units), self.limited.replace(false), self.cut.get());
         let result = work();
