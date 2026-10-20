@@ -246,6 +246,11 @@ impl<'a> LintWorld<'a> {
             if let (Some(profile), Some(tree)) = (self.ctx.profile, World::tree(&files, file)) {
                 let used = u64::from(crate::grammar::names::question::Budget::per_question() - budget.remaining());
                 profile.record_root(tree.node(node).matcher as usize, used, budget.limited());
+                if budget.limited() {
+                    let syntax = tree.node(node);
+                    let text = World::text(&files, file).and_then(|text| text.get(syntax.start as usize..syntax.end as usize));
+                    profile.record_cut_root(text.unwrap_or(""));
+                }
             }
             answer
         });
@@ -1065,6 +1070,16 @@ impl World for Files<'_> {
             Known::Yes(None) => Known::Yes(false),
             Known::Unknown => Known::Unknown,
         }
+    }
+
+    fn refuted_by_syntax(&self, at: Leaf, condition: u32) -> bool {
+        let world = self.0;
+        let Some(item) = world.ctx.grammar.names.conditions.get(condition as usize) else { return false };
+        let Some(lowered) = item.lowered.get() else { return false };
+        let Some(guard) = item.guard.get_or_init(|| lowered.syntax_guard()) else { return false };
+        let Some(ctx) = world.here(at) else { return false };
+        let held = Session::new(&ctx, ctx.node, &[]).holds_on(ctx.node, guard);
+        held == Some(false)
     }
 
     fn condition(&self, at: Leaf, condition: u32, semantic: &Semantic<'_>) -> Known<bool> {

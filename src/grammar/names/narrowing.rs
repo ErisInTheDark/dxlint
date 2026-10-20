@@ -218,6 +218,13 @@ impl Narrowing<'_> {
                     for site in sites {
                         let Target::Node(site) = site.target else { return None };
                         if site.file != file { return None }
+                        // A whole test that narrows nothing in any frame
+                        // (`x < limit`) tests none of its operands. Only the
+                        // test itself: inside it, a parent's items reach
+                        // through children (`typeof x === "string"`).
+                        if let Some(data) = tree.nodes.get(site.node as usize) {
+                            if self.proves_nothing(Leaf { target: Target::Node(site), frame: super::question::FrameId::ROOT }, data.matcher) { continue }
+                        }
                         let mut pending = vec![site.node];
                         while let Some(node) = pending.pop() {
                             let named = names.merged.contains_key(&node) || names.declaration.contains_key(&node)
@@ -246,6 +253,16 @@ impl Narrowing<'_> {
             }
         }
         Some(roots)
+    }
+
+    /// Whether a test at `at` (of kind `matcher`) narrows nothing in any
+    /// frame: it calls nothing (no type predicates), and each of its truth
+    /// items has a condition its syntax refutes.
+    fn proves_nothing(&self, at: Leaf, matcher: u32) -> bool {
+        let (Some(kind), Some(truthy)) = (self.semantic.tables.kinds.get(matcher as usize), self.semantic.tables.vocabulary.effect("truthy")) else { return false };
+        if !kind.calls.invokes.is_empty() { return false }
+        let mut items = kind.unwraps.iter().filter(|item| item.effect == Some(truthy)).peekable();
+        items.peek().is_some() && items.all(|item| item.when.is_some_and(|condition| self.semantic.world.refuted_by_syntax(at, condition)))
     }
 
     /// Every node entered in `execution` whose kind propagates guards, once

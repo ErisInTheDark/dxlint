@@ -157,6 +157,8 @@ pub struct Condition {
     pub matcher: u32,
     pub expr: std::sync::OnceLock<crate::expr::CExpr>,
     pub lowered: std::sync::OnceLock<crate::vm::VExpr>,
+    /// Its syntax-only conjuncts ([`crate::vm::VExpr::syntax_guard`]).
+    pub guard: std::sync::OnceLock<Option<crate::vm::VExpr>>,
 }
 
 /// An expression one name item evaluates on its layer's nodes (a module
@@ -475,7 +477,7 @@ impl Names {
                 .iter()
                 .map(|&matcher| {
                     def.when.as_ref().map(|_| {
-                        names.conditions.push(Condition { item, matcher, expr: std::sync::OnceLock::new(), lowered: std::sync::OnceLock::new() });
+                        names.conditions.push(Condition { item, matcher, expr: std::sync::OnceLock::new(), lowered: std::sync::OnceLock::new(), guard: std::sync::OnceLock::new() });
                         names.conditions.len() as u32 - 1
                     })
                 })

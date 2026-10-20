@@ -284,6 +284,35 @@ pub enum PositionRead {
 }
 
 impl VExpr {
+    /// The conjuncts of a condition that read only syntax (fields, kinds,
+    /// texts, value-only functions on them), joined: when they are false
+    /// the whole condition is, in every frame, without a type question.
+    pub fn syntax_guard(&self) -> Option<VExpr> {
+        if let VExpr::Binary(BinOp::And, a, b) = self {
+            return match (a.syntax_guard(), b.syntax_guard()) {
+                (Some(a), Some(b)) => Some(VExpr::Binary(BinOp::And, Box::new(a), Box::new(b))),
+                (one, other) => one.or(other),
+            };
+        }
+        self.is_syntactic().then(|| self.clone())
+    }
+
+    fn is_syntactic(&self) -> bool {
+        match self {
+            VExpr::Const(_) | VExpr::Is { .. } | VExpr::InField(..) | VExpr::InFields(_) | VExpr::FieldPresent(_)
+            | VExpr::FieldCount(_) | VExpr::Node | VExpr::Text | VExpr::Parent | VExpr::Offset | VExpr::EndOffset
+            | VExpr::Index | VExpr::Line | VExpr::Field(_) | VExpr::Ancestor(..) => true,
+            VExpr::Not(a) | VExpr::Neg(a) | VExpr::IsNull(a) | VExpr::NonEmpty(a) | VExpr::OnField(_, a) | VExpr::OnParent(a)
+            | VExpr::OnSibling(_, a) | VExpr::IsValue(a, _) | VExpr::FieldElse(_, a) | VExpr::ReTest(a, _) | VExpr::KindName(a)
+            | VExpr::OwnChild(_, _, a) | VExpr::OnAncestor(_, a) | VExpr::Pattern(a, _) => a.is_syntactic(),
+            VExpr::Binary(_, a, b) | VExpr::Coalesce(a, b) | VExpr::Nullish(a, b) | VExpr::Contains(a, b)
+            | VExpr::StartsWith(a, b) | VExpr::EndsWith(a, b) => a.is_syntactic() && b.is_syntactic(),
+            VExpr::If(a, b, c) => a.is_syntactic() && b.is_syntactic() && c.is_syntactic(),
+            VExpr::List(items) | VExpr::Template(items) | VExpr::Call(_, items) => items.iter().all(VExpr::is_syntactic),
+            _ => false,
+        }
+    }
+
     /// Small value-only bodies cost less than a second per-node cache.
     pub(crate) fn is_direct(&self) -> bool {
         fn cost(e: &VExpr, remaining: &mut u8) -> bool {

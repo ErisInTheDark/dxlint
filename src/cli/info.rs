@@ -533,6 +533,13 @@ pub fn profile(output: &mut Output<'_>, linter: &Linter, format: super::Format, 
                 ms(row.nanos), row.calls, path.display(), cause.name()));
         }
     }
+    let cut_roots = p.cut_roots();
+    if !cut_roots.is_empty() {
+        output.err(format_args!("  root questions cut by their budget, by query and code (top 25 of {}):", cut_roots.len()));
+        for (count, query, text) in cut_roots.into_iter().take(25) {
+            output.err(format_args!("  {count:>8}  {query:<22} {text}"));
+        }
+    }
     let mut semantic: Vec<_> = p.semantic_queries.iter()
         .map(|(&name, query)| (Profile::get(&query.nanos), Profile::get(&query.self_nanos), Profile::get(&query.calls), Profile::get(&query.limited), name))
         .filter(|(_, _, calls, ..)| *calls > 0).collect();

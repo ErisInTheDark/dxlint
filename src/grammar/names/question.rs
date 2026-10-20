@@ -452,6 +452,10 @@ pub trait World {
     /// holds at `at` (run on the VM in that node's file; nested questions
     /// see its frame and view).
     fn condition(&self, at: Leaf, condition: u32, semantic: &super::semantic::Semantic<'_>) -> Known<bool>;
+    /// Whether `condition` fails at `at` on syntax alone (its syntax-only
+    /// conjuncts are false): false in every frame, decided without a type
+    /// question. `false` when that can't be told.
+    fn refuted_by_syntax(&self, _at: Leaf, _condition: u32) -> bool { false }
     /// The value of item expression `operand` ([`super::Names::operands`])
     /// at `at`, run on the VM in that node's file like [`World::condition`].
     fn operand(&self, at: Leaf, operand: u32, semantic: &super::semantic::Semantic<'_>) -> Known<crate::expr::Value<'static>>;

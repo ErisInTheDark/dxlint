@@ -223,6 +223,9 @@ pub struct Profile {
     /// first: what bounds a parallel run's wall time.
     slowest_files: Mutex<Vec<(u64, String)>>,
     effect_failures: Mutex<FxHashMap<(PathBuf, u32, crate::grammar::names::effects::build::Failure), EffectFailureProfile>>,
+    /// Root questions cut short by their budget, by asking query and the
+    /// code they were asked about: what `--semantic-budget` rulers list.
+    cut_roots: Mutex<FxHashMap<(&'static str, Box<str>), u64>>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -554,6 +557,24 @@ impl Profile {
             row.cut += 1;
             row.cut_steps += steps;
         }
+    }
+
+    /// Counts a root question cut short by its budget at code `text` (its
+    /// first line, trimmed).
+    pub fn record_cut_root(&self, text: &str) {
+        const SHOWN: usize = 72;
+        let query = SEMANTIC_QUERY.with(Cell::get).unwrap_or("-");
+        let line = text.lines().next().unwrap_or("").trim();
+        let shown: String = line.chars().take(SHOWN).collect();
+        *self.cut_roots.lock().expect("cut roots lock").entry((query, shown.into())).or_default() += 1;
+    }
+
+    /// Cut root questions by query and code, most first.
+    pub fn cut_roots(&self) -> Vec<(u64, &'static str, Box<str>)> {
+        let mut rows: Vec<_> = self.cut_roots.lock().expect("cut roots lock").iter()
+            .map(|((query, text), &count)| (count, *query, text.clone())).collect();
+        rows.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.2.cmp(&b.2)));
+        rows
     }
 
     /// Counts a root question cut short by its budget against the semantic
