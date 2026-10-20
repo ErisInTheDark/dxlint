@@ -4,7 +4,7 @@ use std::cell::{Cell, Ref, RefCell};
 use std::rc::Rc;
 
 use super::memo::Epoch;
-use super::question::{Known, Leaf, NodeRef, QueryContext, Target, World};
+use super::question::{FrameId, Known, Leaf, NodeRef, QueryContext, Target, World};
 use super::values::Values;
 use super::Names;
 
@@ -26,18 +26,20 @@ pub struct State {
     pub(crate) modules: super::modules::queries::State,
     /// Semantic attributes read inside questions, by what their answer can
     /// depend on: complete answers only.
-    attributes: super::memo::Memo<AttributeKey, crate::vm::V>,
+    attributes: super::memo::Memo<AttributeKey, crate::vm::Packed>,
     defects: RefCell<Vec<Defect>>,
 }
 
 /// A semantic attribute on a node, read where a question's frame (and a
-/// scope standing for that node) applies: everything its answer can see.
+/// scope of the node's file the question stands at) applies: everything its
+/// answer can see. Kept compact: big files keep hundreds of thousands.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct AttributeKey {
     pub file: u32,
     pub node: u32,
+    pub frame: FrameId,
+    pub scope: Option<u32>,
     pub attr: u16,
-    pub at: Leaf,
 }
 
 impl std::ops::Deref for Semantic<'_> {
@@ -224,11 +226,11 @@ impl<'a> Semantic<'a> {
     }
 
     pub(crate) fn attribute(&self, key: &AttributeKey) -> Option<crate::vm::V> {
-        self.attributes.get(key)
+        self.attributes.get(key).map(crate::vm::Packed::get)
     }
 
     pub(crate) fn remember_attribute(&self, key: AttributeKey, value: crate::vm::V) {
-        self.attributes.insert(self.epoch, key, value);
+        self.attributes.insert(self.epoch, key, crate::vm::Packed::new(value));
     }
 
     pub fn defect(&self, item: u32, at: Leaf, message: impl Into<Box<str>>) {

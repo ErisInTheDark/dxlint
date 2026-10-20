@@ -46,6 +46,14 @@ pub(super) fn encode(v: V) -> u64 {
     }
 }
 
+/// The value [`encode`] gave `cell`.
+pub(super) fn unpack(cell: u64) -> V {
+    match decode(cell) {
+        Cell::Ready(v) => v,
+        Cell::Unset | Cell::Busy | Cell::GaveUp => unreachable!("encoded values are never cell states"),
+    }
+}
+
 fn decode(cell: u64) -> Cell {
     let payload = cell as u32;
     match cell {

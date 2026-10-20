@@ -191,12 +191,12 @@ impl<'a> LintWorld<'a> {
         let semantic = question.semantic;
         // Like `asked_at`, without reading names: a scope target of this
         // file keys the entry as is (names may still be resolving here).
-        let at = match question.at.target {
-            Target::Scope(scope) if scope.file == file => question.at,
-            Target::Node(at) if at.file == file => Leaf { target: Target::Node(NodeRef { file, node }), frame: question.at.frame },
-            _ => Leaf { target: Target::Node(NodeRef { file, node }), frame: FrameId::ROOT },
+        let (frame, scope) = match question.at.target {
+            Target::Scope(scope) if scope.file == file => (question.at.frame, Some(scope.scope)),
+            Target::Node(at) if at.file == file => (question.at.frame, None),
+            _ => (FrameId::ROOT, None),
         };
-        let key = AttributeKey { file, node, attr, at };
+        let key = AttributeKey { file, node, frame, scope, attr };
         if let Some(kept) = semantic.attribute(&key) { return Some(kept) }
         let mut value = None;
         if let Known::Yes(Some(complete)) = self.complete_attribute(|| { value = compute(); value }) {

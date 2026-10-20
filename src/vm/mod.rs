@@ -62,6 +62,15 @@ fn interned(i: u32) -> &'static str {
     pool().read().expect("pool lock").1[i as usize]
 }
 
+/// A [`V`] in one word (the record cell coding), for tables that keep many.
+#[derive(Clone, Copy)]
+pub struct Packed(u64);
+
+impl Packed {
+    pub fn new(v: V) -> Self { Packed(records::encode(v)) }
+    pub fn get(self) -> V { records::unpack(self.0) }
+}
+
 impl V {
     pub fn to_value<'s>(self, h: &impl Host, source: &'s str) -> Value<'s> {
         match self {

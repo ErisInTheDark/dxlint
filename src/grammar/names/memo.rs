@@ -47,16 +47,30 @@ impl Settled for super::question::NodeValue {
     fn settled(&self) -> bool { !matches!(self, super::question::NodeValue::Unknown) }
 }
 
+/// A memoised answer and its write order: entries written by the current
+/// root are those at or after [`Writes::start`].
 #[derive(Clone)]
 struct Entry<V> {
-    epoch: Epoch,
     value: V,
     order: u64,
 }
 
 struct Writes<K, V> {
     epoch: Epoch,
+    /// The write order when `epoch`'s root first wrote here.
+    start: u64,
     undo: Vec<(K, Option<Entry<V>>)>,
+}
+
+impl<K, V> Writes<K, V> {
+    /// Starts `epoch`'s writes, forgetting a finished root's undo log.
+    fn enter(&mut self, epoch: Epoch) {
+        if self.epoch != epoch {
+            self.undo.clear();
+            self.epoch = epoch;
+            self.start = write_order();
+        }
+    }
 }
 
 pub(super) struct Memo<K, V> {
@@ -68,7 +82,7 @@ impl<K, V> Default for Memo<K, V> {
     fn default() -> Self {
         Self {
             entries: RefCell::default(),
-            writes: RefCell::new(Writes { epoch: Epoch::default(), undo: Vec::new() }),
+            writes: RefCell::new(Writes { epoch: Epoch::default(), start: 0, undo: Vec::new() }),
         }
     }
 }
@@ -81,14 +95,11 @@ impl<K: Clone + Eq + Hash, V: Clone> Memo<K, V> {
     pub(super) fn insert(&self, epoch: Epoch, key: K, value: V) {
         let mut entries = self.entries.borrow_mut();
         let mut writes = self.writes.borrow_mut();
-        if writes.epoch != epoch {
-            writes.undo.clear();
-            writes.epoch = epoch;
-        }
-        let entry = Entry { epoch, value, order: next_write() };
+        writes.enter(epoch);
+        let entry = Entry { value, order: next_write() };
         match entries.entry(key) {
             std::collections::hash_map::Entry::Occupied(mut slot) => {
-                if slot.get().epoch != epoch { writes.undo.push((slot.key().clone(), Some(slot.get().clone()))) }
+                if slot.get().order < writes.start { writes.undo.push((slot.key().clone(), Some(slot.get().clone()))) }
                 slot.insert(entry);
             }
             std::collections::hash_map::Entry::Vacant(slot) => {
@@ -102,12 +113,9 @@ impl<K: Clone + Eq + Hash, V: Clone> Memo<K, V> {
     pub(super) fn remove(&self, epoch: Epoch, key: &K) {
         let mut entries = self.entries.borrow_mut();
         let mut writes = self.writes.borrow_mut();
-        if writes.epoch != epoch {
-            writes.undo.clear();
-            writes.epoch = epoch;
-        }
+        writes.enter(epoch);
         if let Some(previous) = entries.remove(key) {
-            if previous.epoch != epoch { writes.undo.push((key.clone(), Some(previous))) }
+            if previous.order < writes.start { writes.undo.push((key.clone(), Some(previous))) }
         }
     }
 
@@ -123,9 +131,10 @@ impl<K: Clone + Eq + Hash, V: Clone> Memo<K, V> {
             return 0;
         }
         let mut discarded = 0;
+        let start = writes.start;
         let mut entries = self.entries.borrow_mut();
         while let Some((key, previous)) = writes.undo.pop() {
-            let complete = entries.get(&key).is_some_and(|entry| entry.epoch == epoch && entry.order < cut && keep(&entry.value));
+            let complete = entries.get(&key).is_some_and(|entry| entry.order >= start && entry.order < cut && keep(&entry.value));
             if complete { continue }
             discarded += 1;
             match previous {
