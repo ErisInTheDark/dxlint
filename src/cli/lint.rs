@@ -187,8 +187,12 @@ pub(super) fn prepared(output: &mut Output<'_>, args: LintArgs, project: &mut Pr
     if args.profile {
         linter.enable_profile();
     }
-    // Profiling measures linting, so it never reads results instead.
-    let cache = (!args.no_cache && !args.profile && !args.fix_preview).then(|| Cache::open(&linter));
+    if let Some(units) = args.semantic_budget {
+        crate::grammar::names::question::Budget::set_per_question(units.get());
+    }
+    // Profiling measures linting, so it never reads results instead; another
+    // budget gives other results than cached ones.
+    let cache = (!args.no_cache && !args.profile && !args.fix_preview && args.semantic_budget.is_none()).then(|| Cache::open(&linter));
     let cwd = output.cwd;
     let roots: Vec<PathBuf> = if args.paths.is_empty() { vec![linter.root.clone()] } else { args.paths.iter().map(|p| cwd.join(p)).collect() };
     let jobs = args.jobs.map_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get()), |n| n.get());

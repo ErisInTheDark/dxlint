@@ -88,7 +88,7 @@ impl Narrowing<'_> {
                 if !roots.get(&root).is_some_and(|owners| owners.iter().any(reaches)) {
                     let lone = !matches!(&base, NodeValue::Alternatives(rows) if rows.len() > 1);
                     if lone || (subject.path.is_empty() && written.path.is_empty()
-                        && effects.unwritten(written.root, &|target| self.writes_binding(target, written.root)) == Known::Yes(true)) {
+                        && self.unwritten(written.root) == Known::Yes(true)) {
                         return base;
                     }
                 }
@@ -107,7 +107,7 @@ impl Narrowing<'_> {
             // Only a value read inside a closure can use its creators' guards,
             // and only then is the (whole-file) unwritten proof worth asking.
             if !enclosing.is_empty()
-                && effects.unwritten(subject.root, &|target| self.writes_binding(target, subject.root)) == Known::Yes(true) {
+                && self.unwritten(subject.root) == Known::Yes(true) {
                 contexts.extend(enclosing);
             }
         }
@@ -336,25 +336,26 @@ impl Narrowing<'_> {
         }
     }
 
-    /// Whether a write to `target` replaces binding `root`. Lexical: a write
-    /// replaces a binding only through a name that resolves to it, never as
-    /// a property write and never through call arguments.
-    fn writes_binding(&self, target: Leaf, root: Leaf) -> Known<bool> {
-        // A subject rooted elsewhere (a parameter read through its call's
-        // argument) is no lexical binding to compare against.
-        let Target::Node(bound) = root.target else { return Known::Unknown };
-        if !self.semantic.world.names(bound.file).is_some_and(|names| names.declared.contains_key(&bound.node)) { return Known::Unknown }
+    /// The binding a write to `target` replaces (`None`: none). Lexical: a
+    /// write replaces a binding only through a name that resolves to it,
+    /// never as a property write and never through call arguments.
+    fn write_declaration(&self, target: Leaf) -> Known<Option<NodeRef>> {
         let Known::Yes(at) = self.semantic.leaf(target) else { return Known::Unknown };
-        let Target::Node(node) = at.target else { return Known::Yes(false) };
+        let Target::Node(node) = at.target else { return Known::Yes(None) };
         let Some(names) = self.semantic.world.names(node.file) else { return Known::Unknown };
         let declaration = names.merged.get(&node.node).or_else(|| names.declaration.get(&node.node)).copied()
             .or_else(|| names.declared.contains_key(&node.node).then_some(node.node));
         match declaration {
-            Some(declaration) => Known::Yes(root.target == Target::Node(NodeRef { node: declaration, ..node })),
-            // A name nothing declares could still be this binding.
+            Some(declaration) => Known::Yes(Some(NodeRef { node: declaration, ..node })),
+            // A name nothing declares could still be any binding.
             None if names.keys.contains_key(&node.node) || names.asked.contains_key(&node.node) => Known::Unknown,
-            None => Known::Yes(false),
+            None => Known::Yes(None),
         }
+    }
+
+    /// Whether no write in `root`'s file replaces it ([`super::effects::Effects::unwritten`]).
+    fn unwritten(&self, root: Leaf) -> Known<bool> {
+        self.semantic.effects().unwritten(root, &|target| self.write_declaration(target))
     }
 
     /// The binding and member path `at` names; a parameter read through its
@@ -378,8 +379,7 @@ impl Narrowing<'_> {
         let Known::Yes(sites) = self.semantic.values().sites(at, key) else { return false };
         let [site] = sites.as_slice() else { return false };
         let Known::Yes((place, _)) = self.find_place(*site, false, false) else { return false };
-        place.path.is_empty() && self.semantic.effects()
-            .unwritten(place.root, &|target| self.writes_binding(target, place.root)) == Known::Yes(true)
+        place.path.is_empty() && self.unwritten(place.root) == Known::Yes(true)
     }
 
     /// The place `at` names (through call arguments when asked) and the

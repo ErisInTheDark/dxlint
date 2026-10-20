@@ -17,6 +17,8 @@ pub(crate) struct State {
     entry_owners: RefCell<FxHashMap<Leaf, Leaf>>,
     /// Per file, every write's target in tree order (for `unwritten`).
     file_writes: RefCell<FxHashMap<u32, Rc<[FileWrite]>>>,
+    /// Per file, those writes resolved to the bindings they replace.
+    written_bindings: RefCell<FxHashMap<u32, Rc<WrittenBindings>>>,
     discarded: RefCell<Option<Discarded>>,
     /// Bodies whose graph build ran a nearly whole question budget out
     /// ([`Effects::execution`]); kept across roots (never rolled back).
@@ -29,6 +31,12 @@ pub(crate) struct State {
 enum FileWrite {
     Target(NodeRef),
     Unreadable,
+}
+
+#[derive(Default)]
+struct WrittenBindings {
+    first: FxHashMap<NodeRef, usize>,
+    unknown: Option<usize>,
 }
 
 #[derive(Default)]
@@ -167,26 +175,51 @@ impl Effects<'_> {
         Known::Yes(entries)
     }
 
-    pub fn unwritten(&self, binding: Leaf, replaces: &impl Fn(Leaf) -> Known<bool>) -> Known<bool> {
+    /// Whether no write in `binding`'s file (other than its declaration)
+    /// replaces it; `declaration` names the binding a write target replaces
+    /// (`None`: none). Each file's writes are resolved once
+    /// ([`Effects::written_bindings`]): closure reads ask per binding, and
+    /// resolving every write per read made big files quadratic.
+    pub fn unwritten(&self, binding: Leaf, declaration: &impl Fn(Leaf) -> Known<Option<NodeRef>>) -> Known<bool> {
         let Some(binding) = self.semantic.leaf(binding).known() else { return Known::Unknown };
         if binding.frame != super::super::question::FrameId::ROOT { return Known::Unknown }
         let Target::Node(node) = binding.target else { return Known::Unknown };
         let Some(tree) = self.semantic.world.tree(node.file) else { return Known::Unknown };
         let Some(names) = self.semantic.world.names(node.file) else { return Known::Unknown };
         if !names.declared.contains_key(&node.node) { return Known::Unknown }
-        let Known::Yes(writes) = self.file_writes(binding, tree.nodes.len()) else { return Known::Unknown };
-        for &write in writes.iter() {
+        let Known::Yes(written) = self.written_bindings(binding, tree.nodes.len(), declaration) else { return Known::Unknown };
+        match (written.first.get(&node), written.unknown) {
+            (Some(&first), unknown) if unknown.is_none_or(|unknown| first < unknown) => Known::Yes(false),
+            (_, Some(_)) => Known::Unknown,
+            _ => Known::Yes(true),
+        }
+    }
+
+    /// Per file (root frame): each binding's first replacing write, in tree
+    /// order, and the first write whose binding can't be told.
+    fn written_bindings(&self, at: Leaf, nodes: usize, declaration: &impl Fn(Leaf) -> Known<Option<NodeRef>>) -> Known<Rc<WrittenBindings>> {
+        let Target::Node(file) = at.target else { return Known::Unknown };
+        if let Some(written) = self.semantic.effects.written_bindings.borrow().get(&file.file) { return Known::Yes(written.clone()) }
+        let Known::Yes(writes) = self.file_writes(at, nodes) else { return Known::Unknown };
+        let mut written = WrittenBindings::default();
+        for (index, &write) in writes.iter().enumerate() {
             if !self.semantic.question.budget.step() { return Known::Unknown }
-            let FileWrite::Target(target) = write else { return Known::Unknown };
-            if target == node { continue }
-            match replaces(Leaf { target: Target::Node(target), ..binding }) {
-                Known::Yes(true) => return Known::Yes(false),
-                Known::Yes(false) => {}
-                Known::Unknown => return Known::Unknown,
+            let FileWrite::Target(target) = write else { written.unknown = Some(index); break };
+            match declaration(Leaf { target: Target::Node(target), ..at }) {
+                // A declaration's own write doesn't replace it.
+                Known::Yes(Some(binding)) => if binding != target { written.first.entry(binding).or_insert(index); },
+                Known::Yes(None) => {}
+                Known::Unknown => { written.unknown = Some(index); break }
             }
         }
-        Known::Yes(true)
+        let written = Rc::new(written);
+        self.semantic.effects.written_bindings.borrow_mut().insert(file.file, written.clone());
+        Known::Yes(written)
     }
+
+    /// Steps per node a whole-file write walk may spend: a few per node
+    /// for its write items and their conditions.
+    const FILE_WALK_STEPS_PER_NODE: u32 = 64;
 
     /// Every write in `at`'s file (root frame), in tree order, walked once
     /// per file: each closure read's unwritten proof asks about one binding,
@@ -195,22 +228,32 @@ impl Effects<'_> {
         let Target::Node(file) = at.target else { return Known::Unknown };
         if let Some(writes) = self.semantic.effects.file_writes.borrow().get(&file.file) { return Known::Yes(writes.clone()) }
         let runtime = super::source::Runtime::new(self.semantic);
-        let mut visited = FxHashSet::default();
-        let mut writes = Vec::new();
-        'nodes: for id in 0..nodes {
-            if !self.semantic.question.budget.step() { return Known::Unknown }
-            let node = Leaf { target: Target::Node(NodeRef { node: id as u32, ..file }), ..at };
-            let Some(node) = self.semantic.leaf(node).known() else { writes.push(FileWrite::Unreadable); break };
-            if !visited.insert(node) { continue }
-            let Some(found) = runtime.writes(node, None).known() else { writes.push(FileWrite::Unreadable); break };
-            for (_, _, write) in found {
-                match write.event.target {
-                    Some(target) => writes.push(FileWrite::Target(target.value)),
-                    None => { writes.push(FileWrite::Unreadable); break 'nodes }
+        let budget = &self.semantic.question.budget;
+        // A whole-file walk, kept for every later question: it gets an
+        // allowance for the file's size rather than what is left of the
+        // asking question's budget (which cut big files' walks short in
+        // every question that asked).
+        let allowance = u32::try_from(nodes).unwrap_or(u32::MAX).saturating_mul(Self::FILE_WALK_STEPS_PER_NODE)
+            .max(super::super::question::Budget::per_question());
+        let walk = budget.detached(allowance, || {
+            let mut visited = FxHashSet::default();
+            let mut writes = Vec::new();
+            'nodes: for id in 0..nodes {
+                if !budget.step() { return writes }
+                let node = Leaf { target: Target::Node(NodeRef { node: id as u32, ..file }), ..at };
+                let Some(node) = self.semantic.leaf(node).known() else { writes.push(FileWrite::Unreadable); break };
+                if !visited.insert(node) { continue }
+                let Some(found) = runtime.writes(node, None).known() else { writes.push(FileWrite::Unreadable); break };
+                for (_, _, write) in found {
+                    match write.event.target {
+                        Some(target) => writes.push(FileWrite::Target(target.value)),
+                        None => { writes.push(FileWrite::Unreadable); break 'nodes }
+                    }
                 }
             }
-        }
-        if self.semantic.question.budget.exhausted() { return Known::Unknown }
+            writes
+        });
+        let Some(writes) = walk else { return Known::Unknown };
         let writes: Rc<[FileWrite]> = writes.into();
         self.semantic.effects.file_writes.borrow_mut().insert(file.file, writes.clone());
         Known::Yes(writes)
@@ -325,7 +368,7 @@ impl Effects<'_> {
         // The build itself must be what ran out: a body big enough that its
         // own steps took a large share of the budget (not a nested question
         // that burned it).
-        let default = u64::from(crate::grammar::names::question::Budget::DEFAULT);
+        let default = u64::from(crate::grammar::names::question::Budget::per_question());
         if matches!(graph, Known::Unknown) && budget.exhausted()
             && u64::from(available) * 10 >= default * 9 && (built.get() as u64) * 4 >= default {
             self.semantic.effects.outgrown.borrow_mut().insert(entry);

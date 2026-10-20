@@ -72,8 +72,8 @@ impl Session {
         let answer = run(&semantic);
         if let Some(profile) = world.profile() {
             profile.record_semantic_budget(
-                u64::from(super::question::Budget::DEFAULT - self.question.budget.remaining()),
-                u64::from(super::question::Budget::DEFAULT),
+                u64::from(super::question::Budget::per_question() - self.question.budget.remaining()),
+                u64::from(super::question::Budget::per_question()),
                 self.question.budget.limited(),
             );
             profile.flush_steps();

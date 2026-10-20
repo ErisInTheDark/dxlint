@@ -158,6 +158,11 @@ pub struct LintArgs {
     /// Lint every file, without reading or writing `.zlintcache`
     #[arg(long)]
     pub no_cache: bool,
+    /// Steps one type question may take before giving up (default 100000).
+    /// A diagnostic ruler: with --profile, questions over it show as cut.
+    /// Results depend on it, so it implies --no-cache.
+    #[arg(long, value_name = "STEPS")]
+    pub semantic_budget: Option<std::num::NonZeroU32>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -269,7 +274,8 @@ where
     let mut output = Output { cwd, stdout: &mut stdout, stderr: &mut stderr };
     if matches!(&cli.command, Some(Command::Conformance)) {
         if cli.lint.sources.is_some() || !cli.lint.paths.is_empty() || cli.lint.fix || cli.lint.fix_preview
-            || cli.lint.jobs.is_some() || cli.lint.stats || cli.lint.profile || cli.lint.no_cache || cli.lint.format != Format::Human {
+            || cli.lint.jobs.is_some() || cli.lint.stats || cli.lint.profile || cli.lint.no_cache || cli.lint.semantic_budget.is_some()
+            || cli.lint.format != Format::Human {
             render::error(&mut output, "conformance accepts only --config; lint options are fixed by the worker protocol");
             return 2;
         }

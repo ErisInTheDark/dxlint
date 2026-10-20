@@ -244,7 +244,7 @@ impl<'a> LintWorld<'a> {
             };
             let budget = &semantic.question.budget;
             if let (Some(profile), Some(tree)) = (self.ctx.profile, World::tree(&files, file)) {
-                let used = u64::from(crate::grammar::names::question::Budget::DEFAULT - budget.remaining());
+                let used = u64::from(crate::grammar::names::question::Budget::per_question() - budget.remaining());
                 profile.record_root(tree.node(node).matcher as usize, used, budget.limited());
             }
             answer

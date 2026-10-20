@@ -131,9 +131,37 @@ impl Budget {
         self.left.get()
     }
 
+    /// Runs `work` on an allowance of its own (`None` when it ran out),
+    /// then gives the question back exactly the budget it had: for
+    /// once-per-file walks memoised for every later question, which a
+    /// question's budget would cut short again in every question that asks.
+    /// Running out there still cuts the question short (its partial answers
+    /// must not be kept as complete).
+    pub(crate) fn detached<R>(&self, units: u32, work: impl FnOnce() -> R) -> Option<R> {
+        let started = super::memo::write_order();
+        let (left, limited, cut) = (self.left.replace(units), self.limited.replace(false), self.cut.get());
+        let result = work();
+        let ran_out = self.limited();
+        self.left.set(left);
+        self.limited.set(limited || ran_out);
+        self.cut.set(if ran_out && !limited { started } else { cut });
+        (!ran_out).then_some(result)
+    }
+
+    /// The work each root question gets in this process: [`Budget::DEFAULT`]
+    /// unless `--semantic-budget` set it (a diagnostic ruler: questions
+    /// doing more than it give up and show in the profile).
+    pub fn per_question() -> u32 {
+        PER_QUESTION.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub fn set_per_question(units: u32) {
+        PER_QUESTION.store(units, std::sync::atomic::Ordering::Relaxed);
+    }
+
     pub(crate) fn restart(&self) {
         assert_eq!(self.depth.get(), 0);
-        self.left.set(Self::DEFAULT);
+        self.left.set(Self::per_question());
         self.limited.set(false);
         self.cut.set(u64::MAX);
     }
@@ -143,9 +171,11 @@ impl Budget {
     }
 }
 
+static PER_QUESTION: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(Budget::DEFAULT);
+
 impl Default for Budget {
     fn default() -> Budget {
-        Budget::new(Budget::DEFAULT)
+        Budget::new(Budget::per_question())
     }
 }
 
