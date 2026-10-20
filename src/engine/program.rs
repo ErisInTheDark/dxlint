@@ -215,6 +215,15 @@ impl Programs {
     }
 }
 
+/// Run-wide answers computed once per key, however many threads ask at once.
+type Slots<K, V> = Mutex<FxHashMap<K, Arc<std::sync::OnceLock<Cached<V>>>>>;
+
+/// `key`'s answer in `slots`: the first asker computes it, the rest wait.
+fn once<K: Eq + Hash, V: Clone>(slots: &Slots<K, V>, key: K, compute: impl FnOnce() -> V) -> Cached<V> {
+    let slot = slots.lock().expect("run slots").entry(key).or_default().clone();
+    slot.get_or_init(|| Cached::compute(compute)).clone()
+}
+
 #[derive(Default)]
 pub(super) struct Snapshot {
     paths: Memo<(u64, Context), Arc<Vec<PathBuf>>>,
@@ -234,9 +243,9 @@ pub(super) struct Snapshot {
     texts: RwLock<FxHashMap<PathBuf, (u64, Option<Arc<str>>, u64)>>,
     /// Per program (settings, input hash) and global name: the inputs whose
     /// text may publish it ([`crate::grammar::names::modules::resolution::Globals::may_publish`]).
-    candidates: RwLock<FxHashMap<(usize, u64, Box<str>), Cached<Arc<[PathBuf]>>>>,
+    candidates: Slots<(usize, u64, Box<str>), Arc<[PathBuf]>>,
     /// Per program (settings, input hash): every input's text, read once.
-    surveys: RwLock<FxHashMap<(usize, u64), Cached<Survey>>>,
+    surveys: Slots<(usize, u64), Survey>,
     /// Program configurations by revision, settings and program directory.
     configurations: RwLock<FxHashMap<(u64, usize, PathBuf), Cached<Arc<crate::grammar::names::modules::resolution::Configuration>>>>,
     /// Metadata parsed from those texts, by text hash (`None`: malformed).
@@ -355,21 +364,16 @@ impl Snapshot {
         Ok(found)
     }
 
-    /// A program's input texts, read once per run (`read` records them).
+    /// A program's input texts, read once per run (`read` records them);
+    /// concurrent callers wait for the one reading.
     pub(super) fn survey(&self, key: (usize, u64), read: impl FnOnce() -> Survey) -> Cached<Survey> {
-        if let Some(found) = self.surveys.read().expect("run surveys").get(&key) { return found.clone() }
-        let answer = Cached::compute(read);
-        self.surveys.write().expect("run surveys").insert(key, answer.clone());
-        answer
+        once(&self.surveys, key, read)
     }
 
     /// The inputs that may publish a global name, computed once per run
     /// (`compute` records the text reads it makes).
     pub(super) fn candidates(&self, key: (usize, u64, Box<str>), compute: impl FnOnce() -> Arc<[PathBuf]>) -> Cached<Arc<[PathBuf]>> {
-        if let Some(found) = self.candidates.read().expect("run candidates").get(&key) { return found.clone() }
-        let answer = Cached::compute(compute);
-        self.candidates.write().expect("run candidates").insert(key, answer.clone());
-        answer
+        once(&self.candidates, key, compute)
     }
 
     /// `path`'s metadata parsed from the text with `hash`, parsed once per
