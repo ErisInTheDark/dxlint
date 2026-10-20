@@ -91,10 +91,10 @@ fn ts_value_print_handle_seen(n, seen) = {
 fn ts_value_print_handle(n) = ts_value_print_handle_seen(n, [])
 fn ts_value_symbol_key(n, key) = {
   value roots: global_declarations(n, "Symbol", "value")
-  value properties: map(roots ?? [], root => value_lookup(declaration_value(n, root), key))
-  value parts: flat_map(properties, property => flat_map(property.value ?? [], arm => arm))
+  value properties: map(roots ?? [], root => value_constituents(value_lookup(declaration_value(n, root), key).member))
+  value parts: flat_map(properties, property => flat_map(property ?? [], arm => arm))
   value identity: first(parts).identity
-  value if roots != null && count(parts) > 0 && all(properties, property => property.value_known)
+  value if roots != null && count(parts) > 0 && all(properties, property => property != null)
     && all(parts, part => contains(part.traits, "symbol") && part.identity_known
       && part.identity.kind == "declaration" && part.identity == identity)
     then {symbol: {file: identity.file, node: identity.node}} else null

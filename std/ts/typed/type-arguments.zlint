@@ -77,7 +77,7 @@ fn reduce_type_argument_fresh(initializer, annotation) = {
       value arms: value_parts(source)
       value lookup != null && count(lookup.alternatives) > 0
         && all(lookup.alternatives, alternative => alternative.matched == true)
-        && lookup.value_known && lookup.member != null && arms != null
+        && lookup.member != null && value_constituents(lookup.member) != null && arms != null
         && all(arms, arm => value_accepts(lookup.member, arm.handle, "value", "value") == true)
     })
 }

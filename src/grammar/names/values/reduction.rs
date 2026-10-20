@@ -17,8 +17,6 @@ impl Values<'_> {
         let written_scalars: Vec<Option<Identity>> = written.iter().map(|row| scalar(row)).collect();
         let mut retained = Vec::new();
         for declaration in declared {
-            let mut possible = false;
-            let mut uncertain = false;
             let declared_scalar = scalar(declaration);
             if let Some(identity) = &declared_scalar {
                 if written_scalars.iter().any(|written| written.as_ref() == Some(identity)) {
@@ -26,52 +24,38 @@ impl Values<'_> {
                     continue;
                 }
             }
+            // Keeping an alternative the write may not reach only widens the
+            // answer; dropping the whole value for it lost every read after a
+            // write of a type with generic methods (`const p = make()`). So an
+            // alternative goes only when every write provably misses it.
+            let mut reached = false;
             for (write, written_scalar) in written.iter().zip(&written_scalars) {
                 // Two different literals never overlap.
                 if declared_scalar.is_some() && written_scalar.is_some() { continue }
                 if !self.question.budget.step() { return NodeValue::Unknown }
-                match self.overlap(declaration, write) {
-                    Known::Yes(true) => { possible = true; break }
-                    Known::Yes(false) => {}
-                    Known::Unknown => uncertain = true,
-                }
+                if !self.disjoint(declaration, write) { reached = true; break }
             }
-            // Keeping an alternative the write may not reach only widens the
-            // answer; dropping the whole value for it lost every read after a
-            // write of a type with generic methods (`const p = make()`).
-            if possible || uncertain {
-                retained.push(declaration.clone());
-            }
+            if reached { retained.push(declaration.clone()) }
         }
         NodeValue::rows(retained)
     }
 
-    fn overlap(&self, declared: &[Leaf], written: &[Leaf]) -> Known<bool> {
+    /// Whether a declared alternative and a written one provably share no
+    /// value: their intersection normalizes to never, or both are distinct
+    /// literals. Anything else (overlapping, or undecided) may share one; a
+    /// structural comparison could only tell those two apart, and both keep
+    /// the alternative.
+    fn disjoint(&self, declared: &[Leaf], written: &[Leaf]) -> bool {
         let mut joint = declared.to_vec();
         joint.extend_from_slice(written);
         match self.normalize(NodeValue::rows(vec![joint])) {
-            NodeValue::Alternatives(rows) if rows.is_empty() => return Known::Yes(false),
-            NodeValue::Unknown => return Known::Unknown,
+            NodeValue::Alternatives(rows) if rows.is_empty() => return true,
+            NodeValue::Unknown => return false,
             _ => {}
         }
-        // A non-empty value overlaps itself (a written value of the declared
-        // type), without a structural comparison of what it contains.
-        if declared == written { return Known::Yes(true) }
-        if let (Known::Yes(Some(left)), Known::Yes(Some(right))) = (
-            self.row_identity(declared), self.row_identity(written),
-        ) {
-            if left == right { return Known::Yes(true) }
-            if scalar_identity(&left) && scalar_identity(&right) { return Known::Yes(false) }
-        }
-        let declared = NodeValue::rows(vec![declared.to_vec()]);
-        let written = NodeValue::rows(vec![written.to_vec()]);
-        let calls = self.semantic.calls();
-        if calls.accepts(&declared, &written) == Known::Yes(true)
-            || calls.accepts(&written, &declared) == Known::Yes(true) {
-            Known::Yes(true)
-        } else {
-            Known::Unknown
-        }
+        if declared == written { return false }
+        matches!((self.row_identity(declared), self.row_identity(written)),
+            (Known::Yes(Some(left)), Known::Yes(Some(right))) if left != right && scalar_identity(&left) && scalar_identity(&right))
     }
 
     fn row_identity(&self, row: &[Leaf]) -> Known<Option<Identity>> {

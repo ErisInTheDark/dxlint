@@ -167,7 +167,7 @@ fn stringification_member(n, handle, key) = {
 }
 fn stringification_ignored_base(n, carrier, ignored) = if carrier == null then false else {
   value sites: walk([carrier], site => {
-    value constructed: if site.kind != "ts_declarator" then [] else flat_map(value_lookup(declaration_value(n, site), "prototype").value ?? [], arm => map(arm, part => part.carrier))
+    value constructed: if site.kind != "ts_declarator" then [] else flat_map(value_constituents(value_lookup(declaration_value(n, site), "prototype").member) ?? [], arm => map(arm, part => part.carrier))
     value (site_field(n, site, "extends") ?? []) (site_sources(n, site).sites ?? []) filter(constructed, item => item != null)
   })
   value any(sites, site => contains(["ts_class", "ts_interface"], site.kind) && contains(ignored, site.name)

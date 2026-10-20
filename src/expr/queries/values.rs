@@ -269,12 +269,9 @@ pub(super) fn lookup_in(semantic: &Semantic<'_>, value: NodeValue, key: &Key) ->
         ]));
     }
     let member = values.member(&value, key);
-    let result = project(semantic, member.clone()).known();
     if semantic.question.budget.exhausted() { return Known::Unknown }
     let member = if matches!(member, NodeValue::Unknown) { Value::Null } else { super::handles::handle(semantic, member) };
     Known::Yes(Value::record(vec![
-        ("value_known".into(), Value::Bool(result.is_some())),
-        ("value".into(), result.unwrap_or(Value::Null)),
         ("member".into(), member),
         ("alternatives".into(), Value::list(alternatives)),
     ]))

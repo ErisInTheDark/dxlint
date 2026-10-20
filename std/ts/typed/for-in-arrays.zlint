@@ -2,11 +2,13 @@ define {
 
 fn for_in_arraylike_value(handle) = {
   value index: value_lookup(handle, 0)
-  value length: value_lookup(handle, "length")
   value any(index.alternatives, alternative => alternative.matched && any(alternative.sources, source =>
       source.kind == "indexer" && source.domain == "ordinal" || source.kind == "repeated" || source.kind == "ordinal"))
-    && length.value_known && count(length.value) > 0
-    && all(length.value, parts => any(parts, part => contains(part.traits, "number")))
+    && {
+      value length: value_constituents(value_lookup(handle, "length").member)
+      value length != null && count(length) > 0
+        && all(length, parts => any(parts, part => contains(part.traits, "number")))
+    }
 }
 fn for_in_arraylike(arm) = any(arm.parts, part => contains(part.traits, "object") || contains(part.traits, "structural"))
   && (for_in_arraylike_value(arm.handle) || any(arm.parts, part => for_in_arraylike_value(part.handle)))

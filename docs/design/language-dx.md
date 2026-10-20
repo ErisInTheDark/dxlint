@@ -13,7 +13,7 @@ Give-ups are a language concept, separate from `null` (absent or empty).
 - `x unknown y`: `y` when `x` is unknown, else `x`; same precedence tier as `??`. `??` never catches unknown.
 - Parsing: after a complete operand `unknown` is the infix operator; in operand position it is the literal.
 - Sinks (`when`, `report at`, `fix`, message interpolation, arithmetic): the compiler tracks a maybe-unknown bit; an unhandled maybe-unknown value at a sink is a config error. At runtime a sink that still receives unknown skips and is counted in `--stats` per rule.
-- Query records keep nested uncertainty as explicit fields (`identity_known`, `uncertain_traits`, `value_known`); only top-level results become unknown.
+- Query records keep nested uncertainty as explicit fields (`identity_known`, `uncertain_traits`, `carrier_known`); only top-level results become unknown.
 
 ## Macros only (rule-local `@macro` implemented; typed parameters, `fn` removal pending)
 

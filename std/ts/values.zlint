@@ -132,9 +132,9 @@ fn ts_value_string_array(n) = {
   value arms: value_parts(n)
   value ts_value_array_like(n) && all(arms, arm => {
     value empty: any(arm.parts, part => part.product_known && part.product != null && count(part.product.elements) == 0)
-    value element: value_lookup(arm.handle, 0)
-    value count(arm.parts) == 1 && (empty || element.value_known && count(element.value) > 0
-      && all(element.value, item => count(item) == 1 && contains(first(item).traits, "string")))
+    value element: value_constituents(value_lookup(arm.handle, 0).member)
+    value count(arm.parts) == 1 && (empty || element != null && count(element) > 0
+      && all(element, item => count(item) == 1 && contains(first(item).traits, "string")))
   })
 }
 fn ts_value_const_context(n) = {
@@ -767,10 +767,21 @@ in ts_class, ts_interface {
 }
 in ts_type_reference {
   let ts_value_unresolved_type name is ts_identifier && ts_value_missing_name(name.node, "type")
+  # `Promise` without its required arguments is an error type, read as any.
+  # Merged declarations share their parameters: one declaring a default is enough.
+  let ts_value_missing_arguments name is ts_identifier && count(type_argument.nodes) == 0 && {
+    value local: map(filter(name_binding(name.node).declarations ?? [], item => item.parent is (ts_class, ts_interface, ts_type_alias)),
+      item => map(item.parent.type_parameter.nodes, parameter => parameter.default != null))
+    value remote: map(filter(value_sources(name.node).sites ?? [], site => contains(["ts_class", "ts_interface", "ts_type_alias"], site.kind)),
+      site => map(site_field(node, site, "type_parameter") ?? [], parameter => count(site_field(node, parameter, "default") ?? []) > 0))
+    value declarations: flat_map([local, remote], group => group)
+    value any(declarations, parameters => any(parameters, (parameter, index) =>
+      all(declarations, other => !any(other, (defaulted, at) => at == index && defaulted))))
+  }
   arguments type_argument
-  when ts_value_unresolved_type { fits any, error open }
+  when ts_value_unresolved_type || ts_value_missing_arguments { fits any, error open }
   when name is ts_qualified_name { unwraps name }
-  when !ts_value_unresolved_type && name not ts_qualified_name { unwraps &...name.definition }
+  when !ts_value_unresolved_type && !ts_value_missing_arguments && name not ts_qualified_name { unwraps &...name.definition }
 }
 in ts_type_query {
   when name is ts_qualified_name { unwraps name }
