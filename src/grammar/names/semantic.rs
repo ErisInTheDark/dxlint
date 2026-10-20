@@ -76,7 +76,7 @@ impl Session {
                 u64::from(super::question::Budget::per_question()),
                 self.question.budget.limited(),
             );
-            profile.flush_steps();
+            profile.flush_steps(self.question.budget.limited());
         }
         let failed = self.question.budget.limited();
         if let (true, Some(profile)) = (failed, world.profile()) {

@@ -573,6 +573,15 @@ pub fn profile(output: &mut Output<'_>, linter: &Linter, format: super::Format, 
             output.err(format_args!("  {steps:>13} steps  {CYAN}{query}{CYAN:#}  {site}"));
         }
     }
+    let mut cut_sites: Vec<_> = p.cut_step_sites.lock().expect("cut step sites lock").iter()
+        .map(|(&key, &steps)| (steps, key)).collect();
+    cut_sites.sort_by_key(|row| std::cmp::Reverse(row.0));
+    if !cut_sites.is_empty() {
+        output.err(format_args!("\n  {BOLD}budget steps in roots cut short{BOLD:#} {DIM}by semantic query and innermost computation (self), top 20{DIM:#}"));
+        for (steps, (query, site)) in cut_sites.into_iter().take(20) {
+            output.err(format_args!("  {steps:>13} steps  {CYAN}{query}{CYAN:#}  {site}"));
+        }
+    }
     let roots = p.roots.lock().expect("roots lock").clone();
     let kind = |matcher: usize| linter.grammar.matchers.get(matcher).map_or("?", |matcher| matcher.name.as_str());
     let mut asked: Vec<_> = roots.iter().map(|(&(query, matcher), &row)| (row, query, matcher)).collect();

@@ -281,19 +281,13 @@ fn candidate(header: Header, call: Leaf, arguments: &[Leaf], receiver: Option<&N
     let frame = values.question.bind_slots(header.site.frame, owner, Some(call), explicit.iter().cloned().map(Some).collect(), classes);
     let header = Header { site: Leaf { frame, ..header.site }, ..header };
     let Known::Yes(parameters) = values.follow(header.site, &signature.item.parameters) else { return Known::Unknown };
+    // Arity first: arguments without a parameter, or a required parameter
+    // without one, rule the overload out before any argument is compared
+    // or anything inferred (the overloads of `addEventListener`, `from`...).
     let mut mapping = Vec::new();
-    let mut compatible = if decide { Known::Yes(true) } else { Known::Unknown };
-    // A declared receiver must accept the one the call passes.
-    if let Some(receiver) = receiver.filter(|_| decide) {
-        let answer = match values.calls().receiver(header) {
-            Known::Yes(Some(declared)) => values.calls().accepts(&values.values(declared), receiver),
-            Known::Yes(None) => Known::Yes(true),
-            Known::Unknown => Known::Unknown,
-        };
-        compatible = answer;
-    }
+    let mut slots = Vec::new();
+    let mut arity = if decide { Known::Yes(true) } else { Known::Unknown };
     let mut has_rest = false;
-    let needs_inference = !formals.is_empty() && !arguments.is_empty();
     for (index, parameter) in parameters.iter().copied().enumerate() {
         if !values.question.budget.step() { return Known::Unknown }
         let is_rest = match rest(parameter, values) {
@@ -313,36 +307,60 @@ fn candidate(header: Header, call: Leaf, arguments: &[Leaf], receiver: Option<&N
             captured.push(actual);
         }
         mapping.push((parameter, captured));
+        slots.push((parameter, is_rest, actuals));
         if decide && actuals.is_empty() && !is_rest {
             match values.optional(parameter) {
-                Known::Yes(false) => compatible = Known::Yes(false),
-                Known::Unknown if compatible != Known::Yes(false) => compatible = Known::Unknown,
-                _ => {}
-            }
-        }
-        // Inferred parameters are checked once instantiated.
-        if needs_inference || !decide { continue }
-        for (offset, &actual) in actuals.iter().enumerate() {
-            let expected = if is_rest {
-                values.member(&values.values(parameter), &Key::Ordinal(offset as u32))
-            } else {
-                values.values(parameter)
-            };
-            let actual = values.values(actual);
-            let answer = match exact.then(|| dynamic_mismatch(&expected, &actual, values)) {
-                Some(Known::Yes(true)) => Known::Yes(false),
-                Some(Known::Unknown) => Known::Unknown,
-                _ => values.calls().accepts(&expected, &actual),
-            };
-            match answer {
-                Known::Yes(false) => compatible = Known::Yes(false),
-                Known::Unknown if compatible != Known::Yes(false) => compatible = Known::Unknown,
+                Known::Yes(false) => arity = Known::Yes(false),
+                Known::Unknown if arity != Known::Yes(false) => arity = Known::Unknown,
                 _ => {}
             }
         }
     }
     if decide && !has_rest && arguments.len() > parameters.len() {
-        compatible = Known::Yes(false);
+        arity = Known::Yes(false);
+    }
+    if arity == Known::Yes(false) {
+        return Known::Yes(Candidate { chosen: Chosen { header, mapping }, compatible: Known::Yes(false), instantiated: false });
+    }
+    let mut compatible = if decide { Known::Yes(true) } else { Known::Unknown };
+    // A declared receiver must accept the one the call passes.
+    if let Some(receiver) = receiver.filter(|_| decide) {
+        let answer = match values.calls().receiver(header) {
+            Known::Yes(Some(declared)) => values.calls().accepts(&values.values(declared), receiver),
+            Known::Yes(None) => Known::Yes(true),
+            Known::Unknown => Known::Unknown,
+        };
+        compatible = answer;
+    }
+    if arity == Known::Unknown && compatible != Known::Yes(false) { compatible = Known::Unknown }
+    // Inferred parameters are checked once instantiated.
+    let needs_inference = !formals.is_empty() && !arguments.is_empty();
+    if decide && !needs_inference {
+        'slots: for (parameter, is_rest, actuals) in slots {
+            for (offset, &actual) in actuals.iter().enumerate() {
+                if compatible == Known::Yes(false) { break 'slots }
+                let expected = if is_rest {
+                    values.member(&values.values(parameter), &Key::Ordinal(offset as u32))
+                } else {
+                    values.values(parameter)
+                };
+                let actual = values.values(actual);
+                let answer = match exact.then(|| dynamic_mismatch(&expected, &actual, values)) {
+                    Some(Known::Yes(true)) => Known::Yes(false),
+                    Some(Known::Unknown) => Known::Unknown,
+                    _ => values.calls().accepts(&expected, &actual),
+                };
+                match answer {
+                    Known::Yes(false) => compatible = Known::Yes(false),
+                    Known::Unknown if compatible != Known::Yes(false) => compatible = Known::Unknown,
+                    _ => {}
+                }
+            }
+        }
+    }
+    // An overload already ruled out needs no instantiation.
+    if compatible == Known::Yes(false) {
+        return Known::Yes(Candidate { chosen: Chosen { header, mapping }, compatible, instantiated: false });
     }
     let header = if formals.is_empty() {
         header

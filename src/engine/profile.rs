@@ -150,6 +150,9 @@ pub struct Profile {
     pub roots: Mutex<FxHashMap<(&'static str, usize), RootSteps>>,
     /// Budget steps by (semantic query, step site) ([`Profile::count_step`]).
     pub step_sites: Mutex<FxHashMap<StepKey, u64>>,
+    /// The steps of roots their budget cut short, by (semantic query, step
+    /// site): what give-ups were spending.
+    pub cut_step_sites: Mutex<FxHashMap<(&'static str, &'static str), u64>>,
     /// Per attribute (`let`): reads including memo hits, total and self
     /// time, so a shared let's cost shows on the let, not on whichever
     /// rule read it first.
@@ -409,6 +412,7 @@ impl Profile {
             value_calls: counters(matchers),
             roots: Mutex::default(),
             step_sites: Mutex::default(),
+            cut_step_sites: Mutex::default(),
             overlay_nanos: counters(matchers),
             overlay_nodes: counters(matchers),
             rule_nanos: counters(rules),
@@ -540,9 +544,14 @@ impl Profile {
         RootScope(ROOT.with(|root| root.replace(Some((query, matcher)))))
     }
 
-    /// Moves this thread's step counts into the profile.
-    pub fn flush_steps(&self) {
+    /// Moves this thread's step counts (one root question's) into the
+    /// profile; `cut`: its budget cut that root short.
+    pub fn flush_steps(&self, cut: bool) {
         let counts = STEP_COUNTS.with(|counts| std::mem::take(&mut *counts.borrow_mut()));
+        if cut {
+            let mut shared = self.cut_step_sites.lock().expect("cut step sites lock");
+            for (&(_, query, site), &steps) in &counts { *shared.entry((query, site)).or_default() += steps }
+        }
         let mut shared = self.step_sites.lock().expect("step sites lock");
         for (key, steps) in counts { *shared.entry(key).or_default() += steps }
     }
