@@ -176,15 +176,30 @@ impl<K: Eq + Hash, V> Drop for Build<'_, K, V> {
 #[derive(Default)]
 pub(super) struct Programs {
     paths: Memo<Context, Arc<Vec<PathBuf>>>,
+    /// Input lists by content: files in different directories of one
+    /// program get the same list, and its address is the program's identity
+    /// for run-shared answers ([`super::world`]'s `program_identity`).
+    inputs: Mutex<FxHashMap<u64, Vec<std::sync::Weak<Vec<PathBuf>>>>>,
     catalogs: Memo<CatalogKey, Arc<Catalog>>,
 }
 
 impl Programs {
     pub fn paths(&self, context: Context, holds: impl Fn(&Dep) -> bool, build: impl FnOnce() -> Known<Vec<PathBuf>>) -> Known<Arc<Vec<PathBuf>>> {
         self.paths.get(context, None, |answer| !answer.reads.any(&mut |dep| !holds(dep)), || match build() {
-            Known::Yes(paths) => Known::Yes(Arc::new(paths)),
+            Known::Yes(paths) => Known::Yes(self.intern(paths)),
             Known::Unknown => Known::Unknown,
         })
+    }
+
+    fn intern(&self, paths: Vec<PathBuf>) -> Arc<Vec<PathBuf>> {
+        let key = std::hash::BuildHasher::hash_one(&crate::fx_hash::FxBuild::default(), &paths);
+        let mut inputs = self.inputs.lock().expect("program inputs");
+        let lists = inputs.entry(key).or_default();
+        lists.retain(|list| list.strong_count() > 0);
+        if let Some(same) = lists.iter().filter_map(std::sync::Weak::upgrade).find(|list| **list == paths) { return same }
+        let list = Arc::new(paths);
+        lists.push(Arc::downgrade(&list));
+        list
     }
 
     pub fn catalog(&self, key: CatalogKey, profile: Option<&Profile>, holds: impl Fn(&Dep) -> bool, build: impl FnOnce() -> Known<Catalog>) -> Known<Arc<Catalog>> {
