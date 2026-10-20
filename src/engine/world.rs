@@ -249,7 +249,8 @@ impl<'a> LintWorld<'a> {
                 if budget.limited() {
                     let syntax = tree.node(node);
                     let text = World::text(&files, file).and_then(|text| text.get(syntax.start as usize..syntax.end as usize));
-                    profile.record_cut_root(text.unwrap_or(""));
+                    let name = World::path(&files, file).and_then(|path| path.file_name()).map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+                    profile.record_cut_root(&name, text.unwrap_or(""));
                 }
             }
             answer

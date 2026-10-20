@@ -79,6 +79,14 @@ impl Session {
             profile.flush_steps();
         }
         let failed = self.question.budget.limited();
+        if let (true, Some(profile)) = (failed, world.profile()) {
+            let inner = semantic.values.innermost().and_then(|leaf| match leaf.target {
+                Target::Node(node) => world.tree(node.file).zip(world.text(node.file))
+                    .and_then(|(tree, text)| { let n = tree.node(node.node); text.get(n.start as usize..n.end as usize).map(str::to_owned) }),
+                _ => None,
+            });
+            profile.note_cut_inner(inner);
+        }
         let cut = self.question.budget.cut();
         let discarded = semantic.values.finish(epoch, failed, cut) + semantic.calls.finish(epoch, failed, cut)
             + semantic.narrowing_places.finish(epoch, failed, cut) + semantic.attributes.finish(epoch, failed, cut, |_| true);

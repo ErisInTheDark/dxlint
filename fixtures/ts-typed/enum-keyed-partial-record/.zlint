@@ -1,0 +1,5 @@
+import .ts
+
+# Mapped types keyed by an enum keep their `?`: reading one with an enum key
+# can be undefined, so comparing it to `true` is needed.
+rule no-unnecessary-boolean-literal-compare

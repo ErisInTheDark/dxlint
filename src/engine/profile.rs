@@ -16,6 +16,8 @@ thread_local! {
     static SEMANTIC_QUERY: Cell<Option<&'static str>> = const { Cell::new(None) };
     /// The innermost engine computation spending budget ([`StepSite`]).
     static STEP_SITE: Cell<&'static str> = const { Cell::new("") };
+    /// What the last question cut short was evaluating ([`Profile::note_cut_inner`]).
+    static CUT_INNER: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
     /// The root question being answered: its query and asking matcher.
     static ROOT: Cell<Option<RootKind>> = const { Cell::new(None) };
     /// Budget steps by [`StepKey`], flushed per root.
@@ -560,13 +562,20 @@ impl Profile {
     }
 
     /// Counts a root question cut short by its budget at code `text` (its
-    /// first line, trimmed).
-    pub fn record_cut_root(&self, text: &str) {
-        const SHOWN: usize = 72;
+    /// first line, trimmed) in file `file`.
+    pub fn record_cut_root(&self, file: &str, text: &str) {
+        const SHOWN: usize = 60;
         let query = SEMANTIC_QUERY.with(Cell::get).unwrap_or("-");
-        let line = text.lines().next().unwrap_or("").trim();
-        let shown: String = line.chars().take(SHOWN).collect();
-        *self.cut_roots.lock().expect("cut roots lock").entry((query, shown.into())).or_default() += 1;
+        let first = |text: &str| -> String { text.lines().next().unwrap_or("").trim().chars().take(SHOWN).collect() };
+        let inner = CUT_INNER.with(|inner| inner.take()).map_or_else(|| "-".to_owned(), |inner| first(&inner));
+        let key = format!("{}  ({file})  evaluating: {inner}", first(text));
+        *self.cut_roots.lock().expect("cut roots lock").entry((query, key.into())).or_default() += 1;
+    }
+
+    /// The innermost value a question cut short was evaluating (`None`:
+    /// outside value evaluation), for the next [`Self::record_cut_root`].
+    pub fn note_cut_inner(&self, inner: Option<String>) {
+        CUT_INNER.with(|cell| cell.replace(inner));
     }
 
     /// Cut root questions by query and code, most first.

@@ -193,6 +193,12 @@ pub(crate) struct State {
 }
 
 impl State {
+    /// The innermost leaf still being evaluated: where a question cut short
+    /// by its budget ran out ([`crate::engine::Profile::record_cut_root`]).
+    pub(super) fn innermost(&self) -> Option<Leaf> {
+        self.evaluating.borrow().last().map(|&(leaf, _)| leaf)
+    }
+
     pub(super) fn finish(&self, epoch: Epoch, failed: bool, cut: u64) -> u64 {
         use super::memo::Settled;
         // A root cut short leaves the evaluations it was inside open: none
