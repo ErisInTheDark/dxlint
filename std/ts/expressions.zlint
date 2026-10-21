@@ -199,19 +199,13 @@ fn logical_fix_root(n) = {
 fn logical_fix_with(n) = !logical_fix_root(n).scoping_strict_code
   && { value n; walk (current) current.parent.node; any (current) current is ts_with.body }
 fn logical_fix_identifier(n) = n is ts_identifier && !logical_fix_with(n)
-# Getters can change a mutable base or key between the read and write.
-# Ambient const declarations provide types, not immutable runtime bindings.
-fn logical_fix_const(n) = n.scoping_definition_use.kind == "const" && n.declaration != null
-  && !{ value n.declaration.node; walk (current) current.parent.node; any (current) contains([] current.modifier, "declare") }
-  && {
-    value n.declaration.node
-    walk (current) if current is ts_declarator then null else current.parent.node
-    any (current) current is ts_declarator && (current.init != null || current.parent is (ts_for_in.left, ts_for_of.left))
-  }
-fn logical_fix_property(n) = !logical_fix_with(n) && n is (ts_member, ts_index)
-  && (unparenthesised_node(n.object.node) is ts_this
-    || unparenthesised_node(n.object.node) is ts_identifier && { value n.object.node; unparenthesised_node; logical_fix_const })
-  && (n is ts_member || unparenthesised_node(n.index.node) is (ts_string, ts_number, ts_bigint, ts_boolean, ts_null))
+# A getter on a mutable base or key can run between the read and the write, so
+# only a single access on a plain base is safe. Inside a sloppy `with` block
+# even an identifier can name a getter, but `if`/`??` fixes still accept it.
+fn logical_fix_single_property(n) = if logical_fix_with(n) then n is ts_identifier
+  else n is (ts_member, ts_index)
+    && unparenthesised_node(n.object.node) is (ts_identifier, ts_super, ts_this)
+    && (n is ts_member || unparenthesised_node(n.index.node) not (ts_member, ts_index))
 fn logical_fix_operator(source, n, operator) = byte_slice(source, n.offset, n.operator.offset) operator byte_slice(source, n.operator.end_offset, n.end_offset)
 fn logical_fix_expand(source, n) = if !{ value n.left.node; unparenthesised_node; logical_fix_identifier } then null
   else (byte_slice(source, n.offset, n.operator.offset) "= " unparenthesised_node(n.left.node).text " " slice(n.operator, 0, -1)
@@ -224,7 +218,7 @@ fn logical_fix_expand(source, n) = if !{ value n.left.node; unparenthesised_node
 fn logical_fix_assignment(source, n, value, first) = if !{ value n.left.node; unparenthesised_node; logical_fix_identifier } then null
   else (byte_slice(source, n.offset, n.operator.offset) value.operator "="
     byte_slice(source, n.operator.end_offset, first.parent.offset) byte_slice(source, first.parent.right.offset, n.end_offset))
-fn logical_fix_expression(source, n, assignment) = if !{ value n.left.node; unparenthesised_node; logical_fix_identifier } && !{ value n.left.node; unparenthesised_node; logical_fix_property } then null
+fn logical_fix_expression(source, n, assignment) = if !{ value n.left.node; unparenthesised_node; logical_fix_identifier } && !{ value n.left.node; unparenthesised_node; logical_fix_single_property } then null
   else if expression_fix_parens(source, n, assignment) == null then null
   else {
     value source
@@ -233,7 +227,7 @@ fn logical_fix_expression(source, n, assignment) = if !{ value n.left.node; unpa
     value expression_fix_wrap(text, needed)
   }
 fn logical_fix_if(source, n, body, assignment, existence) =
-  if !logical_fix_identifier(existence.reference) && !(unparenthesised_node(n.test.node) not ts_logical && logical_fix_property(existence.reference)) then null
+  if !logical_fix_identifier(existence.reference) && !(unparenthesised_node(n.test.node) not ts_logical && logical_fix_single_property(existence.reference)) then null
   else if n.token_neighbours.before != null && !{ value [";", "{{"]; contains n.token_neighbours.before.text }
     && !re_test(body.first_token.text, /^[\w$\\]/) then null
   else (byte_slice(source, body.offset, assignment.operator.offset) existence.operator "="

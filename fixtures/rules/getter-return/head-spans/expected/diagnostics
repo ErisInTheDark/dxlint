@@ -1,0 +1,8 @@
+file.ts:11:54-11:57 getter-return#0
+file.ts:12:55-12:58 getter-return#0
+file.ts:1:16-1:23 getter-return#0
+file.ts:2:12-3:6 getter-return#0
+file.ts:5:21-5:28 getter-return#0
+file.ts:7:57-7:71 getter-return#0
+file.ts:8:53-8:58 getter-return#0
+file.ts:9:45-9:59 getter-return#0

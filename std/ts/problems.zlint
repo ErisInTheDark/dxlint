@@ -654,7 +654,7 @@ in ts_class rule no-unreachable:derived {
 in ts_method, ts_function, ts_arrow rule getter-return {
   option allowImplicit boolean = false "a bare `return;` counts as returning"
   when accessor == "get" && flow_normal(body.node) == true
-  report at function_warning_site(node)
+  report at function_head_site(node)
   warn if count(scoping_own_returns) == 0 || !allowImplicit && all(scoping_own_returns, returned => returned.argument == null) then "Expected to return a value in {function_name}." else "Expected {function_name} to always return a value."
 }
 in ts_return rule getter-return:bare {
