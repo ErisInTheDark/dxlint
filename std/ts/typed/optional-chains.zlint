@@ -62,15 +62,40 @@ fn optional_falsy_literal(n) = {
   value arms: value_constituents(n)
   value any(arms, arm => any(arm, part => part.identity.kind == "value"
       || contains(part.traits, "boolean"))
-    && any(arm, part => contains(part.traits, "falsy")
+    && any(arm, part => (contains(part.traits, "falsy") || contains(part.traits, "boolean") && !contains(part.traits, "truthy"))
       && any(part.traits, trait => contains(["boolean", "number", "string", "bigint"], trait))))
 }
-fn optional_type_allowed(n, opts) = ts_value_has_void(n) == false
-  && all(["any", "unknown", "string", "number", "boolean", "bigint"], trait =>
-    ts_value_has_trait(n, trait) != true || get(opts, trait))
+# A computed type is not needed when the value is an unresolved global or reads
+# as `any`; a call whose callee is understood is likewise treated as `any`.
+# Any other uncomputable operand cannot prove the chain is safe.
+fn optional_type_allowed(n, opts) = {
+  value arms: value_parts(n)
+  value if arms == null then optional_opaque_any(n) || n is ts_call && value_parts(n.callee.node) != null else
+    !any(arms, arm => any(arm.parts, part => contains(part.traits, "void")))
+      && all(["any", "unknown", "string", "number", "boolean", "bigint"], trait =>
+        get(opts, trait) || !any(arms, arm => any(arm.parts, part => contains(part.traits, trait))))
+}
+fn optional_value_root(n) = if n is (ts_parenthesized, ts_non_null) then optional_value_root(n.expression.node)
+  else if n is ts_await then optional_value_root(n.argument.node)
+  else if n is (ts_member, ts_index) then optional_value_root(n.object.node)
+  else if n is ts_call then optional_value_root(n.callee.node)
+  else n
+# Unresolved globals, `this` and `import.meta` read as `any`, which includes every trait.
+fn optional_opaque_any(n) = value_parts(n) == null && {
+  value root: optional_value_root(n)
+  value root is (ts_this, ts_meta_property) || root is ts_identifier && root.resolved == "global"
+}
 fn optional_uncertain(n, trait) = {
   value arms: value_parts(n)
   value arms == null || any(arms, arm => any(arm.parts, part =>
+    contains(part.traits, trait) || contains(part.traits, "any") || contains(part.traits, "unknown")
+      || contains(part.uncertain_traits, trait)))
+}
+# Like `optional_uncertain`, but an uncomputable answer is only treated as
+# `any` when it comes from an unresolved global.
+fn optional_may(n, trait) = {
+  value arms: value_parts(n)
+  value if arms == null then optional_opaque_any(n) else any(arms, arm => any(arm.parts, part =>
     contains(part.traits, trait) || contains(part.traits, "any") || contains(part.traits, "unknown")
       || contains(part.uncertain_traits, trait)))
 }
@@ -100,10 +125,10 @@ fn optional_valid(current, next, op, last, opts) = current.subject != null && cu
   if contains(["plain", "not"], current.kind) then last || optional_type_allowed(current.subject, opts)
     && !(current.kind == (if op == "&&" then "plain" else "not") && optional_falsy_literal(current.subject))
   else current.kind == "nullish" || optional_group(current, next)
-    || current.kind == "null" && (op == "||" || next != null) && !optional_uncertain(current.subject, "undefined")
-    || current.kind == "undefined" && !optional_uncertain(current.subject, "null"))
-fn optional_terminal_allowed(n, comparison, op) = if comparison == (if op == "&&" then "===" else "!==") then !optional_uncertain(n, "undefined")
-  else if comparison == (if op == "&&" then "==" else "!=") then !optional_uncertain(n, "null") && !optional_uncertain(n, "undefined")
+    || current.kind == "null" && (op == "||" || next != null) && !optional_may(current.subject, "undefined")
+    || current.kind == "undefined" && !optional_may(current.subject, "null"))
+fn optional_terminal_allowed(n, comparison, op) = if comparison == (if op == "&&" then "===" else "!==") then !optional_may(n, "undefined")
+  else if comparison == (if op == "&&" then "==" else "!=") then !optional_may(n, "null") && !optional_may(n, "undefined")
   else if comparison == (if op == "&&" then "!==" else "===") then optional_nullish_only(n, false)
   else if comparison == (if op == "&&" then "!=" else "==") then optional_nullish_only(n, true) else false
 fn optional_item(current) = {node: current.node, subject: current.subject, kind: current.kind, yoda: current.yoda,
@@ -183,7 +208,7 @@ fn optional_safe(items, op, unsafe) = {
   value terminal: last(items)
   value unsafe || !terminal.terminal && (contains(["nullish", "undefined"], terminal.kind)
     || op == "||" && terminal.kind == "not"
-    || { value items; any (item) value_parts(item.node) != null && optional_uncertain(item.node, "undefined") })
+    || { value items; any (item) optional_may(item.node, "undefined") })
 }
 fn optional_tail(source, span, boundary) = {
   # Paired code tokens, not character counts: parentheses in comments and strings
