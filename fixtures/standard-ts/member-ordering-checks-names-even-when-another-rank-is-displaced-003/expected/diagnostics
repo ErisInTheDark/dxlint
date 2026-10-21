@@ -1,2 +1,2 @@
-file.ts:1:26-1:35 member-ordering:interface#2
-file.ts:1:51-1:62 member-ordering:interface#1
+file.ts:1:26-1:36 member-ordering:interface#2
+file.ts:1:51-1:63 member-ordering:interface#1

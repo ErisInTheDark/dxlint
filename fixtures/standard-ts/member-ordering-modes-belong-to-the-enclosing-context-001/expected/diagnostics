@@ -1,2 +1,2 @@
 file.ts:2:32-2:38 member-ordering:class-declaration#2
-file.ts:4:50-4:64 member-ordering:interface#2
+file.ts:4:50-4:65 member-ordering:interface#2

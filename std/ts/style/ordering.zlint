@@ -94,6 +94,11 @@ in ordering_member_node let ordering_member {
   init: ordering_initialiser == true, dependencies: ordering_initialiser_dependencies.nonempty ?? []
 }
 in ordering_container let ordering_members [] member.ordering_member
+fn ordering_member_end(n) = {
+  value after: token(n, "after")
+  value if n is (ts_property_signature, ts_method_signature, ts_call_signature, ts_index_signature)
+    && after != null && contains([";", ","], after.text) then after.end else n.end_offset
+}
 fn ordering_at_rank(states, partition, rank) = find(states, state => state.partition == partition && state.rank == rank)
 fn ordering_frontier(states, partition, rank) = {
   value states
@@ -168,6 +173,7 @@ fn ordering_alpha_states(states, row, partition, rows, mode, optionality, enable
     let alpha_bad alpha_enabled && ordering_alpha_bad(row.name, alpha_before.name, order)
     let alpha_blocked alpha_bad && ordering_alpha_blocked(row, alpha_before, owner.ordering_members, optionality)
     when owner.ordering_context == context && checked
+    report at { start: offset, end: ordering_member_end(node) }
     each failure in if optionality_bad then (if optionality_error then ["optionality"] else [])
       else (if rank_bad then ["rank"] else []) (if alpha_bad && !alpha_blocked then ["alpha"] else []) {
       warn when {
