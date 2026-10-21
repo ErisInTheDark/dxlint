@@ -1,7 +1,7 @@
 namespace Case992 {
 
 class TestIncorrectlyModifiableDelayed {
-  private readonly incorrectlyModifiableDelayed = 7;
+  private readonly incorrectlyModifiableDelayed: number = 7;
 
   public constructor() {
     this.incorrectlyModifiableDelayed = 7;

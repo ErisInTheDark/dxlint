@@ -14,7 +14,7 @@ class WrittenString {
   change() { this["[Symbol.iterator]"] = 2; }
 }
 class ConstructorSymbol {
-  private readonly [Symbol.iterator]: number = 1;
+  private readonly [Symbol.iterator] = 1;
   constructor() { this[Symbol.iterator] = 2; }
 }
 declare const distinctSymbol: unique symbol;

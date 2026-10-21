@@ -24,7 +24,7 @@ enum Foo {
 const foo = Foo.Bar;
 
 class Test {
-  private readonly prop = foo;
+  private readonly prop: Foo = foo;
 
   constructor() {
     this.prop = foo;

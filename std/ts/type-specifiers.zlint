@@ -66,9 +66,10 @@ fn type_value_allowed(entries, n) = if count(entries) == 0 then false else {
   value roots: value_sources(n)
   value sites: walk(roots.sites ?? [], site => site_sources(n, site).sites ?? [])
   value complete: roots != null && all(sites, site =>
-    contains(["ts_class", "ts_interface", "ts_enum", "ts_function", "ts_method", "ts_method_signature"], site.kind)
+    contains(["ts_class", "ts_interface", "ts_enum", "ts_function", "ts_method", "ts_method_signature", "ts_array_type", "ts_tuple_type"], site.kind)
     || site_sources(n, site) != null)
-  value named: if count(arms) == 1 then filter(sites, site => site.name != null
+  # Arms can be truthiness/enum splits of one declared type; a union source means distinct types.
+  value named: if count(arms) == 1 || !any(sites, site => site.kind == "ts_union") then filter(sites, site => site.name != null
     && contains(["ts_type_alias", "ts_function", "ts_method", "ts_method_signature"], site.kind)) else []
   value directory: if any(entries, entry => entry.from == "file") then program_directory(n) else null
   value states: map(entries, entry => {

@@ -97,17 +97,9 @@ fn readonly_member_key(key) =
   || key is ts_template && count(key.expression) == 0
   || key is ts_computed_key && (key.expression is ts_number
     || key.expression is ts_member && key.expression.object == "Symbol")
-fn readonly_write_value(access) = {
-  value parent: access.parent.node
-  value if parent is ts_assignment && parent.left.node == access then parent.right.node else null
-}
-fn readonly_same_value(a, b) = {
-  value identity: declaration_identity(a)
-  value if identity != null && identity == declaration_identity(b) then true
-  else if a is (ts_number, ts_string, ts_boolean, ts_bigint) && b is (ts_number, ts_string, ts_boolean, ts_bigint)
-    then a.kind == b.kind && a.text == b.text
-  else false
-}
+# An enum member reference is not trait-literal, but it is a literal initializer.
+fn readonly_enum_literal(initializer) = ts_value_has_enum(initializer)
+  && any(value_constituents(initializer) ?? [], arm => any(arm, part => part.identity_known && part.identity.kind == "value"))
 fn readonly_primitive_annotation(initializer) = {
   value names: filter(["string", "number", "boolean", "bigint"], name => ts_value_has_trait(initializer, name) == true)
   value if count(names) > 0 then join(names, " | ") else null
@@ -147,14 +139,10 @@ in ts_class_property rule prefer-readonly {
   let readonly_message_name if key is ts_computed_key then key.expression.text else key.text
   warn "Member '{readonly_message_name}' is never reassigned; mark it as `readonly`."
   let preserve_inference type.node == null && init != null && count(readonly_constructor_writes) > 0
-  # A constructor write of the same value cannot widen the inferred literal type.
-  let readonly_widening init != null && any(readonly_constructor_writes, write => {
-    value written: readonly_write_value(write)
-    value written == null || !readonly_same_value(written, init.node)
-  })
-  let needs_annotation preserve_inference && readonly_widening && (ts_value_has_enum(init.node) || ts_value_has_trait(init.node, "literal") == true && ts_value_has_trait(node, "literal") != true)
+  let literal_initializer init != null && (ts_value_has_trait(init.node, "literal") == true || readonly_enum_literal(init.node))
+  let needs_annotation preserve_inference && literal_initializer && key is ts_identifier && ts_value_has_trait(node, "literal") != true
   let annotation if needs_annotation then readonly_initializer_annotation(init.node) else null
-  let fixable readonly_constructor_indirect_writes == 0 && (!preserve_inference || !ts_value_opaque(init.node) && ts_value_has_trait(init.node, "unknown") == false && (!needs_annotation || annotation != null))
+  let fixable readonly_constructor_indirect_writes == 0 && (!preserve_inference || !ts_value_opaque(init.node) && ts_value_has_trait(init.node, "unknown") == false)
   fix at key.node if fixable as "readonly " key (if annotation != null then ": " annotation else "")
 }
 
