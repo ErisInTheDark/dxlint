@@ -1,0 +1,2 @@
+import .ts
+rule computed-property-spacing { set style "always" }

@@ -157,6 +157,10 @@ in ts_comma rule comma-spacing:after {
 }
 
 group semicolon_statement ts_expression_statement, ts_variable_declaration, ts_return, ts_throw, ts_break, ts_continue, ts_do_while, ts_import, ts_import_equals, ts_type_alias, ts_class_property, ts_debugger, ts_export_assignment, ts_export, ts_method, ts_function
+fn layout_next_position_len(source, offset) = {
+  value char: byte_char(source, offset)
+  value if char == "\r" && byte_char(source, offset + 1) == "\n" then 2 else byte_len(char)
+}
 in semicolon_statement rule semi {
   option mode "always" | "never" = "always" "statement semicolon policy"
   option omitLastInOneLineBlock boolean = false "omit final semicolons in single-line blocks"
@@ -167,7 +171,7 @@ in semicolon_statement rule semi {
   when statement_semi != null
   let omit_statement_semi omitLastInOneLineBlock && statement_semi.one_line_block || omitLastInOneLineClassBody && statement_semi.one_line_class
   when if mode == "always" then statement_semi.present == omit_statement_semi else if statement_semi.present then statement_semi.redundant || !statement_semi.class_hazard && !statement_semi.same_line && (!statement_semi.hazard_before || !statement_semi.class_field && beforeStatementContinuationChars == "never" && !statement_semi.hazard_after) else !statement_semi.class_field && beforeStatementContinuationChars == "always" && statement_semi.hazard_before
-  report at statement_semi.offset
+  report at { start: statement_semi.offset, end: if statement_semi.present then statement_semi.end else statement_semi.offset + layout_next_position_len(source, statement_semi.offset) }
   fix at {start:statement_semi.offset, end:statement_semi.end} as if statement_semi.present then "" else ";"
   warn if statement_semi.present then "Extra semicolon." else "Missing semicolon."
 }

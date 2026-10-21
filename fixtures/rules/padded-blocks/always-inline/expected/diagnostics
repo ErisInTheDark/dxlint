@@ -1,2 +1,2 @@
-a.ts:1:1-1:1 padded-blocks:top#1
+a.ts:1:1-1:2 padded-blocks:top#1
 a.ts:1:6-1:6 padded-blocks:bottom#1

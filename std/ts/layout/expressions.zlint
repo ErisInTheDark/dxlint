@@ -7,6 +7,7 @@ define {
 
 @macro layout_computed_space_options {
   option style "always" | "never" = "never" "spaces inside computed property brackets"
+  option enforceForClassMembers boolean = true "check class member keys"
 }
 group computed_spacing_owners ts_computed_key, ts_index, ts_indexed_access
 in ts_computed_key, ts_index, ts_indexed_access let computed_spacing_enabled true
@@ -101,9 +102,10 @@ in ts_dot rule no-whitespace-before-property:import {
 in ts_open_bracket rule computed-property-spacing:after {
   @layout_computed_space_options
   when parent is computed_spacing_owners && parent.computed_spacing_enabled
+  when enforceForClassMembers || !(parent is ts_computed_key) || !(parent.layout_computed_class.nonempty ?? false)
   let computed_space layout_comma_space(space_after.text, false)
   when layout_same_line(computed_space) && (computed_space != "") != (style == "always")
-  report at if computed_space != "" then end_offset else offset
+  report at if computed_space != "" then { start: end_offset, end: end_offset + byte_len(computed_space) } else { start: offset, end: end_offset }
   fix space_after as if style == "always" then " " else ""
   warn if style == "always" then "A space is required after '['." else "There should be no space after '['."
 }
@@ -111,9 +113,10 @@ in ts_open_bracket rule computed-property-spacing:after {
 in ts_close_bracket rule computed-property-spacing:before {
   @layout_computed_space_options
   when parent is computed_spacing_owners && parent.computed_spacing_enabled
+  when enforceForClassMembers || !(parent is ts_computed_key) || !(parent.layout_computed_class.nonempty ?? false)
   let computed_space layout_comma_space(space_before.text, true)
   when layout_same_line(computed_space) && (computed_space != "") != (style == "always")
-  report at if computed_space != "" then offset - byte_len(computed_space) else offset
+  report at if computed_space != "" then { start: offset - byte_len(computed_space), end: offset } else { start: offset, end: end_offset }
   fix space_before as if style == "always" then " " else ""
   warn if style == "always" then "A space is required before ']'." else "There should be no space before ']'."
 }
@@ -196,7 +199,7 @@ in ts_ellipsis rule rest-spread-spacing {
   let spread_space layout_comma_space(space_after.text, false)
   when (spread_space != "") != (style == "always")
   let spread_kind (if parent is ts_rest then "rest" else "spread") (if parent.layout_spread_property then " property" else "")
-  report at if style == "always" then offset else end_offset
+  report at if style == "always" then { start: offset, end: end_offset } else { start: end_offset, end: space_after.end }
   fix space_after as if style == "always" then " " else ""
   warn if style == "always" then "Expected whitespace after {spread_kind} operator." else "Unexpected whitespace after {spread_kind} operator."
 }

@@ -77,9 +77,10 @@ in ts_block, ts_static_block, ts_switch, ts_class rule padded-blocks:top {
   let padding_space layout_padding_top_space(opener.ts_open_brace.space_after.text)
   let padding_padded layout_line_breaks(padding_space) >= 2
   when padding_padded != (padding_mode == "always" || padding_mode == "start")
-  report at if layout_padding_open_prefix == "" then opener.ts_open_brace.offset else opener.ts_open_brace.end_offset + byte_len(layout_padding_open_prefix) - { value layout_padding_open_prefix; layout_padding_last_attached; byte_len }
-  warn if padding_padded then "Block must not be padded by blank lines." else "Block must be padded by blank lines."
   let padding_start opener.ts_open_brace.end_offset + byte_len(layout_padding_open_prefix)
+  let padding_report_start if layout_padding_open_prefix == "" then opener.ts_open_brace.offset else opener.ts_open_brace.end_offset + byte_len(layout_padding_open_prefix) - { value layout_padding_open_prefix; layout_padding_last_attached; byte_len }
+  report at { start: padding_report_start, end: padding_start + byte_len(padding_space) }
+  warn if padding_padded then "Block must not be padded by blank lines." else "Block must be padded by blank lines."
   fix at { start: padding_start, end: padding_start + (if padding_padded then byte_len(padding_space) else 0) } as if padding_padded then layout_padding_reduced(padding_space) else "\n"
 }
 
@@ -93,9 +94,9 @@ in ts_block, ts_static_block, ts_switch, ts_class rule padded-blocks:bottom {
   let padding_space layout_padding_bottom_space(closer.ts_close_brace.space_before.text)
   let padding_padded layout_line_breaks(padding_space) >= 2
   when padding_padded != (padding_mode == "always" || padding_mode == "end")
-  report at closer.ts_close_brace.offset - byte_len(layout_padding_close_suffix) - byte_len(padding_space)
-  warn if padding_padded then "Block must not be padded by blank lines." else "Block must be padded by blank lines."
   let padding_end closer.ts_close_brace.offset - byte_len(layout_padding_close_suffix)
+  report at { start: padding_end - byte_len(padding_space), end: closer.ts_close_brace.offset }
+  warn if padding_padded then "Block must not be padded by blank lines." else "Block must be padded by blank lines."
   fix at { start: padding_end - (if padding_padded then byte_len(padding_space) else 0), end: padding_end } as if padding_padded then layout_padding_reduced(padding_space) else "\n"
 }
 
@@ -208,7 +209,7 @@ in ts_open_brace rule block-spacing:after {
   when !(style == "never" && parent.layout_block_line_comment)
   let block_space layout_comma_space(space_after.text, false)
   when layout_same_line(block_space) && (block_space != "") != (style == "always")
-  report at if block_space != "" then end_offset else offset
+  report at if block_space != "" then { start: end_offset, end: end_offset + byte_len(block_space) } else { start: offset, end: end_offset }
   fix space_after as if style == "always" then " " else ""
   warn if style == "always" then "Requires a space after '{{'." else "Unexpected space(s) after '{{'."
 }
@@ -220,7 +221,7 @@ in ts_close_brace rule block-spacing:before {
   when !(style == "never" && parent.layout_block_line_comment)
   let block_space layout_comma_space(space_before.text, true)
   when layout_same_line(block_space) && (block_space != "") != (style == "always")
-  report at if block_space != "" then offset - byte_len(block_space) else offset
+  report at if block_space != "" then { start: offset - byte_len(block_space), end: offset } else { start: offset, end: end_offset }
   fix space_before as if style == "always" then " " else ""
   warn if style == "always" then "Requires a space before '}}'." else "Unexpected space(s) before '}}'."
 }
