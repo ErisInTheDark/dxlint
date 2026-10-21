@@ -79,6 +79,7 @@ in ts_import {
   let restriction_import_name ""
   let restriction_import_item false
   let restriction_import_offset offset
+  let restriction_import_end end_offset
   let restriction_import_star_offset offset + {
     value text
     split "*"
@@ -93,12 +94,14 @@ in ts_export {
   let restriction_import_star count(specifier) == 0 && declaration == null
   let restriction_import_name if restriction_import_star then "*" else ""
   let restriction_import_item restriction_import_star
-  let restriction_import_offset if restriction_import_star then offset + {
+  let restriction_import_star_offset offset + {
     value text
     split "*"
     first
     byte_len
-  } else offset
+  }
+  let restriction_import_offset if restriction_import_star then restriction_import_star_offset else offset
+  let restriction_import_end if restriction_import_star then restriction_import_star_offset + 1 else end_offset
 }
 in ts_import_equals {
   let restriction_import_source restriction_import_source(value.restriction_import_argument)
@@ -107,6 +110,7 @@ in ts_import_equals {
   let restriction_import_name ""
   let restriction_import_item false
   let restriction_import_offset offset
+  let restriction_import_end end_offset
 }
 in ts_import_specifier let restriction_import_name if type_of(imported.static_name) == "str" then imported.static_name else imported.nonempty ?? local
 in ts_export_specifier let restriction_import_name if type_of(local.static_name) == "str" then local.static_name else local
@@ -116,6 +120,7 @@ in ts_import_specifier, ts_export_specifier {
   let restriction_import_all_type parent.restriction_import_all_type
   let restriction_import_item true
   let restriction_import_offset offset
+  let restriction_import_end end_offset
 }
 in ts_identifier {
   let restriction_import_source parent.restriction_import_source
@@ -124,6 +129,7 @@ in ts_identifier {
   let restriction_import_name if is ts_node.namespace then "*" else "default"
   let restriction_import_item true
   let restriction_import_offset if is ts_node.namespace then parent.restriction_import_star_offset else offset
+  let restriction_import_end end_offset
 }
 @macro restriction_import_info {
   let info if type_of(restriction_import_source) == "str" then {
@@ -133,6 +139,7 @@ in ts_identifier {
     type: restriction_import_type,
     all_type: restriction_import_all_type,
     offset: restriction_import_offset,
+    end: restriction_import_end,
     parents: restriction_import_parents(restriction_import_source)
   } else null
 }
@@ -151,7 +158,7 @@ in ts_import_specifier, ts_import.default_import, ts_import.namespace, ts_export
   when info.item && info != null
   @each entry in paths
   when entry.name == info.source && !(entry.allowTypeImports && (info.type || info.all_type)) && (entry.importNames != null && (info.name == "*" || contains(entry.importNames, info.name)) || entry.allowImportNames != null && !contains(entry.allowImportNames, info.name))
-  report at info.offset
+  report at { start: info.offset, end: info.end }
   warn (if info.name == "*" then "* import is invalid because " (if entry.allowImportNames != null then "only " @restriction_import_list(entry.allowImportNames) " from '{info.source}' " @restriction_import_plural(entry.allowImportNames) " allowed." else @restriction_import_list(entry.importNames) " from '{info.source}' " @restriction_import_plural(entry.importNames) " restricted.") else "'{info.name}' import from '{info.source}' is restricted" (if entry.allowImportNames != null then " because only " @restriction_import_list(entry.allowImportNames) " " @restriction_import_plural(entry.allowImportNames) " allowed." else ".")) @restriction_import_custom(entry)
 }
 in ts_import, ts_export, ts_import_equals rule no-restricted-imports:patterns {
@@ -170,7 +177,7 @@ in ts_import_specifier, ts_import.default_import, ts_import.namespace, ts_export
   when info.item && info != null
   @each entry in patterns
   when @restriction_import_pattern_matches(entry) && !(entry.allowTypeImports && (info.type || info.all_type)) && (entry.importNames != null && (info.name == "*" || contains(entry.importNames, info.name)) || entry.importNamePattern != null && (info.name == "*" || js_re_test(info.name, entry.importNamePattern, "u")) || entry.allowImportNames != null && !contains(entry.allowImportNames, info.name) || entry.allowImportNamePattern != null && (info.name == "*" || !js_re_test(info.name, entry.allowImportNamePattern, "u")))
-  report at info.offset
+  report at { start: info.offset, end: info.end }
   warn (if info.name == "*" then "* import is invalid because " (if entry.allowImportNames != null then "only " @restriction_import_list(entry.allowImportNames) " from '{info.source}' " @restriction_import_plural(entry.allowImportNames) " allowed." else if entry.allowImportNamePattern != null then "only imports that match the pattern '/{entry.allowImportNamePattern}/u' from '{info.source}' are allowed." else if entry.importNamePattern != null && entry.importNames == null then "import name matching '/{entry.importNamePattern}/u' pattern from '{info.source}' is restricted from being used." else @restriction_import_list(entry.importNames) " from '{info.source}' " @restriction_import_plural(entry.importNames) " restricted from being used by a pattern.") else "'{info.name}' import from '{info.source}' is restricted" (if entry.allowImportNames != null then " because only " @restriction_import_list(entry.allowImportNames) " " @restriction_import_plural(entry.allowImportNames) " allowed." else if entry.allowImportNamePattern != null then " because only imports that match the pattern '/{entry.allowImportNamePattern}/u' are allowed from '{info.source}'." else " from being used by a pattern.")) @restriction_import_custom(entry)
 }
 

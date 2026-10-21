@@ -784,6 +784,12 @@ in ts_arrow let scoping_callable_head operator.offset
 in ts_member let scoping_callable_head property.scoping_expression_offset.nonempty ?? property.offset
 in ts_index let scoping_callable_head index.scoping_expression_offset.nonempty ?? index.offset
 in ts_parenthesized let scoping_callable_head expression.scoping_callable_head.nonempty ?? expression.offset
+in ts_identifier, ts_function, ts_method let scoping_callable_end end_offset
+in ts_arrow let scoping_callable_end operator.end_offset
+in ts_member let scoping_callable_end property.scoping_expression_end.nonempty ?? property.end_offset
+in ts_index let scoping_callable_end index.scoping_expression_end.nonempty ?? index.end_offset
+in ts_parenthesized let scoping_callable_end expression.scoping_callable_end.nonempty ?? expression.end_offset
+in ts_parenthesized let scoping_expression_end expression.scoping_expression_end.nonempty ?? expression.end_offset
 in ts_call.callee rule new-cap {
   option capIsNew boolean = true "require new for capitalised calls"
   option newIsCap boolean = true "require capitalised constructors"
@@ -798,7 +804,7 @@ in ts_call.callee rule new-cap {
   when capIsNewExceptionPattern == null || !re_test(text, capIsNewExceptionPattern)
   when !(scoping_builtin_constructor && contains(["Array", "Boolean", "Date", "Error", "Function", "Number", "Object", "RegExp", "String", "Symbol", "BigInt"], scoping_cap_name))
   when !scoping_utc_call
-  report at scoping_callable_head
+  report at { start: scoping_callable_head, end: scoping_callable_end }
   warn "A function with a name starting with an uppercase letter should only be used as a constructor."
 }
 in ts_new.callee rule new-cap:constructor {
@@ -813,7 +819,7 @@ in ts_new.callee rule new-cap:constructor {
   when properties || scoping_is_property != true
   when !contains(newIsCapExceptions, scoping_cap_name) && !contains(newIsCapExceptions, text)
   when newIsCapExceptionPattern == null || !re_test(text, newIsCapExceptionPattern)
-  report at scoping_callable_head
+  report at { start: scoping_callable_head, end: scoping_callable_end }
   warn "A constructor name should not start with a lowercase letter."
 }
 

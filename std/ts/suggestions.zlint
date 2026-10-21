@@ -860,7 +860,7 @@ in ts_string, ts_template, ts_regex rule no-useless-escape {
   when contains(text, "\\")
   each escape_info in regexp_useless_escapes {
     when !escape_info.regex || !contains(allowRegexCharacters, escape_info.character)
-    report at escape_info.offset
+    report at { start: escape_info.offset, end: escape_info.offset + 1 }
     warn "Unnecessary escape character: \\{escape_info.character}."
   }
 }
