@@ -2,21 +2,24 @@ import .ts/expression-fixes
 
 define {
 
-in ts_node let strict_void_kind {
-  value parts: value_constituents(node)
-  value kinds: filter(["void", "undefined", "null", "any", "unknown", "boolean", "number", "bigint", "string", "symbol", "object"], kind =>
-    parts != null && count(parts) > 0 && all(parts, arm => any(arm, part =>
-      contains(part.traits, kind) && !contains(part.uncertain_traits, kind))))
-  value if parts == null then null else if count(parts) == 0 then "never"
-    else if count(kinds) == 1 then first(kinds) else null
-}
-fn strict_void_allowed(kind, any) = contains(["void", "undefined", "never"], kind) || any && kind == "any"
+fn strict_void_unsafe_parts(parts, allow_any) = parts != null && !all(parts, arm =>
+  count(arm) == 0 || any(arm, part => contains(part.traits, "void")
+    || contains(part.traits, "undefined") || contains(part.traits, "never")
+    || allow_any && contains(part.traits, "any")))
 fn strict_void_signature_allowed(signature, allow_any) = all(signature.result, arm =>
   any(arm, part => contains(part.traits, "undefined") || allow_any && contains(part.traits, "any")))
 fn strict_void_signatures_known(signatures) = count(signatures) > 0
   && all(signatures, signature => signature.result_known)
 fn strict_void_source_allowed(signatures, allow_any) = strict_void_signatures_known(signatures)
   && all(signatures, signature => strict_void_signature_allowed(signature, allow_any))
+fn strict_void_handle_result(handle) = {
+  value parts: value_parts(handle)
+  value if parts == null then null else map(parts, arm => arm.parts)
+}
+fn strict_void_signature(header) = {
+  value result: strict_void_handle_result(header.result)
+  value {result: result, result_known: result != null}
+}
 fn strict_void_expected_transfer(signatures, argument) =
   if argument then any(signatures, signature => any(signature.result, arm =>
     any(arm, part => contains(part.traits, "void"))))
@@ -35,7 +38,7 @@ fn strict_void_argument_transfer(n) = {
       value parameter: first(slice(header.parameters, index, index + 1))
       value callbacks: if parameter == null then [] else value_signatures(parameter)
       value if callbacks == null then null else map(callbacks, arm => map(arm, callback => {
-        value result: value_constituents(callback.result)
+        value result: strict_void_handle_result(callback.result)
         value {result: result, result_known: result != null}
       }))
     })
@@ -50,15 +53,29 @@ fn strict_void_argument_transfer(n) = {
   }
 }
 fn strict_void_source(n) = if n is ts_property then n.value.node ?? n.key.node else n
-fn strict_void_reports(n, any) = when {
+fn strict_void_reports(n, allow_any) = when {
   n not (ts_function, ts_arrow, ts_method) then [{site: n, mode: "function"}]
   contains(n.modifier, "*") then [{site: function_head_site(n), mode: "function"}]
   contains(n.modifier, "async") then [{site: function_head_site(n), mode: "async"}]
-  n.body not ts_block then [{site: unparenthesised_node(n.body.node), mode: "return"}]
+  n.body not ts_block then {
+    value body: unparenthesised_node(n.body.node)
+    value eager: value_constituents(body)
+    value parts: if eager != null then eager else {
+      value arms: value_parts(body)
+      value if arms == null then null else map(arms, arm => arm.parts)
+    }
+    value if strict_void_unsafe_parts(parts, allow_any) then [{site: body, mode: "return"}] else []
+  }
   n.return_type != null && n.return_type.text != "void" then [{site: n.return_type.node, mode: "function"}]
   else then {
-    value invalid: filter(n.scoping_own_returns, returned => returned.argument != null && returned.argument.strict_void_kind != null
-      && !strict_void_allowed(returned.argument.strict_void_kind, any))
+    value invalid: filter(n.scoping_own_returns, returned => {
+      value eager: value_constituents(returned.argument)
+      value parts: if eager != null then eager else {
+        value arms: value_parts(returned.argument)
+        value if arms == null then null else map(arms, arm => arm.parts)
+      }
+      value returned.argument != null && strict_void_unsafe_parts(parts, allow_any)
+    })
     value map(invalid, returned => {site: {start: returned.offset, end: returned.offset + 6}, mode: "return"})
   }
 }
@@ -73,19 +90,24 @@ in ts_call.argument, ts_new.argument, ts_declarator.init, ts_assignment.right, t
   when !(is ts_method && parent is ts_object && node.key.token_neighbours.before.text == "[")
   let actual strict_void_source(node)
   when actual could callable
-  let signatures { value call_signatures(actual) ?? []; flat_map (arm) arm }
+  let unwrapped unparenthesised_node(actual)
+  let signatures {
+    value value_signatures(actual) ?? []
+    flat_map (arm) arm
+    map (header) strict_void_signature(header)
+  }
   let expected expected_call_signatures(actual)
   let expected_signatures { value expected ?? []; flat_map (arm) arm }
   let expected_known expected != null && all(expected_signatures, signature => signature.result_known)
   let argument_transfer strict_void_argument_transfer(actual)
-  when strict_void_signatures_known(signatures)
+  when strict_void_signatures_known(signatures) || unwrapped is (ts_function, ts_arrow, ts_method)
+    && (contains([] unwrapped.modifier, "async") || contains([] unwrapped.modifier, "*") || unwrapped.return_type == null)
   when if argument_transfer != null
     then argument_transfer
       && !strict_void_source_allowed(signatures, allowReturnAny)
     else expected_known
       && strict_void_expected_transfer(expected_signatures, outer_parenthesised_node(actual).parent is (ts_call, ts_new))
       && !strict_void_source_allowed(signatures, allowReturnAny)
-  let unwrapped unparenthesised_node(actual)
   each report in strict_void_reports(unwrapped, allowReturnAny) {
     report at report.site
     warn when {

@@ -151,6 +151,22 @@ fn enum_names_text(contexts) = {
   join ", "
 }
 
+fn enum_declaration_owner(n) = {
+  value parent: n.parent.node
+  value if parent == null then null
+    else if parent is (ts_declarator, ts_class_property) then parent
+    else if parent is (ts_conditional, ts_logical) then enum_declaration_owner(parent)
+    else null
+}
+fn enum_report_site(n) = if n not ts_property then n else {
+  value object: n.parent.node
+  value declared: enum_declaration_owner(object)
+  value if declared == null then n
+    else if declared is ts_class_property then declared
+    else if declared.init.node != object then declared
+    else n
+}
+
 group enum_transfer ts_declarator, ts_parameter, ts_class_property, ts_assignment, ts_assignment_pattern, ts_property, ts_as, ts_type_assertion, ts_update
 in enum_transfer let enum_mutation is ts_update || is ts_assignment && !contains(["=", "&&=", "&=", "??=", "^=", "|=", "||="], node.operator)
 in enum_transfer let enum_value
@@ -172,7 +188,7 @@ in enum_transfer rule no-unsafe-enum-assignment {
   let contexts enum_selected_contexts
   report at if node is ts_parameter then { start: node.name.node.offset, end: end_offset }
     else if node is ts_assignment_pattern && node.left.node == null then { start: parent.key.node.offset, end: end_offset }
-    else node
+    else enum_report_site(node)
   warn if enum_mutation then "This mutation can produce a value outside of the expected enum {enum_names_text(contexts)}."
     else if is (ts_as, ts_type_assertion) then "The value asserted here does not have a shared enum type with the expected enum {enum_names_text(contexts)}."
     else "The value assigned here does not have a shared enum type with the expected enum {enum_names_text(contexts)}."
