@@ -56,9 +56,17 @@ fn rejection_findings(call) = {
     value rejection_inline(selection.handler)
     flat_map (function) {
       value parameter: first(function.parameter.nodes)
+      value declared: if parameter == null then null else parameter.type.node
       value type: if parameter == null then null else rejection_parameter_type(function, parameter)
-      value if parameter == null || type == null || ts_value_trait(type, "unknown") then [] else [{
-        offset: parameter.offset, method: selection.method,
+      value safe: if type != null then ts_value_trait(type, "unknown")
+        else if declared == null then true
+        else if parameter.name is ts_rest && declared is ts_tuple_type then {
+          value first_element: first(declared.element.nodes)
+          value first_element != null && first_element.type is ts_type_keyword && first_element.type.text == "unknown"
+        }
+        else declared is ts_type_keyword && declared.text == "unknown"
+      value if parameter == null || safe then [] else [{
+        offset: parameter.offset, end: parameter.end_offset, method: selection.method,
         pattern: when {
           parameter.name is ts_array_pattern then "array"
           parameter.name is ts_object_pattern then "object"
@@ -71,7 +79,7 @@ fn rejection_findings(call) = {
 
 in ts_call rule use-unknown-in-catch-callback-variable {
   each finding in rejection_findings(node) {
-    report at finding.offset
+    report at { start: finding.offset, end: finding.end }
     warn "Prefer the safe `: unknown` for a `" finding.method "`" (if finding.method == "then" then " rejection" else "") " callback variable." (when {
       finding.pattern == "array" then " The thrown error may not be iterable."
       finding.pattern == "object" then " The thrown error may be nullable, or may not have the expected shape."

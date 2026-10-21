@@ -1,10 +1,10 @@
-input.ts:10:20-10:56 method-signature-style:property#0
+input.ts:10:20-10:57 method-signature-style:property#0
 input.ts:10:35-10:54 method-signature-style:property#0
-input.ts:10:58-10:77 method-signature-style:property#0
-input.ts:2:3-2:27 method-signature-style:property#0
-input.ts:3:3-3:44 method-signature-style:property#0
-input.ts:4:3-4:60 method-signature-style:property#0
-input.ts:5:3-5:20 method-signature-style:property#0
+input.ts:10:58-10:78 method-signature-style:property#0
+input.ts:2:3-2:28 method-signature-style:property#0
+input.ts:3:3-3:45 method-signature-style:property#0
+input.ts:4:3-4:61 method-signature-style:property#0
+input.ts:5:3-5:21 method-signature-style:property#0
 input.ts:6:3-6:22 method-signature-style:property#0
 input.ts:8:12-8:37 method-signature-style:property#0
 input.ts:9:30-9:48 method-signature-style:property#0
