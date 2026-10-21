@@ -283,8 +283,8 @@ in ts_jsx_expression, ts_jsx_text, ts_string, ts_jsx_element, ts_jsx_fragment ru
   when if element_value then (if expression_node then propElementValues == "never" else propElementValues != "ignore") else if expression_node then selected == "never" && unnecessary else selected == "always" && missing
   warn if expression_node then "Curly braces are unnecessary here." else "Need to wrap this literal in a JSX expression."
   let replacement if expression_node then jsx_presence_remove(inner, attribute) else if element_value then "{{" text "}}" else if attribute then { value jsx_presence_content(text); jsx_presence_wrap } else jsx_presence_text_fix(node)
-  # Entities must remain JSX, not literal entity spellings inside a JS string.
-  let safe_literal !re_test(text, /[\u{0}-\u{7}\u{b}\u{e}-\u{1f}]/) && (expression_node || element_value || (jsx_presence_entities(text) == text || child && jsx_break(text)) && !(attribute && jsx_break(text)))
+  # Single-line entity text is wrapped whole, matching @stylistic's fix; multi-line text keeps entities outside braces via jsx_presence_line_fix.
+  let safe_literal !re_test(text, /[\u{0}-\u{7}\u{b}\u{e}-\u{1f}]/) && (expression_node || element_value || !(attribute && jsx_break(text)))
   fix if safe_literal && !(element_value && !expression_node && propElementValues != "always") && expression_fix_retains_comments(node, replacement) as replacement
 }
 

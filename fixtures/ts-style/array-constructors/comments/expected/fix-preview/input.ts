@@ -3,7 +3,7 @@ const B = [
   // keep
   1, 2,
 ];
-const C = Array /* keep */?.(1, 2);
-const D = new /* keep */ Array();
+const C = [1, 2];
+const D = [];
 const E = [] /* keep */;
 /* outer */ []; /* after */

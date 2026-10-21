@@ -291,7 +291,7 @@ fn array_constructor_fix(source, n) = {
   value statement: expression_fix_statement(n)
   value owners: if statement != null then expression_fix_before_nodes(n) else []
   value semicolon: if statement != null then expression_fix_asi(statement, n.token_neighbours.before, owners, replacement) else false
-  value if open == null && count(n.argument) > 0 || !expression_fix_retains_comments(n, replacement) || semicolon == null then null
+  value if open == null && count(n.argument) > 0 || semicolon == null then null
     else (if semicolon then ";" else "") replacement
 }
 in ts_call, ts_new rule no-array-constructor {
