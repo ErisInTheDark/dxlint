@@ -143,13 +143,11 @@ in ts_call rule prefer-promise-reject-errors {
   when rejection_call
   let reason first([] argument.rejection_reason)
   when reason != null || !allowEmptyReject
-  when reason == null || (if re_test(file, /\.[cm]?tsx?$/) then value_parts(reason.subject) != null && reason.kind != "error" && !(allowThrowingAny && reason.kind == "any") && !(allowThrowingUnknown && reason.kind == "unknown") && type_value_allowed(allow, reason.subject) == false else !reason.possible)
+  when reason == null || (if re_test(file, /\.[cm]?tsx?$/) then (value_parts(reason.subject) != null || unparenthesised_node(reason.subject) is ts_array) && reason.kind != "error" && !(allowThrowingAny && reason.kind == "any") && !(allowThrowingUnknown && reason.kind == "unknown") && type_value_allowed(allow, reason.subject) == false else !reason.possible)
   when prefer_promise_reject_errors_checked
   warn "Expected the Promise rejection reason to be an Error."
 }
 
-fn stringification_collection(states) = if any(states, state => state == null) then null
-  else if any(states, state => state == 2) then 2 else if any(states, state => state == 1) then 1 else 0
 fn stringification_union(states) = if count(states) == 0 then 0 else if any(states, state => state == null) then null
   else if all(states, state => state == 2) then 2 else if all(states, state => state == 0) then 0 else 1
 fn stringification_member(n, handle, key) = {
@@ -190,7 +188,7 @@ fn stringification_part(n, part, ignored, check_unknown, seen) = {
   value if primitive || ignored_name then 0
     else if contains(part.traits, "unknown") || contains(part.traits, "parameter") then if check_unknown then 1 else 0
     else if contains(["array", "tuple"], carrier.description.kind) then
-      stringification_collection(map(carrier.arguments, argument => stringification_certainty(n, argument, ignored, check_unknown, seen)))
+      stringification_union(map(carrier.arguments, argument => stringification_certainty(n, argument, ignored, check_unknown, seen)))
     else if !part.carrier_known then null else {
       value symbol: value_lookup(part.handle, ts_value_symbol_key(n, "toPrimitive"))
       value custom_symbol: symbol.alternatives != null
@@ -220,11 +218,17 @@ fn stringification_join(n, ignored, check_unknown) = {
   value arms: value_parts(n)
   value if arms == null then null else stringification_union(map(arms, arm => {
     value states: map(stringification_parts(arm), part => if contains(["array", "tuple"], part.carrier.description.kind)
-      then stringification_collection(map(part.carrier.arguments, argument => stringification_certainty(n, argument, ignored, check_unknown, [])))
+      then stringification_union(map(part.carrier.arguments, argument => stringification_certainty(n, argument, ignored, check_unknown, [])))
       else 0)
     value if any(states, state => state == 0) then 0
       else if any(states, state => state == null) then null else max(states)
   }))
+}
+fn stringification_literal_array(n, ignored, check_unknown) = {
+  value elements: n.element.nodes
+  value spread: any(elements, element => element is ts_spread)
+  value if spread then null
+    else stringification_union(map(elements, element => stringification_certainty(n, element, ignored, check_unknown, [])))
 }
 in ts_call let stringification_subjects
   if callee is ts_identifier && global_callee == "String" then [{node: { value argument.nodes; first; unparenthesised_node }, join: false}]
@@ -241,7 +245,7 @@ in ts_call, ts_binary, ts_assignment, ts_template rule no-base-to-string {
   let findings map(stringification_subjects, subject => {
     node: subject.node,
     join: subject.join,
-    certainty: if stringification_ignored_alias(subject.node, ignoredTypeNames) then 0 else if subject.join then stringification_join(subject.node, ignoredTypeNames, checkUnknown) else stringification_certainty(subject.node, subject.node, ignoredTypeNames, checkUnknown, [])
+    certainty: if stringification_ignored_alias(subject.node, ignoredTypeNames) then 0 else if subject.join then stringification_join(subject.node, ignoredTypeNames, checkUnknown) else if subject.node is ts_array && value_parts(subject.node) == null then stringification_literal_array(subject.node, ignoredTypeNames, checkUnknown) else stringification_certainty(subject.node, subject.node, ignoredTypeNames, checkUnknown, [])
   })
   each subject in findings {
     when subject.node != null && subject.node not (ts_literal, ts_spread)
@@ -483,10 +487,10 @@ in ts_template.expression rule restrict-template-expressions {
 
 in ts_unary rule no-unsafe-unary-minus {
   when operator == "-" && !ts_value_opaque(argument.node)
-    && !any(["any", "unknown", "number", "bigint", "enum"], trait => ts_value_has_trait(argument.node, trait) == true)
+    && !any(["any", "number", "bigint", "enum"], trait => ts_value_has_trait(argument.node, trait) == true)
   let operand_type value_constituents(argument.node)
-  when operand_type != null
-  warn "Argument of unary negation should be assignable to number | bigint but is { { value ts_value_print(operand_type); re_replace /^\"[\s\S]*\"$/ 'string' } } instead."
+  when operand_type != null && count(operand_type) > 0
+  warn "Argument of unary negation should be assignable to number | bigint but is {ts_value_print(operand_type)} instead."
 }
 
 in ts_member, ts_index let object_array_type ts_value_array_like(object.node)

@@ -9,9 +9,20 @@ fn type_argument_target(n) = unparenthesised_node(if n is ts_class then n.extend
 fn type_argument_declaration(n) = {
   value target: type_argument_target(n)
   value binding: if target is ts_identifier then name_binding(target) else null
-  value owner: binding.node.parent
+  value owners: map(binding.declarations ?? [], declaration => declaration.parent.node)
+  value preferred: if n is ts_type_reference then
+      concat(concat(filter(owners, owner => owner is ts_interface), filter(owners, owner => owner is ts_type_alias)), filter(owners, owner => owner is ts_class))
+    else concat(concat(filter(owners, owner => owner is ts_declarator), filter(owners, owner => owner is ts_class)), filter(owners, owner => owner is (ts_function, ts_arrow)))
+  value candidates: if count(preferred) > 0 then preferred else owners
+  value parameterized: filter(candidates, owner => count(owner.type_parameter.nodes) > 0)
+  value chosen: first(parameterized)
+  value declarator: find(candidates, owner => owner is ts_declarator && owner.type != null)
+  value construct: if declarator != null then first(declarator.type.descendants(ts_call_signature)) else null
+  value owner: if binding != null then binding.node.parent else null
   value if target is (ts_function, ts_arrow, ts_class) then target
-    else if count(binding.declarations) != 1 then null
+    else if chosen != null then chosen
+    else if construct != null && count(construct.type_parameter.nodes) > 0 then construct
+    else if count(candidates) != 1 then null
     else if owner is (ts_function, ts_class, ts_interface, ts_type_alias) then owner
     else if owner is ts_declarator && owner.type == null && owner.parent.kind == "const"
       && unparenthesised_node(owner.init.node) is (ts_function, ts_arrow, ts_class)
@@ -22,11 +33,21 @@ fn type_argument_known(parts) = parts != null && all(parts, arm => all(arm, part
   part.carrier_known && !any(["any", "unknown", "error", "parameter"],
     trait => contains(part.traits, trait) || contains(part.uncertain_traits, trait))
   && all(part.carrier.arguments ?? [], argument => type_argument_known(argument))))
-fn type_argument_same(argument, other, widened) = {
+fn type_argument_carried(parts) = parts != null && count(parts) > 0
+  && all(parts, arm => count(arm) > 0 && all(arm, part => part.carrier_known && part.carrier != null))
+fn type_argument_available(argument, parts) = if argument is ts_type_reference then {
+  value written: count(argument.type_argument.nodes)
+  value resolved: map(parts ?? [], arm => map(arm, part => count(part.carrier.arguments ?? [])))
+  value written == 0 || count(resolved) == 0
+    || all(resolved, arm => count(arm) > 0 && all(arm, count => count == written))
+} else true
+fn type_argument_same(source, other, widened) = {
+  value argument: value_union(source, [])
   value a: value_constituents(argument)
   value b: if widened then value_widened(other) else value_constituents(other)
   value type_argument_known(a) && type_argument_known(b) && (
-    !widened && value_same(argument, other) == true
+    !widened && (value_same(argument, other) == true
+      || a == b && type_argument_carried(a) && type_argument_available(source, a))
     || assertion_scalar_identity_known(a) && assertion_scalar_identity_known(b) && a == b)
 }
 fn type_argument_default(n, declaration) = {
@@ -63,7 +84,7 @@ fn type_argument_redundancy(n) = {
   value formal: get(declaration.type_parameter.nodes, count(arguments) - 1)
   value default: type_argument_default(owner, declaration)
   value if last(arguments) != n then null
-    else if default != null && type_argument_same(value_union(n, []), default, false) then "default"
+    else if default != null && type_argument_same(n, default, false) then "default"
     else if formal != null && type_argument_inferred(n, declaration, formal) then "inferred"
     else null
 }
