@@ -99,6 +99,26 @@ fn optional_may(n, trait) = {
     contains(part.traits, trait) || contains(part.traits, "any") || contains(part.traits, "unknown")
       || contains(part.uncertain_traits, trait)))
 }
+fn optional_arms_trait(arms, trait) = arms == null || any(arms, arm => any(arm, part => contains(part.traits, trait)))
+fn optional_result_trait(call, trait) = {
+  value binding: call_binding(call)
+  value if binding == null then true else any(binding.choices, choice =>
+    choice.result == null || optional_may(choice.result, trait))
+}
+fn optional_hop_trait(hop, trait) = if hop is ts_call then optional_result_trait(hop, trait)
+  else if hop is ts_member && hop.property not ts_private_name then
+    optional_arms_trait(value_member(hop.object.node, hop.property.text), trait)
+  else if hop is ts_index then optional_arms_trait(value_member(hop.object.node, hop.index.node), trait)
+  else false
+fn optional_linked(n) = { value n; walk (m) optional_base(m);
+  any (m) m is (ts_member, ts_index, ts_call) && m.optional != null }
+# `undefined` that an optional link adds is synthetic: an earlier guard already
+# settled the link's receiver, so TypeScript narrows it away at this operand.
+# Undefined the link's own target declares (a call result, a member) is real.
+fn optional_link_trait(n, trait) = { value n; walk (m) optional_base(m);
+  any (m) m is (ts_member, ts_index, ts_call) && m.optional != null && optional_hop_trait(m, trait) }
+fn optional_may_real(n, trait) = optional_may(n, trait)
+  && (!optional_linked(n) || optional_link_trait(n, trait))
 fn optional_nullish_only(n, allow_null) = {
   value arms: value_parts(n)
   value arms != null && count(arms) > 0 && all(arms, arm => any(arm.parts, part =>
@@ -125,8 +145,8 @@ fn optional_valid(current, next, op, last, opts) = current.subject != null && cu
   if contains(["plain", "not"], current.kind) then last || optional_type_allowed(current.subject, opts)
     && !(current.kind == (if op == "&&" then "plain" else "not") && optional_falsy_literal(current.subject))
   else current.kind == "nullish" || optional_group(current, next)
-    || current.kind == "null" && (op == "||" || next != null) && !optional_may(current.subject, "undefined")
-    || current.kind == "undefined" && !optional_may(current.subject, "null"))
+    || current.kind == "null" && (op == "||" || next != null) && !optional_may_real(current.subject, "undefined")
+    || current.kind == "undefined" && !optional_may_real(current.subject, "null"))
 fn optional_terminal_allowed(n, comparison, op) = if comparison == (if op == "&&" then "===" else "!==") then !optional_may(n, "undefined")
   else if comparison == (if op == "&&" then "==" else "!=") then !optional_may(n, "null") && !optional_may(n, "undefined")
   else if comparison == (if op == "&&" then "!==" else "===") then optional_nullish_only(n, false)
@@ -204,11 +224,18 @@ fn optional_output(items) = {
     else unary text " " terminal.node.operator " " terminal.node.right.text
   else if terminal.kind == "not" then "!" text else text
 }
+# A call whose signature and receiver the engine cannot read together (lib
+# `Function`, unread imported types) answers TypeScript's error type `any`.
+fn optional_opaque_member_call(n) = n is ts_call && value_parts(n) == null
+  && n.callee.node is (ts_member, ts_index) && value_parts(n.callee.node.object.node) != null
 fn optional_safe(items, op, unsafe) = {
   value terminal: last(items)
+  # A fix adds `undefined` to the chain's value; that changes nothing when an
+  # operand already carries it (`any` includes `undefined`).
+  value already_undefined: any(items, item =>
+    optional_may_real(item.node, "undefined") || optional_opaque_member_call(item.node))
   value unsafe || !terminal.terminal && (contains(["nullish", "undefined"], terminal.kind)
-    || op == "||" && terminal.kind == "not"
-    || { value items; any (item) optional_may(item.node, "undefined") })
+    || op == "||" && terminal.kind == "not" || already_undefined)
 }
 fn optional_tail(source, span, boundary) = {
   # Paired code tokens, not character counts: parentheses in comments and strings
