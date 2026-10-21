@@ -106,13 +106,12 @@ in ts_throw.argument rule only-throw-error {
   option allowRethrowing boolean = true "Allow rethrowing catch and Promise rejection parameters"
   option allowThrowingAny boolean = true "Allow any values"
   option allowThrowingUnknown boolean = true "Allow unknown values"
-  when value_parts(node) != null
   when ts_error_value.kind != "error"
   when !allowRethrowing || !ts_error_value.rethrown
   when !allowThrowingAny || ts_error_value.kind != "any"
   when !allowThrowingUnknown || ts_error_value.kind != "unknown"
   when only_throw_error_checked
-  when type_value_allowed(allow, node) == false
+  when type_value_allowed(allow, node) != true
   report at unparenthesised_node(node)
   warn if ts_error_value.kind == "undefined" then "Do not throw undefined." else "Expected an error object to be thrown."
 }
