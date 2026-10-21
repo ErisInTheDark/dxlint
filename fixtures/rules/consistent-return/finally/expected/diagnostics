@@ -1,1 +1,1 @@
-input.ts:20:10-20:10 consistent-return:fallthrough#0
+input.ts:20:10-20:21 consistent-return:fallthrough#0

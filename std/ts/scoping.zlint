@@ -412,7 +412,11 @@ in ts_program, ts_function, ts_arrow, ts_method rule consistent-return:fallthrou
   let initial first(scoping_consistent_returns)
   when scoping_return_specified(initial, treatUndefinedAsUnspecified)
   when !scoping_return_constructor && flow_normal(scoping_return_entry) == true
-  report at scoping_return_head
+  report at when {
+    is ts_program then scoping_return_head
+    is ts_function && node.name != null then { start: node.name.offset, end: node.name.end_offset }
+    else then function_head_site(node)
+  }
   warn "Expected to return a value at the end of {scoping_return_name}."
 }
 
@@ -481,15 +485,20 @@ in ts_statement, ts_arrow, ts_method, ts_static_block, ts_program, ts_case let s
   }
 
 in ts_return let scoping_executor_result
-  if scoping_executor_body && argument != null then {void: argument.scoping_void_expression, offset: offset} else null
+  if scoping_executor_body && argument != null then
+    { void: argument.scoping_void_expression, start: offset,
+      end: if byte_slice(source, end_offset, end_offset + 1) == ";" then end_offset + 1 else end_offset }
+  else null
 in ts_arrow let scoping_executor_result
   if scoping_executor_argument && body not ts_block then
-    {void: body.scoping_void_expression, offset: body.scoping_expression_offset.nonempty ?? body.offset} else null
+    { void: body.scoping_void_expression,
+      start: body.scoping_expression_offset.nonempty ?? body.offset,
+      end: unparenthesised_node(body).end_offset } else null
 in ts_return, ts_arrow rule no-promise-executor-return {
   option allowVoid boolean = false "allow explicit void return expressions"
   let returned scoping_executor_result
   when returned != null && !(allowVoid && returned.void)
-  report at returned.offset
+  report at { start: returned.start, end: returned.end }
   warn "Return values from promise executor functions cannot be read."
 }
 
@@ -721,6 +730,7 @@ in ts_declarator rule init-declarations {
   option ignoreForLoopInit boolean = false "allow initialized declarations in loop initializers"
   when name.declaration_kind != null && name.ambient != true && mode == "always" && init == null
   when !parent.scoping_iteration_binding
+  report at { start: name.offset, end: name.end_offset }
   warn "Variable '{name}' should be initialized on declaration."
 }
 in ts_declarator rule init-declarations:never {
@@ -730,6 +740,7 @@ in ts_declarator rule init-declarations:never {
   when parent.kind != "const" && name.declaration_kind != "using"
   when init != null || parent.scoping_iteration_binding
   when !(ignoreForLoopInit && parent.scoping_loop_head)
+  report at { start: name.offset, end: name.end_offset }
   warn "Variable '{name}' should not be initialized on declaration."
 }
 

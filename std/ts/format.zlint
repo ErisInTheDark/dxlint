@@ -718,7 +718,7 @@ in ts_keyword, ts_variable_declaration.kind, ts_try.kind, ts_unary.operator, ts_
     value re_test(token_neighbours.before.text, result)
   }
   when !re_test(token_neighbours.before.text, /\$\{$/)
-  report at if keyword_required then offset else space_before.start
+  report at if keyword_required then { start: offset, end: end_offset } else { start: space_before.start, end: space_before.end }
   fix space_before as if keyword_required then " " else ""
   warn if keyword_required then "Expected space(s) before \"{keyword_label}\"." else "Unexpected space(s) before \"{keyword_label}\"."
 }
@@ -739,9 +739,9 @@ in ts_keyword, ts_variable_declaration.kind, ts_try.kind, ts_method.modifier, ts
   }
   when !re_test(token_neighbours.after.text, /^\}/)
   report at when {
-    !keyword_required then end_offset
+    !keyword_required then { start: space_after.start, end: space_after.end }
     is ts_for_of.modifier then parent.offset
-    else then offset
+    else then { start: offset, end: end_offset }
   }
   fix space_after as if keyword_required then " " else ""
   warn if keyword_required then "Expected space(s) after \"{keyword_label}\"." else "Unexpected space(s) after \"{keyword_label}\"."
