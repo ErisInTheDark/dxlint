@@ -562,7 +562,7 @@ in ts_program rule no-redeclare:global {
   option ignoreDeclarationMerge boolean = true "allow typescript declaration merging"
   let redeclarations scoping_global_mentions(node)
   each redeclaration in filter(redeclarations, d => d.duplicate || d.syntax || builtinGlobals && d.builtin) {
-    report at redeclaration.offset
+    report at { start: redeclaration.offset, end: redeclaration.offset + byte_len(redeclaration.name) }
     warn when {
       builtinGlobals && redeclaration.builtin then "'{redeclaration.name}' is already defined as a built-in global variable."
       redeclaration.syntax then "'{redeclaration.name}' is already defined by a variable declaration."
@@ -615,6 +615,7 @@ in ts_program.binding_declarations rule no-shadow {
   when !(ignoreFunctionTypeParameterNameValueShadow && shadowed.function_type)
   when !(ignoreOnInitialization && shadowed.initializing)
   when !shadowed.early || hoist == "all" || (hoist == "functions" || hoist == "functions-and-types") && shadowed.kind == "function" || (hoist == "types" || hoist == "functions-and-types") && contains(["type", "interface"], shadowed.kind)
+  report at if parent is ts_parameter then parent.node else node
   warn when {
     shadowed.enum_member then "Enum members are added to the enum scope, so references to '{text}' in enum member initializers resolve to this member instead of the declaration in the upper scope on line {shadowed.line} column {shadowed.column}."
     shadowed.global then "'{text}' is already a global variable."
@@ -646,7 +647,7 @@ in ts_variable_declaration, ts_function, ts_class rule no-implicit-globals {
   option lexicalBindings boolean = false "also top-level let, const and class declarations"
   let declarations scoping_global_bindings(node)
   each global_declaration in filter(declarations, d => !d.exported && contains(["var", "let", "const", "function", "class"], d.kind) && d.setting != "writable" && (lexicalBindings || d.kind == "var" || d.kind == "function")) {
-    report at global_declaration.offset
+    report at { start: global_declaration.offset, end: global_declaration.end }
     warn when {
       global_declaration.setting == "readonly" then "Unexpected redeclaration of read-only global variable."
       global_declaration.kind == "var" || global_declaration.kind == "function" then "Unexpected {implicit_global_label(global_declaration.kind)} declaration in the global scope, wrap in an IIFE for a local variable, assign as global property for a global variable."
@@ -659,6 +660,7 @@ in ts_identifier rule no-implicit-globals:leak {
   when access == "write"
   let setting ts_global_setting(scoping_program, identifier_name)
   when ts_source_type(scoping_program) != "module" && !scoping_strict_code && resolved == "global" && (setting == null || setting == "off")
+  report at { start: scoping_pattern_write_owner.offset, end: end_offset }
   warn "Global variable leak, declare the variable if it is intended to be local."
 }
 in ts_identifier rule no-implicit-globals:readonly {
@@ -666,6 +668,7 @@ in ts_identifier rule no-implicit-globals:readonly {
   when access == "write"
   when ts_source_type(scoping_program) != "module" && resolved == "global"
     && ts_global_setting(scoping_program, identifier_name) == "readonly"
+  report at { start: scoping_pattern_write_owner.offset, end: end_offset }
   warn "Unexpected assignment to read-only global variable."
 }
 

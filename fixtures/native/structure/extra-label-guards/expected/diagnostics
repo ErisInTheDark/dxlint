@@ -1,2 +1,2 @@
-a.js:1:49-1:49 no-extra-label#0
-a.js:2:52-2:52 no-extra-label#0
+a.js:1:49-1:58 no-extra-label#0
+a.js:2:52-2:61 no-extra-label#0

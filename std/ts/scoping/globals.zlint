@@ -16,7 +16,7 @@ fn scoping_global_bindings(n) =
         kind: site.scoping_site_kind,
         exported: contains(exported, site.identifier_name),
         setting: ts_global_setting(n.scoping_program, site.identifier_name),
-        name: site.identifier_name, offset: owner.offset
+        name: site.identifier_name, offset: owner.offset, end: site.end_offset
       }
     }
   }
