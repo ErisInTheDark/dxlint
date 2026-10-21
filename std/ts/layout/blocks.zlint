@@ -174,7 +174,7 @@ in ts_class.member rule lines-between-class-members {
   let gap_mode if count(enforce) == 0 then style else find_last(enforce, e => (e.prev == "*" || e.prev == prior_member.kind) && (e.next == "*" || e.next == retained_member.kind)).blankLine
   let gap_single_line position(prior_member.start).line == position(gap_start).line
   when gap_mode == "never" && gap_padded || gap_mode == "always" && !gap_padded && !(exceptAfterSingleLine && gap_single_line)
-  report at { start: gap_start, end: gap_end }
+  report at offset
   warn if gap_padded then "Unexpected blank line between class members." else "Expected blank line between class members."
   let edit layout_member_gap_fix(source, gap_start, gap_end, gap_padded)
   fix at (edit ?? { start: gap_start, end: gap_end }) if edit != null as edit.text

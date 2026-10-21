@@ -110,7 +110,7 @@ in ts_semicolon rule semi-spacing:before {
   @layout_semi_spacing_options
   let semi_space space_before != null && !space_before.line_break && space_before.spaced
   when semi_space != before
-  report at if semi_space then space_before.start else offset
+  report at { start: if semi_space then space_before.start else offset, end: if semi_space then offset else end_offset }
   let semi_fix_start if semi_space then space_before.start else offset
   fix at { start: semi_fix_start, end: offset } if !space_before.line_break && { value overlapping(ts_comment, semi_fix_start, offset); count } == 0 as if before then " " else ""
   warn if semi_space then "Unexpected whitespace before semicolon." else "Missing whitespace before semicolon."
@@ -120,7 +120,7 @@ in ts_semicolon rule semi-spacing:after {
   when previous_token != null && next_token != null
   when !space_before.line_break && !space_after.line_break && next_token not (ts_close_paren, ts_close_brace)
   when space_after.spaced != after
-  report at if space_after.spaced then end_offset else offset
+  report at { start: if space_after.spaced then end_offset else offset, end: if space_after.spaced then space_after.end else end_offset }
   let semi_fix_end if space_after.spaced then space_after.end else end_offset
   fix at { start: end_offset, end: semi_fix_end } if { value overlapping(ts_comment, end_offset, semi_fix_end); count } == 0 as if after then " " else ""
   warn if space_after.spaced then "Unexpected whitespace after semicolon." else "Missing whitespace after semicolon."
