@@ -49,23 +49,28 @@ fn assignment_carrier_arguments(source, target, n) = {
   value if source.carrier_known && target.carrier_known && a != null && b != null
     && same && len(a.arguments) == len(b.arguments) then arguments else []
 }
-fn assignment_finding(site, mode, parts, receiver) = {
-  site: site, mode: mode, error: ts_value_category(parts) == "error",
+fn assignment_finding(site, mode, parts, receiver, this_any) = {
+  site: site, mode: mode, error: ts_value_category(parts) == "error", this_any: this_any,
   sender: if mode == "generic" then ts_value_print(parts) else "any",
   receiver: if mode == "generic" then ts_value_print(receiver) else null
 }
+# `this` typed as any, with `noImplicitThis` off, gets its own message variant.
+fn assignment_this_any(source, n) = source != null && ts_compiler_option(n, "noImplicitThis") == false
+  && (source is ts_this && ts_value_category(value_constituents(source)) == "any"
+    || any(filter(descendants(ts_this) ?? [], item => item.offset >= source.offset && item.end_offset <= source.end_offset),
+      item => ts_value_category(value_constituents(item)) == "any"))
 fn assignment_destructure_step(entry, source) = {
   value receiver: entry.receiver
   value sender: value_at(source, entry.path)
   value if entry.mode != null && ts_value_category(sender) != null then
-    {finding: assignment_finding(receiver, entry.mode, sender, null), children: []}
+    {finding: assignment_finding(receiver, entry.mode, sender, null, false), children: []}
   else {
     value carrier: assignment_carrier(sender)
     value array: assignment_array(sender, source)
     value element: first(carrier.arguments)
     value if receiver is (ts_array, ts_array_pattern) then
       if array && ts_value_trait(element, "any") then
-        {finding: assignment_finding(receiver, "array", element, null), children: []}
+        {finding: assignment_finding(receiver, "array", element, null, false), children: []}
       else if carrier.description.kind == "tuple" then {
         value items: receiver.element.nodes
         value selected: filter(items, item => item not (ts_hole, ts_rest))
@@ -125,9 +130,9 @@ fn assignment_transfers_value(n) = {
     value category: ts_value_category(sender)
     value known_unknown: ts_value_trait(receiver, "unknown")
       && (n.type != null || target not (ts_array, ts_array_pattern, ts_object, ts_object_pattern))
-    value if category != null && !known_unknown then [assignment_finding(report, "any", sender, null)]
+    value if category != null && !known_unknown then [assignment_finding(report, "any", sender, null, assignment_this_any(source, n))]
       else if compare && !assignment_empty_map(source) && assignment_unsafe(sender, receiver, n)
-        then [assignment_finding(report, "generic", sender, receiver)]
+        then [assignment_finding(report, "generic", sender, receiver, false)]
       else assignment_destructure(target, source, [])
   }
 }
@@ -138,7 +143,7 @@ fn assignment_spread(n) = {
   value element: first(carrier.arguments)
   value if n.parent is ts_array && (ts_value_category(sender) != null
     || assignment_array(sender, source) && ts_value_trait(element, "any"))
-    then [assignment_finding(n, "spread", sender, null)] else []
+    then [assignment_finding(n, "spread", sender, null, false)] else []
 }
 
 in ts_declarator, ts_parameter, ts_class_property, ts_assignment, ts_assignment_pattern, ts_property, ts_jsx_attribute {

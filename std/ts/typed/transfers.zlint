@@ -4,9 +4,9 @@ import .ts/typed/awaitability
 
 define {
 
-fn argument_value_finding(site, mode, sender, receiver) = {
+fn argument_value_finding(site, mode, sender, receiver, display) = {
   site: {start: site.offset, end: site.end_offset}, mode: mode, error: ts_value_category(sender) == "error",
-  sender: ts_value_print(sender), receiver: ts_value_print(receiver)
+  sender: ts_value_print(display ?? sender), receiver: ts_value_print(receiver)
 }
 # An unsafe transfer needs an `any` somewhere the walk can reach: its own parts,
 # or the arguments of their carriers (the only children the walk descends into).
@@ -25,12 +25,12 @@ fn argument_value_findings(call) = if call not (ts_call, ts_new, ts_tagged_templ
     value element: first(carrier.arguments)
     value when {
       spread && ts_value_category(sender) != null then
-        [argument_value_finding(argument, "spread", sender, null)]
+        [argument_value_finding(argument, "spread", sender, null, null)]
       spread && assignment_array(sender, source) && ts_value_category(element) != null then
-        [argument_value_finding(argument, "array", element, null)]
+        [argument_value_finding(argument, "array", element, null, sender)]
       !spread && expected.present == true && receiver != null
         && !assignment_empty_map(source) && assignment_unsafe(sender, receiver, call) then
-        [argument_value_finding(argument, "argument", sender, receiver)]
+        [argument_value_finding(argument, "argument", sender, receiver, null)]
       else then []
     }
   }
@@ -82,9 +82,9 @@ fn return_value_finding(n) = {
     || async_target && target_awaited == null
     || promise && (awaited == null || receiver != null && target_awaited == null)
     || mode == "promise" && !asynchronous then null
-    else if mode != "generic" then assignment_finding(n, mode, sender, receiver)
+    else if mode != "generic" then assignment_finding(n, mode, sender, receiver, assignment_this_any(source, n))
     else if !assignment_empty_map(source) && assignment_unsafe(sender, receiver, source)
-      then assignment_finding(n, mode, sender, receiver) else null
+      then assignment_finding(n, mode, sender, receiver, false) else null
 }
 in ts_call, ts_new, ts_tagged_template { let argument_value_transfers argument_value_findings(node) }
 in ts_node { let return_value_transfer return_value_finding(node) }

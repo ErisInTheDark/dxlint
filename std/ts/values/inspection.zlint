@@ -32,7 +32,37 @@ fn ts_value_string(text) = {
   value lines: replace(quotes, "\n", "\\n")
   value "\"" lines "\""
 }
-fn ts_value_print_element(text) = if contains(text, " | ") || contains(text, " & ") then "(" text ")" else text
+fn ts_value_print_element_mode(parts) = if count(parts ?? []) > 1 then "wrap"
+  else if count(parts ?? []) == 1 && count(first(parts ?? [])) > 1 then "wrap" else "plain"
+# Parenthesise only a union or intersection element: a nested array already
+# carries its own brackets.
+fn ts_value_print_element(parts, text) = if ts_value_print_element_mode(parts) == "wrap" then "(" text ")" else text
+# TypeScript sorts union constituents by type flags (`stableTypeOrdering`),
+# with `null` and `undefined` always printed last.
+fn ts_value_print_part_rank(part) = {
+  value traits: part.traits
+  value literal: part.identity_known && part.identity.kind == "value"
+  value unique: part.identity_known && part.identity.kind != "value"
+  value when {
+    contains(traits, "intersection") then 268435456
+    contains(traits, "null") then 2000000
+    contains(traits, "undefined") then 2000001
+    contains(traits, "any") then 1
+    contains(traits, "unknown") then 2
+    contains(traits, "void") then 16
+    contains(traits, "string") then (if literal then 1024 else 32)
+    contains(traits, "number") then (if literal then 2048 else 64)
+    contains(traits, "bigint") then (if literal then 4096 else 128)
+    contains(traits, "boolean") then (if literal then 8192 else 256)
+    contains(traits, "symbol") then (if unique then 16384 else 512)
+    contains(traits, "enum") then 65536
+    contains(traits, "never") then 262144
+    contains(traits, "parameter") then 524288
+    else then 1048576
+  }
+}
+fn ts_value_print_arm_rank(arm) = if any(arm, part => contains(part.traits, "intersection")) then 268435456
+  else if count(arm) == 0 then 1048576 else first(map(arm, part => ts_value_print_part_rank(part)))
 fn ts_value_print_part(part) = {
   value carrier: part.carrier
   value args: if carrier.description.kind == "tuple" && part.product_known && part.product != null then
@@ -42,11 +72,14 @@ fn ts_value_print_part(part) = {
     })
     else map(carrier.arguments ?? [], item => ts_value_print(item))
   value joined: { value args; join ", " }
+  value elements: zip(carrier.arguments ?? [], args, (item, text) => ts_value_print_element(item, text))
+  value joined_elements: { value elements; join ", " }
   value scalar: find(["any", "unknown", "void", "null", "undefined", "string", "number", "boolean", "bigint", "symbol", "object"], trait => contains(part.traits, trait))
   value literal: part.identity.kind == "value" && part.identity_known
   value if carrier.description.kind == "tuple" then (if part.product.readonly then "readonly " else "") "[" joined "]"
-    else if carrier.description.kind == "array" then (if part.product.readonly then "readonly " else "") ts_value_print_element(joined) "[]"
+    else if carrier.description.kind == "array" then (if part.product.readonly then "readonly " else "") joined_elements "[]"
     else if carrier.description.kind == "named" then carrier.description.name (if len(args) == 0 then "" else "<" joined ">")
+    else if carrier.description.kind == "parameter" then carrier.description.name
     else if scalar == "symbol" && part.identity_known && part.identity != null && part.identity.kind != "value" then "unique symbol"
     else if literal && scalar == "string" then ts_value_string(part.identity.value)
     else if literal && scalar == "bigint" then part.identity.value.value "n"
@@ -60,8 +93,9 @@ fn ts_value_print_arm(arm) = {
   value { value kept; unique; join " & " }
 }
 fn ts_value_print(parts) = if parts == null then "unknown" else if len(parts) == 0 then "never" else {
-  value arms: map(parts, arm => ts_value_print_arm(arm))
-  value { value arms; unique; join " | " }
+  value labels: map(parts, arm => ts_value_print_arm(arm))
+  value ranked: zip(labels, map(parts, arm => ts_value_print_arm_rank(arm)), (label, rank) => { label: label, rank: rank })
+  value { value ranked; sort_by (pair) pair.rank; map (pair) pair.label; unique; join " | " }
 }
 fn ts_value_print_member(edge, seen) = {
   value key: edge.member.key
@@ -85,18 +119,36 @@ fn ts_value_print_handle_part(part, seen) = {
     else if count(children) == 0 then "{{}}"
     else "{{ " {value members; join " "} " }}"
 }
+fn ts_value_print_handle_arm(arm, seen, n) = if count(arm.parts) == 0 then "unknown" else {
+  value printed: map(arm.parts, part => {
+    value text: ts_value_print_handle_part(part, [] seen n)
+    value { text: text, parameter: contains(part.traits, "parameter") }
+  })
+  value definite: filter(printed, item => item.text != "unknown")
+  value content: filter(definite, item => !item.parameter)
+  value kept: if count(content) > 0 then content else definite
+  value if count(kept) == 0 then [{ text: "unknown" }] else kept
+  value { value kept; map (item) item.text; unique; join " & " }
+}
 fn ts_value_print_handle_seen(n, seen) = {
   value arms: if contains(seen, n) then null else value_parts(n)
-  value labels: map(arms ?? [], arm => {
-    value arm.parts
-    map (part) ts_value_print_handle_part(part, [] seen n)
-    unique
-    join " & "
-  })
+  value labels: map(arms ?? [], arm => ts_value_print_handle_arm(arm, seen, n))
+  value ranked: zip(labels, map(arms ?? [], arm => ts_value_print_arm_rank(arm.parts)), (label, rank) => { label: label, rank: rank })
   value if arms == null then "unknown" else if count(arms) == 0 then "never"
-    else {value labels; unique; join " | "}
+    else {value ranked; sort_by (pair) pair.rank; map (pair) pair.label; unique; join " | "}
 }
 fn ts_value_print_handle(n) = ts_value_print_handle_seen(n, [])
+# The type TypeScript prints for an expression: a type parameter stands for its
+# constraint, and a reference keeps its written name.
+fn ts_value_print_annotation(n) = if n is ts_identifier && name_binding(n) != null
+  && name_binding(n).node.parent.type != null then name_binding(n).node.parent.type.node else null
+fn ts_value_print_type(n) = {
+  value annotation: ts_value_print_annotation(n)
+  value named: annotation is ts_type_reference && annotation.name is ts_identifier
+    && !ts_value_has_trait(annotation, "parameter")
+    && !contains(["Array", "ReadonlyArray"], annotation.name.text)
+  value if named then annotation.text else ts_value_print_handle(n)
+}
 fn ts_value_symbol_key(n, key) = {
   value roots: global_declarations(n, "Symbol", "value")
   value properties: map(roots ?? [], root => value_constituents(value_lookup(declaration_value(n, root), key).member))

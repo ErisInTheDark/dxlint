@@ -1,7 +1,7 @@
 import .ts/values/inspection
 define {
 
-fn arithmetic_type_name(n) = ts_value_print(value_widened(n) ?? value_constituents(n))
+fn arithmetic_type_name(n) = ts_value_print_type(n)
 fn arithmetic_has_type(arms, kinds) = any(arms, arm =>
   any(arm.parts, part => any(kinds, kind => contains(part.traits, kind))))
 fn arithmetic_known(arms) = arms != null && all(arms, arm => any(arm.parts, part =>
@@ -31,7 +31,7 @@ fn arithmetic_operand_errors(subject, t, other, options) =
       value regexp: arithmetic_regexp(arm)
       value regexp == false || regexp == true && (!options.allowRegExp || arithmetic_has_type(other, ["number"]))
     }
-    map (arm) { node: subject, type: arithmetic_type_name(arm.handle) }
+    map (arm) { node: subject, type: if count(t) == 1 then arithmetic_type_name(subject) else ts_value_print_handle(arm.handle) }
   }
 
 fn arithmetic_pair_error(left, right, options) = when {

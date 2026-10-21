@@ -337,6 +337,7 @@ in ts_call, ts_new {
 
 fn unsafe_argument_sender(transfer) = if transfer.error then if transfer.mode == "array" then "error" else "error typed" else if transfer.mode == "tuple" then "of type `{transfer.sender}`" else "`{transfer.sender}`"
 fn unsafe_assignment_sender(transfer) = if transfer.error then "error typed" else "`{transfer.sender}`"
+fn unsafe_this_note() = "\nYou can try to fix this by turning on the `noImplicitThis` compiler option, or adding a `this` parameter to the function."
 
 in ts_call, ts_new, ts_tagged_template {
   rule no-unsafe-argument {
@@ -374,7 +375,8 @@ in ts_declarator, ts_parameter, ts_class_property, ts_assignment, ts_assignment_
     each unsafe_assigned in assignment_value_transfers {
       when unsafe_assigned.mode == "any"
       report at unsafe_assigned.site
-      warn "Unsafe assignment of an " unsafe_assignment_sender(unsafe_assigned) " value."
+      warn when { unsafe_assigned.this_any then "Unsafe assignment of an `any` value. `this` is typed as `any`." unsafe_this_note()
+        else then "Unsafe assignment of an " unsafe_assignment_sender(unsafe_assigned) " value." }
     }
   }
   rule no-unsafe-assignment:generic {
@@ -418,7 +420,8 @@ fn unsafe_return_sender(transfer) = if transfer.error then "error" else if trans
 
 in ts_return, ts_arrow.body rule no-unsafe-return {
   when return_value_transfer != null && return_value_transfer.mode != "generic"
-  warn "Unsafe return of a value of type " unsafe_return_sender(return_value_transfer) "."
+  warn when { return_value_transfer.this_any then "Unsafe return of a value of type `{unsafe_return_sender(return_value_transfer)}`. `this` is typed as `any`." unsafe_this_note()
+    else then "Unsafe return of a value of type " unsafe_return_sender(return_value_transfer) "." }
 }
 in ts_return, ts_arrow.body rule no-unsafe-return:assignment {
   when return_value_transfer != null && return_value_transfer.mode == "generic"
@@ -490,15 +493,18 @@ in ts_template.expression rule restrict-template-expressions {
   when any(restrict_template_expressions_type_checks, clause => !any(clause, gate => contains(enabled_template_options, gate.option) || gate.name != null && (if allow == null then gate.from == "lib" && contains(["Error", "URL", "URLSearchParams"], gate.name) else contains(allow, gate.name))))
   let template_display_parts value_constituents(node)
   when template_display_parts != null
-  warn "Invalid type \"{ts_value_print(template_display_parts)}\" of template literal expression."
+  warn "Invalid type \"{ts_value_print_type(node)}\" of template literal expression."
 }
+
+fn typed_unary_type(n) = if (n is ts_template) && count(n.expression.nodes) == 0
+  then ts_value_string(slice(first(n.quasi.nodes).text, 1, -1)) else ts_value_print_type(n)
 
 in ts_unary rule no-unsafe-unary-minus {
   when operator == "-" && !ts_value_opaque(argument.node)
     && !any(["any", "number", "bigint", "enum"], trait => ts_value_has_trait(argument.node, trait) == true)
   let operand_type value_constituents(argument.node)
   when operand_type != null && count(operand_type) > 0
-  warn "Argument of unary negation should be assignable to number | bigint but is {ts_value_print(operand_type)} instead."
+  warn "Argument of unary negation should be assignable to number | bigint but is {typed_unary_type(argument.node)} instead."
 }
 
 in ts_member, ts_index let object_array_type ts_value_array_like(object.node)
