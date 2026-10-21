@@ -909,6 +909,14 @@ impl World for Files<'_> {
     fn revision(&self) -> u64 {
         self.0.revision()
     }
+
+    fn unknown_read(&self) -> Option<bool> {
+        self.0.active_evaluation().map(|evaluation| evaluation.unknown.get())
+    }
+
+    fn forget_unknown_reads(&self, read: bool) {
+        if let Some(evaluation) = self.0.active_evaluation() { evaluation.unknown.set(read) }
+    }
     fn grammar(&self) -> &Grammar {
         self.0.ctx.grammar
     }

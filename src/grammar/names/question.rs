@@ -142,7 +142,9 @@ impl Budget {
         if self.exhausted() { self.limit(); return None }
         let started = super::memo::write_order();
         let (left, limited, cut) = (self.left.replace(units), self.limited.replace(false), self.cut.get());
+        let scope = self.traced.get().then(crate::engine::Profile::detached_scope);
         let result = work();
+        drop(scope);
         let ran_out = self.limited();
         self.left.set(left);
         self.limited.set(limited || ran_out);
@@ -450,6 +452,13 @@ pub trait World {
     fn shared_modules(&self, _question: super::modules::SharedQuestion<'_>, compute: &mut dyn FnMut() -> Known<Vec<Target>>) -> Known<Vec<Target>> {
         compute()
     }
+    /// Whether the current evaluation has read an unknown answer (a strict
+    /// query then discards its own); `None` outside one.
+    fn unknown_read(&self) -> Option<bool> { None }
+    /// Resets [`Self::unknown_read`] to `read`: unknowns met by work whose
+    /// answer was discarded (an inference input skipped as undecidable) did
+    /// not shape the answer.
+    fn forget_unknown_reads(&self, _read: bool) {}
     /// Whether item condition `condition` ([`super::Names::conditions`])
     /// holds at `at` (run on the VM in that node's file; nested questions
     /// see its frame and view).

@@ -9,9 +9,69 @@ pub(super) struct Candidate {
     /// False when the signature's type arguments couldn't be bound (its
     /// result would still name unbound formals).
     instantiated: bool,
+    /// The first pass left a formal to a callback this call types.
+    pending: Option<Box<Pending>>,
+}
+
+/// What a candidate's second inference pass instantiates again.
+#[derive(Clone, Debug)]
+struct Pending {
+    declaration: Header,
+    /// Formal leaves in the explicit arguments' frame.
+    mapping: Vec<(Leaf, Vec<Leaf>)>,
+    explicit: Vec<NodeValue>,
+    /// Compatibility decided before instantiation (arity, receiver).
+    checked: Known<bool>,
 }
 
 pub(super) type Answer = Known<Option<Vec<Vec<Known<Candidate>>>>>;
+
+/// The candidates once callbacks are typed (TypeScript's second inference
+/// pass): an argument the first pass couldn't relate, a callback whose
+/// parameters this call types, is typed by the first pass's selection
+/// ([`context`]) and related again, inferring the formals only it can
+/// (`map(x => x + 1)`'s `U`). Results read these; argument contexts the
+/// first pass, which they themselves type.
+pub(super) fn refined(call: Leaf, values: &Values<'_>) -> Answer {
+    let groups = match values.calls().candidates(call) {
+        Known::Yes(Some(groups)) => groups,
+        answer => return answer,
+    };
+    let mut refined = Vec::with_capacity(groups.len());
+    for group in groups {
+        let mut candidates = Vec::with_capacity(group.len());
+        for candidate in group {
+            candidates.push(match candidate {
+                Known::Yes(candidate) => second_pass(candidate, call, values),
+                Known::Unknown => Known::Unknown,
+            });
+        }
+        refined.push(candidates);
+    }
+    Known::Yes(Some(refined))
+}
+
+fn second_pass(mut candidate: Candidate, call: Leaf, values: &Values<'_>) -> Known<Candidate> {
+    let Some(pending) = candidate.pending.take() else { return Known::Yes(candidate) };
+    let Pending { declaration, mut mapping, explicit, checked } = *pending;
+    // The first pass's open parameters never reach results: what the
+    // callbacks still leave unbound is unknown.
+    match super::infer::instantiate(declaration, call, &mapping, &explicit, super::infer::Pass::Result, checked == Known::Yes(true), values) {
+        Known::Yes(Some(instantiated)) => {
+            for (parameter, _) in &mut mapping { parameter.frame = instantiated.header.site.frame }
+            let compatible = if checked == Known::Yes(true) { instantiated.fits } else { checked };
+            Known::Yes(Candidate { chosen: Chosen { header: instantiated.header, mapping }, compatible, instantiated: true, pending: None })
+        }
+        Known::Yes(None) => Known::Yes(Candidate { compatible: Known::Yes(false), ..candidate }),
+        Known::Unknown => Known::Unknown,
+    }
+}
+
+/// The first pass's selection: the signature that types the call's
+/// arguments (their expected values).
+pub(super) fn context(call: Leaf, values: &Values<'_>) -> Known<Option<Selection>> {
+    select(values.calls().candidates(call))
+}
 
 pub(super) fn candidates(call: Leaf, values: &Values<'_>) -> Answer {
     let Some(kind) = kind(call, values) else { return Known::Unknown };
@@ -110,7 +170,11 @@ fn dynamic_mismatch(expected: &NodeValue, actual: &NodeValue, values: &Values<'_
 }
 
 pub(super) fn selection(call: Leaf, values: &Values<'_>) -> Known<Option<Selection>> {
-    let groups = match values.calls().candidates(call) {
+    select(values.calls().refined(call))
+}
+
+fn select(candidates: Answer) -> Known<Option<Selection>> {
+    let groups = match candidates {
         Known::Yes(Some(groups)) => groups,
         Known::Yes(None) => return Known::Yes(None),
         Known::Unknown => return Known::Unknown,
@@ -154,7 +218,7 @@ pub(super) fn selection(call: Leaf, values: &Values<'_>) -> Known<Option<Selecti
 
 pub(super) fn outputs(call: Leaf, values: &Values<'_>) -> Known<Option<NodeValue>> {
     if let Some(result) = agreed_outputs(call, values) { return Known::Yes(Some(result)) }
-    let groups = match values.calls().candidates(call) {
+    let groups = match values.calls().refined(call) {
         Known::Yes(Some(groups)) => groups,
         Known::Yes(None) => return Known::Yes(None),
         Known::Unknown => return Known::Unknown,
@@ -274,6 +338,7 @@ fn candidate(header: Header, call: Leaf, arguments: &[Leaf], receiver: Option<&N
                 chosen: Chosen { header, mapping: Vec::new() },
                 compatible: Known::Yes(false),
                 instantiated: false,
+                pending: None,
             });
         }
     }
@@ -320,7 +385,7 @@ fn candidate(header: Header, call: Leaf, arguments: &[Leaf], receiver: Option<&N
         arity = Known::Yes(false);
     }
     if arity == Known::Yes(false) {
-        return Known::Yes(Candidate { chosen: Chosen { header, mapping }, compatible: Known::Yes(false), instantiated: false });
+        return Known::Yes(Candidate { chosen: Chosen { header, mapping }, compatible: Known::Yes(false), instantiated: false, pending: None });
     }
     let mut compatible = if decide { Known::Yes(true) } else { Known::Unknown };
     // A declared receiver must accept the one the call passes.
@@ -360,23 +425,24 @@ fn candidate(header: Header, call: Leaf, arguments: &[Leaf], receiver: Option<&N
     }
     // An overload already ruled out needs no instantiation.
     if compatible == Known::Yes(false) {
-        return Known::Yes(Candidate { chosen: Chosen { header, mapping }, compatible, instantiated: false });
+        return Known::Yes(Candidate { chosen: Chosen { header, mapping }, compatible, instantiated: false, pending: None });
     }
-    let header = if formals.is_empty() {
-        header
+    let (header, pending) = if formals.is_empty() {
+        (header, None)
     } else {
-        let header = match super::infer::instantiate(declaration, call, &mapping, &explicit, values) {
-            Known::Yes(Some((header, fits))) => {
-                if compatible == Known::Yes(true) { compatible = fits }
-                header
-            }
-            Known::Yes(None) => return Known::Yes(Candidate { chosen: Chosen { header, mapping }, compatible: Known::Yes(false), instantiated: false }),
+        let instantiated = match super::infer::instantiate(declaration, call, &mapping, &explicit, super::infer::Pass::Context, compatible == Known::Yes(true), values) {
+            Known::Yes(Some(instantiated)) => instantiated,
+            Known::Yes(None) => return Known::Yes(Candidate { chosen: Chosen { header, mapping }, compatible: Known::Yes(false), instantiated: false, pending: None }),
             Known::Unknown => return Known::Unknown,
         };
-        for (parameter, _) in &mut mapping { parameter.frame = header.site.frame }
-        header
+        let pending = instantiated.pending.then(|| Box::new(Pending {
+            declaration, mapping: mapping.clone(), explicit, checked: compatible,
+        }));
+        if compatible == Known::Yes(true) { compatible = instantiated.fits }
+        for (parameter, _) in &mut mapping { parameter.frame = instantiated.header.site.frame }
+        (instantiated.header, pending)
     };
-    Known::Yes(Candidate { chosen: Chosen { header, mapping }, compatible, instantiated: true })
+    Known::Yes(Candidate { chosen: Chosen { header, mapping }, compatible, instantiated: true, pending })
 }
 
 pub(super) fn argument_sites(binding: Leaf, values: &Values<'_>) -> Known<Option<Vec<Leaf>>> {
@@ -392,13 +458,21 @@ pub(super) fn argument_sites(binding: Leaf, values: &Values<'_>) -> Known<Option
             continue;
         }
         let Some(call) = environment.through else { return Known::Yes(None) };
-        let selected = match values.calls().selection(call) {
-            Known::Yes(Some(selected)) if !selected.uncertain => selected,
+        // The frame is the first pass's (arguments typed by it) or the
+        // second's (results), which maps the same arguments to the same
+        // signature: the first pass answers for both, so the second never
+        // waits on itself.
+        let mut chosen = match values.calls().context(call) {
+            Known::Yes(Some(selected)) if !selected.uncertain => selected.choices.into_iter()
+                .filter(|chosen| node(chosen.header.site, values) == Some(owner)).collect::<Vec<_>>(),
             Known::Yes(None) => return Known::Yes(None),
             _ => return Known::Unknown,
         };
-        let Some(chosen) = selected.choices.iter().find(|chosen| chosen.header.site.frame == frame
-            && node(chosen.header.site, values) == Some(owner)) else { return Known::Unknown };
+        let chosen = match chosen.iter().position(|chosen| chosen.header.site.frame == frame) {
+            Some(exact) => chosen.swap_remove(exact),
+            None if chosen.len() == 1 => chosen.remove(0),
+            None => return Known::Unknown,
+        };
         let mut answer = None;
         for (parameter, actuals) in &chosen.mapping {
             let Known::Yes(roots) = direct_targets(*parameter, values) else { return Known::Unknown };

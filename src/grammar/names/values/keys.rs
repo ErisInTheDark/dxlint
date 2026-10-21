@@ -68,14 +68,16 @@ impl Values<'_> {
     }
 
     /// [`Self::value_keys`] with the alternatives each key comes from.
+    /// An enumerating leaf (an enum type) gives one key per alternative it
+    /// enumerates, as a mapped type's keys over it do.
     pub(super) fn value_key_rows(&self, value: &NodeValue) -> Known<Vec<(Key, Vec<Vec<Leaf>>)>> {
-        let NodeValue::Alternatives(rows) = value else { return Known::Unknown };
+        let NodeValue::Alternatives(rows) = self.enumerated(value) else { return Known::Unknown };
         let mut keys: Vec<(Key, Vec<Vec<Leaf>>)> = Vec::new();
         for row in rows {
-            let Known::Yes(key) = self.row_key(row) else { return Known::Unknown };
+            let Known::Yes(key) = self.row_key(&row) else { return Known::Unknown };
             match keys.iter_mut().find(|(known, _)| known == &key) {
-                Some((_, sources)) => sources.push(row.clone()),
-                None => keys.push((key, vec![row.clone()])),
+                Some((_, sources)) => sources.push(row),
+                None => keys.push((key, vec![row])),
             }
         }
         if keys.is_empty() { Known::Unknown } else { Known::Yes(keys) }

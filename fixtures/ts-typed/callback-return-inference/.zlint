@@ -1,0 +1,6 @@
+import .ts
+
+# A formal only a callback infers comes from the callback's return, once
+# the call has typed its parameters (TypeScript's second inference pass);
+# the callback's still-unknown parameter infers nothing for other formals.
+rule no-misused-promises

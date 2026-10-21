@@ -22,6 +22,11 @@ thread_local! {
     static ROOT: Cell<Option<RootKind>> = const { Cell::new(None) };
     /// Budget steps by [`StepKey`], flushed per root.
     static STEP_COUNTS: RefCell<FxHashMap<StepKey, u64>> = RefCell::new(FxHashMap::default());
+    /// How many detached allowances ([`Profile::detached_scope`]) are open.
+    static DETACHED: Cell<u32> = const { Cell::new(0) };
+    /// This root's steps charged to its own budget (none detached), by
+    /// semantic query and step site.
+    static CHARGED_COUNTS: RefCell<FxHashMap<(&'static str, &'static str), u64>> = RefCell::new(FxHashMap::default());
     /// Per open self-timed region (outermost first), the time its nested
     /// regions took so far.
     static NESTED_TIME: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
@@ -316,6 +321,15 @@ impl Drop for StepSite {
     }
 }
 
+/// Holds one level of [`Profile::detached_scope`].
+pub struct DetachedScope;
+
+impl Drop for DetachedScope {
+    fn drop(&mut self) {
+        DETACHED.with(|depth| depth.set(depth.get() - 1));
+    }
+}
+
 pub enum EffectBuild {
     Graph,
     ReadCatalogue,
@@ -535,6 +549,16 @@ impl Profile {
         let query = SEMANTIC_QUERY.with(Cell::get).unwrap_or("-");
         let site = STEP_SITE.with(Cell::get);
         STEP_COUNTS.with(|counts| *counts.borrow_mut().entry((root, query, site)).or_default() += 1);
+        if DETACHED.with(Cell::get) == 0 {
+            CHARGED_COUNTS.with(|counts| *counts.borrow_mut().entry((query, site)).or_default() += 1);
+        }
+    }
+
+    /// Steps counted while held run on an allowance of their own: they
+    /// don't spend the root question's budget.
+    pub fn detached_scope() -> DetachedScope {
+        DETACHED.with(|depth| depth.set(depth.get() + 1));
+        DetachedScope
     }
 
     /// Steps counted while held belong to a root question asked by the
@@ -548,9 +572,10 @@ impl Profile {
     /// profile; `cut`: its budget cut that root short.
     pub fn flush_steps(&self, cut: bool) {
         let counts = STEP_COUNTS.with(|counts| std::mem::take(&mut *counts.borrow_mut()));
+        let charged = CHARGED_COUNTS.with(|counts| std::mem::take(&mut *counts.borrow_mut()));
         if cut {
             let mut shared = self.cut_step_sites.lock().expect("cut step sites lock");
-            for (&(_, query, site), &steps) in &counts { *shared.entry((query, site)).or_default() += steps }
+            for (key, steps) in charged { *shared.entry(key).or_default() += steps }
         }
         let mut shared = self.step_sites.lock().expect("step sites lock");
         for (key, steps) in counts { *shared.entry(key).or_default() += steps }

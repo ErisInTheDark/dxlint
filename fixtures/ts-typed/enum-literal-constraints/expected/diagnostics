@@ -1,0 +1,2 @@
+input.ts:10:12-10:13 no-unsafe-enum-assignment:arguments#0
+input.ts:11:9-11:10 no-unsafe-enum-assignment:arguments#0

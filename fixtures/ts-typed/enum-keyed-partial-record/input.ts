@@ -9,8 +9,10 @@ declare const direct: { [P in Many]?: boolean };
 declare const oneKey: One;
 declare const manyKey: Many;
 declare const flag: boolean;
+declare const required: Keyed<Many, boolean>;
 
 one[oneKey] === true;
 many[manyKey] === true;
 direct[manyKey] === true;
 flag === true;
+required[Many.B] === true;

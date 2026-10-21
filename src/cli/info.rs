@@ -577,7 +577,7 @@ pub fn profile(output: &mut Output<'_>, linter: &Linter, format: super::Format, 
         .map(|(&key, &steps)| (steps, key)).collect();
     cut_sites.sort_by_key(|row| std::cmp::Reverse(row.0));
     if !cut_sites.is_empty() {
-        output.err(format_args!("\n  {BOLD}budget steps in roots cut short{BOLD:#} {DIM}by semantic query and innermost computation (self), top 20{DIM:#}"));
+        output.err(format_args!("\n  {BOLD}budget steps in roots cut short{BOLD:#} {DIM}charged to their own budget (detached allowances excluded), by semantic query and innermost computation (self), top 20{DIM:#}"));
         for (steps, (query, site)) in cut_sites.into_iter().take(20) {
             output.err(format_args!("  {steps:>13} steps  {CYAN}{query}{CYAN:#}  {site}"));
         }

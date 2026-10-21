@@ -214,11 +214,19 @@ fn ts_value_fresh_literal(n, part) = {
 }
 fn ts_value_contextual_literal(n, part) = {
   value category: find(["string", "number", "boolean", "bigint"], trait => contains(part.traits, trait))
-  value value_has_expected(n) && (if category == "boolean" then n.expected could boolean
-    else if category == "string" then n.expected could (string, literal)
-    else if category == "number" then n.expected could (number, literal)
-    else if category == "bigint" then n.expected could (bigint, literal)
-    else false)
+  value wanted: if category == "boolean" then ["boolean"] else if category == null then null else [category, "literal"]
+  # A type parameter in the context (one being inferred) stands for its
+  # constraint only, as in TypeScript: an unconstrained one keeps no literal.
+  value arms: if wanted == null || !value_has_expected(n) then null else value_parts(value_expected_handle(n))
+  value when {
+    wanted == null || !value_has_expected(n) then false
+    arms != null && any(arms, arm => any(arm.parts, item => contains(item.traits, "parameter")))
+      then any(arms, arm => all(wanted, trait => any(arm.parts, item => !contains(item.traits, "parameter") && contains(item.traits, trait))))
+    category == "boolean" then n.expected could boolean
+    category == "string" then n.expected could (string, literal)
+    category == "number" then n.expected could (number, literal)
+    else then n.expected could (bigint, literal)
+  }
 }
 in ts_node let ts_value_preserved_element {
   value bare: unparenthesised_node(node)
@@ -256,7 +264,10 @@ fn ts_value_nonthenable(n) = {
         && count(part.uncertain_traits) == 0
         && (any(part.traits, trait => contains(["number", "string", "boolean", "bigint", "symbol", "structural"], trait))
           || part.carrier.description.kind == "enum" && contains(part.traits, "object"))
-      value children: if closed then value_children(part.handle, true, []) else null
+      # An enum's primitive type or member has no members of its own.
+      value children: if !closed then null
+        else if part.carrier.description.kind == "enum" && !contains(part.traits, "object") then []
+        else value_children(part.handle, true, [])
       value children != null && !any(children, child => child.member.key == "then")
     })
   })
@@ -807,6 +818,7 @@ in ts_type_parameter {
   fits parameter open
   carries as { kind: "parameter", name: name.text }
   when constraint != null { constrains constraint }
+  when default != null { defaults default }
   unwraps it.inferred ?? (self & (constraint ?? trait unknown))
 }
 in ts_union { unwraps ...type }

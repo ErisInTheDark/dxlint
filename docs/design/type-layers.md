@@ -114,9 +114,10 @@ struct, signature or literal type is the type; nothing is constructed.
 | `product <shape> <items> fits <traits> as <constant record> [inherits v] [readonly inherits v] [optional v]` (language) | an ordered product shape (tuples, rest packs): traits, carrier description, member base (readonly products use `readonly inherits`) and the optional-element payload |
 | `unwraps product <shape> of <sites> [using v] [optional <path>] [repeated <path>] [repeated values <path>] [readonly <path>]` | the node is a product: one element per site (real values and frames, `using` per element), optional/repeated read at each site, readonly at the node; a missing flag is false, an unreadable one unknown. `repeated` marks a spread collection (its ordinal members repeat there); `repeated values` marks an element whose own value repeats (array literals and `T[]`). A missing global base (no library) is no inherited layer |
 | `unwraps modified <value> [optional add\|remove] [readonly add\|remove] [flag <name> add\|remove]...` | `value` with every member's requiredness and declaration flags changed (mapped types over a source's own keys); member values, traits, carriers, identity and syntax stay the source's. Index signatures keep their requiredness; products (tuples, arrays) are rebuilt with element optionality and their readonly flag (`readonly`) edited; primitives are unchanged; nested modifications compose, the outer edit winning |
-| `pack <shape>` (on a rest parameter kind) | rest arguments are captured as an ordered product of that shape |
+| `pack <shape>` (on a rest parameter kind) | rest arguments are captured as an ordered product of that shape; call inference into a rest parameter typed by a bare formal (`...args: A`) infers that product |
 | `constrains <value>` (on a generic formal) | the formal's bound, evaluated in the bound frame (so dependent bounds see real arguments); inferred candidates violating a known bound fall back to it, explicit ones reject the candidate |
-| `defines <value>` (on a syntax owner) | the raw definition sites the node selects (qualified names: the member, not the left side); without it, name bindings decide. A closed scope proving the member absent yields no sites so `??` falls through; incomplete selection stays unknown; selected frames, files and classes are kept |
+| `defaults <value>` (on a generic formal) | what a call binds the formal to when neither explicit arguments nor inference do, evaluated with the formals before it bound |
+| `enumerates <value> [in <scope classes>]` | the finite alternatives a value that is otherwise one leaf (an enum type) spells out where they are enumerated: mapped type keys, `value_alternatives` (case arms), acceptance against a target listing some of them || `defines <value>` (on a syntax owner) | the raw definition sites the node selects (qualified names: the member, not the left side); without it, name bindings decide. A closed scope proving the member absent yields no sites so `??` falls through; incomplete selection stays unknown; selected frames, files and classes are kept |
 | `unwraps <value> for <declaration classes>` | class-specific view of a dual declaration (enum type vs runtime object) used during real definition/instance binding; qualified first, default `unwraps` as fallback; ordered arguments, file, `through` and frame kept |
 | `arguments <path>` (per kind) | the ordered type arguments a reference supplies, read in the caller's frame |
 | `top <trait>` / `dynamic <trait>` (language) | `top` (TS `unknown`): universal target, meet identity, absorbs joins; `dynamic` (TS `any`): the same plus universal source, and wins joins over `top`. An ordinary unknown answer stays epistemic, never `top` |
@@ -224,6 +225,11 @@ in ts_declarator { in init expects type }
 - Generic inference: a type parameter reached through a call with no
   explicit argument unwraps to `inferred`: what the arguments give the
   parameter positions mentioning it (engine-owned).
+- Two passes, as TypeScript: the first skips a callback's unknown
+  (untyped) parameters and defers an argument it cannot relate yet,
+  leaving formals only that argument infers open; that selection types
+  the arguments (`expected`). The second re-infers once the callbacks are
+  typed; results and selections read it, with what stays unbound unknown.
 - Explicit arguments read through the reference win; a present unknown
   slot blocks defaults and constraints.
 - Inferred slots fill missing explicit arguments; declaration-only headers

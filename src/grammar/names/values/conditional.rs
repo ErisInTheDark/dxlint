@@ -3,14 +3,24 @@ use super::compile::Selection;
 use super::super::question::FrameId;
 
 impl Values<'_> {
+    /// The formal's bound (`constrains`), in its frame.
     pub fn constraint(&self, formal: Leaf) -> Known<Option<NodeValue>> {
+        self.formal_value(formal, |kind| &kind.constraints)
+    }
+
+    /// The formal's declared default (`defaults`), in its frame.
+    pub fn default_argument(&self, formal: Leaf) -> Known<Option<NodeValue>> {
+        self.formal_value(formal, |kind| &kind.defaults)
+    }
+
+    fn formal_value(&self, formal: Leaf, recipes: impl Fn(&super::super::KindNames) -> &Vec<(super::compile::Value, Option<u32>)>) -> Known<Option<NodeValue>> {
         let Known::Yes(formal) = self.semantic.leaf(formal) else { return Known::Unknown };
         let Target::Node(node) = formal.target else { return Known::Yes(None) };
         let Some(tree) = self.world.tree(node.file) else { return Known::Unknown };
         let Some(data) = tree.nodes.get(node.node as usize) else { return Known::Unknown };
         let Some(kind) = self.tables.kinds.get(data.matcher as usize) else { return Known::Unknown };
         let mut answer = None;
-        for (recipe, when) in &kind.constraints {
+        for (recipe, when) in recipes(kind) {
             if !self.question.budget.step() { return Known::Unknown }
             match when.map_or(Known::Yes(true), |when| self.world.condition(formal, when, self.semantic)) {
                 Known::Yes(false) => continue,

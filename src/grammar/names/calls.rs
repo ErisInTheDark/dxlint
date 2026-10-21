@@ -146,6 +146,7 @@ pub(crate) struct State {
     assumed: std::cell::Cell<Option<usize>>,
     headers: Memo<(NodeValue, InvokeKind), HeaderAnswer>,
     candidates: Memo<Leaf, select::Answer>,
+    refined: Memo<Leaf, select::Answer>,
     values: Memo<(Leaf, ValueQuestion), ValueAnswer>,
 }
 
@@ -153,7 +154,8 @@ impl State {
     pub(super) fn finish(&self, epoch: Epoch, failed: bool, cut: u64) -> u64 {
         use super::memo::Settled;
         self.acceptance.finish(epoch, failed, cut, Settled::settled) + self.headers.finish(epoch, failed, cut, |_| false)
-            + self.candidates.finish(epoch, failed, cut, |_| false) + self.values.finish(epoch, failed, cut, |_| false)
+            + self.candidates.finish(epoch, failed, cut, |_| false) + self.refined.finish(epoch, failed, cut, |_| false)
+            + self.values.finish(epoch, failed, cut, |_| false)
     }
 }
 
@@ -216,6 +218,13 @@ impl Calls<'_> {
         select::selection(call, &self.semantic.values())
     }
 
+    /// The first inference pass's selection, which types the arguments
+    /// ([`select::refined`]).
+    fn context(&self, call: Leaf) -> Known<Option<Selection>> {
+        let Known::Yes(call) = self.semantic.leaf(call) else { return Known::Unknown };
+        select::context(call, &self.semantic.values())
+    }
+
     /// Whether a signature's parameter gathers the remaining arguments.
     pub fn is_rest(&self, parameter: Leaf) -> Known<bool> {
         rest(parameter, &self.semantic.values())
@@ -234,6 +243,23 @@ impl Calls<'_> {
             let values = self.semantic.values();
             values.memoized_with(memo, call, || self.question.budget.step().then(|| self.question.budget.nest()).flatten(),
                 || select::candidates(call, &values))
+        })
+    }
+
+    /// Whether the call's candidates are being inferred right now (asking
+    /// for them would be a cycle).
+    fn selecting(&self, call: Leaf) -> bool {
+        let Known::Yes(call) = self.semantic.leaf(call) else { return false };
+        self.semantic.values().computing(&self.semantic.calls.candidates, &call)
+    }
+
+    fn refined(&self, call: Leaf) -> select::Answer {
+        self.profile(ProfileQuery::Select, || {
+            let Known::Yes(call) = self.semantic.leaf(call) else { return Known::Unknown };
+            let memo = &self.semantic.calls.refined;
+            let values = self.semantic.values();
+            values.memoized_with(memo, call, || self.question.budget.step().then(|| self.question.budget.nest()).flatten(),
+                || select::refined(call, &values))
         })
     }
 

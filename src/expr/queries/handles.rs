@@ -169,8 +169,10 @@ fn union(semantic: &Semantic<'_>, value: NodeValue, args: &[Value<'static>]) -> 
 }
 
 /// Each alternative's handle, without describing it: `[]` is never.
+/// Each alternative's handle; an enumerating leaf (an enum type) gives one
+/// per alternative it enumerates (its members), as case analysis sees it.
 fn alternatives(semantic: &Semantic<'_>, value: NodeValue, _: &[Value<'static>]) -> Known<Value<'static>> {
-    let NodeValue::Alternatives(rows) = value else { return Known::Unknown };
+    let NodeValue::Alternatives(rows) = semantic.values().enumerated(&value) else { return Known::Unknown };
     let mut arms = Vec::with_capacity(rows.len());
     for row in rows {
         if row.is_empty() || !semantic.question.budget.step() { return Known::Unknown }

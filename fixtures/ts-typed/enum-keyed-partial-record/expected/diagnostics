@@ -1,1 +1,2 @@
-input.ts:16:1-16:14 no-unnecessary-boolean-literal-compare#4
+input.ts:17:1-17:14 no-unnecessary-boolean-literal-compare#4
+input.ts:18:1-18:26 no-unnecessary-boolean-literal-compare#4

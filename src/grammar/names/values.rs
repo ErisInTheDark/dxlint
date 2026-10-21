@@ -10,6 +10,7 @@ pub mod compile;
 mod algebra;
 mod carriers;
 mod conditional;
+mod enumerated;
 mod eval;
 mod indexed;
 mod keys;
@@ -321,6 +322,15 @@ impl Values<'_> {
             memo.insert(self.semantic.epoch, key, answer.clone());
         }
         answer
+    }
+
+    /// Whether `memo`'s answer for `key` is being computed right now (an
+    /// ask would be a cycle).
+    pub(super) fn computing<K, T>(&self, memo: &Memo<K, Known<T>>, key: &K) -> bool
+    where K: std::hash::Hash {
+        use std::hash::BuildHasher;
+        let tag = (memo as *const Memo<K, Known<T>> as usize, crate::fx_hash::FxBuild::default().hash_one(key));
+        self.semantic.values.pending.borrow().contains(&tag)
     }
 
     pub fn fits(&self, leaf: Leaf, trait_id: u16) -> Known<bool> {
@@ -876,6 +886,14 @@ impl Values<'_> {
     /// reference.
     fn definition_frame(&self, parent: super::question::FrameId, owner: NodeRef, through: Leaf, classes: u64) -> super::question::FrameId {
         if let Some(shared) = self.shared_frame(owner, classes) { return shared }
+        // A bare reference (`Map`) to a declaration generic only in its own
+        // formals binds every formal to its default, whoever refers: all
+        // such references share one frame, read through the declaration.
+        if self.semantic.generic_scope(owner) == Some(owner.node)
+            && matches!(self.declared_argument_sites(through), Known::Yes(Some(ref sites)) if sites.is_empty()) {
+            let declaration = Leaf { target: Target::Node(owner), frame: super::question::FrameId::ROOT };
+            return self.question.bind_definition(super::question::FrameId::ROOT, owner, Some(declaration), None, classes);
+        }
         let through = match through.target { Target::Node(_) => Some(through), _ => None };
         self.question.bind_definition(parent, owner, through, None, classes)
     }
@@ -920,7 +938,11 @@ impl Values<'_> {
                             }
                         } else {
                             let Some(through) = binding.through else { return Known::Yes(None) };
-                            return self.declared_argument(through, position);
+                            // The frame bare references share ([`Values::definition_frame`]).
+                            if through.target == Target::Node(binding.owner) {
+                                return self.default_argument(Leaf { target: parameter.target, frame });
+                            }
+                            return self.declared_argument(through, position, Leaf { target: parameter.target, frame });
                         }
                     }
                 }
@@ -942,12 +964,14 @@ impl Values<'_> {
         }
     }
 
-    fn declared_argument(&self, at: Leaf, position: usize) -> Known<Option<NodeValue>> {
+    /// The argument the reference `at` gives `formal` (at `position`); a
+    /// reference taking type arguments that leaves it out (`Map<K>`) gives
+    /// its default.
+    fn declared_argument(&self, at: Leaf, position: usize, formal: Leaf) -> Known<Option<NodeValue>> {
         let Some(_nested) = self.question.budget.nest() else { return Known::Unknown };
         let Known::Yes(sites) = self.declared_argument_sites(at) else { return Known::Unknown };
-        let Some(site) = sites.and_then(|sites| sites.get(position).copied()) else {
-            return Known::Yes(None);
-        };
+        let Some(sites) = sites else { return Known::Yes(None) };
+        let Some(&site) = sites.get(position) else { return self.default_argument(formal) };
         let Some(_value) = self.question.budget.nest() else { return Known::Unknown };
         if !self.question.budget.step() { return Known::Unknown }
         Known::Yes(Some(self.values(site)))

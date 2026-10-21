@@ -39,7 +39,11 @@ fn switch_case_literal(parts) = {
     switch_part_identity(part) != literal.key.identity && part.carrier.description.kind != "enum") then null else literal
 }
 in ts_switch {
-  let switch_parts value_constituents(discriminant.node)
+  # Arms one by one: an enum type enumerates its members here.
+  let switch_arms value_alternatives(discriminant.node)
+  let switch_arm_parts map(switch_arms ?? [], arm => value_constituents(arm))
+  let switch_parts if switch_arms == null || any(switch_arm_parts, parts => parts == null) then null
+    else flat_map(switch_arm_parts, parts => parts)
   let switch_literals flat_map(switch_parts, arm => switch_arm_literals(arm))
   let switch_tests filter(case.nodes, branch => branch.test != null)
   let switch_test_parts map(switch_tests, branch => value_constituents(branch.test.node))

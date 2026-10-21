@@ -50,7 +50,18 @@ fn argument_expected(parent: Leaf, kind: &crate::grammar::names::KindNames, at: 
         argument |= sites.contains(&at);
     }
     if !argument { return Known::Yes(None) }
-    let selected = match values.calls().selection(parent) {
+    // Asked while the call infers from this very argument: TypeScript types
+    // an argument that isn't context-sensitive (no callback) without a
+    // contextual type then (`new Set([1, 2])`: `number[]`). A callback
+    // waits for the call instead (the second pass).
+    if values.calls().selecting(parent) {
+        let callable = values.tables.vocabulary.traits.iter().position(|name| name == "callable")
+            .map_or(Known::Yes(false), |id| values.declared_fits(at, id as u16));
+        if callable == Known::Yes(false) { return Known::Yes(None) }
+    }
+    // The first pass's: an argument it couldn't relate (a callback) is
+    // typed by it, then related again ([`super::select::refined`]).
+    let selected = match values.calls().context(parent) {
         Known::Yes(Some(selected)) if !selected.uncertain => selected,
         Known::Yes(None) => return Known::Yes(None),
         _ => return Known::Unknown,

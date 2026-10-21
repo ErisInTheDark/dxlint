@@ -35,7 +35,7 @@ const RESERVED: &[&str] = &[
 
 /// Items about names and effects (docs/design/type-layers.md); words only
 /// in item position on a layer.
-const NAME_ITEMS: &[&str] = &["scope", "declares", "resolves", "targets", "unwraps", "widens", "defines", "refers", "constrains", "assigned", "fits", "carries", "arguments", "indexed", "members", "member", "runs", "labels", "exports", "globals", "uses", "merges",
+const NAME_ITEMS: &[&str] = &["scope", "declares", "resolves", "targets", "unwraps", "widens", "defines", "refers", "constrains", "defaults", "enumerates", "assigned", "fits", "carries", "arguments", "indexed", "members", "member", "runs", "labels", "exports", "globals", "uses", "merges",
     "signature", "signatures", "calls", "constructs", "discards", "identity", "optional", "flag", "variance", "generics", "overloads", "pack"];
 
 /// What the lines of a `{ ... }` block (or one `in ...` line) are about:
@@ -519,6 +519,15 @@ impl<'a> Parser<'a> {
             "constrains" => {
                 let Some(value) = self.unwrap_value() else { return };
                 NameItem::Constrains { value }
+            }
+            "defaults" => {
+                let Some(value) = self.unwrap_value() else { return };
+                NameItem::Defaults { value }
+            }
+            "enumerates" => {
+                let Some(value) = self.unwrap_value() else { return };
+                let views = if self.word("in") { self.name_list("a scope class") } else { Vec::new() };
+                NameItem::Enumerates { value, views }
             }
             "pack" => {
                 let Some(shape) = self.ident("a product shape") else { return };

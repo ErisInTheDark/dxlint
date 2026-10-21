@@ -198,6 +198,13 @@ pub enum NameItem {
     /// names (narrowing, writes), read from syntax alone.
     Refers { value: Unwrap },
     Constrains { value: Unwrap },
+    /// `defaults <value>` (on a generic formal): what a call binds it to
+    /// when inference leaves it unbound.
+    Defaults { value: Unwrap },
+    /// `enumerates <value> [in <scope classes>]`: the finite alternatives a
+    /// value stands for where something enumerates them (mapped keys, case
+    /// arms); elsewhere it stays one value.
+    Enumerates { value: Unwrap, views: Vec<Name> },
     Pack(Name),
     /// `runs`, `labels`, `in <field> catches|runs after ...`: execution
     /// shapes ([`effects`]).

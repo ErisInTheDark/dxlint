@@ -4,6 +4,9 @@ use crate::grammar::names::question::{Known, Leaf, NodeValue};
 use crate::grammar::names::values::Values;
 
 pub(super) fn result(at: Leaf, values: &Values<'_>) -> Known<Option<NodeValue>> {
+    // A trait-only value (`null`, `undefined`, a primitive) has no
+    // signature: no result (a contextual `(() => T) | null` reads `T`).
+    if matches!(at.target, crate::grammar::names::question::Target::Traits(_)) { return Known::Yes(None) }
     let Some(kind) = kind(at, values) else { return Known::Unknown };
     if !kind.calls.invokes.is_empty() {
         match super::select::outputs(at, values) {

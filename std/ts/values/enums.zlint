@@ -36,11 +36,20 @@ in ts_enum {
   scope enum_origin
   members statics closed
   fits object, truthy in statics
+  # A uniform (all number or all string) enum type is one value; it spells
+  # out its members only where they are enumerated (mapped keys, case arms).
+  # A mixed one stays the union of its members.
+  let ts_value_enum_backing if count(member.nodes) == 0 then "number"
+    else if all(member.nodes, item => item.ts_value_enum_kind == "number") then "number"
+    else if all(member.nodes, item => item.ts_value_enum_kind == "string") then "string"
+    else null
   fits enum in enum_origin
-  fits number in enum_origin when count(member.nodes) == 0
+  fits number in enum_origin when ts_value_enum_backing == "number"
+  fits string in enum_origin when ts_value_enum_backing == "string"
   carries as { kind: "enum", name: name.text, first_member_kind: first(member.nodes).ts_value_enum_kind ?? "number" }
-  when count(member.nodes) > 0 { unwraps ...member for type }
-  when count(member.nodes) == 0 { unwraps scope enum_origin from it for type }
+  when count(member.nodes) > 0 { enumerates ...member in enum_origin }
+  when ts_value_enum_backing != null { unwraps scope enum_origin from it for type }
+  when ts_value_enum_backing == null { unwraps ...member for type }
   unwraps scope statics from it
 }
 in ts_namespace {

@@ -25,6 +25,8 @@ pub(super) struct Run<'a, 'world> {
     pending: Vec<(NodeValue, NodeValue)>,
     expanding: Vec<Leaf>,
     validating: bool,
+    /// Relating a callback argument in call inference ([`Self::deferring`]).
+    callback: bool,
 }
 
 impl<'a, 'world> Run<'a, 'world> {
@@ -38,7 +40,23 @@ impl<'a, 'world> Run<'a, 'world> {
         let candidates = slots.iter().enumerate().map(|(position, _)| Candidate {
             locked: supplied.get(position).cloned().flatten(), ..Candidate::default()
         }).collect();
-        Known::Yes(Self { values, positions, candidates, pending: Vec::new(), expanding: Vec::new(), validating: false })
+        Known::Yes(Self { values, positions, candidates, pending: Vec::new(), expanding: Vec::new(), validating: false, callback: false })
+    }
+
+    /// Whether the call inference argument being related is a callback the
+    /// call may type: its unknown parameters are skipped and its unknown
+    /// parts leave the relation undecided, for the second pass.
+    pub(super) fn deferring(&mut self, callback: bool) {
+        self.callback = callback;
+    }
+
+    pub(super) fn inferring_callback(&self) -> bool {
+        self.callback && self.capturing()
+    }
+
+    /// Whether `value` is one of this run's formals, alone.
+    pub(super) fn is_slot(&self, value: &NodeValue) -> bool {
+        matches!(value, NodeValue::Alternatives(rows) if matches!(rows.as_slice(), [row] if matches!(row.as_slice(), [leaf] if self.slot(*leaf).is_some())))
     }
 
     fn slot(&self, leaf: Leaf) -> Option<usize> {
@@ -75,8 +93,14 @@ impl<'a, 'world> Run<'a, 'world> {
                     Known::Unknown => NodeValue::Unknown,
                 }
             }
+            // Likewise a value question alone (`body.widened`): no sites.
+            Value::Path(path) if path.last().is_some_and(|&step| crate::grammar::names::query_step(step)) => {
+                self.values.evaluate(at, recipe)
+            }
             Value::Path(_) | Value::Either(..) | Value::Scope { .. } | Value::From(..) => {
-                let Known::Yes(sites) = self.values.sites(at, recipe) else { return NodeValue::Unknown };
+                // A recipe with no syntax sites (`returned default void`):
+                // its finished value.
+                let Known::Yes(sites) = self.values.sites(at, recipe) else { return self.values.evaluate(at, recipe) };
                 if sites.is_empty() { return NodeValue::Unknown }
                 let parts: Vec<_> = sites.into_iter().map(|site| self.raw_leaf(site)).collect();
                 self.values.combine(parts, false)
@@ -133,8 +157,12 @@ impl<'a, 'world> Run<'a, 'world> {
     /// undecidable relation leaves the captures as they were.
     pub(super) fn relate_or_skip(&mut self, expected: &NodeValue, actual: &NodeValue) -> Known<bool> {
         let saved = self.candidates.clone();
+        let read = self.values.world.unknown_read();
         let answer = self.relate(expected, actual);
-        if answer == Known::Unknown { self.candidates = saved; }
+        if answer == Known::Unknown {
+            self.candidates = saved;
+            if let Some(read) = read { self.values.world.forget_unknown_reads(read) }
+        }
         answer
     }
 
@@ -182,6 +210,9 @@ impl<'a, 'world> Run<'a, 'world> {
             return if covariant { self.relate(&locked, value) } else { self.relate(value, &locked) };
         }
         if self.validating { return Known::Unknown }
+        // A callback's unknown part infers nothing: the relation stays
+        // undecided, for the second pass.
+        if self.callback && *value == NodeValue::Unknown { return Known::Unknown }
         let candidates = if covariant { &mut self.candidates[slot].covariant } else { &mut self.candidates[slot].contravariant };
         if !candidates.contains(value) { candidates.push(value.clone()) }
         Known::Yes(true)
@@ -235,13 +266,59 @@ impl<'a, 'world> Run<'a, 'world> {
         let NodeValue::Alternatives(actual) = actual else { return Known::Unknown };
         let mut unknown = false;
         for actual in actual {
-            match self.choose(expected, |run, expected| run.alternative(expected, actual)) {
+            // A source arm the target lists as is, or one declared to extend
+            // it, relates without comparing members of any arm (TypeScript's
+            // identity check against a union; an incompatible `extends` is
+            // a TypeScript error). Validating a match (every slot locked)
+            // relates like acceptance.
+            if (self.positions.is_empty() || self.validating)
+                && (expected.iter().any(|row| row == actual) || self.derives(expected, actual)) { continue }
+            // A literal fits a value standing for finite alternatives (an
+            // enum type) only as one of them: `1` is no `Fruit` whose only
+            // member is `0`, though both are numbers.
+            let spelled_target = self.literal_target(expected, actual);
+            let target = spelled_target.as_deref().unwrap_or(&expected[..]);
+            let mut answer = self.choose(target, |run, expected| run.alternative(expected, actual));
+            // A value that stands for finite alternatives (an enum type)
+            // fits a target its alternatives each fit (`E` to `E.A | E.B`):
+            // only a target naming some of them can (their rows hold it).
+            if answer != Known::Yes(true) && actual.len() == 1
+                && expected.iter().any(|row| row.len() > 1 && row.contains(&actual[0])) {
+                if let Some(spelled) = self.enumerated_arm(actual) {
+                    let whole = NodeValue::Alternatives(expected.clone());
+                    match self.alternatives(&whole, &spelled) {
+                        Known::Yes(true) => answer = Known::Yes(true),
+                        Known::Unknown if answer == Known::Yes(false) => answer = Known::Unknown,
+                        _ => {}
+                    }
+                }
+            }
+            match answer {
                 Known::Yes(false) => return Known::Yes(false),
                 Known::Unknown => unknown = true,
                 Known::Yes(true) => {}
             }
         }
         if unknown { Known::Unknown } else { Known::Yes(true) }
+    }
+
+    /// `expected` with its lone enumerating leaves spelled out, when
+    /// `actual` is a literal (a value identity) and any are; else `None`.
+    fn literal_target(&self, expected: &[Vec<Leaf>], actual: &[Leaf]) -> Option<Vec<Vec<Leaf>>> {
+        let [leaf] = actual else { return None };
+        if !matches!(self.values.identity(*leaf), Known::Yes(Some(crate::grammar::names::values::Identity::Value(_)))) { return None }
+        if !expected.iter().any(|row| row.len() == 1 && self.enumerated_arm(row).is_some()) { return None }
+        let NodeValue::Alternatives(rows) = self.values.enumerated(&NodeValue::rows(expected.to_vec())) else { return None };
+        Some(rows.to_vec())
+    }
+
+    /// The alternatives a lone enumerating leaf spells out; `None` for any
+    /// other arm (or one that spells out nothing new).
+    fn enumerated_arm(&self, actual: &[Leaf]) -> Option<NodeValue> {
+        let [_] = actual else { return None };
+        let arm = NodeValue::rows(vec![actual.to_vec()]);
+        let spelled = self.values.enumerated(&arm);
+        (spelled != arm && !matches!(spelled, NodeValue::Unknown)).then_some(spelled)
     }
 
     fn alternative(&mut self, expected: &[Leaf], actual: &[Leaf]) -> Known<bool> {
@@ -329,6 +406,50 @@ impl<'a, 'world> Run<'a, 'world> {
             Known::Unknown => unknown = true,
         }
         if unknown || !described { Known::Unknown } else { Known::Yes(true) }
+    }
+
+    /// Whether a declared base of `actual`, however deep, is one of the
+    /// `expected` rows (the same declarations as the same instantiations).
+    fn derives(&mut self, expected: &[Vec<Leaf>], actual: &[Leaf]) -> bool {
+        const MAX_BASES: usize = 32;
+        let values = self.values;
+        let mut pending = vec![actual.to_vec()];
+        let mut seen: Vec<Vec<Leaf>> = Vec::new();
+        while let Some(row) = pending.pop() {
+            for &leaf in &row {
+                if !values.question.budget.step() { return false }
+                let Known::Yes(bases) = values.bases(leaf) else { return false };
+                for base in bases {
+                    let NodeValue::Alternatives(rows) = base else { continue };
+                    let [base] = rows.as_slice() else { continue };
+                    if seen.contains(base) { continue }
+                    if expected.iter().any(|row| row == base || self.covariant_row(row, base)) { return true }
+                    if seen.len() >= MAX_BASES { return false }
+                    seen.push(base.clone());
+                    pending.push(base.clone());
+                }
+            }
+        }
+        false
+    }
+
+    /// The same declarations leaf by leaf, each expected type argument
+    /// accepting the actual one (TypeScript's covariant default for a
+    /// generic's arguments): `Entity<Human>` fits `Entity<unknown>`.
+    fn covariant_row(&mut self, expected: &[Leaf], actual: &[Leaf]) -> bool {
+        let values = self.values;
+        if expected.is_empty() || expected.len() != actual.len()
+            || expected.iter().zip(actual).any(|(expected, actual)| expected.target != actual.target) { return false }
+        expected.iter().zip(actual).all(|(&expected, &actual)| {
+            if matches!(expected.target, Target::Modified(_)) { return expected == actual }
+            match (values.carrier(expected), values.carrier(actual)) {
+                (Known::Yes(None), Known::Yes(None)) => expected == actual,
+                (Known::Yes(Some(left)), Known::Yes(Some(right))) => left.declaration == right.declaration
+                    && left.arguments.len() == right.arguments.len()
+                    && left.arguments.iter().zip(&right.arguments).all(|(left, right)| left == right || self.relate(left, right) == Known::Yes(true)),
+                _ => false,
+            }
+        })
     }
 
     /// Two instantiations of one generic declaration, inferred from their

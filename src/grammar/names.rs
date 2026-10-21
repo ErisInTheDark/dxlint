@@ -140,6 +140,11 @@ pub struct KindNames {
     /// `generics`: paths to the ordered formal type parameters.
     pub generics: Vec<(Vec<u16>, Option<u32>)>,
     pub constraints: Vec<(Value, Option<u32>)>,
+    pub defaults: Vec<(Value, Option<u32>)>,
+    /// `enumerates <value> [in <views>]`: the alternatives a leaf of this
+    /// kind (in those scope classes; 0 = the node itself) spells out where
+    /// they are enumerated ([`values::Values::enumerated`]).
+    pub enumerates: Vec<(Value, u64, Option<u32>)>,
     pub packs: Vec<(question::ProductShapeId, Option<u32>)>,
     /// `members .. inherits`: scope classes and where inherited members
     /// come from, searched after the kind's own.
@@ -535,10 +540,24 @@ impl Names {
                         names.add(g, matcher, |kind| kind.refers.push((value.clone(), when)));
                     }
                 }
+                NameItem::Enumerates { value, views } => {
+                    let Some(value) = lower_value(value, &path, &mut vocab, errors, &mut requested_classes) else { continue };
+                    let Some(views_mask) = class_bits(&mut vocab.scope_classes, views, errors) else { continue };
+                    asked.extend(views.iter().map(|name| (name, true)));
+                    for (&matcher, &when) in targets.iter().zip(&when) {
+                        names.add(g, matcher, |kind| kind.enumerates.push((value.clone(), views_mask, when)));
+                    }
+                }
                 NameItem::Constrains { value } => {
                     let Some(value) = lower_value(value, &path, &mut vocab, errors, &mut requested_classes) else { continue };
                     for (&matcher, &when) in targets.iter().zip(&when) {
                         names.add(g, matcher, |kind| kind.constraints.push((value.clone(), when)));
+                    }
+                }
+                NameItem::Defaults { value } => {
+                    let Some(value) = lower_value(value, &path, &mut vocab, errors, &mut requested_classes) else { continue };
+                    for (&matcher, &when) in targets.iter().zip(&when) {
+                        names.add(g, matcher, |kind| kind.defaults.push((value.clone(), when)));
                     }
                 }
                 NameItem::Pack(shape) => {

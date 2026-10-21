@@ -124,15 +124,18 @@ fn header(expected: Header, actual: Header, run: &mut super::accepts::Run<'_, '_
             Known::Yes(true) => {}
         }
     }
-    match discards(expected.site, values) {
+    let Some((expected_site, expected_signature)) = super::signature(expected, values) else { return Known::Unknown };
+    let expected_result = run.recipe(expected_site, &expected_signature.result);
+    // A result that is a formal being inferred is never a discarded one
+    // (`void`): it is what the actual result infers.
+    let discarded = if run.is_slot(&expected_result) { Known::Yes(false) } else { discards(expected.site, values) };
+    match discarded {
         Known::Yes(true) => {}
         Known::Unknown => unknown = true,
         Known::Yes(false) => {
-            let Some((expected_site, expected_signature)) = super::signature(expected, values) else { return Known::Unknown };
             let Some((actual_site, actual_signature)) = super::signature(actual, values) else { return Known::Unknown };
-            let expected = run.recipe(expected_site, &expected_signature.result);
             let actual = run.recipe(actual_site, &actual_signature.result);
-            match run.relate(&expected, &actual) {
+            match run.relate(&expected_result, &actual) {
                 Known::Yes(false) => return Known::Yes(false),
                 Known::Unknown => unknown = true,
                 Known::Yes(true) => {}
@@ -143,6 +146,10 @@ fn header(expected: Header, actual: Header, run: &mut super::accepts::Run<'_, '_
 }
 
 fn parameter(provided: &NodeValue, wanted: &NodeValue, bivariant: bool, run: &mut super::accepts::Run<'_, '_>) -> Known<bool> {
+    // A callback's unknown parameter (one the call itself types) neither
+    // infers nor contradicts: TypeScript skips context-sensitive parameters
+    // while inferring.
+    if run.inferring_callback() && *wanted == NodeValue::Unknown { return Known::Yes(true) }
     let prefer_covariant = bivariant && run.capturing();
     let (first, second) = if prefer_covariant { (provided, wanted) } else { (wanted, provided) };
     let mut accepted = run.branch(|run| run.relate(first, second));
