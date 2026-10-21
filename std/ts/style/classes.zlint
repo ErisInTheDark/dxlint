@@ -29,10 +29,12 @@ in ts_method, ts_class_property, ts_method_signature let style_member_name {
 in ts_parameter let style_member_name member_display_name(name, name.node)
 in ts_method, ts_class_property let style_key_offset key.member_key_offset.nonempty ?? key.offset
 in ts_parameter let style_key_offset name.offset
+in ts_method, ts_class_property let style_key_end key.member_key_node.end_offset ?? key.end_offset
+in ts_parameter let style_key_end name.end_offset
 in ts_method, ts_class_property let style_head_end if key is ts_computed_key then token(key.member_key_node, "after").end else key.node.end_offset
 in ts_parameter let style_head_end name.end_offset
 in ts_method, ts_class_property, ts_parameter let style_head_offset { value [] decorator.after_decorator; last; nonempty } ?? offset
-in ts_method, ts_class_property, ts_parameter let style_member { name: style_member_name, head: style_head_offset, end: style_head_end, public: style_public_modifier, key: style_key_offset }
+in ts_method, ts_class_property, ts_parameter let style_member { name: style_member_name, head: style_head_offset, end: style_head_end, public: style_public_modifier, key: style_key_offset, key_end: style_key_end }
 in ts_method let class_constructor parent is ts_class && key is (ts_identifier, ts_string) && static_name == "constructor" && !contains([] modifier, "static") && kind != "get" && kind != "set"
 in ts_class_property rule explicit-member-accessibility:property {
   option accessibility ("explicit" | "no-public" | "off") = "explicit" "Required accessibility."
@@ -97,14 +99,14 @@ in ts_method.key rule class-literal-property-style {
   option mode ("fields" | "getters") = "fields" "Preferred literal member declaration."
   when mode == "fields" && parent.literal_member_candidate
   let shape parent.style_member
-  report at shape.key
+  report at { start: shape.key, end: shape.key_end }
   warn "Literals should be exposed using readonly fields."
 }
 in ts_class_property.key rule class-literal-property-style:getters {
   option mode ("fields" | "getters") = "fields" "Preferred literal member declaration."
   when mode == "getters" && parent.literal_member_candidate
   let shape parent.style_member
-  report at shape.key
+  report at { start: shape.key, end: shape.key_end }
   warn "Literals should be exposed using getters."
 }
 
@@ -148,6 +150,7 @@ in ts_method rule no-useless-constructor {
   let super_call body.constructor_super_call
   when if ts_class.extends == null then count(body.body) == 0 else super_call != null && count(parameter) == count([] parameter.constructor_forwarding_key)
     && (count(super_call.argument) == 1 && { value super_call.argument.nodes; first; constructor_spreads_arguments } || count(parameter) == count(super_call.argument) && [] parameter.constructor_forwarding_key == [] super_call.argument.constructor_forwarding_key)
+  report at { start: offset, end: key.end_offset }
   warn "Useless constructor."
 }
 

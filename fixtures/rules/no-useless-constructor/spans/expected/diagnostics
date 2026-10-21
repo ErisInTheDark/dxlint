@@ -1,0 +1,2 @@
+a.ts:1:11-1:22 no-useless-constructor#0
+a.ts:2:11-2:29 no-useless-constructor#0

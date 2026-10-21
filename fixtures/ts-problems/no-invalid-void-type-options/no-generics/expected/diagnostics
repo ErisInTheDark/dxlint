@@ -1,0 +1,3 @@
+file.ts:1:32-1:36 no-invalid-void-type#5
+file.ts:2:20-2:24 no-invalid-void-type#5
+file.ts:3:12-3:16 no-invalid-void-type#5

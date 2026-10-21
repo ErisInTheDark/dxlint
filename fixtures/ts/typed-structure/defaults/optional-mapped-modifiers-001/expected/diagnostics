@@ -1,2 +1,2 @@
-input.ts:7:32-7:32 no-useless-default-assignment#2
-input.ts:8:32-8:32 no-useless-default-assignment#2
+input.ts:7:32-7:34 no-useless-default-assignment#2
+input.ts:8:32-8:34 no-useless-default-assignment#2

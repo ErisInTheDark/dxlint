@@ -1,0 +1,4 @@
+import .ts
+rule class-literal-property-style:getters {
+  set mode "getters"
+}

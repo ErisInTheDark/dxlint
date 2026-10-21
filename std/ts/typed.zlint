@@ -500,12 +500,18 @@ in ts_unary rule no-array-delete {
 
 in ts_assignment_pattern, ts_parameter rule no-useless-default-assignment {
   when typed_default_assignment != null
-  report at typed_default_assignment.offset
+  report at { start: typed_default_assignment.offset, end: typed_default_assignment.end }
   warn when {
     typed_default_assignment.kind == "optional" then "Using `= undefined` to make a parameter optional adds unnecessary runtime logic."
     typed_default_assignment.kind == "undefined" then "Default value is useless because it is undefined. Optional {typed_default_assignment.owner}s are already undefined by default."
     else then "Default value is useless because the {typed_default_assignment.owner} is not optional."
   }
+}
+in ts_program rule no-useless-default-assignment:strict {
+  option allowRuleToRunWithoutStrictNullChecksIKnowWhatIAmDoing boolean = false "Run without strict null checks"
+  when ts_compiler_option(node, "strictNullChecks") == false && !allowRuleToRunWithoutStrictNullChecksIKnowWhatIAmDoing
+  report at { start: 0, end: 0 }
+  warn "This rule requires the `strictNullChecks` compiler option to be turned on to function correctly."
 }
 
 in ts_as, ts_type_assertion rule no-unsafe-type-assertion {

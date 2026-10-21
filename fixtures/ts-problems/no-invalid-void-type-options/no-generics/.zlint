@@ -1,0 +1,4 @@
+import .ts
+rule no-invalid-void-type {
+  set allowInGenericTypeArguments false
+}

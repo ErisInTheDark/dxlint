@@ -140,9 +140,20 @@ in ts_type_keyword {
   let no_invalid_void_type_checked !contains(["generic", "generic-other", "default"], void_type_context)
 }
 in ts_type_keyword rule no-invalid-void-type {
+  option allowAsThisParameter boolean = false "Whether a `this` parameter may be `void`."
+  option allowInGenericTypeArguments boolean | string[] = true "Whether `void` may be a generic type argument: for every type, or only those listed."
   when text == "void" && void_type_context != "return"
-  when no_invalid_void_type_checked
-  warn if void_type_context == "generic" then void_type_generic_name " may not have void as a type argument." else if void_type_context == "union" then "void is not valid as a constituent in a union type" else "void is not valid in this position."
+  let any_generic allowInGenericTypeArguments != false
+  let listed_generic if type_of(allowInGenericTypeArguments) == "list" then any(allowInGenericTypeArguments, entry => re_replace(entry, /\s+/, "") == void_type_generic_name) else false
+  let checked_option when {
+    void_type_context == "generic" then !any_generic || type_of(allowInGenericTypeArguments) == "list" && listed_generic != true
+    void_type_context == "generic-other" then allowInGenericTypeArguments != true
+    void_type_context == "default" then !any_generic
+    else then false
+  }
+  when no_invalid_void_type_checked || checked_option == true
+  when !(void_type_context == "this" && allowAsThisParameter == true)
+  warn if void_type_context == "generic" && any_generic then void_type_generic_name " may not have void as a type argument." else if void_type_context == "union" && any_generic then "void is not valid as a constituent in a union type" else if any_generic && allowAsThisParameter != true then "void is only valid as a return type or generic type argument." else if any_generic then "void is only valid as a return type or generic type argument or the type of a `this` parameter." else if allowAsThisParameter == true then "void is only valid as return type or type of `this` parameter." else "void is only valid as a return type."
 }
 
 in ts_parameter let rest_function_parameter name is ts_rest && parent is (ts_function, ts_arrow, ts_method, ts_method_signature, ts_call_signature, ts_function_type)

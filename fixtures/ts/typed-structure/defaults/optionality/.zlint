@@ -1,2 +1,4 @@
 import .ts
-rule no-useless-default-assignment
+rule no-useless-default-assignment {
+  set allowRuleToRunWithoutStrictNullChecksIKnowWhatIAmDoing true
+}

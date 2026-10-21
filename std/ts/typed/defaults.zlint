@@ -37,10 +37,18 @@ fn typed_default_member(handle, child) = {
       else ts_value_key(child.key.node)
     value elements: part.product.elements
     value required: count(filter(elements, element => !element.optional && !element.repeated && !element.values))
+    value variadic: find(elements, element => element.values == true)
+    value fixed: if variadic == null then count(elements) else index_of(elements, variadic)
+    value element: if !array || carrier.description.kind != "tuple" || key == null || key < 0
+      || key >= required then null
+      else if key < fixed then first(slice(carrier.arguments, key, key + 1))
+      else {
+        value rest: slice(carrier.arguments, fixed)
+        value if count(rest) == 0 then null else value_union(first(rest), drop(rest, 1))
+      }
     value member: if key != null then value_lookup(arm.handle, key) else null
     value when {
-      array && carrier.description.kind == "tuple" then
-        if key < required then member.member else null
+      element != null then element
       array && child not ts_assignment_pattern
         && ts_value_array_parts([arm.parts], child).array then first(carrier.arguments)
       !array && key != null && member != null && count(member.alternatives) > 0
@@ -80,7 +88,7 @@ fn typed_useless_default(n) = {
     else then null
   }
   value if kind == null then null else {
-    kind: kind, owner: if property then "property" else "parameter", offset: initial.offset
+    kind: kind, owner: if property then "property" else "parameter", offset: initial.offset, end: initial.end_offset
   }
 }
 

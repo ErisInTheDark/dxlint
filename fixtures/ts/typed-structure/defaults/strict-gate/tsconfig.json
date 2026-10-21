@@ -1,0 +1,4 @@
+{
+  "compilerOptions": { "strictNullChecks": false, "lib": [], "types": [] },
+  "files": ["a.ts"]
+}
