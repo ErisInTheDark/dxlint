@@ -299,7 +299,7 @@ fn ts_constant_static_literal(n) = {
 }
 fn ts_constant_report(kind, n, detail) = {
   value bare: unparenthesised_node(n)
-  value {kind: kind, offset: bare.offset, detail: detail}
+  value {kind: kind, node: bare, detail: detail}
 }
 fn ts_constant_compare(n) = {
   value left: n.left.node

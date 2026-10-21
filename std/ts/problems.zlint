@@ -204,7 +204,7 @@ in ts_binary, ts_logical let constant_relation_checked false
 in ts_binary, ts_logical rule no-constant-binary-expression {
   let c constant_comparison
   when c != null || constant_relation_checked && constant_relation
-  report at if c != null then c.offset else offset
+  report at if c != null then c.node else node
   warn if c == null then "Unexpected constant relational comparison. Both sides of the `{operator}` are literal values."
     else if c.kind == "constantShortCircuit" then "Unexpected constant {c.detail} on the left-hand side of a `{operator}` expression."
     else if c.kind == "constantBinaryOperand" then "Unexpected constant binary expression. Compares constantly with the {c.detail}-hand side of the `{operator}`."
