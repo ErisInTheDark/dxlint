@@ -137,7 +137,7 @@ in ts_identifier {
       ts_enum_member.name, ts_pattern_property.key, ts_import_specifier.imported, ts_export_specifier.local,
       ts_export_specifier.exported, ts_labeled.label, ts_break.label, ts_continue.label, ts_jsx_attribute.name,
       ts_tuple_member.name, ts_qualified_name.right, ts_type_parameter.name, ts_type_alias.name,
-      ts_interface.name, ts_import.default_import, ts_import.namespace, ts_import_specifier.local, ts_import_equals.name)
+      ts_interface.name, ts_import.default_import, ts_import.namespace, ts_export.namespace, ts_import_specifier.local, ts_import_equals.name)
     || is ts_property.key && parent.value != null && !parent.flow_shorthand_default
     # `[key: string]: T` names nothing.
     || is ts_parameter.name && parent is ts_index_signature.parameter) {
