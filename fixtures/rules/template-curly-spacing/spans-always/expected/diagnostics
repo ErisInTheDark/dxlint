@@ -1,0 +1,4 @@
+file.ts:1:12-1:14 template-curly-spacing:missing-after#0
+file.ts:1:17-1:18 template-curly-spacing:missing-before#0
+file.ts:1:18-1:20 template-curly-spacing:missing-after#0
+file.ts:1:23-1:24 template-curly-spacing:missing-before#0

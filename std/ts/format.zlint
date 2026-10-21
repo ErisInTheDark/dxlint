@@ -216,24 +216,25 @@ in ts_dot, ts_punctuator, ts_member.optional rule dot-location {
 in ts_template.quasi rule template-curly-spacing:after warn "Unexpected space(s) after '${{'." {
   @format_template_curly
   when mode == "never" && ends_with(text, "${{") && template_after != "" && !re_test(template_after, /[\n\r\u{2028}\u{2029}]/)
-  report at end_offset
+  report at { start: end_offset, end: end_offset + byte_len(template_after) }
   fix space_after as ""
 }
 in ts_template.quasi rule template-curly-spacing:before warn "Unexpected space(s) before '}}'." {
   @format_template_curly
   when mode == "never" && starts_with(text, "}}") && template_before != "" && !re_test(template_before, /[\n\r\u{2028}\u{2029}]/)
-  report at offset - byte_len(template_before)
+  report at { start: offset - byte_len(template_before), end: offset }
   fix space_before as ""
 }
 in ts_template.quasi rule template-curly-spacing:missing-after warn "Expected space(s) after '${{'." {
   @format_template_curly
   when mode == "always" && ends_with(text, "${{") && template_after == ""
-  report at end_offset - 2
+  report at { start: end_offset - 2, end: end_offset }
   fix space_after as " "
 }
 in ts_template.quasi rule template-curly-spacing:missing-before warn "Expected space(s) before '}}'." {
   @format_template_curly
   when mode == "always" && starts_with(text, "}}") && template_before == ""
+  report at { start: offset, end: offset + 1 }
   fix space_before as " "
 }
 
@@ -246,7 +247,7 @@ in ts_template.quasi rule template-curly-spacing:missing-before warn "Expected s
 in ts_tagged_template rule template-tag-spacing warn "Unexpected space between template tag and template literal." {
   @format_template_tag
   when style == "never" && tag_gap.spaced && !tag_line_comment
-  report at tag_gap.start
+  report at { start: tag_gap.start, end: tag_gap.end }
   fix as {
     value edits: [{ start: tag_gap.start, end: tag_gap.end, text: format_gap_text(tag_gap, false, tag_comments) }]
     value expression_fix_edits(text, offset, edits)
@@ -255,11 +256,12 @@ in ts_tagged_template rule template-tag-spacing warn "Unexpected space between t
 in ts_tagged_template rule template-tag-spacing:comment warn "Unexpected space between template tag and template literal." {
   @format_template_tag
   when style == "never" && tag_gap.spaced && tag_line_comment
-  report at tag_gap.start
+  report at { start: tag_gap.start, end: tag_gap.end }
 }
 in ts_tagged_template rule template-tag-spacing:missing warn "Missing space between template tag and template literal." {
   @format_template_tag
   when style == "always" && !tag_gap.spaced
+  report at { start: offset, end: quasi.offset }
   fix as {
     value edits: [{ start: tag_gap.start, end: tag_gap.end, text: format_gap_text(tag_gap, true, tag_comments) }]
     value expression_fix_edits(text, offset, edits)
@@ -344,7 +346,7 @@ in ts_arrow rule arrow-parens {
   }
   let arrow_prefix byte_slice(text, 0, arrow_open.offset - offset)
   let arrow_separate arrow_open.space_before.text == "" && re_test(arrow_open.token_neighbours.before.text, /[\p{L}\p{N}_$]$/)
-  report at arrow_parameter.offset
+  report at arrow_parameter
   fix as arrow_prefix (if arrow_separate then " " else "") arrow_parameter.text byte_slice(text, arrow_close.end - offset)
   warn if requireForBlockBody then "Unexpected parentheses around single function argument having a body with no curly braces." else "Unexpected parentheses around single function argument."
 }
