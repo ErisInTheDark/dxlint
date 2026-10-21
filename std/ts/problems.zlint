@@ -336,8 +336,8 @@ in ts_method let proto_setter false
 in ts_property, ts_method let key_entry if !@has_static_name || proto_setter then null else { name: static_name, kind: accessor_kind }
 in ts_object let keyed [] property.key_entry
 in ts_property, ts_method let duplicate_key parent is ts_object && parent.flow_destructuring_target != true && key_entry != null && { value parent.keyed; slice 0 index; any (e) @duplicate_of(e) }
-# At the name: inside the brackets of a computed key.
-@macro at_key_name (offset + { value text; re_find /^\[\s*/; len })
+# At the name: a computed key reports the expression inside its brackets.
+@macro at_key_name (if node is ts_computed_key then node.expression.node else node)
 in ts_property.key, ts_method.key rule no-dupe-keys {
   when parent.duplicate_key
   report at @at_key_name

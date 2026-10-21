@@ -236,6 +236,12 @@ fn condition_literal(n) = {
   value if arms != null && count(arms) > 0 && first_literal != null && all(literals, literal => literal == first_literal)
     then first_literal else null
 }
+# A static value as TypeScript prints its literal type: `"a"`, `1`, `2n`, `true`, `null`.
+fn condition_literal_text(literal) = when {
+  literal.type == "string" then ts_value_string(literal.value)
+  literal.type == "null" then "null"
+  else then str(literal.value)
+}
 fn condition_equal(left, right, strict) = when {
   left.type == right.type then contains(["null", "undefined"], left.type) || js_compare(left, right) == 0
   strict then false
@@ -371,7 +377,7 @@ in ts_binary, ts_case rule no-unnecessary-condition:comparison {
   when left_value != null && right_value != null
   let answer condition_compare(left_value, right_value, comparison.operator)
   report at { start: comparison.report.offset, end: comparison.report.end_offset }
-  warn "Unnecessary conditional, comparison is always " answer ", since `" comparison.left.type " " comparison.operator " " comparison.right.type "` is " answer "."
+  warn "Unnecessary conditional, comparison is always " answer ", since `" condition_literal_text(left_value) " " comparison.operator " " condition_literal_text(right_value) "` is " answer "."
 }
 in ts_binary, ts_case rule no-unnecessary-condition:overlap {
   let comparison condition_comparison
