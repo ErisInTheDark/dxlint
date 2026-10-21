@@ -1,4 +1,4 @@
-input.ts:2:3-2:3 explicit-member-accessibility:property#0
-input.ts:3:3-3:3 explicit-member-accessibility:method#0
-input.ts:6:22-6:22 explicit-member-accessibility:parameter#0
-input.ts:6:3-6:3 explicit-member-accessibility:method#0
+input.ts:2:3-2:9 explicit-member-accessibility:property#0
+input.ts:3:3-3:9 explicit-member-accessibility:method#0
+input.ts:6:22-6:28 explicit-member-accessibility:parameter#0
+input.ts:6:3-6:9 explicit-member-accessibility:method#0

@@ -29,8 +29,10 @@ in ts_method, ts_class_property, ts_method_signature let style_member_name {
 in ts_parameter let style_member_name member_display_name(name, name.node)
 in ts_method, ts_class_property let style_key_offset key.member_key_offset.nonempty ?? key.offset
 in ts_parameter let style_key_offset name.offset
+in ts_method, ts_class_property let style_head_end if key is ts_computed_key then token(key.member_key_node, "after").end else key.node.end_offset
+in ts_parameter let style_head_end name.end_offset
 in ts_method, ts_class_property, ts_parameter let style_head_offset { value [] decorator.after_decorator; last; nonempty } ?? offset
-in ts_method, ts_class_property, ts_parameter let style_member { name: style_member_name, head: style_head_offset, public: style_public_modifier.offset ?? style_head_offset, key: style_key_offset }
+in ts_method, ts_class_property, ts_parameter let style_member { name: style_member_name, head: style_head_offset, end: style_head_end, public: style_public_modifier, key: style_key_offset }
 in ts_method let class_constructor parent is ts_class && key is (ts_identifier, ts_string) && static_name == "constructor" && !contains([] modifier, "static") && kind != "get" && kind != "set"
 in ts_class_property rule explicit-member-accessibility:property {
   option accessibility ("explicit" | "no-public" | "off") = "explicit" "Required accessibility."
@@ -39,7 +41,7 @@ in ts_class_property rule explicit-member-accessibility:property {
   let check overrides.properties.nonempty ?? accessibility
   let shape style_member
   when !re_test(key, /^#/) && (check == "explicit" && !{ value @modifiers; has_accessibility } || check == "no-public" && contains([] modifier, "public"))
-  report at if check == "no-public" then shape.public else shape.head
+  report at if check == "no-public" then shape.public else { start: shape.head, end: shape.end }
   warn "{if check == 'no-public' then 'Public' else 'Missing'} accessibility modifier on class property {shape.name}."
   let edit if check == "no-public" then style_public_range else null
   fix at { start: edit.start ?? offset, end: edit.end ?? offset } if edit != null as ""
@@ -55,7 +57,7 @@ in ts_method rule explicit-member-accessibility:method {
   let shape style_member
   when parent is ts_class && !re_test(key, /^#/) && !contains(ignoredMethodNames, shape.name)
   when check == "explicit" && !{ value @modifiers; has_accessibility } || check == "no-public" && contains([] modifier, "public")
-  report at if check == "no-public" then shape.public else shape.head
+  report at if check == "no-public" then shape.public else { start: shape.head, end: shape.end }
   warn "{if check == 'no-public' then 'Public' else 'Missing'} accessibility modifier on {if kind == 'get' then 'get property accessor' else if kind == 'set' then 'set property accessor' else 'method definition'} {shape.name}."
   let edit if check == "no-public" then style_public_range else null
   fix at { start: edit.start ?? offset, end: edit.end ?? offset } if edit != null as ""
@@ -68,7 +70,7 @@ in ts_parameter rule explicit-member-accessibility:parameter {
   let shape style_member
   when contains([] modifier, "readonly") && parent is ts_method
   when check == "explicit" && !{ value @modifiers; has_accessibility } || check == "no-public" && contains([] modifier, "public")
-  report at if check == "no-public" then shape.public else shape.head
+  report at if check == "no-public" then shape.public else { start: shape.head, end: shape.end }
   warn "{if check == 'no-public' then 'Public' else 'Missing'} accessibility modifier on parameter property {shape.name}."
   let edit if check == "no-public" then style_public_range else null
   fix at { start: edit.start ?? offset, end: edit.end ?? offset } if edit != null as ""

@@ -1,3 +1,3 @@
-input.ts:2:3-2:3 explicit-member-accessibility:method#0
-input.ts:2:34-2:34 explicit-member-accessibility:parameter#0
-input.ts:3:3-3:3 explicit-member-accessibility:property#0
+input.ts:2:3-2:9 explicit-member-accessibility:method#0
+input.ts:2:34-2:40 explicit-member-accessibility:parameter#0
+input.ts:3:3-3:9 explicit-member-accessibility:property#0

@@ -28,7 +28,7 @@ in inferrable_annotation let no_inferrable_types_checked true
 in inferrable_annotation rule no-inferrable-types {
   when inferred_annotation != null && (annotation_widens.nonempty ?? false) != true
   when no_inferrable_types_checked
-  report at type.node
+  report at { start: if is ts_parameter then name.offset else offset, end: end_offset }
   warn "Type {inferred_annotation} trivially inferred from a {inferred_annotation} literal, remove type annotation."
   let annotation_colon type.token_neighbours.before
   let annotation_start if is ts_parameter && node.optional != null then node.optional.offset else annotation_colon.start
