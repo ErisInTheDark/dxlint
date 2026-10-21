@@ -27,6 +27,13 @@ fn readonly_parameter_annotation_allowed(annotation, allow) = if annotation == n
   value alias.kind == "ts_type_alias"
     && any(allow, entry => type_specifier_matches(entry, gate, program_directory(annotation)))
 }
+fn readonly_parameter_indexer_sources(part) =
+  flat_map([{domain: "text"}, {domain: "ordinal"}], key => {
+    value lookup: value_lookup(part.handle, key)
+    value if lookup == null then [] else filter(flat_map(lookup.alternatives, arm => arm.sources), source => source.kind == "indexer")
+  })
+fn readonly_parameter_indexer_mutable(part) =
+  any(readonly_parameter_indexer_sources(part), source => !contains(source.flags, "readonly"))
 fn readonly_parameter_branded(arm) = {
   value parts: filter(arm.parts, part => !readonly_parameter_marker(part))
   value count(parts) > 1
@@ -80,6 +87,7 @@ fn readonly_parameter_step(entry, settings) = if entry.kind == "source" then {
     else if any(arm.parts, part => part.carrier.description.kind == "parameter")
         && !any(arm.parts, part => readonly_parameter_marker(part))
       || all(arm.parts, part => readonly_parameter_scalar(part)) then {answer: true, children: []}
+    else if any(arm.parts, part => readonly_parameter_indexer_mutable(part)) then {answer: false, children: []}
     else if any(arm.parts, part => readonly_parameter_array(part) || part.product != null) then
       {answer: true, children: map(arm.parts, part => {kind: "part", part: part})}
     else readonly_parameter_children(arm.handle, true, [], false)

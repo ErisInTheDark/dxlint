@@ -40,7 +40,7 @@ class TestUnion {
 namespace Case2359 {
 
 class Test {
-  private prop: number;
+  private readonly prop: number;
 
   constructor() {
     const that = {} as this & { _foo: 'bar' };

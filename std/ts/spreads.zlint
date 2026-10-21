@@ -5,17 +5,23 @@ import .ts/type-specifiers
 define {
 
 fn spread_string(n) = ts_value_has_trait(n, "string") == true
+fn spread_declared_contract(n) = {
+  value roots: value_sources(n)
+  value sites: walk(roots.sites ?? [], site => site_sources(n, site).sites ?? [])
+  value any(sites, site => site.kind == "ts_declarator" && count(site_field(n, site, "type") ?? []) > 0)
+}
 fn spread_written_properties(n) = {
   value binding: name_binding(n)
-  value if binding == null then if n is (ts_function, ts_arrow) then false else null else
-    any(binding.references, reference => reference.parent is (ts_member, ts_index)
+  value if binding == null then if n is (ts_function, ts_arrow) then false else null
+    else if spread_declared_contract(n) then false
+    else any(binding.references, reference => reference.parent is (ts_member, ts_index)
       && reference.parent.object.node == reference && reference.parent.write_site != null)
 }
 fn spread_class_value(n, arms) = {
   value roots: value_sources(n)
   value sites: walk(roots.sites ?? [], site => site_sources(n, site).sites ?? [])
   value any(arms, arm => any(arm.parts, part => contains(part.traits, "constructible")))
-    && (n is ts_class || any(sites, site => site.kind == "ts_class"))
+    && (n is (ts_class, ts_instantiation) || any(sites, site => contains(["ts_class", "ts_instantiation"], site.kind)))
 }
 fn spread_global_instance(n, carrier) = if carrier.description.name == null then false else {
   value types: global_declarations(n, carrier.description.name, "type")
@@ -50,7 +56,7 @@ fn spread_object_category(n) = {
   value arms: value_parts(n)
   value if arms == null then null
     else if spread_builtin_type(n, arms, ["Promise"]) then "promise"
-    else if spread_written_properties(n) == false && any(arms, arm => {
+    else if spread_written_properties(n) != true && any(arms, arm => {
       value signatures: value_signatures(arm.handle)
       value signatures != null && any(signatures, headers => count(headers) > 0)
         && value_children(arm.handle, true, []) == []
@@ -68,7 +74,7 @@ in ts_spread, ts_jsx_spread_attribute rule no-misused-spread {
   let sequence_spread parent is (ts_array, ts_call)
   when object_spread || sequence_spread
   let subject argument.node
-  when type_value_allowed(allow, subject) == false
+  when type_value_allowed(allow, subject) != true
   let category if object_spread then spread_object_category(subject) else if spread_string(subject) then "string" else null
   when category != null
   when no_misused_spread_checked

@@ -8,13 +8,17 @@ in ts_program let readonly_write_index {
     value descendants(readonly_write_access)
     filter (access) access.write_site != null
   }
-  value if any(accesses, access => access.readonly_write_name == null && access.readonly_write_sources == null)
-    then { unknown_names: [null], writes: [] } else {
-    value unknown_names: {
-      value accesses
+  # A constructor write never blocks `readonly`: a readonly member may be assigned there.
+  value blocking: {
+    value accesses
+    filter (access) !access.readonly_write_constructor
+  }
+  value if any(blocking, access => access.readonly_write_name == null && access.readonly_write_sources == null)
+    then { unnamable: true, unknown_writes: [], writes: [] } else {
+    value unknown_writes: {
+      value blocking
       filter (access) access.readonly_write_sources == null
-      map (access) access.readonly_write_name
-      unique
+      map (access) { name: access.readonly_write_name, class: access.readonly_write_class }
     }
     value writes: {
       value accesses
@@ -26,7 +30,7 @@ in ts_program let readonly_write_index {
       }
       group_by (write) write.site
     }
-    value { unknown_names: unknown_names, writes: writes }
+    value { unnamable: false, unknown_writes: unknown_writes, writes: writes }
   }
 }
 in ts_member, ts_index {
@@ -44,6 +48,14 @@ in ts_member, ts_index {
     value walk(node, item => item.parent.node)
     find (item) item is (ts_function, ts_arrow, ts_method)
   }
+  let readonly_write_constructor {
+    value owner: readonly_write_function
+    value owner is ts_method && owner.calls_constructor
+  }
+  let readonly_write_class {
+    value walk(node, item => item.parent.node)
+    find (item) item is ts_class
+  }
 }
 fn readonly_writes(n) = {
   value identity: declaration_identity(n)
@@ -52,7 +64,10 @@ fn readonly_writes(n) = {
   value name: ts_value_key(key)
   value program: last(walk(n, item => item.parent.node))
   value index: program.readonly_write_index
-  value unknown: contains(index.unknown_names, null) || contains(index.unknown_names, name)
+  value class: find(walk(n, item => item.parent.node), item => item is ts_class)
+  # A write whose receiver type is unknown can only target a member of the class it sits in.
+  value unknown: index.unnamable || any(index.unknown_writes,
+    write => write.name == name && (write.class == null || write.class == class))
   value if unknown then null else map(find(index.writes, group => group.key == identity).items ?? [], write => write.access)
 }
 fn readonly_constructor_write(n, access) = {
@@ -72,6 +87,17 @@ fn readonly_member_key(key) =
   || key is ts_template && count(key.expression) == 0
   || key is ts_computed_key && (key.expression is ts_number
     || key.expression is ts_member && key.expression.object == "Symbol")
+fn readonly_write_value(access) = {
+  value parent: access.parent.node
+  value if parent is ts_assignment && parent.left.node == access then parent.right.node else null
+}
+fn readonly_same_value(a, b) = {
+  value identity: declaration_identity(a)
+  value if identity != null && identity == declaration_identity(b) then true
+  else if a is (ts_number, ts_string, ts_boolean, ts_bigint) && b is (ts_number, ts_string, ts_boolean, ts_bigint)
+    then a.kind == b.kind && a.text == b.text
+  else false
+}
 fn readonly_primitive_annotation(initializer) = {
   value names: filter(["string", "number", "boolean", "bigint"], name => ts_value_has_trait(initializer, name) == true)
   value if count(names) > 0 then join(names, " | ") else null
@@ -108,9 +134,15 @@ in ts_class_property rule prefer-readonly {
     && readonly_member_key(key.node)
   when readonly_writes != null && readonly_member_writes == 0
   report at {start: style_head_offset, end: key.end_offset}
-  warn "Member '{key}' is never reassigned; mark it as `readonly`."
+  let readonly_message_name if key is ts_computed_key then key.expression.text else key.text
+  warn "Member '{readonly_message_name}' is never reassigned; mark it as `readonly`."
   let preserve_inference type.node == null && init != null && count(readonly_constructor_writes) > 0
-  let needs_annotation preserve_inference && (ts_value_has_enum(init.node) || ts_value_has_trait(init.node, "literal") == true && ts_value_has_trait(node, "literal") != true)
+  # A constructor write of the same value cannot widen the inferred literal type.
+  let readonly_widening init != null && any(readonly_constructor_writes, write => {
+    value written: readonly_write_value(write)
+    value written == null || !readonly_same_value(written, init.node)
+  })
+  let needs_annotation preserve_inference && readonly_widening && (ts_value_has_enum(init.node) || ts_value_has_trait(init.node, "literal") == true && ts_value_has_trait(node, "literal") != true)
   let annotation if needs_annotation then readonly_initializer_annotation(init.node) else null
   let fixable readonly_constructor_indirect_writes == 0 && (!preserve_inference || !ts_value_opaque(init.node) && ts_value_has_trait(init.node, "unknown") == false && (!needs_annotation || annotation != null))
   fix at key.node if fixable as "readonly " key (if annotation != null then ": " annotation else "")

@@ -1,0 +1,3 @@
+import .ts
+import .ts/spreads
+rule no-misused-spread { set allow ["AllowedIterable"] }

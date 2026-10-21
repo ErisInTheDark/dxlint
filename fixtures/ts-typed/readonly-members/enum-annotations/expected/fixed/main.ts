@@ -24,7 +24,7 @@ enum Foo {
 const foo = Foo.Bar;
 
 class Test {
-  private readonly prop: Foo = foo;
+  private readonly prop = foo;
 
   constructor() {
     this.prop = foo;
@@ -45,7 +45,7 @@ function wrapper() {
   const Foo = 10;
 
   class Test {
-    private prop = bar;
+    private readonly prop = bar;
 
     constructor() {
       this.prop = bar;
@@ -67,7 +67,7 @@ function wrapper() {
   type Foo = 10;
 
   class Test {
-    private prop = bar;
+    private readonly prop = bar;
 
     constructor() {
       this.prop = bar;
@@ -90,7 +90,7 @@ const Bar = (function () {
 const bar = Bar.Bar;
 
 class Test {
-  private prop = bar;
+  private readonly prop = bar;
 
   constructor() {
     this.prop = bar;
