@@ -821,7 +821,7 @@ in regexp_site rule no-control-regex {
   when is ts_regex || regexp_candidate
   when is ts_regex || regexp_input.written == "string"
   each f in regexp_control_findings {
-    report at regexp_input.offset
+    report at regexp_input.pattern_node
     warn "Unexpected control character(s) in regular expression: {first(f.data)}."
   }
 }
