@@ -1,0 +1,4 @@
+import .ts
+rule no-mixed-spaces-and-tabs {
+  set mode "smart-tabs"
+}

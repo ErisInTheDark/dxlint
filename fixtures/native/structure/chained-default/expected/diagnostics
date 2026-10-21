@@ -1,2 +1,2 @@
-a.js:2:11-2:11 newline-per-chained-call#0
-a.js:2:15-2:15 newline-per-chained-call#0
+a.js:2:11-2:13 newline-per-chained-call#0
+a.js:2:15-2:17 newline-per-chained-call#0

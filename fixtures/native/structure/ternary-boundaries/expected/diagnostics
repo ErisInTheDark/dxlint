@@ -1,2 +1,2 @@
-a.js:1:11-1:11 multiline-ternary#0
-a.js:1:18-1:18 multiline-ternary#0
+a.js:1:11-1:15 multiline-ternary#0
+a.js:1:18-1:21 multiline-ternary#0
