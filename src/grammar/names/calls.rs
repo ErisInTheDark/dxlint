@@ -153,9 +153,16 @@ pub(crate) struct State {
 impl State {
     pub(super) fn finish(&self, epoch: Epoch, failed: bool, cut: u64) -> u64 {
         use super::memo::Settled;
-        self.acceptance.finish(epoch, failed, cut, Settled::settled) + self.headers.finish(epoch, failed, cut, |_| false)
-            + self.candidates.finish(epoch, failed, cut, |_| false) + self.refined.finish(epoch, failed, cut, |_| false)
-            + self.values.finish(epoch, failed, cut, |_| false)
+        // A cut root keeps what it finished before its budget ran out, as
+        // values and narrowing do: answers holding no unknown part.
+        let value = |answer: &ValueAnswer| match answer {
+            Known::Yes(None) => true,
+            Known::Yes(Some(value)) => value.settled(),
+            Known::Unknown => false,
+        };
+        self.acceptance.finish(epoch, failed, cut, Settled::settled) + self.headers.finish(epoch, failed, cut, Settled::settled)
+            + self.candidates.finish(epoch, failed, cut, select::settled) + self.refined.finish(epoch, failed, cut, select::settled)
+            + self.values.finish(epoch, failed, cut, value)
     }
 }
 

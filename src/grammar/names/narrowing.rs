@@ -138,9 +138,21 @@ impl Narrowing<'_> {
             base = self.assigned(written, &execution, entry, &uses, base);
         }
         let Some(guards) = self.guards(&execution, entry) else { return NodeValue::Unknown };
+        // Only guards whose proofs test the read's binding can narrow it
+        // (projection rejects the others after proving them): skip the rest
+        // before any proof work. Unknown roots keep every guard.
+        let tested = self.tested_roots(node.file);
+        let owners = |place: &Place| match (&tested, place.root.target) {
+            (Some(roots), Target::Node(root)) if root.file == node.file => Some(roots.get(&root).map_or(&[][..], Vec::as_slice)),
+            _ => None,
+        };
+        let filter = owners(subject).zip(owners(written));
         let _site = self.semantic.world.profile().map(|_| crate::engine::StepSite::enter("narrowing.guards"));
         for guard in guards.iter() {
             if !self.semantic.question.budget.step() { return NodeValue::Unknown }
+            if let Some((by_subject, by_written)) = filter {
+                if guard.node.file == node.file && !by_subject.contains(&guard.node.node) && !by_written.contains(&guard.node.node) { continue }
+            }
             let entries = execution.field_entries(guard.node, &guard.path);
             if execution.guarded(&uses, entries, &self.semantic.question.budget) == Known::Yes(true) {
                 let Some((_, proof, _)) = self.kind(guard.node).and_then(|kind| kind.propagates.get(guard.item)) else { continue };

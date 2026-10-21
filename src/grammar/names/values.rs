@@ -211,7 +211,7 @@ impl State {
         self.values.finish(epoch, failed, cut, Settled::settled) + self.widened.finish(epoch, failed, cut, Settled::settled)
             + self.traits.finish(epoch, failed, cut, Settled::settled) + self.optional.finish(epoch, failed, cut, Settled::settled)
             + self.identities.finish(epoch, failed, cut, Settled::settled) + self.members.finish(epoch, failed, cut, Settled::settled)
-            + self.member_keys.finish(epoch, failed, cut, Settled::settled) + self.key_paths.finish(epoch, failed, cut, |_| false)
+            + self.member_keys.finish(epoch, failed, cut, Settled::settled) + self.key_paths.finish(epoch, failed, cut, |_| true)
             + self.member_closed.finish(epoch, failed, cut, Settled::settled) + self.bound_arguments.finish(epoch, failed, cut, Settled::settled)
             + self.carriers.finish(epoch, failed, cut, Settled::settled)
     }

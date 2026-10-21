@@ -26,6 +26,18 @@ struct Pending {
 
 pub(super) type Answer = Known<Option<Vec<Vec<Known<Candidate>>>>>;
 
+/// Whether a candidates answer holds no unknown part (kept from a root
+/// cut short after it was written).
+pub(super) fn settled(answer: &Answer) -> bool {
+    match answer {
+        Known::Yes(None) => true,
+        // A lone overload's compatibility is never asked (unknown by design).
+        Known::Yes(Some(groups)) => groups.iter().all(|group| group.iter().all(|candidate| matches!(candidate,
+            Known::Yes(candidate) if group.len() == 1 || candidate.compatible != Known::Unknown))),
+        Known::Unknown => false,
+    }
+}
+
 /// The candidates once callbacks are typed (TypeScript's second inference
 /// pass): an argument the first pass couldn't relate, a callback whose
 /// parameters this call types, is typed by the first pass's selection
