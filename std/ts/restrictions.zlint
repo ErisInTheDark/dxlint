@@ -505,7 +505,7 @@ in restriction_parameter_function rule max-params {
   option max int(0..) = 3 "maximum parameters"
   let amount { value parameter.nodes; filter (p) p.max_params_counted.nonempty ?? true; count }
   when amount > max
-  report at if is ts_function_type then offset else function_warning_site(node)
+  report at restriction_function_head(node)
   warn "{@restriction_function_name} has too many parameters ({amount}). Maximum allowed is {max}."
 }
 in ts_function_like {
@@ -532,7 +532,7 @@ in ts_function_like rule complexity {
   option variant "classic" | "modified" = "classic" "how switches contribute"
   let amount 1 + (if variant == "classic" then restriction_subtree_classic else restriction_subtree_modified)
   when amount > max
-  report at function_warning_site(node)
+  report at restriction_function_head(node)
   warn "{@restriction_function_name} has a complexity of {amount}. Maximum allowed is {max}."
 }
 in ts_static_block, ts_class_property.init rule complexity:implicit {
@@ -595,9 +595,15 @@ in ts_line {
 }
 in ts_program, ts_function_like let restriction_line_rows overlapping(ts_line)
 fn restriction_open_paren(n) = first(overlapping(ts_open_paren, n.offset, n.end_offset)).offset
-# ESLint reports a function's head: the callable start through its parameter paren.
+fn restriction_function_type_arrow(n) = {
+  value from: { value last(n.parameter.nodes).end_offset; nonempty } ?? n.offset
+  value arrow: { value overlapping(ts_punctuator, from, n.return_type.offset); filter (t) t.text == "=>"; first }
+  value { start: arrow.offset, end: arrow.end_offset }
+}
+# ESLint reports a function's head: the callable start through its parameter paren, or the arrow token for a function type.
 fn restriction_function_head(n) = when {
   n.parent is (ts_property, ts_class_property) then { start: n.parent.node.offset, end: restriction_open_paren(n) }
+  n is ts_function_type then restriction_function_type_arrow(n)
   n is ts_arrow then n.operator.node
   else then { start: n.offset, end: restriction_open_paren(n) }
 }
