@@ -6,7 +6,7 @@ input.js:3:3-3:9 no-unused-private-class-members#1
 input.js:43:7-43:13 no-unused-private-class-members#1
 input.js:4:3-4:8 no-unused-private-class-members#1
 input.ts:2:3-2:10 no-unused-private-class-members#0
-input.ts:31:45-31:51 no-unused-private-class-members#0
+input.ts:31:45-31:59 no-unused-private-class-members#0
 input.ts:34:11-34:21 no-unused-private-class-members#0
 input.ts:35:11-35:20 no-unused-private-class-members#0
 input.ts:36:11-36:25 no-unused-private-class-members#0

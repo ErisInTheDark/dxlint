@@ -124,7 +124,7 @@ in ts_jsx_element.body, ts_jsx_fragment.body rule jsx-newline {
   let blank { value result: "\n" jsx_space_regex() "*\n"; value re_test(previous.text, result) }
   when previous is ts_jsx_text && previous.jsx_child_preceding_eligible
   when if allowMultilines && multiline then !blank else blank == prevent
-  report at previous.node
+  report at previous.node.end_offset
   warn if allowMultilines && multiline then "Multiline JSX elements should start in a new line" else if prevent then "JSX element should not start in a new line" else "JSX element should start in a new line"
   let remove prevent && !(allowMultilines && multiline)
   let fixed jsx_newline_text(previous.text, remove)

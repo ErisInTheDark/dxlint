@@ -90,16 +90,21 @@ fn member_usage_used(declaration) = {
         }))
 }
 
+in ts_program let member_usage_typescript_file re_test(file, /\.[cm]?tsx?$/)
+in ts_method, ts_class_property, ts_parameter let member_usage_private
+  modifier != null && contains([] modifier, "private")
 in ts_method.key, ts_class_property.key, ts_parameter.name rule no-unused-private-class-members {
   when is (ts_private_name, ts_identifier, ts_string, ts_number, ts_computed_key)
-  when parent not ts_parameter || contains([] parent.modifier, "private")
-  let typed re_test(file, /\.[cm]?tsx?$/)
-  when is ts_private_name || typed && contains([] parent.modifier, "private")
+  when parent not ts_parameter || parent.member_usage_private
+  when is ts_private_name || parent.member_usage_private
+  let typed ts_program.member_usage_typescript_file
+  when is ts_private_name || typed
   let declaration parent.node
   let name ts_value_key(node)
   when name != null
   when member_usage_last(member_usage_class(declaration), name, ts_value_static(declaration.modifier.nodes)) == declaration
   when !member_usage_used(declaration)
+  report at if parent is ts_parameter && parent.type != null then { start: offset, end: parent.type.end_offset } else node
   warn if typed then "Private class member '{text}' is defined but never used." else "'{text}' is defined but never used."
 }
 
