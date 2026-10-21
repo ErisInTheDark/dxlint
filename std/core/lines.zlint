@@ -1,7 +1,7 @@
 # Shared line structure and hygiene; syntax owners supply comment/raw adapters.
 @macro core_line_pattern /[^\n\r\u{2028}\u{2029}]*(?:\r\n|[\n\r\u{2028}\u{2029}])|[^\n\r\u{2028}\u{2029}]+/
 @macro core_line_comment_pattern /\/\/[^\n\r\u{2028}\u{2029}]*/
-@macro core_block_comment_pattern /\/\*/ until /\*\//
+@macro core_block_comment_pattern /\/\*[^*]*\*+(?:[^/*][^*]*\*+)*\//
 @macro core_html_comment_pattern /<!--/ until /-->/
 
 define {
