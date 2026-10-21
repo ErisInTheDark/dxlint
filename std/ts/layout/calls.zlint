@@ -53,7 +53,7 @@ in ts_open_paren rule function-call-spacing {
     else if invocation_optional then invocation_prefix.spaced != chain_before || space_before.spaced != chain_after
     else !invocation_spaced
   when bad_newline || bad_space
-  report at invocation_prefix.start
+  report at { start: invocation_prefix.start, end: offset }
   warn if bad_newline then "Unexpected newline between function name and paren."
     else if mode == "never" || invocation_optional && (!chain_before && invocation_prefix.spaced || !chain_after && space_before.spaced) then "Unexpected whitespace between function name and paren."
     else "Missing space between function name and paren."

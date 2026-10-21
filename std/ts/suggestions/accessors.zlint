@@ -105,7 +105,7 @@ in ts_method, ts_method_signature rule accessor-pairs {
   when accessor_pair != null && !accessor_pair.paired
   when accessor_pair.scope == "object" || accessor_pair.scope == "class" && enforceForClassMembers || accessor_pair.scope == "type" && enforceForTSTypes
   when accessor_pair.kind == "get" && getWithoutSet || accessor_pair.kind == "set" && setWithoutGet
-  report at accessor_pair.offset
+  report at { start: offset, end: key.end_offset }
   warn "{if accessor_pair.kind == 'set' then 'Getter' else 'Setter'} is not present for {if accessor_pair.scope == 'class' then 'class ' else if accessor_pair.scope == 'type' then 'type ' else ''}{accessor_pair.name}."
 }
 

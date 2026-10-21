@@ -23,13 +23,13 @@ in ts_member.property rule no-unsafe-member-access {
 in ts_index.index rule no-unsafe-member-access:computed {
   option allowOptionalChaining boolean = false "Allow optional chaining on any"
   when if allowOptionalChaining then parent.unsafe_optional_member_access == true else parent.unsafe_member_access == true
-  report at parent.unsafe_member_site.offset
+  report at parent.unsafe_member_site
   warn if parent.object_unsafe_type == "error" then "Unsafe member access [{parent.unsafe_member_site.text}] on a type that cannot be resolved." else "Unsafe member access [{parent.unsafe_member_site.text}] on an `any` value."
 }
 in ts_index.index rule no-unsafe-member-access:key {
   option allowOptionalChaining boolean = false "Allow optional chaining on any"
-  when parent.unsafe_member_site.unsafe_member_kind != null && (!allowOptionalChaining || parent.optional == null)
-  report at parent.unsafe_member_site.offset
+  when parent.unsafe_member_site.unsafe_member_kind != null && parent.unsafe_member_site not ts_update && (!allowOptionalChaining || parent.optional == null)
+  report at parent.unsafe_member_site
   warn if parent.unsafe_member_site.unsafe_member_kind == "error" then "The type of computed name [{parent.unsafe_member_site.text}] cannot be resolved." else "Computed name [{parent.unsafe_member_site.text}] resolves to an `any` value."
 }
 
