@@ -60,13 +60,18 @@ fn promise_void_context(n) = {
 }
 fn promise_dispose_void_context(n) = {
   value key: {global: "Symbol", class: "value", path: ["dispose"]}
-  value source: value_lookup(n, key).member
-  value source != null && promise_returns_thenable(promise_return_arms(value_signatures(source)))
-    && (n is ts_declarator.init && n.parent.parent.kind == "using" || {
-      value expected: value_expected_handle(n)
-      value target: if expected != null then value_lookup(expected, key).member else null
-      value target != null && promise_returns_void(promise_return_arms(value_signatures(target)))
-    })
+  # A disposal contract is only asked of `using` bindings and of targets whose
+  # declared type can hold one; anything else answers without a value lookup.
+  value using: n is ts_declarator.init && n.parent.parent.kind == "using"
+  value expected: if using then null else value_expected_handle(n)
+  value if !using && expected == null then false else {
+    value source: value_lookup(n, key).member
+    value source != null && promise_returns_thenable(promise_return_arms(value_signatures(source)))
+      && (using || {
+        value target: value_lookup(expected, key).member
+        value target != null && promise_returns_void(promise_return_arms(value_signatures(target)))
+      })
+  }
 }
 fn promise_property_source(n) = if n is ts_property then n.value.node ?? n else n
 fn promise_property_site(n) = {
