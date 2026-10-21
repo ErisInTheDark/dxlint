@@ -730,7 +730,6 @@ in ts_declarator rule init-declarations {
   option ignoreForLoopInit boolean = false "allow initialized declarations in loop initializers"
   when name.declaration_kind != null && name.ambient != true && mode == "always" && init == null
   when !parent.scoping_iteration_binding
-  report at { start: name.offset, end: name.end_offset }
   warn "Variable '{name}' should be initialized on declaration."
 }
 in ts_declarator rule init-declarations:never {
@@ -740,7 +739,6 @@ in ts_declarator rule init-declarations:never {
   when parent.kind != "const" && name.declaration_kind != "using"
   when init != null || parent.scoping_iteration_binding
   when !(ignoreForLoopInit && parent.scoping_loop_head)
-  report at { start: name.offset, end: name.end_offset }
   warn "Variable '{name}' should not be initialized on declaration."
 }
 
