@@ -1,4 +1,4 @@
-input.ts:19:3-19:23 no-misused-promises:void-inherited-methods#0
-input.ts:20:3-20:32 no-misused-promises:void-inherited-methods#0
+input.ts:19:3-19:24 no-misused-promises:void-inherited-methods#0
+input.ts:20:3-20:33 no-misused-promises:void-inherited-methods#0
 input.ts:30:3-30:24 no-misused-promises:void-inherited-methods#0
 input.ts:31:3-31:33 no-misused-promises:void-inherited-methods#0

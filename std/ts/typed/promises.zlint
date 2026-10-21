@@ -30,7 +30,7 @@ in ts_node rule no-misused-promises:conditionals {
 in ts_spread rule no-misused-promises:spreads {
   when parent is ts_object
   when argument could thenable
-  report at argument.node
+  report at unparenthesised_node(argument.node)
   warn "Expected a non-Promise value to be spread in an object."
 }
 
@@ -169,7 +169,7 @@ in ts_method, ts_method_signature, ts_class_property, ts_property_signature rule
   when static_name != null && parent is (ts_class, ts_interface)
   when promise_returns_thenable(promise_return_arms(value_signatures(node)))
   each target in promise_inherited_void_targets(node) {
-    report at node
+    report at { start: offset, end: if byte_slice(source, end_offset, end_offset + 1) == ";" then end_offset + 1 else end_offset }
     warn "Promise-returning method provided where a void return was expected by extended/implemented type '" target.heritage.text "'."
   }
 }
