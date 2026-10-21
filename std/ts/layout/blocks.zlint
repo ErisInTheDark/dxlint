@@ -272,9 +272,9 @@ in ts_close_brace rule brace-style:close {
 in ts_close_brace rule brace-style:keyword {
   @layout_brace_options
   when parent.layout_brace_keyword.nonempty ?? false
-  when contains(["else", "catch", "finally"], token_neighbours.after.text)
+  when contains(["else", "catch", "finally"], token(node, "after").text)
   when space_after.line_break == (style == "1tbs")
-  fix at { start: end_offset, end: if style == "1tbs" then token_neighbours.after.start else end_offset } if style != "1tbs" || !space_after.comments as if style == "1tbs" then " " else "\n"
+  fix at { start: end_offset, end: if style == "1tbs" then token(node, "after").start else end_offset } if style != "1tbs" || !space_after.comments as if style == "1tbs" then " " else "\n"
   warn if style == "1tbs" then "Closing curly brace does not appear on the same line as the subsequent block." else "Closing curly brace appears on the same line as the subsequent block."
 }
 

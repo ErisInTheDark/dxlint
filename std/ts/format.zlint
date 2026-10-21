@@ -198,7 +198,8 @@ in ts_dot, ts_punctuator, ts_member.optional rule dot-location {
   option style "object" | "property" = "property" "line for a member-access dot"
   when text == "." || text == "?."
   when parent is (ts_member, ts_qualified_name, ts_import_type, ts_meta_property, ts_jsx_name)
-  when if style == "object" then space_before.line_break else space_after.line_break
+  when if style == "object" then position(offset).js_line != position(token(node, "before").end).js_line
+    else position(end_offset).js_line != position(token(node, "after").start).js_line
   let dot_number_space text == "." && re_test(token_neighbours.before.text, /^(?:0|0[0-7]*[89]\d*|[1-9](?:_?\d)*)$/)
   fix at {
     start: if style == "object" then space_before.start else offset,
@@ -708,16 +709,17 @@ in ts_keyword, ts_variable_declaration.kind, ts_try.kind, ts_unary.operator, ts_
   @format_keyword_options
   # Cheapest and most selective first: most keywords are spaced as wanted.
   let keyword_required if len(overrides) == 0 then before else { value get(overrides, keyword_value).before; nonempty } ?? before
-  when space_before != null && space_before.spaced != keyword_required
+  let keyword_before_text token(node, "before").text
   when keyword_around || keyword_leading
+  when space_before != null && space_before.spaced != keyword_required
   when !(contains(["in", "of"], text) && previous_token is ts_private_name)
-  when !(token_neighbours.before.text == ">" && ts_binary.operator == ">" && offset == ts_binary.right.offset)
+  when !(keyword_before_text == ">" && ts_binary.operator == ">" && offset == ts_binary.right.offset)
   when !space_before.line_break && (keyword_required || !space_before.comments)
   when previous_token is (ts_regex, ts_string, ts_template, ts_private_name) || {
     value result: if keyword_module then /^[)\]}>*]$/ else /^[)\]}>]$/
-    value re_test(token_neighbours.before.text, result)
+    value re_test(keyword_before_text, result)
   }
-  when !re_test(token_neighbours.before.text, /\$\{$/)
+  when !re_test(keyword_before_text, /\$\{$/)
   report at if keyword_required then { start: offset, end: end_offset } else { start: space_before.start, end: space_before.end }
   fix space_before as if keyword_required then " " else ""
   warn if keyword_required then "Expected space(s) before \"{keyword_label}\"." else "Unexpected space(s) before \"{keyword_label}\"."
@@ -727,17 +729,18 @@ in ts_keyword, ts_variable_declaration.kind, ts_try.kind, ts_method.modifier, ts
   @format_keyword_options
   # Cheapest and most selective first: most keywords are spaced as wanted.
   let keyword_required if len(overrides) == 0 then after else { value get(overrides, keyword_value).after; nonempty } ?? after
-  when space_after != null && space_after.spaced != keyword_required
+  let keyword_after_text token(node, "after").text
   when keyword_around
+  when space_after != null && space_after.spaced != keyword_required
   when !(parent is ts_try && text == "catch" && parent.parameter != null)
   when !(parent is ts_import_specifier && text == "as" || parent is ts_import && text == "as")
   when !(parent is ts_variable_declaration && starts_with(text, "await"))
   when !space_after.line_break && (keyword_required || !space_after.comments)
   when next_token is (ts_regex, ts_string, ts_template, ts_private_name) || {
     value result: if keyword_module then /^[{*]$/ else /^(?:[(\[{<~!]|\+\+?|--?)$/
-    value re_test(token_neighbours.after.text, result)
+    value re_test(keyword_after_text, result)
   }
-  when !re_test(token_neighbours.after.text, /^\}/)
+  when !re_test(keyword_after_text, /^\}/)
   report at when {
     !keyword_required then { start: space_after.start, end: space_after.end }
     is ts_for_of.modifier then parent.offset

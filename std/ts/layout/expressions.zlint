@@ -67,8 +67,13 @@ in ts_parenthesized_type let layout_property_name type.layout_property_name.none
 in ts_member let layout_property_name property
 in ts_index, ts_indexed_access let layout_property_name index.layout_property_name.nonempty ?? index
 in ts_qualified_name let layout_property_name right
-in ts_member let layout_property_spaced object.space_after.spaced || property.space_before.spaced
-in ts_qualified_name let layout_property_spaced left.space_after.spaced || right.space_before.spaced
+in ts_member let layout_property_spaced {
+  value dots: if node.optional != null then 2 else 1
+  value property.offset - object.end_offset > dots
+    && (object.space_after.spaced || property.space_before.spaced)
+}
+in ts_qualified_name let layout_property_spaced right.offset - left.end_offset > 1
+  && (left.space_after.spaced || right.space_before.spaced)
 in ts_member let layout_property_same_line position(object.end_offset).line == position(property.offset).line
 in ts_index let layout_property_same_line position(object.end_offset).line == position(index.offset).line
 fn layout_property_gap_clean(start, end) = { value overlapping(ts_comment, start, end); count } == 0
@@ -84,6 +89,7 @@ in ts_member, ts_qualified_name rule no-whitespace-before-property {
   warn "Unexpected whitespace before property {layout_property_name}."
 }
 in ts_index, ts_indexed_access rule no-whitespace-before-property:computed {
+  when opener.ts_open_bracket.offset > object.end_offset
   when object.space_after.spaced || opener.ts_open_bracket.space_before.spaced
   when layout_property_same_line.nonempty ?? true
   let property_fix_end opener.ts_open_bracket.offset

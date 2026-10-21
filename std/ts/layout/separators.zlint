@@ -24,18 +24,18 @@ in ts_import_attribute_comma {
 in ts_comma, ts_import_attribute_comma let comma_style_checked comma_style_owner is comma_style_lists
 in ts_comma, ts_import_attribute_comma rule comma-style {
   option style "last" | "first" = "last" "comma line position"
-  when if style == "last" then token_neighbours.before.line_break else token_neighbours.after.line_break
+  when if style == "last" then space_before.line_break else space_after.line_break
   when comma_style_checked
   when comma_style_owner not (ts_array, ts_array_pattern) || comma_style_previous != null
-  when !(token_neighbours.after.text == "," && token_neighbours.after.line_break)
-  let comma_comments overlapping(ts_comment, token_neighbours.before.end, token_neighbours.after.start)
+  when !(token(node, "after").text == "," && space_after.line_break)
+  let comma_comments overlapping(ts_comment, token(node, "before").end, token(node, "after").start)
   let comma_after_comment { value comma_comments; filter (comment) comment.offset >= end_offset; first }
-  let comma_placement if token_neighbours.before.line_break && token_neighbours.after.line_break && !(comma_after_comment is ts_block_comment && position(comma_after_comment.offset).js_line == position(offset).js_line) then "between" else style
-  let comma_gap "{token_neighbours.before.gap}{token_neighbours.after.gap}"
+  let comma_placement if space_before.line_break && space_after.line_break && !(comma_after_comment is ts_block_comment && position(comma_after_comment.offset).js_line == position(offset).js_line) then "between" else style
+  let comma_gap "{space_before.text}{space_after.text}"
   let comma_fixed_gap if comma_placement == "between" then re_replace(comma_gap, /^([^\r\n\u{2028}\u{2029}]*)(\r\n|[\r\n\u{2028}\u{2029}])/, "$1") else comma_gap
   let comma_between_safe all(comma_comments, c => position(c.offset).js_line == position(c.end_offset).js_line) && (count(comma_comments) <= 1 || all(comma_comments, c => c is ts_block_comment))
-  fix at {start: token_neighbours.before.end, end: token_neighbours.after.start} if comma_placement != "between" || comma_between_safe as "{if comma_placement == 'first' then '' else ','}{comma_fixed_gap}{if comma_placement == 'first' then ',' else ''}"
-  warn if token_neighbours.before.line_break && token_neighbours.after.line_break then "Bad line breaking before and after ','." else if style == "last" then "',' should be placed last." else "',' should be placed first."
+  fix at {start: space_before.start, end: space_after.end} if comma_placement != "between" || comma_between_safe as "{if comma_placement == 'first' then '' else ','}{comma_fixed_gap}{if comma_placement == 'first' then ',' else ''}"
+  warn if space_before.line_break && space_after.line_break then "Bad line breaking before and after ','." else if style == "last" then "',' should be placed last." else "',' should be placed first."
 }
 
 schema trailing_comma_mode "always-multiline" | "always" | "never" | "only-multiline" | "ignore"
@@ -94,7 +94,8 @@ in ts_semicolon rule semi-style {
   option style "last" | "first" = "last" "semicolon line position"
   when layout_semi_header || layout_semi_statement
   let semi_at_end style == "last" || layout_semi_header
-  when if semi_at_end then space_before.line_break else !(parent.layout_semi_last.nonempty ?? false) && space_after.line_break
+  when if semi_at_end then position(offset).js_line != position(token(node, "before").end).js_line
+    else !(parent.layout_semi_last.nonempty ?? false) && position(end_offset).js_line != position(token(node, "after").start).js_line
   let semi_fix_start token_neighbours.before.end.nonempty ?? offset
   let semi_fix_end token_neighbours.after.start.nonempty ?? end_offset
   fix at { start: semi_fix_start, end: semi_fix_end } if { value overlapping(ts_comment, semi_fix_start, semi_fix_end); count } == 0 as if semi_at_end then ";\n" else "\n;"
