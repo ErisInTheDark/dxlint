@@ -112,7 +112,7 @@ fn unchanged_call_receiver(receiver, tokens, null_receiver) = receiver != null &
   when if is ts_identifier then text == "eval" else static_name == "eval"
   let eval_info eval_usage
   when eval_info != null && (!allowIndirect || eval_info.direct && !eval_info.optional)
-  report at eval_info.offset
+  report at { start: eval_info.offset, end: eval_info.end }
   warn "`eval` can be harmful."
 }
 in ts_identifier rule no-eval { @suggestion_eval_policy }
@@ -645,7 +645,7 @@ in ts_switch rule default-case {
 
 in ts_break, ts_continue rule no-extra-label {
   when label != null && label == get(parent.nearest_break_target, "label")
-  report at label.offset
+  report at label.node
   fix at { start: first_token.end, end: label.end_offset } if !label.node.space_before.comments as ""
   warn "This label '{label}' is unnecessary."
 }

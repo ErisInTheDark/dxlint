@@ -1,5 +1,11 @@
 define {
 
+# Returns of one function, for the inferred signature of a type parameter.
+in ts_function, ts_arrow, ts_method let type_parameter_return_nodes descendants(ts_return)
+# A `typeof` resolves to the queried value's type, which the value layer only
+# reaches through the query itself.
+in ts_function, ts_arrow, ts_method, ts_function_type, ts_method_signature, ts_call_signature let type_parameter_query_nodes descendants(ts_type_query)
+
 fn type_parameter_usages(items) = {
   value { known: all(items, item => item.known), uses: flat_map(items, item => item.uses) }
 }
@@ -144,6 +150,100 @@ fn type_parameter_class(n, target) = type_parameter_usages(map(n.member.nodes,
     else if member is ts_class_property then type_parameter_value(value_constituents(member), target, false, true)
     else { known: false, uses: [] }))
 
+# Written signatures need no types: the references themselves say how often a
+# parameter is used. One entry for the parameter, plus two for each use that is
+# already repeated by its syntax (a generic argument, or a mutable array that
+# is returned), which is how ESLint counts before it consults types.
+fn type_parameter_type_reference(reference) =
+  if reference.parent is ts_type_reference then reference.parent else null
+fn type_parameter_argument_owner(reference) = {
+  value reference_node: type_parameter_type_reference(reference)
+  value if reference_node == null then null else find(
+    walk(reference_node, item => if item.parent == null then null else item.parent.node),
+    item => item.parent != null && item.parent is ts_type_reference
+      && item.parent.type_argument != null
+      && any(item.parent.type_argument.nodes, argument => argument.offset == item.offset))
+}
+fn type_parameter_array_owner(reference) = {
+  value reference_node: type_parameter_type_reference(reference)
+  value argument_owner: type_parameter_argument_owner(reference)
+  value outer: if reference_node == null then null else
+    last(walk(reference_node, item =>
+      if item.parent is (ts_union, ts_intersection, ts_parenthesized_type) then item.parent else null))
+  value if argument_owner != null then argument_owner
+    else if outer != null && outer.parent is ts_array_type then outer.parent
+    else null
+}
+fn type_parameter_repeated_reference(reference) = {
+  value owner: type_parameter_argument_owner(reference)
+  value owner != null && !(owner.name is ts_identifier && contains(["Array", "ReadonlyArray"], owner.name.text))
+}
+fn type_parameter_multiple_reference(reference, result) = {
+  value owner: type_parameter_array_owner(reference)
+  value array: if owner == null || result == null
+    || !(result.offset <= owner.offset && owner.end_offset <= result.end_offset) then null else owner
+  value array != null && !(array.parent is ts_type_operator && array.parent.operator == "readonly")
+    && (array is ts_array_type || array.name is ts_identifier && array.name.text == "Array")
+}
+fn type_parameter_reference_uses(reference, result) =
+  if type_parameter_repeated_reference(reference) || type_parameter_multiple_reference(reference, result)
+    then [true, true] else [true]
+fn type_parameter_return_owner(n) = {
+  value child: last(walk(n, item =>
+    if item is (ts_function, ts_arrow, ts_method) then null
+    else if item.parent == null then null
+    else if item.parent is (ts_function, ts_arrow, ts_method) then null
+    else item.parent.node))
+  value if child == null || child.parent == null then null else child.parent.node
+}
+fn type_parameter_result_layer(result, target) = {
+  value bare: ts_value_bare_type(result)
+  value declaration: if bare is ts_type_reference && count(bare.type_argument.nodes) == 0 && bare.name is ts_identifier
+    && name_binding(bare.name.node) != null then name_binding(bare.name.node).node.parent.node else null
+  # Another parameter's constraint already counts wherever that parameter is
+  # written, so a bare `U` in the result adds nothing of its own.
+  value other_parameter: declaration is ts_type_parameter && declaration_identity(declaration).node != target.node
+  value if result is ts_type_keyword || other_parameter then { known: true, uses: [] }
+    else type_parameter_handle(result, target, true, false, [])
+}
+fn type_parameter_inferred_usage(n, target, returns) = {
+  value signatures: call_signatures(n)
+  value known: count(signatures) == 1 && count(first(signatures)) == 1
+  value result: if known then first(first(value_signatures(n))).result else null
+  value body_values: if n is ts_arrow && n.body.node != null && n.body.node not ts_block then [n.body.node] else []
+  value returned_values: map(returns, item => item.argument.node)
+  value values: if result != null then [] else filter(body_values returned_values, value => value != null)
+  value states: map(values, value => {
+    value usage: type_parameter_handle(value, target, true, false, [])
+    # A property read the layer cannot resolve (`x.length` on a constrained
+    # parameter) yields a concrete member type, never an indexed `T[K]`.
+    value if value is ts_member && !usage.known then { known: true, uses: [] } else usage
+  })
+  value if !known then { known: false, uses: [] }
+    else if result != null then type_parameter_result_layer(result, target)
+    else if any(states, state => !state.known) then { known: false, uses: [] }
+    else type_parameter_usages(states)
+}
+fn type_parameter_written_usage(n, references, result, target, returns, queries) = {
+  value result_references: if result == null then [] else filter(references, reference =>
+    result.offset <= reference.offset && reference.end_offset <= result.end_offset)
+  value other_references: if result == null then references else filter(references, reference =>
+    !(result.offset <= reference.offset && reference.end_offset <= result.end_offset))
+  value result_syntax: flat_map(result_references, reference => type_parameter_reference_uses(reference, result))
+  value result_layer: if result == null then null else type_parameter_result_layer(result, target)
+  value result_uses: if result_layer != null && result_layer.known && count(result_layer.uses) > count(result_syntax)
+    then result_layer.uses else result_syntax
+  value syntax_uses: ([true] flat_map(other_references, reference => type_parameter_reference_uses(reference, result))
+    result_uses)
+  value result_queries: if result == null then [] else
+    filter(queries, query => result.offset <= query.offset && query.end_offset <= result.end_offset)
+  value inferred: if result != null
+    then { known: !(count(result_syntax) == 0 && result_layer != null && !result_layer.known && count(result_queries) > 0),
+      uses: [] }
+    else type_parameter_inferred_usage(n, target, returns)
+  value if inferred.known then { known: true, uses: (syntax_uses inferred.uses) } else { known: false, uses: [] }
+}
+
 in ts_type_parameter rule no-unnecessary-type-parameters warn "Type parameter {name} is {type_parameter_uses} in the {type_parameter_descriptor} signature." {
   let type_parameter_owner parent.node
   when type_parameter_owner is (ts_function, ts_arrow, ts_method, ts_function_type,
@@ -153,19 +253,28 @@ in ts_type_parameter rule no-unnecessary-type-parameters warn "Type parameter {n
   let type_parameter_descriptor if type_parameter_owner is ts_class then "class" else "function"
   let type_parameter_binding name_binding(name.node)
   when type_parameter_binding != null
-  let type_parameter_boundary type_parameter_owner.body.offset ?? type_parameter_owner.return_type.end_offset ?? type_parameter_owner.end_offset
-  let type_parameter_written {
+  let type_parameter_boundary if type_parameter_owner is ts_arrow && type_parameter_owner.body.node not ts_block
+    then type_parameter_owner.end_offset
+    else type_parameter_owner.body.offset ?? type_parameter_owner.return_type.end_offset ?? type_parameter_owner.end_offset
+  let type_parameter_references {
     value type_parameter_binding.references
     filter (reference) contains(name_role_classes(reference, "reference"), "type")
       && reference.offset <= type_parameter_boundary
       && (reference.offset >= node.end_offset || reference.end_offset <= node.offset)
   }
-  when type_parameter_owner is ts_class || count(type_parameter_written) < 2
+  let type_parameter_returns filter(type_parameter_owner.type_parameter_return_nodes ?? [],
+    item => type_parameter_return_owner(item).offset == type_parameter_owner.offset)
+  let type_parameter_result_queries if type_parameter_owner.return_type == null then []
+    else type_parameter_owner.type_parameter_query_nodes ?? []
   let type_parameter_target declaration_identity(node)
   let type_parameter_usage if type_parameter_owner is ts_class
     then type_parameter_class(type_parameter_owner, type_parameter_target)
-    else type_parameter_callable(type_parameter_owner, type_parameter_target, false)
-  when type_parameter_usage.known && count(type_parameter_usage.uses) < 2
-  let type_parameter_uses if count(type_parameter_usage.uses) == 0 then "never used" else "used only once"
+    else type_parameter_written_usage(type_parameter_owner, type_parameter_references,
+      type_parameter_owner.return_type.node, type_parameter_target, type_parameter_returns, type_parameter_result_queries)
+  when type_parameter_usage.known
+    && count(type_parameter_usage.uses) < (if type_parameter_owner is ts_class then 2 else 3)
+  let type_parameter_uses if type_parameter_owner is ts_class
+    then if count(type_parameter_usage.uses) == 0 then "never used" else "used only once"
+    else if count(type_parameter_usage.uses) < 2 then "never used" else "used only once"
 }
 }
