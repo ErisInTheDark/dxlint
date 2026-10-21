@@ -256,8 +256,17 @@ in ts_declarator let scoping_name_destination
 in ts_assignment let scoping_name_destination
   {target: left.scoping_assignment_name, property: left.scoping_assignment_property,
     commonjs: left.static_name == "exports" && left.scoping_property_object == "module", offset: offset}
+in ts_property, ts_class_property let scoping_name_key_node key.scoping_match_key_node.nonempty ?? key.node
+# ESLint names string keys only when they are identifier names for the file's
+# edition; its ES5 tables predate modern Unicode, so pre-2015 stays ASCII.
+in ts_property, ts_class_property let scoping_name_target when {
+  key.node is ts_computed_key then if scoping_name_key_node is (ts_identifier, ts_string) then static_name else null
+  scoping_name_key_node is ts_identifier then static_name
+  scoping_name_key_node is ts_string && (if ecma_version >= 2015 then ts_identifier_name_valid(static_name) else is_identifier(static_name)) then static_name
+  else then null
+}
 in ts_property, ts_class_property let scoping_name_destination
-  {target: if (key.scoping_match_key_node.nonempty ?? key.node) is (ts_identifier, ts_string) then static_name else null,
+  {target: scoping_name_target,
     property: true, commonjs: false, descriptor: if static_name == "value" then parent.scoping_descriptor_context else null, offset: offset}
 in ts_parenthesized let scoping_name_destination parent.scoping_name_destination
 in ts_function rule func-name-matching {
