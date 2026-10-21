@@ -156,12 +156,12 @@ fn ts_global_eval(n) = {
   value object: unparenthesised_node(n.object.node)
   value if n is ts_identifier && n.text == "eval" then
     if call == null && !ts_global_enabled_reference(n) then null
-    else { direct: call != null, optional: call.optional != null, offset: n.offset }
+    else { direct: call != null, optional: call.optional != null, offset: n.offset, end: n.end_offset }
   else if n is (ts_member, ts_index) && n.static_name == "eval" then {
     value global: if object is ts_this then object.ts_global_this
       else any(["global", "window", "globalThis"], key => ts_global_eval_object(object, key))
     value property: if n is ts_index then n.index.node else n.property.node
-    value if global != true || property == null then null else { direct: false, optional: false, offset: property.offset }
+    value if global != true || property == null then null else { direct: false, optional: false, offset: property.offset, end: property.end_offset }
   } else null
 }
 in ts_identifier, ts_member, ts_index let eval_usage ts_global_eval(node)

@@ -472,6 +472,12 @@ in ts_program let restriction_classes {
   filter (item) item.max_classes_counted == true
   count
 }
+in ts_program let restriction_declared_classes {
+  value descendants(ts_class)
+  filter (item) item.max_classes_counted == true && item.parent is (ts_program, ts_block, ts_export)
+  count
+}
+in ts_program let restriction_program_span if count(body.nodes) == 0 then { start: offset, end: offset } else { start: first(body.nodes).offset, end: last(body.nodes).end_offset }
 fn restriction_branch_total(branch, extra, child_totals) = (if branch then 1 else 0) + (if extra == true then 1 else 0) + sum(child_totals)
 in ts_node {
   let restriction_metric_boundary is (ts_function_like, ts_static_block) || is ts_class_property.init
@@ -482,8 +488,8 @@ in ts_node {
   let restriction_subtree_modified restriction_branch_total(restriction_flow_branch, is ts_switch, children.restriction_modified_contribution)
   let restriction_modified_contribution if restriction_metric_boundary then 0 else restriction_branch_total(restriction_flow_branch, is ts_switch, children.restriction_modified_contribution)
   let restriction_function_depth (parent.restriction_function_depth.nonempty ?? 0) + (if parent is (ts_function_like, ts_static_block) then 1 else 0)
-  let restriction_ordinary_function_depth (parent.restriction_ordinary_function_depth.nonempty ?? 0) + (if parent is ts_function_like then 1 else 0)
-  let restriction_top_functions (if is ts_function_like && restriction_ordinary_function_depth == 0 then 1 else 0) + sum(children.restriction_top_functions)
+  let restriction_top_functions (if is ts_function_like && restriction_function_depth == 0 then 1 else 0) + sum(children.restriction_top_functions)
+  let restriction_file_top_functions if parent.node == null then restriction_top_functions else (parent.restriction_file_top_functions.nonempty ?? 0)
   let restriction_call_argument if parent is ts_parenthesized then parent.restriction_call_argument else is ts_call.argument
   let restriction_constructor_argument if parent is ts_parenthesized then parent.restriction_constructor_argument else is (ts_call.argument, ts_new.argument)
   let restriction_iife if parent is ts_parenthesized then parent.restriction_iife else is ts_call.callee
@@ -514,9 +520,11 @@ in ts_function_like {
 }
 in ts_function_like rule max-statements {
   option max int(0..) = 10 "maximum statements"
+  option ignoreTopLevelFunctions boolean = false "skip top-level functions unless the file has only one"
   when restriction_subtree_statements > max
   when max_statements_checked
-  report at function_warning_site(node)
+  when !(ignoreTopLevelFunctions && restriction_function_depth == 0 && restriction_file_top_functions == 1)
+  report at restriction_function_head(node)
   warn "{@restriction_function_name} has too many statements ({restriction_subtree_statements}). Maximum allowed is {max}."
 }
 in ts_function_like rule complexity {
@@ -553,9 +561,10 @@ in ts_function, ts_arrow rule max-nested-callbacks {
 }
 in ts_program rule max-classes-per-file {
   option max int(1..) = 1 "maximum classes"
-  let amount restriction_classes
+  option ignoreExpressions boolean = false "count only class declarations"
+  let amount if ignoreExpressions then restriction_declared_classes else restriction_classes
   when amount > max
-  report at { value [] body.offset; first; nonempty } ?? 0
+  report at { start: restriction_program_span.start, end: restriction_program_span.end }
   warn "File has too many classes ({amount}). Maximum allowed is {max}."
 }
 fn restriction_line_previous(items, item) = {
@@ -585,6 +594,13 @@ in ts_line {
   } == ""
 }
 in ts_program, ts_function_like let restriction_line_rows overlapping(ts_line)
+fn restriction_open_paren(n) = first(overlapping(ts_open_paren, n.offset, n.end_offset)).offset
+# ESLint reports a function's head: the callable start through its parameter paren.
+fn restriction_function_head(n) = when {
+  n.parent is (ts_property, ts_class_property) then { start: n.parent.node.offset, end: restriction_open_paren(n) }
+  n is ts_arrow then n.operator.node
+  else then { start: n.offset, end: restriction_open_paren(n) }
+}
 in ts_program rule max-lines {
   option max int(0..) = 300 "maximum lines"
   option skipComments boolean = false "exclude comment-only lines"
@@ -592,7 +608,8 @@ in ts_program rule max-lines {
   let lines filter(restriction_line_rows, l => !(skipComments && l.restriction_line_comment || skipBlankLines && l.restriction_line_blank))
   let amount if source == "" && !skipBlankLines then 1 else len(lines)
   when amount > max
-  report at { value { value lines; slice max; first }.offset; nonempty } ?? offset
+  let exceed_line { value { value lines; slice max; first }; nonempty } ?? node
+  report at { start: position(exceed_line.offset).js_line_start, end: byte_len(source) }
   warn "File has too many lines ({amount}). Maximum allowed is {max}."
 }
 in ts_function_like let max_lines_per_function_checked !restriction_iife
@@ -603,7 +620,7 @@ in ts_function_like rule max-lines-per-function {
   let lines filter(restriction_line_rows, l => !(skipComments && l.restriction_line_comment || skipBlankLines && l.restriction_line_blank))
   when max_lines_per_function_checked
   when len(lines) > max
-  report at function_warning_site(node)
+  report at restriction_function_head(node)
   warn "{@restriction_function_name} has too many lines ({len(lines)}). Maximum allowed is {max}."
 }
 

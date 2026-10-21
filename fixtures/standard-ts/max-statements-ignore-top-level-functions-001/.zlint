@@ -1,0 +1,5 @@
+import .ts
+rule max-statements {
+  set max 1
+  set ignoreTopLevelFunctions true
+}

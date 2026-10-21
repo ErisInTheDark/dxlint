@@ -1,0 +1,5 @@
+import .ts
+rule max-classes-per-file {
+  set max 2
+  set ignoreExpressions true
+}
