@@ -50,11 +50,13 @@ fn promise_returns_void(arms) = promise_returns_known(arms) && count(arms) > 0
   && !any(arms, arm => any(arm, part => contains(part.traits, "thenable")))
 fn promise_void_context(n) = {
   value source: promise_return_arms(value_signatures(n))
-  value targets: expected_call_signatures(n)
-  value headers: flat_map(targets ?? [], arm => arm)
-  value target: flat_map(headers, header => header.result)
-  value promise_returns_thenable(source) && targets != null && count(headers) > 0
-    && all(headers, header => header.result_known) && promise_returns_void(target)
+  value if !promise_returns_thenable(source) then false else {
+    value targets: expected_call_signatures(n)
+    value headers: flat_map(targets ?? [], arm => arm)
+    value target: flat_map(headers, header => header.result)
+    value targets != null && count(headers) > 0
+      && all(headers, header => header.result_known) && promise_returns_void(target)
+  }
 }
 fn promise_dispose_void_context(n) = {
   value key: {global: "Symbol", class: "value", path: ["dispose"]}

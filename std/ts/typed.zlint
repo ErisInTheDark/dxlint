@@ -440,7 +440,7 @@ in ts_await rule await-thenable {
   when ts_value_nonthenable(argument.node) == true
   warn "Unexpected `await` of a non-Promise (non-\"Thenable\") value."
 }
-in ts_member, ts_index let promise_aggregate_member object.global_value == "Promise" && contains(["all", "allSettled", "race", "any"], static_name)
+in ts_member, ts_index let promise_aggregate_member contains(["all", "allSettled", "race", "any"], static_name) && object.global_value == "Promise"
 in ts_call let is_promise_aggregator callee.promise_aggregate_member == true
 in ts_array let is_promise_aggregator_argument parent.is_promise_aggregator == true
 in ts_array.element rule await-thenable:aggregate {
