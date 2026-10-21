@@ -700,18 +700,20 @@ in ts_identifier, ts_private_name rule id-match {
   warn "Identifier '{text}' does not match the pattern '{mode}'."
 }
 schema restriction_global {name: string; message?: string}
+# ESLint accepts bare names as well as {name, message} records.
+fn restriction_global_entry(g) = if type_of(g) == "str" then {name: g, message: null} else g
 @macro restriction_global_options {
-  option globals restriction_global[] = [] "restricted globals"
+  option globals (restriction_global | string)[] = [] "restricted globals"
   option checkGlobalObject boolean = false "check global-object properties"
   option globalObjects string[] = [] "additional global-object names"
   when len(globals) > 0
 }
 in ts_identifier rule no-restricted-globals {
   @restriction_global_options
-  let matched find_last(globals, g => g.name == text)
+  let matched find_last(globals, g => restriction_global_entry(g).name == text)
   when resolved == "global" && access != "type" && matched != null
   when parent not (ts_type_reference, ts_qualified_name, ts_type_query)
-  warn "Unexpected use of '{text}'." (if matched.message != null && matched.message != "" then " " matched.message else "")
+  warn "Unexpected use of '{text}'." (if restriction_global_entry(matched).message != null && restriction_global_entry(matched).message != "" then " " restriction_global_entry(matched).message else "")
 }
 in ts_identifier let restriction_global_root if resolved == "global" && contains(["readonly", "writable"], global) then text else null
 in ts_parenthesized let restriction_global_root expression.restriction_global_root
@@ -722,10 +724,10 @@ in ts_member, ts_index rule no-restricted-globals:member {
   @restriction_global_options
   let root object.restriction_global_root
   let name static_name
-  let matched find_last(globals, g => g.name == name)
+  let matched find_last(globals, g => restriction_global_entry(g).name == name)
   when checkGlobalObject && root != null && type_of(name) == "str" && contains(["globalThis", "self", "window"] globalObjects, root) && matched != null
   report at restriction_global_property_report
-  warn "Unexpected use of '{name}'." (if matched.message != null && matched.message != "" then " " matched.message else "")
+  warn "Unexpected use of '{name}'." (if restriction_global_entry(matched).message != null && restriction_global_entry(matched).message != "" then " " restriction_global_entry(matched).message else "")
 }
 schema restriction_property {
   object?: string
