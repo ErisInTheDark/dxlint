@@ -392,7 +392,7 @@ in ts_binary rule no-useless-concat {
   let right_endpoint concat_endpoint(right.node, false)
   when left_endpoint is (ts_string, ts_template) && right_endpoint is (ts_string, ts_template)
   when !{ value source; byte_slice left_endpoint.end_offset right_endpoint.offset; re_test /[\r\n\u{2028}\u{2029}]/ }
-  report at operator.offset
+  report at { start: operator.offset, end: operator.end_offset }
   warn "Unexpected string concatenation of literals."
 }
 

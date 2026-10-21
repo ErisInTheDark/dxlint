@@ -62,6 +62,8 @@ fn function_description(n) = {
   value name: when {
     private then member.key.identifier_name
     member.static_name != null then "'" member.static_name "'"
+    member.key is (ts_string, ts_number) then member.key.text
+    member.key is ts_computed_key && unparenthesised_node(member.key.expression.node) is (ts_string, ts_number) then unparenthesised_node(member.key.expression.node).text
     n is ts_function && n.name != null then "'" n.name.identifier_name "'"
     else then ""
   }

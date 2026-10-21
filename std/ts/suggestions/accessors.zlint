@@ -123,7 +123,7 @@ in ts_method, ts_method_signature rule grouped-accessor-pairs {
   let group_info accessor_pair.grouping
   when accessor_pair.scope != "type" || enforceForTSTypes
   when group_info != null && (group_info.gap || mode == "getBeforeSet" && !group_info.getter_first || mode == "setBeforeGet" && group_info.getter_first)
-  report at accessor_pair.offset
+  report at { start: offset, end: key.end_offset }
   warn if group_info.gap then "Accessor pair {group_info.former} and {accessor_pair.name} should be grouped." else "Expected {accessor_pair.name} to be before {group_info.former}."
 }
 
