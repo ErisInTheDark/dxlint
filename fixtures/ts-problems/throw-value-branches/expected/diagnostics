@@ -8,7 +8,6 @@ input.js:24:1-24:27 no-throw-literal#1
 input.js:25:1-25:18 no-throw-literal#1
 input.js:28:1-28:17 no-throw-literal#0
 input.js:29:1-29:22 no-throw-literal#0
-input.js:30:30-30:50 no-throw-literal#0
 input.js:31:1-31:26 prefer-promise-reject-errors#0
 input.js:32:1-32:31 prefer-promise-reject-errors#0
 input.js:33:36-33:63 prefer-promise-reject-errors#0

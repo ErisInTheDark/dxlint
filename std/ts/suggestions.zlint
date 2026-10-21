@@ -172,7 +172,7 @@ in ts_sequence rule no-sequences {
   when !allowInParentheses || paren_count == 0 || paren_count == 1 && outside is ts_arrow.body
   let comma_offset opener.ts_comma.offset
   when comma_offset != null
-  report at comma_offset
+  report at opener.ts_comma.node
   warn "Unexpected use of comma operator."
 }
 
@@ -194,8 +194,10 @@ fn suggestion_possible_error(n) = {
 in ts_node let could_be_error suggestion_possible_error(node)
 in ts_identifier let error_undefined_identifier identifier_name == "undefined"
 in ts_parenthesized forward error_undefined_identifier from expression
+in ts_identifier let error_undefined_global identifier_name == "undefined" && resolved == "global"
+in ts_parenthesized forward error_undefined_global from expression
 in ts_throw rule no-throw-literal {
-  when !argument.could_be_error || argument.error_undefined_identifier == true
+  when !argument.could_be_error || argument.error_undefined_global == true
   warn if argument.could_be_error then "Do not throw undefined." else "Expected an error object to be thrown."
 }
 
@@ -316,7 +318,10 @@ in ts_binary rule no-self-compare {
   warn "Comparing to itself is potentially pointless."
 }
 
-in ts_with rule no-with warn "Unexpected use of 'with' statement."
+in ts_with rule no-with {
+  report at { start: first_token.start, end: first_token.end }
+  warn "Unexpected use of 'with' statement."
+}
 
 in ts_member, ts_index rule no-proto {
   when static_name == "__proto__"
@@ -955,9 +960,9 @@ fn strict_directive_message(kind) = get({
 fn strict_missing(n, scope, mode) =
   when {
     count(scope.directives) != 0 then []
-    n is ts_program && mode == "global" && count(n.body.node) > 0 then [{ offset: first(n.body.node).offset, message: "Use the global form of 'use strict'." }]
+    n is ts_program && mode == "global" && count(n.body.node) > 0 then [{ report: { start: first(n.body.node).offset, end: last(n.body.node).end_offset }, message: "Use the global form of 'use strict'." }]
     n not ts_program && mode == "function" && !scope.parent_function && !scope.class_body then [{
-      offset: n.offset,
+      report: n.offset,
       message: if scope.simple_parameters then "Use the function form of 'use strict'." else "Wrap " (n.function_name.nonempty ?? "function") " in a function with 'use strict' directive."
     }]
     else then []
@@ -977,7 +982,7 @@ in ts_program, ts_function, ts_arrow, ts_method rule strict {
     fold initial_findings (findings, directive) {
       value kind: strict_directive_kind(node, strict_scope, strict_mode, directive)
       value findings [{
-        offset: directive.offset,
+        report: directive.offset,
         directive: directive,
         kind: kind,
         message: strict_directive_message(kind)
@@ -985,7 +990,7 @@ in ts_program, ts_function, ts_arrow, ts_method rule strict {
     }
   }
   each strict_finding in filter(strict_findings, finding => finding.message != null) {
-    report at strict_finding.offset
+    report at strict_finding.report
     fix at strict_finding.directive if contains(["multiple", "unnecessary", "module", "implied", "class"], strict_finding.kind) && expression_fix_clean(strict_finding.directive) as ""
     warn strict_finding.message
   }

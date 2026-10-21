@@ -1,4 +1,4 @@
 const x = <Box>
-{'a'}
+{'a'} text
 {'b'}
 </Box>;

@@ -43,6 +43,8 @@ in ts_node {
   let jsx_child_last_line position(end_offset).js_line - (if jsx_child_trailing then 1 else 0)
   let jsx_child_previous_row if previous == null then null else if previous.jsx_child_row then {first: previous.jsx_child_first_line, last: previous.jsx_child_last_line} else previous.jsx_child_previous_row
   let jsx_child_next_row if next == null then null else if next.jsx_child_row then {first: next.jsx_child_first_line, last: next.jsx_child_last_line} else next.jsx_child_next_row
+  let jsx_child_previous_content_expression if previous == null then false else if previous.jsx_child_row then previous is ts_jsx_expression else previous.jsx_child_previous_content_expression
+  let jsx_child_next_content_expression if next == null then false else if next.jsx_child_row then next is ts_jsx_expression else next.jsx_child_next_content_expression
   let jsx_child_multiline position(offset).js_line != position(end_offset).js_line
   let jsx_child_next_multiline if jsx_child_newline_eligible == true then jsx_child_multiline else if next != null then next.jsx_child_next_multiline else false
 }
@@ -271,7 +273,7 @@ in ts_jsx_expression, ts_jsx_text, ts_string, ts_jsx_element, ts_jsx_fragment ru
   let escape contains(spelling, "\\") || jsx_presence_entities(spelling) != spelling || child && re_test(spelling, /[{}<>]/)
   let comment jsx_presence_comments > 0
   let removable if element_value then true else if !comment && string then !escape && !contains(value, "/*") && (!attribute || !jsx_presence_whitespace(value)) && (attribute || !jsx_presence_edge(value)) && (child || !re_test(value, /['"]/)) else if !comment && template then !escape && !contains(spelling, "\n") && !jsx_presence_edge(spelling) && !re_test(value, /['"]/) else !comment && inner is (ts_jsx_element, ts_jsx_fragment)
-  let adjacent previous is ts_jsx_expression || next is ts_jsx_expression
+  let adjacent jsx_child_previous_content_expression || jsx_child_next_content_expression
   let space_expression string && jsx_presence_whitespace(value)
   let unnecessary removable && !(child && (adjacent || space_expression && (count(parent.body) == 1 || previous is ts_jsx_element || next is ts_jsx_element)))
   let raw_line_break jsx_break(text) && jsx_trim_space(text) == ""
@@ -512,6 +514,8 @@ in ts_jsx_element rule jsx-pascal-case {
     re_escape
     replace "\\*" ".*"
     replace "\\?" "."
+    re_replace "\\\\\\+\\\\\\(([^()]*)\\\\\\)" "(?:$1)+"
+    replace "\\|" "|"
   } "$"
     value re_test(n, result)
   })))
@@ -620,7 +624,7 @@ in jsx_max_props_multiline rule jsx-max-props-per-line:multiline {
 @macro jsx_props_style_body {
   option max_per_line int(1..) = 1 "maximum props per line when wrapping"
   when if need_wrap then jsx_prop_same && (jsx_prop_first || jsx_prop_run > max_per_line && (jsx_prop_run - 1) % max_per_line == 0) else !jsx_prop_same
-  report at if is ts_jsx_attribute then name.node else argument.node
+  report at if is ts_jsx_attribute then name.node else node
   warn if need_wrap then "Prop `{jsx_prop_name}` must be placed on a new line" else "Prop `{jsx_prop_name}` should not be placed on a new line"
   fix at space_before if jsx_gap_safe(space_before.text) as if need_wrap then "\n" else " "
 }
