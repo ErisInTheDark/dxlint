@@ -274,22 +274,26 @@ in ts_class_property rule parameter-properties:class {
   warn "Property {key} should be declared as a parameter property."
 }
 
-fn empty_object_message(subject) = subject " allows any non-nullish value, including literals like `0` and `\"\"`.\n- If that's what you want, disable this lint rule with an inline comment or configure an exemption.\n- If you want a type meaning \"any object\", you probably want `object` instead.\n- If you want a type meaning \"any value\", you probably want `unknown` instead."
+fn empty_object_message(subject, option) = subject " allows any non-nullish value, including literals like `0` and `\"\"`.\n- If that's what you want, disable this lint rule with an inline comment or configure the '" option "' rule option.\n- If you want a type meaning \"any object\", you probably want `object` instead.\n- If you want a type meaning \"any value\", you probably want `unknown` instead."
 in ts_interface, ts_type_literal let no_empty_object_type_checked true
 in ts_interface.name rule no-empty-object-type:interface {
-  option allowSingleExtends boolean = false "Allow empty interfaces extending one type."
+  option allowInterfaces ("always" | "never" | "with-single-extends") = "never" "Whether to allow empty interfaces."
   option allowWithName regex | null = null "Allow matching interface and type alias names."
   when parent.no_empty_object_type_checked
+  when allowInterfaces != "always"
   when count(parent.member) == 0 && count(parent.extends) <= 1
-  when !(allowSingleExtends && count(parent.extends) == 1) && !(type_of(allowWithName) == "str" && re_test(text, allowWithName))
-  warn if count(parent.extends) == 1 then "An interface declaring no members is equivalent to its supertype." else empty_object_message("An empty interface declaration")
+  when !(allowInterfaces == "with-single-extends" && count(parent.extends) == 1)
+  when !(type_of(allowWithName) == "str" && re_test(text, allowWithName))
+  warn if count(parent.extends) == 1 then "An interface declaring no members is equivalent to its supertype." else empty_object_message("An empty interface declaration", "allowInterfaces")
 }
 in ts_type_literal rule no-empty-object-type:object {
+  option allowObjectTypes ("always" | "never") = "never" "Whether to allow empty object type literals."
   option allowWithName regex | null = null "Allow matching interface and type alias names."
   when no_empty_object_type_checked
+  when allowObjectTypes != "always"
   when count(member) == 0 && parent not ts_intersection
   when !(type_of(allowWithName) == "str" && parent is ts_type_alias && re_test(parent.name, allowWithName))
-  warn { value "The `{{}}` (\"empty object\") type"; empty_object_message }
+  warn empty_object_message("The `{{}}` (\"empty object\") type", "allowObjectTypes")
 }
 
 # A type literal or interface that is only an index signature.

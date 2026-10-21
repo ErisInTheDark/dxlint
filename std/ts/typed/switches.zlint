@@ -6,48 +6,109 @@ fn switch_part_identity(part) =
     part.identity_known then part.identity
     else then null
   }
-fn switch_literal(arm) = {
+fn switch_enum_outer(n, site) = {
+  value parent: site_parent(n, site)
+  value if parent == null then ""
+    else if contains(["ts_namespace", "ts_module"], parent.kind) then {
+      value outer: first(site_field(n, parent, "name") ?? [])
+      value prefix: switch_enum_outer(n, parent)
+      value if outer == null then prefix else if prefix == "" then outer.name else prefix "." outer.name
+    } else switch_enum_outer(n, parent)
+}
+fn switch_enum_name(n, carrier) = {
+  value outer: switch_enum_outer(n, { file: carrier.file, node: carrier.node })
+  value if outer == "" then carrier.description.name else outer "." carrier.description.name
+}
+fn switch_enum_members(n, carrier) =
+  site_field(n, { file: carrier.file, node: carrier.node }, "member") ?? []
+fn switch_enum_values(n, members) = {
+  value states: {
+    value { index: 0, literal: null }
+    walk (state) if state.index >= len(members) then null else {
+      value member: get(members, state.index)
+      value init: first(site_field(n, member, "init") ?? [])
+      value text: if init == null then null else trim(site_text(n, init).text)
+      value literal: when {
+        text == null && state.index == 0 then 0
+        text == null && type_of(state.literal) == "num" then state.literal + 1
+        text == null then null
+        starts_with(text, "'") || starts_with(text, "\"") then js_string(text)
+        type_of(num(text)) == "num" then num(text)
+        else then null
+      }
+      value { index: state.index + 1, literal: literal }
+    }
+    drop 1
+  }
+  value map(states, state => state.literal)
+}
+fn switch_enum_label(enum_name, member_name) =
+  if re_test(member_name, /^[A-Za-z_$][A-Za-z0-9_$]*$/) then enum_name "." member_name
+  else "(typeof " enum_name ")[" json_string(member_name) "]"
+fn switch_literal(n, arm) = {
   value part: find(arm, part => {
     value identity: switch_part_identity(part)
     value identity != null && (contains(["value", "nullish"], identity.kind) || contains(part.traits, "symbol"))
   })
-  value origin: find(arm, part => part.carrier.description.kind == "enum")
+  value enum_part: find(arm, part => part.carrier.description.kind == "enum")
+  value enum_members: if enum_part == null then [] else switch_enum_members(n, enum_part.carrier)
+  value enum_values: switch_enum_values(n, enum_members)
+  value enum_member: if part == null || enum_part == null then null else {
+    value index: index_of(enum_values, part.identity.value)
+    value if index == null then null else get(enum_members, index)
+  }
+  value symbol_site: if part == null || !contains(part.traits, "symbol") || part.identity.kind != "declaration"
+    then null else { file: part.identity.file, node: part.identity.node }
+  value symbol_name: if symbol_site == null then null else {
+    value name: first(site_field(n, symbol_site, "name") ?? [])
+    value if name == null then null else name.name
+  }
+  value label: when {
+    symbol_name != null then "typeof " symbol_name
+    enum_member != null then switch_enum_label(switch_enum_name(n, enum_part.carrier), enum_member.name)
+    contains(part.traits, "symbol") then "symbol"
+    switch_part_identity(part).kind == "nullish" then switch_part_identity(part).value
+    else then ts_value_print_part(part)
+  }
   value if part == null then null else {
-    key: { identity: switch_part_identity(part), enum_file: origin.carrier.file, enum_node: origin.carrier.node },
-    label: when {
-      contains(part.traits, "symbol") then "symbol"
-      switch_part_identity(part).kind == "nullish" then switch_part_identity(part).value
-      else then ts_value_print_part(part)
-    },
+    key: { identity: switch_part_identity(part), enum_file: enum_part.carrier.file, enum_node: enum_part.carrier.node },
+    label: label,
+    sort: if symbol_name != null then "unique symbol" else label,
   }
 }
-fn switch_arm_literals(arm) = {
-  value literal: switch_literal(arm)
+fn switch_arm_literals(n, arm) = {
+  value literal: switch_literal(n, arm)
   value when {
     literal != null then [literal]
     any(arm, part => contains(part.traits, "boolean")) then map([false, true], value => {
       key: { identity: { kind: "value", value: value }, enum_file: null, enum_node: null },
       label: "" value,
+      sort: "" value,
     })
     else then [null]
   }
 }
-fn switch_case_literal(parts) = {
+fn switch_case_literal(n, parts) = {
   value arm: first(parts)
-  value literal: switch_literal(arm)
+  value literal: switch_literal(n, arm)
   value if count(parts) != 1 || literal == null || any(arm, part =>
     switch_part_identity(part) != literal.key.identity && part.carrier.description.kind != "enum") then null else literal
 }
+fn switch_sort_literals(literals) = fold(literals, [], (sorted, literal) => {
+  value before: filter(sorted, other => compare_text(other.sort, literal.sort, false, true) <= 0)
+  value after: filter(sorted, other => compare_text(other.sort, literal.sort, false, true) > 0)
+  value concat(concat(before, [literal]), after)
+})
 in ts_switch {
   # Arms one by one: an enum type enumerates its members here.
   let switch_arms value_alternatives(discriminant.node)
   let switch_arm_parts map(switch_arms ?? [], arm => value_constituents(arm))
   let switch_parts if switch_arms == null || any(switch_arm_parts, parts => parts == null) then null
     else flat_map(switch_arm_parts, parts => parts)
-  let switch_literals flat_map(switch_parts, arm => switch_arm_literals(arm))
+  let switch_literals flat_map(switch_parts, arm => switch_arm_literals(node, arm))
   let switch_tests filter(case.nodes, branch => branch.test != null)
   let switch_test_parts map(switch_tests, branch => value_constituents(branch.test.node))
-  let switch_test_literals map(switch_test_parts, parts => switch_case_literal(parts))
+  let switch_test_literals map(switch_test_parts, parts => switch_case_literal(node, parts))
   let switch_missing {
     value filter(switch_literals, literal => literal != null
       && !any(switch_test_literals, branch => branch != null && branch.key == literal.key))
@@ -66,7 +127,7 @@ in ts_switch rule switch-exhaustiveness-check {
       defaultCaseCommentPattern.nonempty ?? "(?i)^no default$"
     ) then switch_default_comment else null)
   let switch_broad any(switch_literals, literal => literal == null)
-  let switch_missing_labels join(sort(map(switch_missing, literal => literal.label)), " | ")
+  let switch_missing_labels join(map(switch_sort_literals(switch_missing), literal => literal.label), " | ")
   let switch_reports {
     value [
       { node: discriminant.node, message: "Switch is not exhaustive. Cases not matched: " switch_missing_labels,
