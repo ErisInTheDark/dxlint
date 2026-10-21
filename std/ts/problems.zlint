@@ -526,6 +526,7 @@ in ts_number rule no-octal {
 in ts_array let is_assignment_target parent is ts_assignment && parent.left == text || parent is (ts_for_of, ts_for_in)
 in ts_hole rule no-sparse-arrays {
   when parent is ts_array && !parent.is_assignment_target
+  report at { start: offset, end: offset + 1 }
   warn "Unexpected comma in middle of array."
 }
 
@@ -570,6 +571,7 @@ in ts_labeled.label rule no-unused-labels {
 in ts_function, ts_method rule require-yield {
   let declared_yields flow_declared_effects(body.node, "yielded")
   when contains(modifier, "*") && declared_yields != null && count(declared_yields) == 0 && !{ value body.nonempty ?? ""; re_test /^\{\s*\}$/ }
+  report at function_head_site(node)
   warn "This generator function does not have 'yield'."
 }
 

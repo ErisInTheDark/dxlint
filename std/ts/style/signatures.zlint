@@ -15,11 +15,18 @@ in ts_export forward overload_identity from declaration
 in ts_function, ts_method, ts_method_signature, ts_call_signature, ts_export let overload_entry { identity: overload_identity, start: offset }
 in ts_program, ts_block, ts_class, ts_interface, ts_type_literal let overload_entries [] children.overload_entry
 fn earlier_overload(entries, identity, start) = any(entries, e => e.start < start && e.identity == identity)
+fn overload_report_site(n) = {
+  value terminator: n.token_neighbours.after
+  value bodiless: n is (ts_method_signature, ts_call_signature) || n.body == null
+  value separated: bodiless && terminator != null && terminator.text == ";" && terminator.start == n.end_offset
+  value { start: n.offset, end: if separated then terminator.end else n.end_offset }
+}
 in ts_function, ts_method, ts_method_signature, ts_call_signature, ts_export rule adjacent-overload-signatures {
   when parent is (ts_program, ts_block, ts_class, ts_interface, ts_type_literal)
   when overload_identity != null && overload_identity != previous.overload_identity
   when earlier_overload(parent.overload_entries, overload_identity, offset)
   let identity overload_identity
+  report at overload_report_site(node)
   warn "All {if identity.static == true then 'static ' else ''}{identity.name} signatures should be adjacent."
 }
 
