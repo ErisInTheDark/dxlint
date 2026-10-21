@@ -12,7 +12,7 @@ group indent_attribute_parts ts_import_attribute, ts_import_attribute_comma, ts_
 # Closing dotted names are text, not component references; native token children require an overlay.
 in ts_jsx_name layer indent_jsx_names match indent_jsx_name_member dot:/\./ /\s*/ property:/[^\s.:]+/
 in indent_jsx_name_member let indent_jsx_closing containing(ts_jsx_closing.name)
-in indent_jsx_name_member let indent_jsx_closing_anchor if position(indent_jsx_closing.offset).js_column == len(indent_jsx_closing.indent) + 1 then indent_jsx_closing else node_at(token(indent_jsx_closing, "before").start)
+in indent_jsx_name_member let indent_jsx_closing_anchor if position(indent_jsx_closing.offset).js_column == len(indent_jsx_closing.indent) + 1 then indent_jsx_closing else node_at(indent_jsx_closing.token_neighbours.before.start)
 
 fn indent_numeric(mode) = if type_of(mode) == "num" then mode else 1
 fn indent_variable_mode(owner, mode, vars, lets, consts, using) =
@@ -63,7 +63,7 @@ fn indent_attribute_node(at) =
     first
   }
 fn indent_node_at(at) = { value at; indent_attribute_node; nonempty } ?? node_at(at)
-fn indent_list_close(item) = if token(item, "after").text == "," then node_at(token(item, "after").start).token_neighbours.after.start else token(item, "after").start
+fn indent_list_close(item) = if item.token_neighbours.after.text == "," then node_at(item.token_neighbours.after.start).token_neighbours.after.start else item.token_neighbours.after.start
 fn indent_list_anchor(item) =
   if item.indent_list_previous == null || position(item.indent_list_previous.last_token.end).js_line <= position(item.parent.indent_list_open.offset).js_line then item.offset
   else item.indent_list_previous.first_token.start
@@ -183,7 +183,7 @@ in ts_import_attribute let indent_attribute_anchor { value node; walk (item) if 
 in indent_attribute_parts let indent_attribute_container containing(ts_import_attributes)
 in indent_attribute_parts let indent_attribute_item if is ts_import_attribute then node else { value indent_attribute_container.indent_items; filter (item) item.offset >= end_offset; first }
 in ts_import, ts_export let indent_module_attributes { value overlapping(ts_import_attributes); first }
-in ts_import, ts_export let indent_module_from if token(from, "before").text == "from" then token(from, "before").start else null
+in ts_import, ts_export let indent_module_from if from.token_neighbours.before.text == "from" then from.token_neighbours.before.start else null
 in ts_import, ts_export let indent_module_tail if indent_module_from != null then indent_module_from else token(indent_module_attributes.open.node, "before").start
 in ts_import_attributes let indent_module_owner { value containing(ts_import); nonempty } ?? containing(ts_export)
 in ts_import_attributes let indent_attribute_line_node { value position(open.offset).js_line_start + byte_len(open.indent); node_at }
@@ -194,7 +194,7 @@ in ts_import_attributes let indent_attribute_anchor if position(indent_attribute
 in indent_calls let indent_call_tail indent_callee_tail(node.callee.node)
 in indent_calls let indent_call_anchor
   if node.callee == null then offset
-  else if node.callee is ts_tagged_template then token(node.callee.quasi, "before").start
+  else if node.callee is ts_tagged_template then node.callee.quasi.token_neighbours.before.start
   else if node.optional != null then node.optional.offset
   else if node_at(indent_call_tail.last_token.start) is (ts_close_paren, ts_close_bracket, ts_close_brace) then { value node_at(indent_call_tail.last_token.start).paired_token.start; nonempty } ?? indent_call_tail.offset
   else indent_call_tail.last_token.start
@@ -210,14 +210,14 @@ in ts_declarator, ts_parameter, ts_class_property let indent_assignment_value in
 in ts_jsx_attribute let indent_assignment_value value.node
 in ts_import_equals let indent_assignment_value value.node
 in ts_type_parameter let indent_assignment_value default.node
-in ts_function let indent_return_colon token(return_type, "before").start
+in ts_function let indent_return_colon return_type.token_neighbours.before.start
 in ts_function let indent_return_anchor node_at(indent_return_colon).token_neighbours.before.start
 in ts_class let indent_class_head { value { value token.nodes; filter (item) item.text == "class"; first }.offset; nonempty } ?? offset
 in indent_generic_arguments let indent_angle_open first(type_argument.nodes).token_neighbours.before.start
 in indent_generic_parameters let indent_angle_open first(type_parameter.nodes).token_neighbours.before.start
 in indent_generic_arguments let indent_angle_close { value type_argument.nodes; last; indent_list_close }
 in indent_generic_parameters let indent_angle_close { value type_parameter.nodes; last; indent_list_close }
-in ts_index let indent_index_open token(index, "before").start
+in ts_index let indent_index_open index.token_neighbours.before.start
 in ts_if let indent_control_tails [consequent.last_token.end, alternate.last_token.end]
 in ts_for, ts_for_in, ts_for_of, ts_while, ts_do_while, ts_with let indent_control_tails [body.last_token.end]
 in ts_semicolon, ts_empty let indent_semicolon_control if space_before.line_break && space_after.line_break == false && next_token != null then {
@@ -314,7 +314,7 @@ in ts_line rule indent {
   indent ts_export.specifier
   indent ts_assignment.right, ts_assignment_pattern.right by indent_numeric(assignment_operator)
   indent ts_class_property.key from if offset != parent.offset && (is ts_computed_key || first(parent.decorator.nodes) == null) then parent.offset else offset by if is ts_computed_key then 0 else 1
-  indent ts_class_property.token from if text == "=" then token_neighbours.before.start else if text == ";" then token(parent.init, "before").start.nonempty ?? parent.key.last_token.start else offset by if text == ";" then 1 else indent_numeric(assignment_operator)
+  indent ts_class_property.token from if text == "=" then token_neighbours.before.start else if text == ";" then parent.init.token_neighbours.before.start.nonempty ?? parent.key.last_token.start else offset by if text == ";" then 1 else indent_numeric(assignment_operator)
   indent ts_class_property.init from token_neighbours.before.start by indent_numeric(assignment_operator)
   indent ts_declarator.init from token_neighbours.before.start by indent_numeric(assignment_operator)
   indent ts_import_equals.value, ts_type_parameter.default from token_neighbours.before.start by indent_numeric(assignment_operator)
@@ -389,8 +389,8 @@ in ts_line rule indent {
   when string_literal == null || position(string_literal.offset).js_line == position(first_offset).js_line
   when attribute_literal == null || position(attribute_literal.offset).js_line == position(first_offset).js_line
   let unit if mode == "tab" then "\t" else repeat(" ", mode)
-  let comment_before if comment == null then null else indent_node_at(token(comment, "before").start)
-  let comment_after if comment == null then null else indent_node_at(token(comment, "after").start)
+  let comment_before if comment == null then null else indent_node_at(comment.token_neighbours.before.start)
+  let comment_after if comment == null then null else indent_node_at(comment.token_neighbours.after.start)
   let comment_switch comment.indent_comment_switch
   let comment_last_case last(comment_switch.case.nodes)
   when comment_last_case == null || comment.offset < comment_last_case.end_offset
