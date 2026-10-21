@@ -62,7 +62,7 @@ fn enum_consistency_mismatch(n) = if count(n.member.nodes) == 0 then null else {
 in ts_enum rule no-mixed-enums {
   let mismatch enum_consistency_mismatch(node)
   when mismatch != null
-  report at mismatch.offset
+  report at mismatch
   warn "Mixing number and string enums can be confusing."
 }
 }
