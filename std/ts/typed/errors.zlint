@@ -13,8 +13,9 @@ fn error_rethrown(n) = {
     || parameter is ts_parameter && function is ts_arrow && call is ts_call
       && first(function.parameter.nodes) == parameter && rejection_handler(call).handler == function)
 }
-fn error_kind(n) = {
-  value arms: value_parts(n)
+fn error_kind(n) = error_kind_at(n, n)
+fn error_kind_at(n, subject) = {
+  value arms: value_parts(subject)
   value parts: map(arms ?? [], arm => arm.parts)
   value when {
     arms == null then "unknown"

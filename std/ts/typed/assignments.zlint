@@ -108,25 +108,28 @@ fn assignment_sender(n) = if n is (ts_declarator, ts_parameter, ts_class_propert
 fn assignment_transfers_value(n) = {
   value source: assignment_sender(n)
   value target: assignment_receiver(n)
-  value compare: n not (ts_declarator, ts_parameter, ts_class_property) || n.type != null
-  value report: if n is ts_parameter then { start: target.offset, end: source.end_offset }
-    else if n is ts_jsx_attribute then source else n
-  value sender: if source != null then value_constituents(source) else null
-  value receiver: if n.type != null then value_constituents(n.type.node)
-    else if n is ts_property then {
-      value key: ts_value_key(n.key.node)
-      value path: [key]
-      value value_expected_at(n.parent.node, path) ?? value_constituents(target)
-    } else if target != null then value_constituents(target) else null
-  value category: ts_value_category(sender)
-  value known_unknown: ts_value_trait(receiver, "unknown")
-    && (n.type != null || target not (ts_array, ts_array_pattern, ts_object, ts_object_pattern))
+  # Compound assignments and shorthand properties never transfer a value, so
+  # nothing below them is asked.
   value if source == null || target == null || n is ts_assignment && n.operator != "="
-    || n is ts_property && (n.parent.flow_destructuring_target || source is ts_assignment_pattern) then []
-    else if category != null && !known_unknown then [assignment_finding(report, "any", sender, null)]
-    else if compare && !assignment_empty_map(source) && assignment_unsafe(sender, receiver, n)
-      then [assignment_finding(report, "generic", sender, receiver)]
-    else assignment_destructure(target, source, [])
+    || n is ts_property && (n.parent.flow_destructuring_target || source is ts_assignment_pattern) then [] else {
+    value compare: n not (ts_declarator, ts_parameter, ts_class_property) || n.type != null
+    value report: if n is ts_parameter then { start: target.offset, end: source.end_offset }
+      else if n is ts_jsx_attribute then source else n
+    value sender: value_constituents(source)
+    value receiver: if n.type != null then value_constituents(n.type.node)
+      else if n is ts_property then {
+        value key: ts_value_key(n.key.node)
+        value path: [key]
+        value value_expected_at(n.parent.node, path) ?? value_constituents(target)
+      } else value_constituents(target)
+    value category: ts_value_category(sender)
+    value known_unknown: ts_value_trait(receiver, "unknown")
+      && (n.type != null || target not (ts_array, ts_array_pattern, ts_object, ts_object_pattern))
+    value if category != null && !known_unknown then [assignment_finding(report, "any", sender, null)]
+      else if compare && !assignment_empty_map(source) && assignment_unsafe(sender, receiver, n)
+        then [assignment_finding(report, "generic", sender, receiver)]
+      else assignment_destructure(target, source, [])
+  }
 }
 fn assignment_spread(n) = {
   value source: n.argument.node

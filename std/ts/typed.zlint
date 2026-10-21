@@ -132,8 +132,13 @@ in ts_parameter let rejection_parameter index == 1 && init == null && parent.rej
 in ts_identifier let rejection_binding is ts_parameter.name && parent.rejection_parameter == true
 in ts_call let rejection_call
   callee.rejection_member == true || any(callee.declarations, d => d.rejection_binding == true)
+fn rejection_reason_subject(n) = if n is ts_await then ts_awaited_value(n, n.argument.node) ?? n else n
 in ts_node let rejection_reason
-  {possible: could_be_error && error_undefined_identifier != true, kind: ts_error_value.kind, subject: node}
+  {possible: could_be_error && error_undefined_global != true, kind: error_kind_at(node, rejection_reason_subject(node)),
+    subject: rejection_reason_subject(node)}
+fn rejection_reason_known(n) = value_parts(n) != null || unparenthesised_node(n) is ts_array
+  || unparenthesised_node(n) is ts_assignment && contains(["-=", "*=", "/=", "%=", "**=", "<<=", ">>=", ">>>=", "|=", "&=", "^="],
+    unparenthesised_node(n).operator)
 in ts_call let prefer_promise_reject_errors_checked true
 in ts_call rule prefer-promise-reject-errors {
   option allowEmptyReject boolean = false "Allow rejection without a reason"
@@ -143,13 +148,17 @@ in ts_call rule prefer-promise-reject-errors {
   when rejection_call
   let reason first([] argument.rejection_reason)
   when reason != null || !allowEmptyReject
-  when reason == null || (if re_test(file, /\.[cm]?tsx?$/) then (value_parts(reason.subject) != null || unparenthesised_node(reason.subject) is ts_array) && reason.kind != "error" && !(allowThrowingAny && reason.kind == "any") && !(allowThrowingUnknown && reason.kind == "unknown") && type_value_allowed(allow, reason.subject) == false else !reason.possible)
+  when reason == null || (if re_test(file, /\.[cm]?tsx?$/) then rejection_reason_known(reason.subject) && reason.kind != "error" && !(allowThrowingAny && reason.kind == "any") && !(allowThrowingUnknown && reason.kind == "unknown") && type_value_allowed(allow, reason.subject) == false else !reason.possible)
   when prefer_promise_reject_errors_checked
   warn "Expected the Promise rejection reason to be an Error."
 }
 
 fn stringification_union(states) = if count(states) == 0 then 0 else if any(states, state => state == null) then null
   else if all(states, state => state == 2) then 2 else if all(states, state => state == 0) then 0 else 1
+# Elements are all stringified, so one certain element is enough; a union's arms are exclusive.
+fn stringification_elements(states) = if any(states, state => state == 2) then 2
+  else if any(states, state => state == null) then null
+  else if any(states, state => state == 1) then 1 else 0
 fn stringification_member(n, handle, key) = {
   value roots: global_declarations(n, "Object", "type")
   value defaults: map(roots ?? [], root => value_lookup(declaration_value(n, root), key))
@@ -188,7 +197,7 @@ fn stringification_part(n, part, ignored, check_unknown, seen) = {
   value if primitive || ignored_name then 0
     else if contains(part.traits, "unknown") || contains(part.traits, "parameter") then if check_unknown then 1 else 0
     else if contains(["array", "tuple"], carrier.description.kind) then
-      stringification_union(map(carrier.arguments, argument => stringification_certainty(n, argument, ignored, check_unknown, seen)))
+      stringification_elements(map(carrier.arguments, argument => stringification_certainty(n, argument, ignored, check_unknown, seen)))
     else if !part.carrier_known then null else {
       value symbol: value_lookup(part.handle, ts_value_symbol_key(n, "toPrimitive"))
       value custom_symbol: symbol.alternatives != null
@@ -218,7 +227,7 @@ fn stringification_join(n, ignored, check_unknown) = {
   value arms: value_parts(n)
   value if arms == null then null else stringification_union(map(arms, arm => {
     value states: map(stringification_parts(arm), part => if contains(["array", "tuple"], part.carrier.description.kind)
-      then stringification_union(map(part.carrier.arguments, argument => stringification_certainty(n, argument, ignored, check_unknown, [])))
+      then stringification_elements(map(part.carrier.arguments, argument => stringification_certainty(n, argument, ignored, check_unknown, [])))
       else 0)
     value if any(states, state => state == 0) then 0
       else if any(states, state => state == null) then null else max(states)
