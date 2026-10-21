@@ -192,7 +192,7 @@ in ts_parenthesized let unified_inner_type expression.unified_bare_type
 in style_tree_node let unified_bare_type unified_inner_type.nonempty ?? text
 in ts_identifier, ts_this let unified_parameter_name text
 in ts_rest let unified_parameter_name argument.unified_parameter_name
-in ts_parameter let unified_parameter { index: index, offset: offset, line: line, name: name.unified_parameter_name, rest: name is ts_rest, optional: optional != null, type: type.unified_bare_type, raw_type: type, union: type.unified_union_members.nonempty ?? [] }
+in ts_parameter let unified_parameter { index: index, offset: offset, end: end_offset, line: line, name: name.unified_parameter_name, rest: name is ts_rest, optional: optional != null, type: type.unified_bare_type, raw_type: type, union: type.unified_union_members.nonempty ?? [] }
 in ts_type_parameter let unified_type_parameter { name: name, constraint: constraint.unified_bare_type }
 in ts_type_parameter let unified_type_name name
 in ts_type_reference let unified_outer_type name
@@ -230,9 +230,9 @@ in ts_program, ts_block, ts_type_literal let unified_outer_names []
 in ts_export let unified_outer_names parent.unified_outer_names
 fn unified_parameter_at(signature, at) = { value signature.parameters; slice at (at + 1); first }
 fn unified_sigils(a, b) = a.rest == b.rest && a.optional == b.optional
-fn unified_difference(a, b) = if unified_sigils(a, b) && !a.rest then { offset: b.offset, other_line: a.line, ending: " taking `" unified_union(a.union b.union) "`." } else null
+fn unified_difference(a, b) = if unified_sigils(a, b) && !a.rest then { offset: b.offset, end: b.end, other_line: a.line, ending: " taking `" unified_union(a.union b.union) "`." } else null
 fn unified_equal_length(a, b, differences) = when {
-  count(differences) == 0 then { offset: b.head.offset, other_line: a.head.line, ending: " with identical parameters." }
+  count(differences) == 0 then { offset: b.head.offset, end: b.node.end_offset, other_line: a.head.line, ending: " with identical parameters." }
   count(differences) == 1 then {
     value differences
     first_differences: first
@@ -248,7 +248,7 @@ fn unified_shorter(short, long) = if last(short.parameters).rest == true || !all
   parameters_count: count
   value slice(long.parameters, result, parameters_count)
   all (p) p.optional || p.rest
-} then null else { offset: last(long.parameters).offset, other_line: short.head.line, ending: " with " (if last(long.parameters).rest then "a rest" else "an optional") " parameter." }
+} then null else { offset: last(long.parameters).offset, end: last(long.parameters).end, other_line: short.head.line, ending: " with " (if last(long.parameters).rest then "a rest" else "an optional") " parameter." }
 fn unified_parameter_difference(a, b) = when {
   count(a.parameters) == count(b.parameters) then {
     value a.parameters
@@ -284,7 +284,7 @@ in unified_signature_node rule unified-signatures {
     }
   }
   each pair in filter(pairs, p => p.difference != null && (!ignoreDifferentlyNamedParameters || unified_names(p.a, p.b)) && (!ignoreOverloadsWithDifferentJSDoc || p.a.node.unified_doc == p.b.node.unified_doc)) {
-    report at pair.difference.offset
+    report at { start: pair.difference.offset, end: pair.difference.end }
     warn "{if pair.count == 2 then 'These overloads' else 'This overload and the one on line ' pair.difference.other_line} can be combined into one signature{pair.difference.ending}"
   }
 }
