@@ -1,12 +1,17 @@
 define {
 
+fn accessor_scope(n) = {
+  value owner: n.parent.node
+  value if owner is ts_object then "object" else if owner is ts_class then "class"
+    else if owner is (ts_interface, ts_type_literal) then "type" else null
+}
 fn accessor_display_name(n) = {
   value label: n.function_name ?? {
     value kind: if n.kind == "get" then "getter" else "setter"
     value if n.static_name == null then kind else "{kind} '{n.static_name}'"
   }
-  # ESLint prints `key.name`, which is null for computed keys.
-  value if n.key is ts_computed_key && !contains(label, "'") then label " 'null'" else label
+  # A TS method signature's message interpolates getStaticPropertyName, so a dynamic key prints 'null'.
+  value if accessor_scope(n) == "type" && !contains(label, "'") then label " 'null'" else label
 }
 fn accessor_static(n) = any([] n.modifier.nodes, modifier => modifier.text == "static")
 fn accessor_key(n) = {
@@ -18,9 +23,8 @@ fn accessor_same_key(left, right) = if left.static_name != null && right.static_
   else left.static_name == null && right.static_name == null
     && left.key != null && right.key != null && accessor_key(left) == accessor_key(right)
 fn accessor_pair_info(n) = {
+  value scope: accessor_scope(n)
   value owner: n.parent.node
-  value scope: if owner is ts_object then "object" else if owner is ts_class then "class"
-    else if owner is (ts_interface, ts_type_literal) then "type" else null
   value if !contains(["get", "set"], n.kind) || scope == null then null else {
     value members: if scope == "object" then owner.property.nodes else owner.member.nodes
     value matches: { value members; filter (member) accessor_static(member) == accessor_static(n) && accessor_same_key(n, member) }

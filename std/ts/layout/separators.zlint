@@ -33,7 +33,7 @@ in ts_comma, ts_import_attribute_comma rule comma-style {
   let comma_placement if space_before.line_break && space_after.line_break && !(comma_after_comment is ts_block_comment && position(comma_after_comment.offset).js_line == position(offset).js_line) then "between" else style
   let comma_gap "{space_before.text}{space_after.text}"
   let comma_fixed_gap if comma_placement == "between" then re_replace(comma_gap, /^([^\r\n\u{2028}\u{2029}]*)(\r\n|[\r\n\u{2028}\u{2029}])/, "$1") else comma_gap
-  let comma_between_safe all(comma_comments, c => position(c.offset).js_line == position(c.end_offset).js_line) && (count(comma_comments) <= 1 || all(comma_comments, c => c is ts_block_comment))
+  let comma_between_safe all(comma_comments, c => position(c.offset).js_line == position(c.end_offset).js_line) && (all(comma_comments, c => c is ts_block_comment) || re_test(comma_fixed_gap, /[\r\n\u{2028}\u{2029}][ \t]*$/))
   fix at {start: space_before.start, end: space_after.end} if comma_placement != "between" || comma_between_safe as "{if comma_placement == 'first' then '' else ','}{comma_fixed_gap}{if comma_placement == 'first' then ',' else ''}"
   warn if space_before.line_break && space_after.line_break then "Bad line breaking before and after ','." else if style == "last" then "',' should be placed last." else "',' should be placed first."
 }
