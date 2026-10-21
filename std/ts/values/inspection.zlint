@@ -47,7 +47,7 @@ fn ts_value_print_part(part) = {
   value if carrier.description.kind == "tuple" then (if part.product.readonly then "readonly " else "") "[" joined "]"
     else if carrier.description.kind == "array" then (if part.product.readonly then "readonly " else "") ts_value_print_element(joined) "[]"
     else if carrier.description.kind == "named" then carrier.description.name (if len(args) == 0 then "" else "<" joined ">")
-    else if scalar == "symbol" && part.identity_known && part.identity.kind != "value" then "unique symbol"
+    else if scalar == "symbol" && part.identity_known && part.identity != null && part.identity.kind != "value" then "unique symbol"
     else if literal && scalar == "string" then ts_value_string(part.identity.value)
     else if literal && scalar == "bigint" then part.identity.value.value "n"
     else if literal && (scalar == "number" || scalar == "boolean") then "" part.identity.value
