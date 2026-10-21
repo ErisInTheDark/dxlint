@@ -1,0 +1,14 @@
+file.ts:10:21-10:22 explicit-module-boundary-types:argument#0
+file.ts:10:24-10:26 explicit-module-boundary-types:arrow#1
+file.ts:11:17-11:26 explicit-module-boundary-types#1
+file.ts:11:27-11:28 explicit-module-boundary-types:argument#0
+file.ts:16:17-16:21 explicit-module-boundary-types:method#1
+file.ts:16:18-16:19 explicit-module-boundary-types:argument#0
+file.ts:17:19-17:20 explicit-module-boundary-types:argument#0
+file.ts:1:26-1:29 explicit-module-boundary-types:argument#0
+file.ts:1:8-1:25 explicit-module-boundary-types#1
+file.ts:4:26-4:29 explicit-module-boundary-types:argument#0
+file.ts:4:31-4:33 explicit-module-boundary-types:arrow#1
+file.ts:6:22-6:31 explicit-module-boundary-types:argument#0
+file.ts:7:10-7:11 explicit-module-boundary-types:argument#0
+file.ts:7:3-7:9 explicit-module-boundary-types:method#1
