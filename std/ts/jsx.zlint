@@ -136,7 +136,7 @@ in ts_jsx_text rule jsx-child-element-spacing {
   let preceding after && previous != null
   when (previous != null || next != null) && (previous == null || previous.jsx_child_inline_name != null) && (next == null || next.jsx_child_inline_name != null)
   when preceding || before && next != null
-  report at node
+  report at if preceding then node.offset else node.end_offset
   warn "Ambiguous spacing {if preceding then 'after previous' else 'before next'} element {if preceding then previous.jsx_child_inline_name else next.jsx_child_inline_name}"
 }
 schema jsx_wrap_mode boolean | "ignore" | "parens" | "parens-new-line"
