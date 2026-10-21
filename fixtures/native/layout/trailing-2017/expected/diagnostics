@@ -1,3 +1,3 @@
-input.js:1:13-1:13 comma-dangle#1
-input.js:1:25-1:25 comma-dangle#1
-input.js:1:26-1:26 comma-dangle#1
+input.js:1:13-1:14 comma-dangle#1
+input.js:1:25-1:26 comma-dangle#1
+input.js:1:26-1:27 comma-dangle#1

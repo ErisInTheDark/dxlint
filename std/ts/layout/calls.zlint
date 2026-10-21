@@ -19,7 +19,7 @@ in ts_open_paren rule space-before-function-paren {
   let paren_mode if parent is ts_try then catch.nonempty ?? style else if parent is ts_arrow then asyncArrow.nonempty ?? style else if function_named then named.nonempty ?? style else anonymous.nonempty ?? style
   when paren_mode != "ignore" && !(paren_mode == "always" && !function_named && parent.type_parameter != null)
   when space_before.spaced != (paren_mode == "always")
-  report at if space_before.spaced then space_before.start else offset
+  report at if space_before.spaced then { start: space_before.start, end: offset } else { start: offset, end: offset + 1 }
   warn if space_before.spaced then "Unexpected space before function parentheses." else "Missing space before function parentheses."
   let paren_gap { start: token_neighbours.before.end, end: offset }
   let paren_comments { value overlapping(ts_comment, paren_gap.start, paren_gap.end); filter (comment) paren_gap.start <= comment.offset && comment.end_offset <= paren_gap.end }

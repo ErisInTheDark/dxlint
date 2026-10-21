@@ -68,7 +68,7 @@ in ts_array, ts_array_pattern, ts_object, ts_object_pattern, ts_function, ts_arr
   each dangle_site in if is ts_import_attributes then layout_attribute_comma_sites else layout_trailing_commas(node) {
     when layout_dangle_enabled(dangle_site.kind, ecma_version)
     when { value dangle_site.kind; mode: layout_dangle_mode style dangle_policies; value layout_dangle_wrong(dangle_site, mode) }
-    report at dangle_site.offset
+    report at { start: dangle_site.offset, end: dangle_site.offset + (if byte_slice(source, dangle_site.offset, dangle_site.offset + 2) == "\r\n" then 2 else 1) }
     fix at {start:dangle_site.offset, end:dangle_site.offset + (if dangle_site.trailing then 1 else 0)} as if dangle_site.trailing then "" else ","
     warn if dangle_site.trailing then "Unexpected trailing comma." else "Missing trailing comma."
   }

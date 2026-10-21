@@ -32,6 +32,7 @@ fn ts_value_string(text) = {
   value lines: replace(quotes, "\n", "\\n")
   value "\"" lines "\""
 }
+fn ts_value_print_element(text) = if contains(text, " | ") || contains(text, " & ") then "(" text ")" else text
 fn ts_value_print_part(part) = {
   value carrier: part.carrier
   value args: if carrier.description.kind == "tuple" && part.product_known && part.product != null then
@@ -44,15 +45,22 @@ fn ts_value_print_part(part) = {
   value scalar: find(["any", "unknown", "void", "null", "undefined", "string", "number", "boolean", "bigint", "symbol", "object"], trait => contains(part.traits, trait))
   value literal: part.identity.kind == "value" && part.identity_known
   value if carrier.description.kind == "tuple" then (if part.product.readonly then "readonly " else "") "[" joined "]"
-    else if carrier.description.kind == "array" then (if part.product.readonly then "ReadonlyArray" else "Array") "<" joined ">"
+    else if carrier.description.kind == "array" then (if part.product.readonly then "readonly " else "") ts_value_print_element(joined) "[]"
     else if carrier.description.kind == "named" then carrier.description.name (if len(args) == 0 then "" else "<" joined ">")
+    else if scalar == "symbol" && part.identity_known && part.identity.kind != "value" then "unique symbol"
     else if literal && scalar == "string" then ts_value_string(part.identity.value)
     else if literal && scalar == "bigint" then part.identity.value.value "n"
     else if literal && (scalar == "number" || scalar == "boolean") then "" part.identity.value
     else scalar ?? "unknown"
 }
+fn ts_value_print_arm(arm) = {
+  value labels: map(arm, part => ts_value_print_part(part))
+  value definite: filter(labels, label => label != "unknown")
+  value kept: if count(definite) == 0 then labels else definite
+  value { value kept; unique; join " & " }
+}
 fn ts_value_print(parts) = if parts == null then "unknown" else if len(parts) == 0 then "never" else {
-  value arms: map(parts, arm => { value arm; map (part) ts_value_print_part(part); unique; join " & " })
+  value arms: map(parts, arm => ts_value_print_arm(arm))
   value { value arms; unique; join " | " }
 }
 fn ts_value_print_member(edge, seen) = {
