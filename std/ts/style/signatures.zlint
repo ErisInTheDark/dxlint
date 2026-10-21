@@ -34,10 +34,12 @@ in ts_function, ts_method, ts_method_signature, ts_call_signature, ts_export rul
 # signatures in interfaces and type literals.
 in ts_call_signature rule no-misused-new {
   when parent is ts_interface && kind == "new" && { value return_type.nonempty ?? ""; re_replace /\s*<[\s\S]*$/ "" } == ts_interface.name
+  report at { start: offset, end: signature_source_end }
   warn "Interfaces cannot be constructed, only classes."
 }
 in ts_method_signature rule no-misused-new:constructor {
   when key == "constructor"
+  report at { start: offset, end: signature_source_end }
   warn "Interfaces cannot be constructed, only classes."
 }
 in ts_method rule no-misused-new:class {

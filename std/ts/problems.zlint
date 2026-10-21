@@ -54,6 +54,8 @@ in ts_parenthesized let promise_executor_slot parent is ts_new && index == 0 && 
 in ts_arrow, ts_function rule no-async-promise-executor {
   when contains(modifier, "async")
   when parent is ts_new && index == 0 && parent.promise_constructor || parent is ts_parenthesized && parent.promise_executor_slot == true
+  let async_token find(modifier.nodes, modifier => modifier.text == "async")
+  report at { start: async_token.offset, end: async_token.end_offset }
   warn "Promise executor functions should not be async."
 }
 

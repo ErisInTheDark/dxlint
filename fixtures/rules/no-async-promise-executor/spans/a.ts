@@ -1,0 +1,3 @@
+new Promise(async function foo(resolve, reject) {});
+new Promise(async (resolve, reject) => {});
+new Promise(((((async () => {})))));
