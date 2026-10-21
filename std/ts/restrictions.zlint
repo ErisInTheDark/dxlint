@@ -716,15 +716,15 @@ in ts_identifier rule no-restricted-globals {
 in ts_identifier let restriction_global_root if resolved == "global" && contains(["readonly", "writable"], global) then text else null
 in ts_parenthesized let restriction_global_root expression.restriction_global_root
 in ts_member, ts_index let restriction_global_root if static_name == object.restriction_global_root then object.restriction_global_root else null
-in ts_member let restriction_global_property_offset property.offset
-in ts_index let restriction_global_property_offset index.offset
+in ts_member let restriction_global_property_report property.node
+in ts_index let restriction_global_property_report index.offset
 in ts_member, ts_index rule no-restricted-globals:member {
   @restriction_global_options
   let root object.restriction_global_root
   let name static_name
   let matched find_last(globals, g => g.name == name)
   when checkGlobalObject && root != null && type_of(name) == "str" && contains(["globalThis", "self", "window"] globalObjects, root) && matched != null
-  report at restriction_global_property_offset
+  report at restriction_global_property_report
   warn "Unexpected use of '{name}'." (if matched.message != null && matched.message != "" then " " matched.message else "")
 }
 schema restriction_property {

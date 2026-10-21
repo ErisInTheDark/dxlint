@@ -1,2 +1,2 @@
-input.ts:2:18-2:18 space-in-parens:before#0
-input.ts:2:5-2:5 space-in-parens:after#0
+input.ts:2:18-2:19 space-in-parens:before#0
+input.ts:2:5-2:6 space-in-parens:after#0

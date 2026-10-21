@@ -127,7 +127,7 @@ in ts_open_paren rule space-in-parens:after {
   }
   let paren_wants if count(exceptions) == 0 then mode == "always" else (mode == "always") != contains(exceptions, paren_next)
   when if paren_space != "" then !re_test(paren_space, /[\n\r\u{2028}\u{2029}]/) && !{ value paren_gap; trim_start; starts_with "//" } && !paren_wants else paren_wants && (paren_next != "empty" || contains(exceptions, "empty"))
-  report at if paren_space != "" then end_offset else offset
+  report at if paren_space != "" then { start: end_offset, end: end_offset + byte_len(paren_space) } else node
   fix space_after as if paren_wants then " " else ""
   warn if paren_space != "" then "There should be no space after this paren." else "There must be a space after this paren."
 }
@@ -149,7 +149,7 @@ in ts_close_paren rule space-in-parens:before {
   }
   let paren_wants if count(exceptions) == 0 then mode == "always" else (mode == "always") != contains(exceptions, paren_previous)
   when if paren_space != "" then !re_test(paren_space, /[\n\r\u{2028}\u{2029}]/) && !paren_wants else paren_wants && (paren_previous != "empty" || contains(exceptions, "empty"))
-  report at if paren_space != "" then offset - byte_len(paren_space) else offset
+  report at if paren_space != "" then { start: offset - byte_len(paren_space), end: offset } else node
   fix space_before as if paren_wants then " " else ""
   warn if paren_space != "" then "There should be no space before this paren." else "There must be a space before this paren."
 }

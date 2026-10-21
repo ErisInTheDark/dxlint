@@ -1,0 +1,3 @@
+import .ts
+rule space-in-parens:after { set mode "always" }
+rule space-in-parens:before { set mode "always" }
