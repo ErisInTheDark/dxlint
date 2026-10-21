@@ -8,9 +8,19 @@ in ts_program let readonly_write_index {
     value descendants(readonly_write_access)
     filter (access) access.write_site != null
   }
+  # A numeric index writes an element, never a member: only numeric member keys
+  # can be targeted that way, and resolving element types is expensive.
+  value numeric_keys: {
+    value descendants(ts_class_property)
+    filter (property) property.key is ts_number
+    map (property) ts_value_key(property.key.node)
+    unique
+  }
+  value relevant: filter(accesses, access => !(access is ts_index && access.index is ts_number
+    && !contains(numeric_keys, access.readonly_write_name)))
   # A constructor write never blocks `readonly`: a readonly member may be assigned there.
   value blocking: {
-    value accesses
+    value relevant
     filter (access) !access.readonly_write_constructor
   }
   value if any(blocking, access => access.readonly_write_name == null && access.readonly_write_sources == null)
@@ -21,7 +31,7 @@ in ts_program let readonly_write_index {
       map (access) { name: access.readonly_write_name, class: access.readonly_write_class }
     }
     value writes: {
-      value accesses
+      value relevant
       flat_map (access) {
         value access.readonly_write_sources
         map (source) source.site
