@@ -129,7 +129,8 @@ fn function_type_fix(source, n, info) = {
 in ts_call_signature rule prefer-function-type {
   let container parent.function_type_container
   when return_type != null && container.eligible == true
-  report at container.this.nonempty ?? offset
+  let this_offset container.this
+  report at if this_offset != null then { start: this_offset, end: this_offset + 4 } else offset
   warn if container.this != null then "`this` refers to the function type '" container.name "', did you intend to use a generic `this` parameter like `<Self>(this: Self, ...) => Self` instead?" else container.kind " only has a call signature, you should use a function type instead."
   let edit function_type_fix(source, node, container)
   fix at { start: edit.start ?? offset, end: edit.end ?? offset } if edit != null as edit.text

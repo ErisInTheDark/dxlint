@@ -212,6 +212,7 @@ in ts_try rule no-useless-catch {
 }
 in ts_try.kind rule no-useless-catch:clause {
   when parent.catch_rethrows && parent.finalizer != null
+  report at { start: offset, end: parent.handler.end_offset }
   warn "Unnecessary catch clause."
 }
 
