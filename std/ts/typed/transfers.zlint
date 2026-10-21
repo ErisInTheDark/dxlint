@@ -8,13 +8,18 @@ fn argument_value_finding(site, mode, sender, receiver) = {
   site: {start: site.offset, end: site.end_offset}, mode: mode, error: ts_value_category(sender) == "error",
   sender: ts_value_print(sender), receiver: ts_value_print(receiver)
 }
+# An unsafe transfer needs an `any` somewhere the walk can reach: its own parts,
+# or the arguments of their carriers (the only children the walk descends into).
+fn assignment_may_be_unsafe(parts) = parts != null && any(parts, arm => any(arm, part =>
+  contains(part.traits, "any")
+  || part.carrier_known && part.carrier != null && count(part.carrier.arguments ?? []) > 0))
 fn argument_value_findings(call) = if call not (ts_call, ts_new, ts_tagged_template) then [] else {
   value if call is ts_tagged_template then call.quasi.expression.nodes else call.argument.nodes
   flat_map (argument) {
     value spread: argument is ts_spread
     value source: if spread then argument.argument.node else argument
     value sender: value_constituents(source)
-    value expected: if !spread then value_expected(argument) else null
+    value expected: if spread || !assignment_may_be_unsafe(sender) then null else value_expected(argument)
     value receiver: expected.value
     value carrier: assignment_carrier(sender)
     value element: first(carrier.arguments)
