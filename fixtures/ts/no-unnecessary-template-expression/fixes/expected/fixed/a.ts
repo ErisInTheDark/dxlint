@@ -41,3 +41,7 @@ type KeyOfUnion = keyof ('foo' | 'bar');
 `nul\x001`;
 `octal${'\60'} value`;
 `/a/gim`;
+` \${a} `;
+declare const sym: symbol;
+String(sym);
+String(1);

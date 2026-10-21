@@ -37,7 +37,7 @@ namespace Case847 {
 type A = (number & string)    ;
 }
 namespace Case875 {
-type A = number & string & (number & string);
+type A = number & string    ;
 }
 namespace Case110 {
 

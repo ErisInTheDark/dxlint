@@ -32,6 +32,13 @@ a.ts:40:7-40:28 no-unnecessary-template-expression#0
 a.ts:41:5-41:12 no-unnecessary-template-expression#0
 a.ts:42:7-42:15 no-unnecessary-template-expression#0
 a.ts:43:2-43:11 no-unnecessary-template-expression#0
+a.ts:44:12-44:22 no-unnecessary-template-expression#0
+a.ts:44:15-44:20 no-unnecessary-template-expression#0
+a.ts:44:24-44:32 no-unnecessary-template-expression#0
+a.ts:44:4-44:24 no-unnecessary-template-expression#0
+a.ts:44:7-44:12 no-unnecessary-template-expression#0
+a.ts:46:2-46:16 no-unnecessary-template-expression#0
+a.ts:47:2-47:14 no-unnecessary-template-expression#0
 a.ts:4:12-4:21 no-unnecessary-template-expression#0
 a.ts:4:2-4:11 no-unnecessary-template-expression#0
 a.ts:5:2-5:9 no-unnecessary-template-expression#0

@@ -19,6 +19,20 @@ fn qualifier_owner_path(n, names, index) = {
     && qualifier_key(n).identifier_name == name.identifier_name
     && qualifier_owner_path(qualifier_receiver(n), names, index - 1)
 }
+fn qualifier_module_import(n, owner) = {
+  value declaration: qualifier_receiver(n).scope_declaration
+  value imports: {
+    value declaration
+    walk (item) item.parent.node
+    filter (item) item is ts_import
+  }
+  value own: first(imports)
+  value source: own.from.node
+  value matches: own != null && own.namespace.node == declaration && source is ts_string && owner is ts_namespace && owner.name is ts_string && source.literal_value.value == owner.name.literal_value.value
+  value matches
+}
+fn qualifier_ambient_module(n, owner) = owner is ts_namespace && owner.name is ts_string && ts_module_program(owner).ts_module_external_file && qualifier_module_import(n, owner)
+fn qualifier_ambient_owner(owner) = owner is ts_namespace && owner.name is ts_string && ts_module_program(owner).ts_module_external_file
 fn qualifier_owner(n) = {
   value owners: {
     value n
@@ -27,7 +41,7 @@ fn qualifier_owner(n) = {
   }
   value find(owners, owner => {
     value names: if owner is ts_namespace then ts_module_names(owner) else [owner.name.node]
-    value count(names) > 0 && qualifier_owner_path(qualifier_receiver(n), names, count(names) - 1)
+    value count(names) > 0 && qualifier_owner_path(qualifier_receiver(n), names, count(names) - 1) || qualifier_ambient_module(n, owner)
   })
 }
 fn qualifier_owned_identity(n) = {
@@ -63,11 +77,12 @@ fn qualifier_local(n, key) = {
 }
 fn qualifier_unnecessary(n) = {
   value receiver: qualifier_receiver(n)
-  value if !qualifier_entity(receiver) || n.optional != null || qualifier_owner(n) == null then false else {
+  value owner: qualifier_owner(n)
+  value if !qualifier_entity(receiver) || n.optional != null || owner == null then false else {
     value accessed: qualifier_identity(n)
     value local: qualifier_local(n, qualifier_key(n).text)
-    value accessed != null && local != null && count(local) > 0
-      && all(local, declaration => declaration == accessed)
+    value matches: if local == null then qualifier_ambient_owner(owner) else count(local) > 0 && all(local, declaration => declaration == accessed)
+    value accessed != null && matches
   }
 }
 fn qualifier_outer(n) = if n.parent is (ts_member, ts_qualified_name) && qualifier_receiver(n.parent.node) == n then n.parent.node else null

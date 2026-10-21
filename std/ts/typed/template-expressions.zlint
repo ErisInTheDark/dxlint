@@ -14,7 +14,8 @@ fn template_expression_whitespace(n) = if n is ts_string then n.literal_value.ty
   re_test /^[\t\v\f \r\n\uFEFF\p{Zs}\u2028\u2029]*$/
 }
 fn template_expression_literal(n, type_syntax) = n is ts_literal || n is (ts_template, ts_template_type) || (if type_syntax then n is ts_type_keyword && contains(["null", "undefined"], n.text) else n is ts_identifier && contains(["undefined", "Infinity", "NaN"], n.text))
-fn template_expression_string(n, single, type_syntax) = single && ts_value_string_like(n) && (!type_syntax || !ts_value_parameter(n) && !ts_value_has_enum(n))
+fn template_expression_global_string(n) = n is ts_call && n.callee is ts_identifier && n.callee.text == "String" && n.callee.resolved == "global"
+fn template_expression_string(n, single, type_syntax) = single && (ts_value_string_like(n) || template_expression_global_string(n)) && (!type_syntax || !ts_value_parameter(n) && !ts_value_has_enum(n))
 
 fn template_regex_text(n) = {
   value flags: re_find(n.text, /[a-z]*$/)
@@ -30,10 +31,11 @@ fn template_interpolation_raw(n) = when {
   n is ts_regex then { value template_regex_text(n); re_replace /\\/ "\\\\"; template_literal_raw (["'", '"']) }
   else then n.literal_value.value.nonempty ?? n.text
 }
+fn template_quasi_text(quasi) = slice(quasi.text, 1, if ends_with(quasi.text, "`") then -1 else -2)
 fn template_unescaped_dollar(text) = re_test(text, /(^|[^\\])(?:\\\\)*\$$/)
 fn template_interpolation_eligible(interpolation, comments, type_syntax) = !any(comments, comment => comment.offset >= interpolation.previous.end_offset && comment.end_offset <= interpolation.following.offset)
   && (interpolation.string_only || template_expression_literal(interpolation.subject, type_syntax) && !(re_test(interpolation.following.text, /^}[\r\n\u2028\u2029]/) && template_expression_whitespace(interpolation.subject)))
-fn template_interpolation_fix(source, n, interpolation, next_opens) = when {
+fn template_interpolation_fix(source, n, interpolation, next_opens, post_opens) = when {
   interpolation.string_only then {
     value operand: interpolation.expression
     value parens: expression_fix_parens(source, n, operand)
@@ -50,11 +52,12 @@ fn template_interpolation_fix(source, n, interpolation, next_opens) = when {
     value following: slice(interpolation.following.text, 1)
     # A valid string NUL escape must not become a legacy octal escape on joining.
     value raw: if re_test(raw_text, /(^|[^\\])(?:\\\\)*\\0$/) && re_test(following, /^[0-9]/) then slice(raw_text, 0, -2) "\\x00" else raw_text
-    value protect_previous: template_unescaped_dollar(previous) && (starts_with(raw, "{{") || raw == "" && next_opens)
-    value protect_next: template_unescaped_dollar(raw) && next_opens
+    value protect_previous: post_opens && template_unescaped_dollar(previous)
+    value protect_next: next_opens && template_unescaped_dollar(raw)
+    value fixed_raw: if protect_next then slice(raw, 0, -1) "\\$" else raw
     value {
       target: { start: interpolation.previous.end_offset - 2 - (if protect_previous then 1 else 0), end: interpolation.following.offset + 1 },
-      text: (if protect_previous then "\\$" else "") (if protect_next then slice(raw, 0, -1) "\\$" else raw)
+      text: (if protect_previous then "\\$" else "") fixed_raw
     }
   }
 }
@@ -91,14 +94,21 @@ in ts_template, ts_template_type rule no-unnecessary-template-expression {
       value next_opens: if following == "" then state.opens else starts_with(following, "{{")
       value eligible: template_interpolation_eligible(interpolation, comments, type_syntax)
       value raw: if eligible then template_interpolation_raw(interpolation.subject) else null
+      value subject_quasis: if interpolation.subject is (ts_template, ts_template_type) then interpolation.subject.quasi.nodes else []
+      value first_quasi: first(subject_quasis)
+      value first_raw: if first_quasi == null then "" else template_quasi_text(first_quasi)
+      value post_opens: when {
+        interpolation.subject is (ts_template, ts_template_type) then if count(subject_quasis) == 1 && first_raw != "" then starts_with(first_raw, "{{") else next_opens
+        else then if raw == "" then next_opens else starts_with(raw, "{{")
+      }
       value {
-        opens: eligible && (if raw == "" then next_opens else starts_with(raw, "{{")),
+        opens: if eligible then post_opens else state.opens,
         items: {
           value state.items
           concat [{
             data: interpolation,
             eligible: eligible,
-            fix: if eligible then template_interpolation_fix(source, node, interpolation, next_opens) else null
+            fix: if eligible then template_interpolation_fix(source, node, interpolation, next_opens, post_opens) else null
           }]
         }
       }

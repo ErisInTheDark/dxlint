@@ -41,3 +41,7 @@ type KeyOfUnion = keyof `${'foo' | 'bar'}`;
 `nul${'\0'}1`;
 `octal${'\60'} value`;
 `${/a/mig}`;
+` $${`${''}${`${``}`}`}${`{a}`} `;
+declare const sym: symbol;
+`${String(sym)}`;
+`${String(1)}`;

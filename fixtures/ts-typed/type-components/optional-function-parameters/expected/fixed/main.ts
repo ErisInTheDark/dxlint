@@ -29,6 +29,6 @@ declare function f(a?: string  ): void;
 namespace Case155 {
 (a: string | undefined) => {};
 }
-const empty = (arg?: undefined | undefined) => {};
+const empty = (arg?:   undefined) => {};
 function constrained<T extends undefined>(arg?: T | string) {}
 function acceptsVoid(arg?: void | string) {}
