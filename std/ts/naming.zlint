@@ -108,6 +108,9 @@ fn naming_suffix_failure(quotes, settings, step) = (
   else if len(settings.formats) > 0 && (quotes || !any(settings.formats, format => naming_format(step.name, format))) then {kind: "format", settings: settings, processed: step.name}
   else null
 )
+fn naming_site(n) = if n.parent is ts_parameter then { start: n.offset, end: n.parent.end_offset }
+  else if n.parent is ts_declarator && n.parent.type != null then { start: n.offset, end: n.parent.type.end_offset }
+  else n
 fn naming_message(name, failure) = "name `" name "` " (
   if failure.kind == "leading" || failure.kind == "trailing" then {
     value result: if failure.kind == "leading" then "leadingUnderscore" else "trailingUnderscore"
@@ -138,6 +141,7 @@ fn naming_underscore_message(policy, side) = if policy == "forbid" then "must no
     })
     when failure != null
     let naming_label label
+    report at naming_site(node)
     warn naming_label " " naming_message(naming_name, failure)
   }
 }
