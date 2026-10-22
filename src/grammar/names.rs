@@ -192,6 +192,8 @@ pub struct Vocabulary {
     /// Per trait index, every trait it implies (itself included), closed
     /// over chains. Shorter than `traits` when later traits imply nothing.
     pub implied: Vec<u64>,
+    /// Per trait index, the other traits that imply it (no entry when none).
+    pub implying: Vec<u64>,
     pub products: Vec<String>,
 }
 
@@ -231,6 +233,12 @@ impl Vocabulary {
                 }
             }
             if !changed { break }
+        }
+        self.implying = vec![0; self.traits.len()];
+        for (from, &implied) in self.implied.iter().enumerate() {
+            for to in 0..self.traits.len() {
+                if to != from && implied & (1 << to) != 0 { self.implying[to] |= 1 << from }
+            }
         }
     }
 }
@@ -632,7 +640,9 @@ impl Names {
                     }
                 }
                 NameItem::Fits { traits, views, open } => {
-                    let Some(bits) = class_bits(&mut vocab.traits, traits, errors).map(|bits| vocab.with_implied(bits)) else { continue };
+                    // Declared bits only: implied traits match through `Values::fits`
+                    // but never make an intersection impossible.
+                    let Some(bits) = class_bits(&mut vocab.traits, traits, errors) else { continue };
                     let Some(views_mask) = class_bits(&mut vocab.scope_classes, views, errors) else { continue };
                     asked.extend(views.iter().map(|name| (name, true)));
                     for (&m, &when) in targets.iter().zip(&when) {

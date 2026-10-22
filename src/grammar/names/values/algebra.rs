@@ -103,7 +103,7 @@ impl Values<'_> {
                 for trait_id in 0..64 {
                     if checked & fittable & (1 << trait_id) == 0 { continue }
                     if !self.question.budget.step() { return NodeValue::Unknown }
-                    if self.fits(leaf, trait_id) == Known::Yes(true) {
+                    if self.declared_trait(leaf, trait_id) == Known::Yes(true) {
                         proven |= 1 << trait_id;
                         if self.tables.exclusive.iter().any(|group| (proven & group).count_ones() > 1) {
                             continue 'alternative;

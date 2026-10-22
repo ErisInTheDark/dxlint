@@ -49,10 +49,10 @@ in ts_member, ts_index {
     else if index is (ts_string, ts_number, ts_bigint) then ts_value_key(index.node) else null
   let readonly_write_sources {
     value lookup: value_lookup(object.node, readonly_write_key)
-    value if lookup.alternatives == null then null else {
-      value lookup.alternatives
-      flat_map (alternative) alternative.sources
-    }
+    value if lookup.alternatives == null then null
+      else if readonly_write_name != null
+        && any(lookup.alternatives, alternative => !alternative.matched && count(alternative.sources) == 0) then null
+      else flat_map(lookup.alternatives, alternative => alternative.sources)
   }
   let readonly_write_function {
     value walk(node, item => item.parent.node)

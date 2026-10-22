@@ -75,7 +75,12 @@ impl<'a, 'world> Run<'a, 'world> {
         if self.positions.is_empty() { return self.values.evaluate(at, recipe) }
         if !self.values.question.budget.step() { return NodeValue::Unknown }
         match recipe {
-            Value::Current => self.raw_leaf(at),
+            // The node itself inside its own recipe (`unwraps self & ...`):
+            // its leaf, as evaluation gives it, not a cycle.
+            Value::Current => match self.values.semantic.leaf(at) {
+                Known::Yes(leaf) if self.expanding.last() == Some(&leaf) => NodeValue::leaf(leaf),
+                _ => self.raw_leaf(at),
+            },
             Value::Captured(value) => (**value).clone(),
             Value::Product(recipe) => {
                 let values = self.values;
@@ -361,7 +366,9 @@ impl<'a, 'world> Run<'a, 'world> {
         for trait_id in 0..64 {
             let bit = 1 << trait_id;
             if categories & bit == 0 { continue }
-            match values.always(&expected_value, bit) {
+            // What the target declares, not what its traits imply: a shape
+            // implies `object` yet takes a primitive with those members.
+            match values.always_declared(&expected_value, bit) {
                 Known::Yes(false) => {}
                 Known::Unknown => unknown = true,
                 Known::Yes(true) => {

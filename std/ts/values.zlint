@@ -7,6 +7,8 @@ define {
 exclusive null, undefined, string, number, boolean, bigint, symbol, object
 exclusive falsy, truthy
 exclusive thenable, nonthenable
+# TypeScript's `object` keyword takes every non-primitive: a shape with members is one.
+trait shaped implies object
 top unknown
 dynamic any
 keys text string
@@ -584,6 +586,7 @@ in ts_object, ts_interface, ts_type_literal {
 }
 in ts_interface, ts_type_literal { unwraps scope members from it }
 in ts_type_literal { fits object_literal in members }
+in ts_interface, ts_type_literal { fits shaped in members when count(member.nodes) > 0 }
 in ts_object {
   let ts_value_any_spreads filter(property.nodes, item => item is ts_spread && item.argument always any)
   when len(ts_value_any_spreads) > 0 { unwraps ...ts_value_any_spreads.argument }
@@ -827,7 +830,7 @@ in ts_intersection {
   let ts_value_dynamic_intersection any(ts_value_intersection, item => item always any)
   when ts_value_dynamic_intersection { unwraps &...ts_value_intersection }
   when !ts_value_dynamic_intersection {
-    fits intersection open
+    fits intersection
     unwraps self & (&...ts_value_intersection)
   }
 }
@@ -905,6 +908,7 @@ in ts_mapped_type {
   scope members
   members members closed
   fits structural in members
+  fits shaped in members
   generics type_parameter
   let ts_value_mapped_modifiers {
     value constraint: ts_value_bare_type(type_parameter.constraint.node)
@@ -1019,7 +1023,7 @@ in ts_type_keyword {
   fits bigint when text == "bigint"
   fits symbol when text == "symbol"
   fits truthy when text == "symbol"
-  fits object, truthy when text == "object"
+  fits object when text == "object"
   fits nonthenable when text == "null" || text == "undefined" || text == "void"
   fits null, nullable, falsy when text == "null"
   fits undefined, nullable, falsy when text == "undefined" || text == "void"

@@ -340,13 +340,34 @@ impl Values<'_> {
         self.semantic.values.pending.borrow().contains(&tag)
     }
 
+    /// Whether `leaf` fits `trait_id`, declared or through a trait it fits
+    /// that implies it (`trait shaped implies object`).
     pub fn fits(&self, leaf: Leaf, trait_id: u16) -> Known<bool> {
+        let direct = self.declared_trait(leaf, trait_id);
+        let implying = self.tables.vocabulary.implying.get(usize::from(trait_id)).copied().unwrap_or(0);
+        if direct != Known::Yes(false) || implying == 0 { return direct }
+        let mut answer = Known::Yes(false);
+        for source in 0..64u16 {
+            if implying & (1 << source) == 0 { continue }
+            match self.declared_trait(leaf, source) {
+                Known::Yes(true) => return Known::Yes(true),
+                Known::Unknown => answer = Known::Unknown,
+                Known::Yes(false) => {}
+            }
+        }
+        answer
+    }
+
+    /// [`Self::fits`] by the leaf's own declared traits only: implied traits
+    /// match, but never make an intersection impossible (`number & {brand}`
+    /// stays a number though shapes imply `object`).
+    pub(crate) fn declared_trait(&self, leaf: Leaf, trait_id: u16) -> Known<bool> {
         let Known::Yes(leaf) = self.semantic.leaf(leaf) else { return Known::Unknown };
         if let Some(answer) = self.fixed_trait(leaf, trait_id) { return answer }
         // A scope's fits are what its declaration declares: one answer for
         // every instantiation (frame) of it.
         if matches!(leaf.target, Target::Scope(_)) && leaf.frame != FrameId::ROOT {
-            return self.fits(Leaf { frame: FrameId::ROOT, ..leaf }, trait_id);
+            return self.declared_trait(Leaf { frame: FrameId::ROOT, ..leaf }, trait_id);
         }
         self.memoized_with(&self.semantic.values.traits, (leaf, trait_id),
             || (trait_id < 64 && self.question.budget.step()).then_some(()), || self.direct_trait(leaf, trait_id))
@@ -459,14 +480,20 @@ impl Values<'_> {
     }
 
     pub fn could(&self, value: &NodeValue, traits: u64) -> Known<bool> {
-        self.quantify(value, traits, false)
+        self.quantify(value, traits, false, false)
     }
 
     pub fn always(&self, value: &NodeValue, traits: u64) -> Known<bool> {
-        self.quantify(value, traits, true)
+        self.quantify(value, traits, true, false)
     }
 
-    fn quantify(&self, value: &NodeValue, traits: u64, every: bool) -> Known<bool> {
+    /// [`Self::always`] by declared traits only (what a target demands of a
+    /// source: a shape implies `object` but doesn't require it).
+    pub fn always_declared(&self, value: &NodeValue, traits: u64) -> Known<bool> {
+        self.quantify(value, traits, true, true)
+    }
+
+    fn quantify(&self, value: &NodeValue, traits: u64, every: bool, declared: bool) -> Known<bool> {
         let NodeValue::Alternatives(alternatives) = value else { return Known::Unknown };
         let mut unknown = false;
         for alternative in alternatives {
@@ -485,7 +512,8 @@ impl Values<'_> {
                     if !self.question.budget.step() {
                         return Known::Unknown;
                     }
-                    match self.fits(leaf, trait_id) {
+                    let fits = if declared { self.declared_trait(leaf, trait_id) } else { self.fits(leaf, trait_id) };
+                    match fits {
                         Known::Yes(true) => { fitted = true; break }
                         Known::Unknown => maybe = true,
                         Known::Yes(false) => {}
