@@ -2,6 +2,7 @@
 static ALLOCATOR: zoomie_lint::alloc::Pooled = zoomie_lint::alloc::Pooled;
 
 fn main() -> std::process::ExitCode {
+    let sampler = zoomie_lint::sampler::start_from_env();
     // Everything runs on a worker-sized stack: a file linted on this thread
     // (fixtures, the language server's loop) asks questions as deep as a
     // lint worker's, and the process main thread's stack is far smaller.
@@ -16,5 +17,6 @@ fn main() -> std::process::ExitCode {
         )
     }).expect("main thread");
     let code = run.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+    drop(sampler);
     std::process::ExitCode::from(code)
 }

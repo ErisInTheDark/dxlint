@@ -8,6 +8,7 @@ Rust linter; rules in `.zlint` (docs/language.md). Binary `zlint`.
 - rule fixtures: `zlint fixtures [paths...] [--bless]` (default `fixtures/`)
 - self-lint: `cargo run --release --` (uses `.zlint`); must stay clean
 - perf check: `zlint --stats --no-cache <big file>`; compare before/after engine changes
+- CPU profile (Windows, no admin): env `ZLINT_SAMPLE=<report>` on a build with debug line tables; `ZLINT_SAMPLE_CALLERS=a;>b` adds callers of `a`, callees of `b`. Budget steps are not time: profile before trusting them
 
 ## Layout
 
