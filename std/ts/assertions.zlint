@@ -208,32 +208,90 @@ fn assertion_subject(n, ignored) = {
   }
   last
 }
+fn assertion_parts_contain_any(parts) = any(parts ?? [], arm => any(arm.parts, part => contains(part.traits, "any")))
+fn assertion_context_identity(n) = if n.expression.node is ts_object
+  && !assertion_parts_contain_any(value_parts(n.type.node))
+  && !assertion_parts_contain_any(value_parts(n.expression.node))
+  && ts_value_trait(value_constituents(n.type.node), "unknown") != true
+  && value_same(n.type.node, value_expected_handle(n.expression.node)) == true
+  && value_accepts(n.type.node, n.expression.node, "value", "value") == true then true else false
+fn assertion_error_identity(n) = {
+  value annotation: n.type.node
+  value if annotation is ts_type_reference && name_binding(annotation.name.node) == null
+    then assertion_parts_contain_any(value_parts(n.type.node))
+      && assertion_parts_contain_any(value_parts(n.expression.node))
+    else false
+}
+fn assertion_same_shape(source, target) = if !assertion_parts_contain_any(value_parts(source))
+  && !assertion_parts_contain_any(value_parts(target))
+  && value_accepts(target, source, "value", "value") == true
+  && value_accepts(source, target, "value", "value") == true then true else false
+fn assertion_generic_callee(call) = {
+  value callee: unparenthesised_node(call.callee.node)
+  value binding: if callee is ts_identifier then name_binding(callee) else null
+  value declaration: if binding != null && count(binding.declarations) == 1 then first(binding.declarations).parent.node else null
+  value if declaration is ts_function then count(declaration.type_parameter) > 0
+    else any(flat_map(value_signatures(callee) ?? [], arm => arm),
+      header => site_field(call, header.site, "type_parameter") != null
+        && count(site_field(call, header.site, "type_parameter")) > 0)
+}
+fn assertion_generic_context(n) = {
+  value n
+  walk (current) if current is (ts_function, ts_arrow) && current.body is ts_block then null else current.parent
+  any (current) current is (ts_call, ts_new) && (current not ts_call || current.type_argument == null)
+    && assertion_generic_callee(current)
+}
+fn assertion_declared_same(n) = {
+  value declared: n.declaration.parent.type.node
+  value declared != null
+    && value_accepts(declared, n, "value", "value") == true
+    && value_accepts(n, declared, "value", "value") == true
+}
+fn assertion_context_skipped(n) = {
+  value parent: n.parent.node
+  value if assertion_parts_contain_any(value_parts(n.type.node)) then parent is ts_logical || assertion_generic_context(n)
+    else if n.expression.node is ts_template && count(n.expression.node.expression.nodes) > 0 then true
+    else if n.expression.node is ts_array then true
+    else if n.type.node is ts_union && (n.expression.node is ts_null || n.expression.node is ts_identifier && n.expression.node.text == "undefined") then true
+    else if parent is (ts_as, ts_type_assertion, ts_spread, ts_satisfies) then true
+    else if parent is ts_assignment && parent.operator != "=" && parent.right.offset == n.offset then true
+    else if parent is ts_assignment && parent.right.offset == n.offset && parent.parent not ts_expression_statement then true
+    else false
+}
 fn assertion_check(n, ignored, check_const) = {
   value literal_const: n.type.text == "const"
   value raw_subject: if literal_const then n.expression.node else assertion_subject(n, ignored)
   value subject: if literal_const then raw_subject else unparenthesised_node(raw_subject)
   value operand: value_parts(subject)
   value annotation: if literal_const then value_parts(n) else value_parts(n.type.node)
-  value expected: value_parts(value_expected_handle(n))
-  value contextual: !literal_const && (ts_value_category(value_constituents(n.type.node)) == "any"
-      || ts_value_trait(value_constituents(n.type.node), "unknown") || subject != unparenthesised_node(n.expression.node))
-    && assertion_outer(n).parent not (ts_as, ts_type_assertion)
-    && assertion_parts_known(operand) && assertion_parts_known(expected)
+  value contextual: !literal_const && assertion_outer(n).parent not (ts_as, ts_type_assertion)
+    && !assertion_parts_contain_any(value_parts(n.expression.node))
+    && (value_accepts(n, subject, "expected", "value") == true
+      || value_accepts(n, n.expression.node, "expected", "widened") == true
+      || n.parent.node is ts_property && value_accepts(n.expression.node, n.expression.node, "expected", "value") == true)
+    && !assertion_context_skipped(n)
+  value chain_contextual: !literal_const && n.expression.node is (ts_as, ts_type_assertion)
+    && (assertion_parts_contain_any(value_parts(n.expression.node))
+      || ts_value_trait(value_constituents(n.expression.node), "unknown") == true)
     && value_accepts(n, subject, "expected", "value") == true
-  value same: if literal_const then assertion_same_handles(operand, annotation) == true else
-    assertion_parts_known(operand) && assertion_parts_known(annotation)
+  value receiver: contextual || chain_contextual
+  value identity: !literal_const && assertion_context_identity(n)
+  value same: if literal_const then assertion_same_handles(operand, annotation) == true
+    else if assertion_context_identity(n) == true then true
+    else if assertion_error_identity(n) == true then true
+    else assertion_parts_known(operand) && assertion_parts_known(annotation)
       && (assertion_same_value(subject, n.type.node) || assertion_same_scalar_type(subject, n.type.node)
-        || assertion_same_optional_type(subject, n.type.node))
+        || assertion_same_optional_type(subject, n.type.node) || assertion_same_shape(subject, n.type.node))
   value generic: assertion_generic_call(subject)
   value literal_preserved: !any(annotation ?? [], arm => any(arm.parts, part =>
     part.identity_known && part.identity.kind == "value")) || assertion_literal_preserved(n)
       || subject is ts_call && generic == false
   value enum_preserved: ts_value_has_enum(n) != null && ts_value_has_enum(n) == ts_value_has_enum(subject)
   value if contains(ignored, n.type.text) || literal_const && (!check_const || !assertion_const_scalar(n))
-    || !contextual && (!same || subject is (ts_object, ts_array)
+    || !receiver && (!same || !identity && subject is (ts_object, ts_array)
       || !literal_const && subject is ts_template && count(subject.expression.nodes) == 0
       || !literal_preserved || !enum_preserved) || generic == null then null
-    else {subject: subject, raw_subject: raw_subject, contextual: contextual && !same, generic: generic}
+    else {subject: subject, raw_subject: raw_subject, contextual: receiver && !same, generic: generic}
 }
 fn assertion_non_null_style(n) = {
   value source: value_parts(n.expression.node)
@@ -246,7 +304,8 @@ fn assertion_non_null_style(n) = {
       && (assertion_same_handles(retained, target) == true || assertion_same_value(non_null, n.type.node)
         || assertion_same_scalar_type(non_null, n.type.node))
 }
-fn assertion_unassigned(n) = n is ts_identifier && (n.declaration == null && n.resolved != "global" || n.declaration.parent is ts_declarator && n.declaration.ambient != true && (n.declaration.parent.init == null && { value n.declaration.parent.token_texts; slice 1 2; first } != "!" || n.declaration.parent.parent.kind == "var" && {
+fn assertion_unassigned(n) = n is ts_identifier && (n.declaration == null && n.resolved != "global" || n.declaration.parent is ts_declarator && n.declaration.ambient != true && (n.declaration.parent.init == null && { value n.declaration.parent.token_texts; slice 1 2; first } != "!"
+    && assertion_declared_same(n) == true || n.declaration.parent.parent.kind == "var" && {
   value n.declaration.parent.parent.parent
   walk (current) current.parent
   any (current) current is ts_block && (n.offset < current.offset || n.end_offset > current.end_offset)

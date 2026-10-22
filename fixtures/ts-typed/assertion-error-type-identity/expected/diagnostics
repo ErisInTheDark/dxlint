@@ -1,0 +1,2 @@
+input.ts:2:14-2:35 no-unnecessary-type-assertion#1
+input.ts:3:15-3:34 no-unnecessary-type-assertion#1

@@ -1,0 +1,12 @@
+declare function takes(value: number): void;
+declare function generic<T extends boolean>(options: { a: T extends true ? never : unknown } & { b: T }): void;
+declare function tagged(text: string): void;
+declare function accept(value: number): void;
+declare const n: number;
+declare const text: string;
+takes(n as number);
+takes(n as 1);
+generic({ a: true, b: true as any });
+tagged(`hello ${text}` as string);
+const nullable: number | null = null as number | null;
+accept(42 as any as number);
