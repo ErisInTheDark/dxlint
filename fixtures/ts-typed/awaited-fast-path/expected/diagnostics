@@ -1,0 +1,11 @@
+a.ts:17:3-17:6 ts-oracle#0 value number
+a.ts:20:3-20:6 ts-oracle#0 value string
+a.ts:23:3-23:6 ts-oracle#0 value boolean
+a.ts:26:3-26:6 ts-oracle#0 value string | number
+a.ts:29:3-29:6 ts-oracle#0 value string | number
+a.ts:32:3-32:6 ts-oracle#0 value string | number
+a.ts:35:3-35:6 ts-oracle#0 value number
+a.ts:38:3-38:6 ts-oracle#0 value boolean
+a.ts:41:3-41:6 ts-oracle#0 value number
+a.ts:44:3-44:7 ts-oracle#0 value void
+a.ts:47:3-47:7 ts-oracle#0 value null

@@ -1,0 +1,11 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "target": "esnext",
+    "module": "esnext",
+    "noLib": true,
+    "lib": [],
+    "types": []
+  },
+  "files": ["lib.d.ts", "a.ts"]
+}

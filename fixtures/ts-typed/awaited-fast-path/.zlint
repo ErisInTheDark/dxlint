@@ -1,0 +1,8 @@
+import .ts
+ignore "tsconfig.json"
+ignore "lib.d.ts"
+
+in ts_expression_statement rule ts-oracle {
+  warn "value " (ts_value_print_handle(expression.node) ?? "null")
+}
+rule ts-oracle
