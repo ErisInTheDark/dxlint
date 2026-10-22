@@ -1,0 +1,6 @@
+{
+  "name": "zoomie-lint",
+  "private": true,
+  "description": "npm-linkable launcher for the locally built zlint binary",
+  "bin": { "zlint": "bin/zlint.cmd" }
+}
