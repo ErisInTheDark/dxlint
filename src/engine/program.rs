@@ -246,8 +246,8 @@ pub(super) struct Snapshot {
     listings: RwLock<FxHashMap<PathBuf, (u64, Option<Arc<reads::Listing>>)>>,
     texts: RwLock<FxHashMap<PathBuf, (u64, Option<Arc<str>>, u64)>>,
     /// Per program (settings, input hash) and global name: the inputs whose
-    /// text may publish it ([`crate::grammar::names::modules::resolution::Globals::may_publish`]).
-    candidates: Slots<(usize, u64, Box<str>), Arc<[PathBuf]>>,
+    /// text may publish it, as positions in the program's survey.
+    candidates: Slots<(usize, u64, Box<str>), Arc<[u32]>>,
     /// Per program (settings, input hash): every input's text, read once.
     surveys: Slots<(usize, u64), Survey>,
     /// Per surveyed program, the inputs each word occurs in.
@@ -338,11 +338,11 @@ pub(super) enum StableQuestion {
 pub(super) type Survey = Arc<[(PathBuf, Option<Arc<str>>, bool)]>;
 
 /// Per surveyed input, the byte trigrams its text holds, hashed into a
-/// fixed bit set (4 KiB per input): a name can only occur in a text holding
+/// fixed bit set (2 KiB per input): a name can only occur in a text holding
 /// every trigram of it, so only those texts are searched.
 pub(super) struct Sketches(Vec<Option<Box<[u64; SKETCH_WORDS]>>>);
 
-const SKETCH_WORDS: usize = 512;
+const SKETCH_WORDS: usize = 256;
 const SKETCH_BITS: usize = SKETCH_WORDS * 64;
 
 pub(super) type Words = Arc<Sketches>;
@@ -475,7 +475,7 @@ impl Snapshot {
 
     /// The inputs that may publish a global name, computed once per run
     /// (`compute` records the text reads it makes).
-    pub(super) fn candidates(&self, key: (usize, u64, Box<str>), compute: impl FnOnce() -> Arc<[PathBuf]>) -> Cached<Arc<[PathBuf]>> {
+    pub(super) fn candidates(&self, key: (usize, u64, Box<str>), compute: impl FnOnce() -> Arc<[u32]>) -> Cached<Arc<[u32]>> {
         once(&self.candidates, key, compute)
     }
 

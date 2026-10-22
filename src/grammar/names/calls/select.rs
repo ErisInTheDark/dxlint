@@ -317,8 +317,14 @@ fn agreement(group: &[Known<Candidate>], values: &Values<'_>) -> Known<NodeValue
         if candidate.compatible == Known::Yes(false) { continue }
         let Known::Yes(result) = super::result::header_result(candidate.chosen.header, values) else { return Known::Unknown };
         if let Some(previous) = &agreed {
-            if previous != &result && (values.calls().accepts(previous, &result) != Known::Yes(true)
-                || values.calls().accepts(&result, previous) != Known::Yes(true)) {
+            if previous == &result { continue }
+            // Instances of the same generics whose arguments aren't all known
+            // can't be shown to agree: don't compare their whole member
+            // structure both ways (`Set<?>` from two `Set` constructor
+            // overloads spent a question's budget doing that).
+            if instances_with_unknown_arguments(previous, &result, values) { return Known::Unknown }
+            if values.calls().accepts(previous, &result) != Known::Yes(true)
+                || values.calls().accepts(&result, previous) != Known::Yes(true) {
                 return Known::Unknown;
             }
         } else {
@@ -326,6 +332,24 @@ fn agreement(group: &[Known<Candidate>], values: &Values<'_>) -> Known<NodeValue
         }
     }
     agreed.map_or(Known::Unknown, Known::Yes)
+}
+
+/// Whether `a` and `b` are, row by row and leaf by leaf, instances of the
+/// same declarations, and some instance argument is unknown on either side.
+fn instances_with_unknown_arguments(a: &NodeValue, b: &NodeValue, values: &Values<'_>) -> bool {
+    let (NodeValue::Alternatives(a), NodeValue::Alternatives(b)) = (a, b) else { return false };
+    if a.len() != b.len() { return false }
+    let mut unknown = false;
+    for (left, right) in a.iter().zip(b.iter()) {
+        if left.len() != right.len() { return false }
+        for (&left, &right) in left.iter().zip(right) {
+            if left.target != right.target { return false }
+            let (Known::Yes(Some(left)), Known::Yes(Some(right))) = (values.carrier(left), values.carrier(right)) else { return false };
+            if left.declaration != right.declaration { return false }
+            unknown |= left.arguments.iter().chain(&right.arguments).any(|argument| *argument == NodeValue::Unknown);
+        }
+    }
+    unknown
 }
 
 /// One overload against the call's arguments; `decide`: whether its

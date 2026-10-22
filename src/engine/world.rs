@@ -506,18 +506,20 @@ impl<'a> Files<'a> {
                             let hinted = text.as_deref().is_none_or(|text| selected.globals.name_hints.iter().any(|hint| text.contains(&**hint)));
                             (path.clone(), text, hinted)
                         }).collect()));
+                        let sources = survey.get();
+                        // Kept as survey positions: a run asks thousands of
+                        // names, each with up to every input as a candidate.
                         let shared = snapshot.candidates((settings, program, Box::from(name)), || {
-                            let sources = survey.get();
                             // Only texts holding every trigram of the name are
                             // searched for it, not every input per name.
                             let sketches = snapshot.words((settings, program), || super::program::sketch_texts(&sources)).get();
                             let mut holding = vec![false; sources.len()];
                             sketches.mark(name, &sources, &mut holding);
-                            sources.iter().zip(holding)
-                                .filter(|((_, _, hinted), holds)| *hinted || *holds)
-                                .map(|((path, ..), _)| path.clone()).collect()
+                            sources.iter().zip(holding).enumerate()
+                                .filter(|(_, ((_, _, hinted), holds))| *hinted || *holds)
+                                .map(|(at, _)| u32::try_from(at).expect("inputs fit u32")).collect()
                         });
-                        Known::Yes(shared.get())
+                        Known::Yes(shared.get().iter().map(|&at| sources[at as usize].0.clone()).collect())
                     }
                     _ => Known::Yes(self.candidate_inputs(&paths, hinted, |text| selected.globals.may_publish(text, name)).into()),
                 }) {
