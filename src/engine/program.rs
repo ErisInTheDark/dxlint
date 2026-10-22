@@ -258,7 +258,47 @@ pub(super) struct Snapshot {
     /// importers in every directory below it share the probes (and their
     /// reads, kept once instead of in every importer's answer).
     packages: RwLock<FxHashMap<PackageKey, Cached<PackageProbe>>>,
+    /// Values of other files' nodes, by stable leaf under one program: every
+    /// linted file reading a declaration in a shared module computes the
+    /// same value ([`super::world`]'s `shared_value`).
+    values: RwLock<FxHashMap<ValueKey, Cached<StableValue>>>,
+    /// Frames those values are read in, interned run-wide.
+    frames: RwLock<(FxHashMap<Arc<StableBinding>, u32>, Vec<Arc<StableBinding>>)>,
 }
+
+/// A leaf by file path: the same node in another world's file ids.
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub(super) enum StableLeaf {
+    Node(reads::DepPath, u32, StableFrame),
+    Scope(reads::DepPath, u32, StableFrame),
+    Traits(u64, StableFrame),
+}
+
+/// A frame every world builds alike: none, or one built only from other
+/// files' nodes and run-wide values ([`Snapshot::stable_frame`] ids).
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub(super) enum StableFrame {
+    Root,
+    Bound(u32),
+}
+
+/// A frame by stable parts: instantiating `owner` through a stable leaf or
+/// with arguments every world evaluates alike.
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub(super) struct StableBinding {
+    pub parent: StableFrame,
+    pub owner: (reads::DepPath, u32),
+    pub through: Option<StableLeaf>,
+    /// (overlay, slots).
+    pub args: Option<(bool, Box<[Option<StableValue>]>)>,
+    pub classes: u64,
+}
+
+/// A value's rows by stable leaf, and how far they are normalized.
+pub(super) type StableValue = (Arc<[Box<[StableLeaf]>]>, crate::grammar::names::question::Normal);
+
+/// (revision, settings, program, outside, leaf).
+pub(super) type ValueKey = (u64, usize, u64, Option<PathBuf>, StableLeaf);
 
 type PackageProbe = crate::grammar::names::modules::resolution::Probe<std::path::PathBuf>;
 
@@ -422,6 +462,29 @@ impl Snapshot {
 
     pub(super) fn keep_module_answer(&self, key: ModuleKey, answer: Cached<Arc<[StableTarget]>>) {
         self.modules.write().expect("run modules").insert(key, answer);
+    }
+
+    pub(super) fn value_answer(&self, key: &ValueKey) -> Option<Cached<StableValue>> {
+        self.values.read().expect("run values").get(key).cloned()
+    }
+
+    pub(super) fn keep_value(&self, key: ValueKey, answer: Cached<StableValue>) {
+        self.values.write().expect("run values").insert(key, answer);
+    }
+
+    /// `binding`'s run-wide frame id.
+    pub(super) fn stable_frame(&self, binding: StableBinding) -> StableFrame {
+        if let Some(&id) = self.frames.read().expect("run frames").0.get(&binding) { return StableFrame::Bound(id) }
+        let mut frames = self.frames.write().expect("run frames");
+        let (ids, bindings) = &mut *frames;
+        let binding = Arc::new(binding);
+        let next = u32::try_from(bindings.len()).expect("run frames fit u32");
+        let id = *ids.entry(binding.clone()).or_insert_with(|| { bindings.push(binding); next });
+        StableFrame::Bound(id)
+    }
+
+    pub(super) fn stable_binding(&self, id: u32) -> Option<Arc<StableBinding>> {
+        self.frames.read().expect("run frames").1.get(id as usize).cloned()
     }
 
     /// `key`'s package probe, run once per run (failures are not kept); the

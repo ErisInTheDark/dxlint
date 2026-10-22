@@ -317,7 +317,7 @@ pub struct Rows {
 }
 
 /// How much of normalization a value's rows already went through.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Normal {
     Raw,
     /// Duplicates and absorbing tops settled.
@@ -329,6 +329,17 @@ pub enum Normal {
 impl Rows {
     pub fn normal(&self) -> Normal {
         self.normal
+    }
+
+    /// Union-normal rows of one leaf each that is no trait set are fully
+    /// normal: one node site can't contradict itself.
+    pub fn fully_normal(&self) -> Option<Rows> {
+        match self.normal {
+            Normal::Full => Some(self.clone()),
+            Normal::Union if self.rows.iter().all(|row| row.len() <= 1 && !row.iter().any(|leaf| matches!(leaf.target, Target::Traits(_)))) =>
+                Some(Rows { rows: self.rows.clone(), normal: Normal::Full }),
+            _ => None,
+        }
     }
 
     pub fn normalized(rows: Vec<Vec<Leaf>>, normal: Normal) -> Rows {
@@ -452,6 +463,17 @@ pub trait World {
     fn shared_modules(&self, _question: super::modules::SharedQuestion<'_>, compute: &mut dyn FnMut() -> Known<Vec<Target>>) -> Known<Vec<Target>> {
         compute()
     }
+    /// The value of canonical `leaf` (a node in another file than the
+    /// linted one), shared with the other worlds of the run that read it;
+    /// `compute` evaluates it here.
+    fn shared_value(&self, _leaf: Leaf, _semantic: &super::semantic::Semantic<'_>, compute: &mut dyn FnMut() -> NodeValue) -> NodeValue {
+        compute()
+    }
+    /// The value another world of the run already shared for canonical
+    /// `leaf`, without computing it.
+    fn shared_value_kept(&self, _leaf: Leaf, _semantic: &super::semantic::Semantic<'_>) -> Option<NodeValue> {
+        None
+    }
     /// Whether the current evaluation has read an unknown answer (a strict
     /// query then discards its own); `None` outside one.
     fn unknown_read(&self) -> Option<bool> { None }
@@ -498,6 +520,10 @@ pub struct QueryContext {
     handles: std::cell::RefCell<Interner<NodeValue>>,
     /// This context's handle namespace, assigned with its first handle.
     owner: std::cell::Cell<u32>,
+    /// Frames by the id the world shares them under across contexts
+    /// (`None`: not shareable), both ways.
+    world_frames: std::cell::RefCell<crate::fx_hash::FxHashMap<FrameId, Option<u64>>>,
+    frames_by_world: std::cell::RefCell<crate::fx_hash::FxHashMap<u64, FrameId>>,
     pub budget: Budget,
 }
 
@@ -622,6 +648,33 @@ impl QueryContext {
             Some(Args::Overlay(args)) => Known::Yes(args.get(position).cloned().flatten()
                 .map_or(Argument::Inherited, Argument::Bound)),
             None => Known::Unknown,
+        }
+    }
+
+    /// `frame`'s world-wide id, computed once per context.
+    pub fn world_frame(&self, frame: FrameId, compute: impl FnOnce() -> Option<u64>) -> Option<u64> {
+        if let Some(&known) = self.world_frames.borrow().get(&frame) { return known }
+        let id = compute();
+        self.world_frames.borrow_mut().insert(frame, id);
+        if let Some(id) = id { self.frames_by_world.borrow_mut().entry(id).or_insert(frame); }
+        id
+    }
+
+    /// The frame world-wide `id` stands for here, built once per context.
+    pub fn frame_for_world(&self, id: u64, build: impl FnOnce() -> Option<FrameId>) -> Option<FrameId> {
+        if let Some(&frame) = self.frames_by_world.borrow().get(&id) { return Some(frame) }
+        let frame = build()?;
+        self.frames_by_world.borrow_mut().insert(id, frame);
+        self.world_frames.borrow_mut().insert(frame, Some(id));
+        Some(frame)
+    }
+
+    /// Evaluated arguments `id`: whether they overlay a parent's (unbound
+    /// slots inherit), and the slots.
+    pub fn arguments(&self, id: ArgsId) -> Option<(bool, Vec<Option<NodeValue>>)> {
+        match self.args.borrow().items.get(id.0 as usize)? {
+            Args::Complete(args) => Some((false, args.clone())),
+            Args::Overlay(args) => Some((true, args.clone())),
         }
     }
 

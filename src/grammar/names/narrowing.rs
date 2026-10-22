@@ -19,6 +19,9 @@ pub struct Narrowing<'a> {
 #[derive(Default)]
 pub(crate) struct State {
     written: super::memo::Memo<Leaf, Known<Place>>,
+    /// The places guard sites test, by site: every read a guard covers
+    /// projects the same site.
+    tested_places: super::memo::Memo<Leaf, Known<Place>>,
     /// Per execution entry and written place, the write steps that can
     /// replace it: every read of one variable in a body shares the scan.
     candidates: super::memo::Memo<(Leaf, Place), std::rc::Rc<[super::effects::StepId]>>,
@@ -59,6 +62,7 @@ struct Guard {
 impl State {
     pub(super) fn finish(&self, epoch: super::memo::Epoch, failed: bool, cut: u64) -> u64 {
         self.written.finish(epoch, failed, cut, super::memo::Settled::settled)
+            + self.tested_places.finish(epoch, failed, cut, super::memo::Settled::settled)
             + self.candidates.finish(epoch, failed, cut, |_| true)
             + self.writes.finish(epoch, failed, cut, |_| true)
             + self.guards.finish(epoch, failed, cut, |_| true)
@@ -425,7 +429,9 @@ impl Narrowing<'_> {
     /// The binding and member path `at` names; a parameter read through its
     /// call is followed to the argument it was bound to.
     fn place(&self, at: Leaf) -> Known<Place> {
-        self.find_place(at, true, true).map(|(place, _)| place)
+        let Known::Yes(at) = self.semantic.leaf(at) else { return Known::Unknown };
+        self.semantic.values().memoized(&self.semantic.narrowing_places.tested_places, at,
+            || self.find_place(at, true, true).map(|(place, _)| place))
     }
 
     /// The binding a write replaces: lexical, never through a call's

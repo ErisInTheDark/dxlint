@@ -497,6 +497,10 @@ pub fn profile(output: &mut Output<'_>, linter: &Linter, format: super::Format, 
         Profile::get(&p.shared_answers[kind]), Profile::get(&p.shared_answer_deps[kind]), Profile::get(&p.shared_answer_groups[kind])
     )).collect();
     output.err(format_args!("  run-shared module answers kept: {}", shared.join(", ")));
+    let skips: Vec<String> = ["frame from linted file", "no key", "unknown", "read linted file", "budget cut", "not run-wide"].iter()
+        .zip(&p.shared_value_skips).map(|(why, steps)| format!("{why} {}", Profile::get(steps))).collect();
+    output.err(format_args!("  run-shared values: {} published, {} taken; steps not shared: {}",
+        Profile::get(&p.shared_value_publishes), Profile::get(&p.shared_value_hits), skips.join(", ")));
     output.err(format_args!(
         "  semantic budget: {} steps total ({} in roots cut short), {} max per root question, {} questions over half budget",
         Profile::get(&p.semantic_budget_steps_total),

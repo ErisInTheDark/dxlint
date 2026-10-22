@@ -110,13 +110,16 @@ pub(super) fn candidates(call: Leaf, values: &Values<'_>) -> Answer {
             // The first overload proven under exact matching wins; failing
             // that, under ordinary acceptance.
             if exact_first && set.len() > 1 {
-                let Known::Yes((group, proven)) = pass(&set, call, &arguments, receiver.as_ref(), true, values) else { return Known::Unknown };
-                if proven {
+                let exact = std::cell::Cell::new(false);
+                let Known::Yes((group, proven)) = pass(&set, call, &arguments, receiver.as_ref(), Some(&exact), values) else { return Known::Unknown };
+                // Exact matching that never met a dynamic argument decided
+                // exactly what ordinary acceptance would.
+                if proven || !exact.get() {
                     groups.push(group);
                     continue;
                 }
             }
-            let Known::Yes((group, _)) = pass(&set, call, &arguments, receiver.as_ref(), false, values) else { return Known::Unknown };
+            let Known::Yes((group, _)) = pass(&set, call, &arguments, receiver.as_ref(), None, values) else { return Known::Unknown };
             groups.push(group);
         }
         return Known::Yes(Some(groups));
@@ -125,8 +128,9 @@ pub(super) fn candidates(call: Leaf, values: &Values<'_>) -> Answer {
 }
 
 /// The overloads of one set tried in order up to the first proven one, and
-/// whether one was.
-fn pass(set: &[Header], call: Leaf, arguments: &[Leaf], receiver: Option<&NodeValue>, exact: bool, values: &Values<'_>) -> Known<(Vec<Known<Candidate>>, bool)> {
+/// whether one was. `exact` matching notes whether a dynamic argument
+/// changed (or left unknown) any answer.
+fn pass(set: &[Header], call: Leaf, arguments: &[Leaf], receiver: Option<&NodeValue>, exact: Option<&std::cell::Cell<bool>>, values: &Values<'_>) -> Known<(Vec<Known<Candidate>>, bool)> {
     let mut group = Vec::new();
     // A lone overload is the call's contract whether or not its arguments
     // fit (`selection`, `outputs`), so nothing reads its compatibility.
@@ -326,7 +330,7 @@ fn agreement(group: &[Known<Candidate>], values: &Values<'_>) -> Known<NodeValue
 
 /// One overload against the call's arguments; `decide`: whether its
 /// compatibility is asked (else it stays unknown, unchecked).
-fn candidate(header: Header, call: Leaf, arguments: &[Leaf], receiver: Option<&NodeValue>, exact: bool, decide: bool, values: &Values<'_>) -> Known<Candidate> {
+fn candidate(header: Header, call: Leaf, arguments: &[Leaf], receiver: Option<&NodeValue>, exact: Option<&std::cell::Cell<bool>>, decide: bool, values: &Values<'_>) -> Known<Candidate> {
     let declaration = header;
     let Some(owner) = node(header.site, values) else { return Known::Unknown };
     let Some(kind) = kind(header.site, values) else { return Known::Unknown };
@@ -422,7 +426,12 @@ fn candidate(header: Header, call: Leaf, arguments: &[Leaf], receiver: Option<&N
                     values.values(parameter)
                 };
                 let actual = values.values(actual);
-                let answer = match exact.then(|| dynamic_mismatch(&expected, &actual, values)) {
+                let mismatch = exact.map(|exact| {
+                    let mismatch = dynamic_mismatch(&expected, &actual, values);
+                    if mismatch != Known::Yes(false) { exact.set(true) }
+                    mismatch
+                });
+                let answer = match mismatch {
                     Some(Known::Yes(true)) => Known::Yes(false),
                     Some(Known::Unknown) => Known::Unknown,
                     _ => values.calls().accepts(&expected, &actual),

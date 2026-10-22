@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use crate::expr::{Ctx, Value};
 use crate::expr::queries::Uncertainty;
-use crate::grammar::names::question::{FrameId, Known, Leaf, NodeRef, ScopeRef, Target, World};
+use crate::grammar::names::question::{FrameId, Known, Leaf, NodeRef, NodeValue, ScopeRef, Target, World};
 use crate::grammar::names::semantic::{AttributeKey, Semantic};
 use crate::grammar::names::modules::compile::Action;
 use crate::grammar::names::modules::SharedQuestion;
@@ -796,6 +796,120 @@ impl<'a> Files<'a> {
         }).collect()
     }
 
+    /// Where the run keeps `leaf`'s value, when every linted file of this
+    /// program would compute the same one.
+    fn value_key(self, leaf: Leaf, semantic: &Semantic<'_>) -> Option<(&'a super::program::Snapshot, super::program::ValueKey)> {
+        let snapshot = self.0.snapshot.filter(|&snapshot| self.shares(snapshot))?;
+        let stable = self.stable_leaf(leaf, semantic)?;
+        let Known::Yes(Some(selected)) = self.program_selected() else { return None };
+        let Known::Yes((program, outside)) = self.program_identity(selected) else { return None };
+        Some((snapshot, (self.0.revision(), selected as *const Settings as usize, program, outside, stable)))
+    }
+
+    fn taken_value(self, snapshot: &super::program::Snapshot, key: &super::program::ValueKey, semantic: &Semantic<'_>) -> Option<NodeValue> {
+        let found = snapshot.value_answer(key)?;
+        let value = self.local_value(&found.value, semantic)?;
+        if let Some(profile) = self.0.ctx.profile { super::Profile::add(&profile.shared_value_hits, 1) }
+        super::reads::note_group(&found.reads);
+        Some(value)
+    }
+
+    /// `leaf` by path, when every world builds its frame alike (none, or a
+    /// declaration's shared frame) and it isn't in the linted file.
+    fn stable_leaf(self, leaf: Leaf, semantic: &Semantic<'_>) -> Option<super::program::StableLeaf> {
+        use super::program::StableLeaf;
+        let frame = self.stable_frame(leaf.frame, semantic)?;
+        match leaf.target {
+            Target::Node(node) => Some(StableLeaf::Node(self.shared_path(node.file)?, node.node, frame)),
+            Target::Scope(scope) => Some(StableLeaf::Scope(self.shared_path(scope.file)?, scope.scope, frame)),
+            Target::Traits(bits) => Some(StableLeaf::Traits(bits, frame)),
+            _ => None,
+        }
+    }
+
+    fn stable_frame(self, frame: FrameId, semantic: &Semantic<'_>) -> Option<super::program::StableFrame> {
+        use super::program::{StableBinding, StableFrame};
+        if frame == FrameId::ROOT { return Some(StableFrame::Root) }
+        let snapshot = self.0.snapshot?;
+        let id = semantic.question.world_frame(frame, || {
+            let binding = semantic.question.get(frame)?;
+            let through = match binding.through {
+                Some(leaf) => Some(self.stable_leaf(leaf, semantic)?),
+                None => None,
+            };
+            let args = match binding.args {
+                Some(id) => {
+                    let (overlay, slots) = semantic.question.arguments(id)?;
+                    let slots = slots.iter().map(|slot| match slot {
+                        Some(value) => self.stable_value(value, semantic).map(Some),
+                        None => Some(None),
+                    }).collect::<Option<Box<[_]>>>()?;
+                    Some((overlay, slots))
+                }
+                None => None,
+            };
+            let StableFrame::Bound(id) = snapshot.stable_frame(StableBinding {
+                parent: self.stable_frame(binding.parent, semantic)?,
+                owner: (self.shared_path(binding.owner.file)?, binding.owner.node),
+                through,
+                args,
+                classes: binding.classes,
+            }) else { return None };
+            Some(u64::from(id))
+        })?;
+        Some(StableFrame::Bound(u32::try_from(id).ok()?))
+    }
+
+    fn local_frame(self, frame: super::program::StableFrame, semantic: &Semantic<'_>) -> Option<FrameId> {
+        let super::program::StableFrame::Bound(id) = frame else { return Some(FrameId::ROOT) };
+        let snapshot = self.0.snapshot?;
+        semantic.question.frame_for_world(u64::from(id), || {
+            let binding = snapshot.stable_binding(id)?;
+            let parent = self.local_frame(binding.parent, semantic)?;
+            let owner = NodeRef { file: self.0.file(&binding.owner.0).filter(|&file| file != 0)?, node: binding.owner.1 };
+            let through = match &binding.through {
+                Some(leaf) => Some(self.local_leaf(leaf, semantic)?),
+                None => None,
+            };
+            let question = &semantic.question;
+            Some(match &binding.args {
+                None => question.bind_definition(parent, owner, through, None, binding.classes),
+                Some((overlay, slots)) => {
+                    let slots = slots.iter().map(|slot| match slot {
+                        Some(value) => self.local_value(value, semantic).map(Some),
+                        None => Some(None),
+                    }).collect::<Option<Vec<_>>>()?;
+                    if *overlay { question.bind_overlay(parent, owner, slots, binding.classes) }
+                    else { question.bind_slots(parent, owner, through, slots, binding.classes) }
+                }
+            })
+        })
+    }
+
+    fn stable_value(self, value: &NodeValue, semantic: &Semantic<'_>) -> Option<super::program::StableValue> {
+        let NodeValue::Alternatives(rows) = value else { return None };
+        let stable = rows.iter().map(|row| row.iter().map(|&leaf| self.stable_leaf(leaf, semantic)).collect::<Option<Box<[_]>>>())
+            .collect::<Option<Arc<[_]>>>()?;
+        Some((stable, rows.normal()))
+    }
+
+    fn local_leaf(self, leaf: &super::program::StableLeaf, semantic: &Semantic<'_>) -> Option<Leaf> {
+        use super::program::StableLeaf;
+        let (target, frame) = match leaf {
+            StableLeaf::Node(path, node, frame) => (Target::Node(NodeRef { file: self.0.file(path).filter(|&file| file != 0)?, node: *node }), frame),
+            StableLeaf::Scope(path, scope, frame) => (Target::Scope(ScopeRef { file: self.0.file(path).filter(|&file| file != 0)?, scope: *scope }), frame),
+            StableLeaf::Traits(bits, frame) => (Target::Traits(*bits), frame),
+        };
+        Some(Leaf { target, frame: self.local_frame(*frame, semantic)? })
+    }
+
+    fn local_value(self, value: &super::program::StableValue, semantic: &Semantic<'_>) -> Option<NodeValue> {
+        let (rows, normal) = value;
+        let rows = rows.iter().map(|row| row.iter().map(|leaf| self.local_leaf(leaf, semantic)).collect::<Option<Vec<_>>>())
+            .collect::<Option<Vec<_>>>()?;
+        Some(NodeValue::Alternatives(crate::grammar::names::question::Rows::normalized(rows, *normal)))
+    }
+
     fn catalog(self, selected: &Settings, classes: u64, semantic: &Semantic<'_>) -> Known<Arc<super::program::Catalog>> {
         let key = (selected as *const Settings, classes);
         if let Some(cached) = self.0.program.catalogs.borrow().get(&key) { return Known::Yes(cached.get()) }
@@ -1085,6 +1199,43 @@ impl World for Files<'_> {
             _ => None,
         }).collect();
         scopes.map_or(Known::Unknown, Known::Yes)
+    }
+
+    fn shared_value_kept(&self, leaf: Leaf, semantic: &Semantic<'_>) -> Option<NodeValue> {
+        let (snapshot, key) = self.value_key(leaf, semantic)?;
+        self.taken_value(snapshot, &key, semantic)
+    }
+
+    fn shared_value(&self, leaf: Leaf, semantic: &Semantic<'_>, compute: &mut dyn FnMut() -> NodeValue) -> NodeValue {
+        let profile = self.0.ctx.profile;
+        let started = profile.map(|_| super::Profile::thread_steps());
+        let skip = |reason: usize| if let (Some(profile), Some(started)) = (profile, started) {
+            super::Profile::add(&profile.shared_value_skips[reason], super::Profile::thread_steps() - started);
+        };
+        let Some((snapshot, key)) = self.value_key(leaf, semantic) else {
+            let value = compute();
+            skip(if self.stable_frame(leaf.frame, semantic).is_none() { 0 } else { 1 });
+            return value;
+        };
+        if let Some(value) = self.taken_value(snapshot, &key, semantic) { return value }
+        let values = semantic.values();
+        let before = values.root_reads();
+        let answer = super::reads::Cached::compute(|| compute());
+        super::reads::note_group(&answer.reads);
+        // Only a value no step of which read the linted file is every
+        // linted file's (a global augmentation there would change it).
+        let stable = if answer.value == NodeValue::Unknown { Err(2) }
+            else if values.root_reads() != before { Err(3) }
+            else if semantic.question.budget.limited() { Err(4) }
+            else { self.stable_value(&answer.value, semantic).ok_or(5) };
+        match stable {
+            Ok(stable) => {
+                if let Some(profile) = profile { super::Profile::add(&profile.shared_value_publishes, 1) }
+                snapshot.keep_value(key, super::reads::Cached { value: stable, reads: answer.reads.clone() });
+            }
+            Err(reason) => skip(reason),
+        }
+        answer.value
     }
 
     fn module_star_excludes(&self, scope: ScopeRef, name: &str, _semantic: &Semantic<'_>) -> Known<bool> {

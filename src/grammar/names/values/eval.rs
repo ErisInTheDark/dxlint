@@ -39,6 +39,11 @@ pub(super) fn values(values: &Values<'_>, leaf: Leaf) -> NodeValue {
     Run { values, tasks: vec![Task::Leaf(leaf)], answers: Vec::new() }.run()
 }
 
+/// The kept, known value of canonical `leaf`.
+pub(super) fn kept_value(values: &Values<'_>, leaf: Leaf) -> Option<NodeValue> {
+    values.semantic.values.values.get(&leaf).filter(|value| *value != NodeValue::Unknown)
+}
+
 /// The kept value of canonical `leaf`, if any; reading one still being
 /// evaluated counts as a cycle read.
 fn kept(values: &Values<'_>, leaf: Leaf) -> Option<NodeValue> {
@@ -182,9 +187,21 @@ impl<'a, 'world> Run<'a, 'world> {
             self.answers.push(Answer::unknown());
             return;
         };
+        let state = &self.values.semantic.values;
+        let root = matches!(leaf.target, Target::Node(super::NodeRef { file: 0, .. }) | Target::Scope(super::ScopeRef { file: 0, .. }));
+        if root {
+            state.root_reads.set(state.root_reads.get() + 1);
+        }
         if let Some(value) = kept(self.values, leaf) {
             self.answers.push(Answer { exists: true, value });
             return;
+        }
+        if !root && super::share_values() {
+            if let Some(value) = self.values.world.shared_value_kept(leaf, self.values.semantic) {
+                state.values.insert(self.values.semantic.epoch, leaf, value.clone());
+                self.answers.push(Answer { exists: true, value });
+                return;
+            }
         }
         self.evaluate_leaf(leaf);
     }
@@ -677,7 +694,13 @@ fn returned(values: &Values<'_>, owner: Leaf, default: Option<&Value>) -> Known<
 }
 
 pub(super) fn combine(values: &Values<'_>, inputs: impl IntoIterator<Item = NodeValue>, intersection: bool) -> NodeValue {
-    let mut inputs = inputs.into_iter().peekable();
+    // `X & X` is `X`: a member merged from many declarations of one type
+    // (11 sources of three rows) must not multiply into 3^11 rows.
+    let mut distinct: Vec<NodeValue> = Vec::new();
+    for input in inputs {
+        if !intersection || !distinct.contains(&input) { distinct.push(input) }
+    }
+    let mut inputs = distinct.into_iter().peekable();
     let first = inputs.next();
     // One input is its own union, and its own intersection when no row
     // repeats a leaf: it passes on shared, normalized at most once.
@@ -685,8 +708,8 @@ pub(super) fn combine(values: &Values<'_>, inputs: impl IntoIterator<Item = Node
         if !intersection {
             return values.normalize_union(NodeValue::Alternatives(rows.clone()));
         }
-        if rows.normal() == super::super::question::Normal::Full && rows.iter().all(|row| row.len() <= 1) {
-            return NodeValue::Alternatives(rows.clone());
+        if rows.iter().all(|row| row.len() <= 1) {
+            if let Some(rows) = rows.fully_normal() { return NodeValue::Alternatives(rows) }
         }
     }
     let inputs = first.into_iter().chain(inputs);

@@ -75,6 +75,9 @@ impl Values<'_> {
         let NodeValue::Alternatives(alternatives) = value else { return NodeValue::Unknown };
         let level = if contradictions { Normal::Full } else { Normal::Union };
         if alternatives.normal() >= level { return NodeValue::Alternatives(alternatives) }
+        if contradictions {
+            if let Some(settled) = alternatives.fully_normal() { return NodeValue::Alternatives(settled) }
+        }
         let mask = self.tables.exclusive.iter().fold(0, |all, group| all | group);
         let mut possible = Vec::new();
         let mut absorbing = Vec::new();

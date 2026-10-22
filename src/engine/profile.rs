@@ -259,6 +259,13 @@ pub struct Profile {
     /// (publication, global, scopes, relative and bare resolves,
     /// augmentations): count, own deps and group references they keep.
     pub shared_answers: [AtomicU64; 6],
+    /// Other files' values taken from another world, and values offered.
+    pub shared_value_hits: AtomicU64,
+    pub shared_value_publishes: AtomicU64,
+    /// Steps of other files' values not shared, by why: frame built from
+    /// the linted file, no run-wide key otherwise, unknown, read the linted
+    /// file, budget cut, value not expressible run-wide.
+    pub shared_value_skips: [AtomicU64; 6],
     pub shared_answer_deps: [AtomicU64; 6],
     pub shared_answer_groups: [AtomicU64; 6],
     pub foreign_steps: AtomicU64,
@@ -599,6 +606,11 @@ impl Profile {
     /// when outermost, against this thread's fact clock.
     pub fn time_fact<T>(&self, fact: usize, compute: impl FnOnce() -> T) -> T {
         shared(&self.fact_nanos[fact], &self.fact_calls[fact], compute)
+    }
+
+    /// Budget steps this thread counted so far.
+    pub fn thread_steps() -> u64 {
+        THREAD_STEPS.with(Cell::get)
     }
 
     /// One budget step, against the root question, the current semantic

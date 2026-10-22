@@ -2,7 +2,7 @@
 //! (docs/design/type-layers.md). Owner: Violet.
 
 use super::memo::{Epoch, Memo};
-use super::question::{FrameId, Known, Leaf, NodeRef, NodeValue, Target};
+use super::question::{FrameId, Known, Leaf, NodeRef, NodeValue, ScopeRef, Target};
 use super::semantic::Semantic;
 use super::Value;
 
@@ -168,6 +168,8 @@ pub(crate) struct State {
     /// Leaves whose values are being evaluated (outermost first), each with
     /// [`State::cycle_reads`] when it started.
     evaluating: std::cell::RefCell<Vec<(Leaf, u64)>>,
+    /// Leaves of the linted file read ([`Values::root_reads`]).
+    root_reads: std::cell::Cell<u64>,
     /// Reads of a leaf still being evaluated (its seed). An unknown value
     /// computed after such a read may only reflect the unfinished cycle, so
     /// it is not kept.
@@ -229,6 +231,13 @@ impl<'a> std::ops::Deref for Values<'a> {
     }
 }
 
+/// `ZLINT_LOCAL_VALUES=1`: every world evaluates other files' values itself
+/// (A/B ruler).
+fn share_values() -> bool {
+    static LOCAL: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    !*LOCAL.get_or_init(|| std::env::var_os("ZLINT_LOCAL_VALUES").is_some())
+}
+
 impl Values<'_> {
     pub fn values(&self, leaf: Leaf) -> NodeValue {
         // File 0 is the linted file; others' values are work every file
@@ -238,7 +247,27 @@ impl Values<'_> {
                 .map(|(path, linted)| profile.foreign_scope(path, node.node, linted)),
             _ => None,
         };
-        eval::values(self, leaf)
+        let foreign = matches!(leaf.target, Target::Node(NodeRef { file, .. }) | Target::Scope(ScopeRef { file, .. }) if file != 0);
+        if !foreign {
+            if matches!(leaf.target, Target::Node(_) | Target::Scope(_)) {
+                self.semantic.values.root_reads.set(self.semantic.values.root_reads.get() + 1);
+            }
+            return eval::values(self, leaf);
+        }
+        if !share_values() { return eval::values(self, leaf) }
+        let Known::Yes(leaf) = self.semantic.leaf(leaf) else { return NodeValue::Unknown };
+        if let Some(value) = eval::kept_value(self, leaf) { return value }
+        let value = self.world.shared_value(leaf, self.semantic, &mut || eval::values(self, leaf));
+        if value != NodeValue::Unknown {
+            self.semantic.values.values.insert(self.semantic.epoch, leaf, value.clone());
+        }
+        value
+    }
+
+    /// Steps into the linted file's own nodes so far: a value computed
+    /// without any is the same for every linted file.
+    pub(crate) fn root_reads(&self) -> u64 {
+        self.semantic.values.root_reads.get()
     }
 
     pub fn unwrap_recipe(&self, leaf: Leaf) -> Known<Option<&Value>> {
@@ -792,6 +821,13 @@ impl Values<'_> {
             let Known::Yes(owner) = self.declaration_owner(node) else { return NodeValue::Unknown };
             let shared = if args.is_empty() { self.shared_frame(owner, classes) } else { None };
             let frame = shared.unwrap_or_else(|| {
+                // A declaration generic only in its own formals, given every
+                // argument, reads nothing from where it was named: every site
+                // instantiating `Awaited<Promise<X>>` shares one frame (and
+                // its answers).
+                if self.semantic.generic_scope(owner) == Some(owner.node) {
+                    return self.question.bind_definition(super::question::FrameId::ROOT, owner, None, Some(args.clone()), classes);
+                }
                 let through = match at.target { Target::Node(_) => Some(at), _ => None };
                 self.question.bind_definition(at.frame, owner, through, Some(args.clone()), classes)
             });
