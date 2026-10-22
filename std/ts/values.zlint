@@ -60,9 +60,15 @@ fn ts_value_this_context(n) = {
   value { owner: owner, explicit: first(parameters).type.node, container: container,
     static: owner is ts_static_block || ts_value_static(owner.modifier.nodes) }
 }
+# A local declaration already answers the common case; only an import can
+# name a class through another module and still fail to carry it.
 fn ts_value_missing_name(n, class) = {
-  value classes: name_classes(n, n.text, null, [class])
-  value classes != null && get(classes, class) == false
+  value local: n.scope_declaration ?? n
+  value if local.parent not (ts_import_specifier, ts_import, ts_import_equals)
+    && contains(name_role_classes(local.node, "declaration"), class) then false else {
+    value classes: name_classes(n, n.text, null, [class])
+    value classes != null && get(classes, class) == false
+  }
 }
 fn ts_value_global_declaration(n, name) = {
   value identity: declaration_identity(n)

@@ -25,6 +25,11 @@ in ts_as, ts_type_assertion let returned_const_assertion type == "const"
 in ts_satisfies, ts_parenthesized let returned_const_assertion expression.returned_const_assertion
 in ts_unary let returned_void operator == "void"
 in ts_parenthesized let returned_void expression.returned_void
+in ts_return let return_function argument.returned_function == true
+in style_tree_node let function_returns_any if is ts_return then true else if is (ts_function, ts_arrow, ts_method, ts_class) then false else any(children.function_returns_any, any => any)
+# Cheap aggregates; the returned values themselves are only collected where a
+# caller needs them.
+in style_tree_node let function_returns_functions if is ts_return then return_function else if is (ts_function, ts_arrow, ts_method, ts_class) then true else all(children.nodes, child => !child.function_returns_any || child.function_returns_functions)
 in ts_return let return_value { value: argument.node, function: argument.returned_function == true }
 in style_tree_node let function_return_values if is ts_return then [return_value] else if is (ts_function, ts_arrow, ts_method, ts_class) then [] else { value [] children.function_return_values; fold ([]) (values, child) values child }
 in ts_method let return_method_valid key == "constructor" || kind == "set"
@@ -46,7 +51,7 @@ in ts_function, ts_arrow, ts_method let explicit_return_shape {
   context_typed: return_context_typed,
   ancestor_typed: !return_declaration && return_ancestor_typed,
   free_expression: !return_declaration && return_parent_info.node != null && return_parent_info.node not (ts_declarator, ts_class_property, ts_export, ts_class),
-  higher_order: is ts_arrow && body.returned_function == true || count(body.function_return_values) > 0 && all(body.function_return_values, value => value.function),
+  higher_order: is ts_arrow && body.returned_function == true || body.function_returns_any && body.function_returns_functions,
   const_assertion: is ts_arrow && body.returned_const_assertion == true,
   iife: return_parent_info.node is ts_call,
   void_arrow: is ts_arrow && body.returned_void == true
@@ -77,7 +82,7 @@ in ts_function, ts_arrow, ts_method let explicit_return_shape {
 # explicit-module-boundary-types: what other modules see needs types.
 group style_boundary_export ts_export, ts_export_assignment
 in ts_class_property, ts_method let boundary_private contains([] modifier, "private") || key is ts_private_name
-in ts_function, ts_arrow, ts_method let boundary_returned_functions if is ts_arrow && body not ts_block then if body.returned_function == true then body.nodes else [] else if count(body.function_return_values) > 0 && all(body.function_return_values, value => value.function) then map(body.function_return_values, value => value.value) else []
+in ts_function, ts_arrow, ts_method let boundary_returned_functions if is ts_arrow && body not ts_block then if body.returned_function == true then body.nodes else [] else if body.function_returns_any && body.function_returns_functions then map(body.function_return_values, value => value.value) else []
 in ts_assignment let boundary_written_value right.node
 in ts_identifier let boundary_binding_owner parent.node
 in ts_identifier let boundary_identifier_refs if reference_kind != null && !contains(["parameter", "catch", "import"], reference_kind) then [] declaration.boundary_binding_owner [] declaration.references.writer.boundary_written_value else []
