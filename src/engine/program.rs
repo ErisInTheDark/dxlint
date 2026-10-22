@@ -250,6 +250,8 @@ pub(super) struct Snapshot {
     candidates: Slots<(usize, u64, Box<str>), Arc<[PathBuf]>>,
     /// Per program (settings, input hash): every input's text, read once.
     surveys: Slots<(usize, u64), Survey>,
+    /// Per surveyed program, the inputs each word occurs in.
+    words: Slots<(usize, u64), Words>,
     /// Program configurations by revision, settings and program directory.
     configurations: RwLock<FxHashMap<(u64, usize, PathBuf), Cached<Arc<crate::grammar::names::modules::resolution::Configuration>>>>,
     /// Metadata parsed from those texts, by text hash (`None`: malformed).
@@ -334,6 +336,76 @@ pub(super) enum StableQuestion {
 /// text holds a name-independent publication hint (so it may publish any
 /// global name).
 pub(super) type Survey = Arc<[(PathBuf, Option<Arc<str>>, bool)]>;
+
+/// A survey's distinct words (maximal runs of alphanumerics and `_`), each
+/// with the indexes of the inputs holding it (ascending), and the words by
+/// each byte trigram they contain.
+pub(super) struct WordIndex {
+    words: Vec<(Box<str>, Vec<u32>)>,
+    trigrams: FxHashMap<[u8; 3], Vec<u32>>,
+}
+
+pub(super) type Words = Arc<WordIndex>;
+
+impl WordIndex {
+    /// Marks in `holding` (one flag per surveyed input) the inputs whose
+    /// text contains `name`, a word-character name: exactly the texts a
+    /// substring scan finds, since such a name never spans two words.
+    pub(super) fn mark(&self, name: &str, holding: &mut [bool]) {
+        let finder = memchr::memmem::Finder::new(name.as_bytes());
+        let mut check = |word: u32| {
+            let (text, files) = &self.words[word as usize];
+            if finder.find(text.as_bytes()).is_some() {
+                for &file in files { holding[file as usize] = true }
+            }
+        };
+        let bytes = name.as_bytes();
+        if bytes.len() < 3 {
+            (0..self.words.len() as u32).for_each(&mut check);
+            return;
+        }
+        let rarest = bytes.windows(3).map(|gram| self.trigrams.get(&[gram[0], gram[1], gram[2]]).map_or(&[][..], Vec::as_slice))
+            .min_by_key(|words| words.len()).unwrap_or(&[]);
+        rarest.iter().copied().for_each(check);
+    }
+}
+
+/// Whether `name` is made of word characters only: then every occurrence
+/// lies inside one word of [`Words`].
+pub(super) fn is_word(name: &str) -> bool {
+    !name.is_empty() && name.chars().all(word_char)
+}
+
+fn word_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
+/// The word index of `survey`'s texts.
+pub(super) fn index_words(survey: &Survey) -> Words {
+    let mut ids: FxHashMap<&str, u32> = FxHashMap::default();
+    let mut words: Vec<(Box<str>, Vec<u32>)> = Vec::new();
+    for (index, (_, text, _)) in survey.iter().enumerate() {
+        let Some(text) = text else { continue };
+        let index = u32::try_from(index).expect("inputs fit u32");
+        for word in text.split(|c: char| !word_char(c)).filter(|word| !word.is_empty()) {
+            let id = *ids.entry(word).or_insert_with(|| {
+                words.push((word.into(), Vec::new()));
+                u32::try_from(words.len() - 1).expect("words fit u32")
+            });
+            let files = &mut words[id as usize].1;
+            if files.last() != Some(&index) { files.push(index) }
+        }
+    }
+    let mut trigrams: FxHashMap<[u8; 3], Vec<u32>> = FxHashMap::default();
+    for (id, (word, _)) in words.iter().enumerate() {
+        let id = id as u32;
+        for gram in word.as_bytes().windows(3) {
+            let posting = trigrams.entry([gram[0], gram[1], gram[2]]).or_default();
+            if posting.last() != Some(&id) { posting.push(id) }
+        }
+    }
+    Arc::new(WordIndex { words, trigrams })
+}
 
 /// Module scope (path, scope) -> the scopes that augment it.
 pub(super) type Augmentations = FxHashMap<(reads::DepPath, u32), Vec<(reads::DepPath, u32)>>;
@@ -421,6 +493,11 @@ impl Snapshot {
     /// concurrent callers wait for the one reading.
     pub(super) fn survey(&self, key: (usize, u64), read: impl FnOnce() -> Survey) -> Cached<Survey> {
         once(&self.surveys, key, read)
+    }
+
+    /// A survey's word index, built once per run.
+    pub(super) fn words(&self, key: (usize, u64), build: impl FnOnce() -> Words) -> Cached<Words> {
+        once(&self.words, key, build)
     }
 
     /// The inputs that may publish a global name, computed once per run

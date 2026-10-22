@@ -44,7 +44,8 @@ type TestedRoots = crate::fx_hash::FxHashMap<NodeRef, Vec<u32>>;
 /// writes can replace it.
 #[derive(Default)]
 struct WriteIndex {
-    by_root: crate::fx_hash::FxHashMap<Leaf, Vec<StepId>>,
+    /// With each write's path length (its syntax shape).
+    by_root: crate::fx_hash::FxHashMap<Leaf, Vec<(StepId, usize)>>,
     /// Writes whose root can't be told from syntax: every place checks them.
     open: Vec<StepId>,
 }
@@ -323,10 +324,14 @@ impl Narrowing<'_> {
         let mut candidates = Vec::new();
         let index = self.write_index(execution, entry)?;
         let own = index.by_root.get(&subject.root).map_or(&[][..], Vec::as_slice);
-        for &id in index.open.iter().chain(own) {
+        // An indexed write's root is the subject's: only a path longer than
+        // the subject's rules it out before its keys are evaluated.
+        let indexed = own.iter().filter(|&&(_, length)| length <= subject.path.len()).map(|&(id, _)| (id, true));
+        for (id, shaped) in index.open.iter().map(|&id| (id, false)).chain(indexed) {
             if !budget.step() { return None }
             let Some(event) = execution.step(id).and_then(|step| step.event()) else { continue };
-            if self.write_invalidates(event, subject, entry.frame) { candidates.push(id) }
+            let replaces = if shaped { self.write_replaces(event, subject, entry.frame) } else { self.write_invalidates(event, subject, entry.frame) };
+            if replaces { candidates.push(id) }
         }
         candidates.sort_unstable();
         if budget.exhausted() { return None }
@@ -348,7 +353,7 @@ impl Narrowing<'_> {
             let Some(target) = event.target else { index.open.push(id); continue };
             let at = Leaf { target: Target::Node(target.value), frame: entry.frame };
             match self.find_place(at, false, false) {
-                Known::Yes((shape, _)) => index.by_root.entry(shape.root).or_default().push(id),
+                Known::Yes((shape, _)) => index.by_root.entry(shape.root).or_default().push((id, shape.path.len())),
                 Known::Unknown => index.open.push(id),
             }
         }
@@ -398,6 +403,14 @@ impl Narrowing<'_> {
         if let Known::Yes((shape, _)) = self.find_place(at, false, false) {
             if shape.root != tested.root || shape.path.len() > tested.path.len() { return false }
         }
+        self.write_replaces(event, tested, frame)
+    }
+
+    /// [`Self::write_invalidates`] for a write whose shape already passed.
+    fn write_replaces(&self, event: &Event, tested: &Place, frame: super::question::FrameId) -> bool {
+        if event.kind != EventKind::Write || event.phase != Phase::Leave { return false }
+        let Some(target) = event.target else { return true };
+        let at = Leaf { target: Target::Node(target.value), frame };
         match self.written_place(at) {
             Known::Yes(written) => written.invalidates(tested),
             Known::Unknown => true,

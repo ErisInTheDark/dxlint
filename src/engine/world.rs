@@ -55,6 +55,8 @@ struct ProgramMemo<'a> {
     augmentations: RefCell<crate::fx_hash::FxHashMap<(*const Settings, u64), Option<super::reads::Cached<Arc<super::program::Augmentations>>>>>,
     /// Per program settings, the linted file when it is not an input.
     outside: RefCell<crate::fx_hash::FxHashMap<*const Settings, (u64, Option<PathBuf>)>>,
+    /// Run-shared module answers this world used, by revision and question.
+    shared_local: RefCell<crate::fx_hash::FxHashMap<(u64, super::program::StableQuestion), super::reads::Cached<Vec<Target>>>>,
 }
 
 /// One lint's world. Engines hold it as `&dyn World` through [`Files`].
@@ -504,6 +506,17 @@ impl<'a> Files<'a> {
                         }).collect()));
                         let shared = snapshot.candidates((settings, program, Box::from(name)), || {
                             let sources = survey.get();
+                            // A name of word characters can only occur inside
+                            // one word: look it up among the inputs' distinct
+                            // words instead of scanning every text per name.
+                            if super::program::is_word(name) {
+                                let words = snapshot.words((settings, program), || super::program::index_words(&sources)).get();
+                                let mut holding = vec![false; sources.len()];
+                                words.mark(name, &mut holding);
+                                return sources.iter().zip(holding)
+                                    .filter(|((_, _, hinted), holds)| *hinted || *holds)
+                                    .map(|((path, ..), _)| path.clone()).collect();
+                            }
                             let finder = memchr::memmem::Finder::new(name.as_bytes());
                             sources.iter()
                                 .filter(|(_, text, hinted)| *hinted || text.as_deref().is_some_and(|text| finder.find(text.as_bytes()).is_some()))
@@ -700,6 +713,14 @@ impl<'a> Files<'a> {
     /// computing (and sharing) it on a miss ([`World::shared_modules`]).
     fn shared(self, question: super::program::StableQuestion, compute: &mut dyn FnMut() -> Known<Vec<Target>>) -> Known<Vec<Target>> {
         let Some(snapshot) = self.0.snapshot else { return compute() };
+        // This world's own copy of every shared answer it used: a repeat
+        // (the same global asked a million times a run) skips the program
+        // key, the run-wide lookup and the path-to-file mapping.
+        let local = (self.0.revision(), question.clone());
+        if let Some(found) = self.0.program.shared_local.borrow().get(&local) {
+            super::reads::note_group(&found.reads);
+            return Known::Yes(found.value.clone());
+        }
         let linted = self.linted_hash();
         // Shared answers see every file as the run reads it; a world whose
         // linted text differs (a fix pass, an unsaved edit) keeps its own.
@@ -707,6 +728,7 @@ impl<'a> Files<'a> {
         if let Some(shared) = self.timed("modules.resolve.shared.lookup", || snapshot.module_answer(&key)) {
             if let Some(targets) = self.timed("modules.resolve.shared.targets", || self.local_targets(&shared.value)) {
                 self.timed("modules.resolve.shared.record", || super::reads::note_group(&shared.reads));
+                self.0.program.shared_local.borrow_mut().insert(local, super::reads::Cached { value: targets.clone(), reads: shared.reads.clone() });
                 return Known::Yes(targets);
             }
         }
@@ -734,6 +756,7 @@ impl<'a> Files<'a> {
                     snapshot.keep_module_answer(key, super::reads::Cached { value: stable, reads: answer.reads.clone() });
                 }
             });
+            self.0.program.shared_local.borrow_mut().insert(local, super::reads::Cached { value: targets.clone(), reads: answer.reads.clone() });
         }
         answer.value
     }
