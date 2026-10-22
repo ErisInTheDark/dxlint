@@ -1,6 +1,6 @@
-a.ts:1:253-1:266 no-unsafe-return#0
-a.ts:1:298-1:312 no-unsafe-return#0
-a.ts:1:347-1:360 no-unsafe-return#0
-a.ts:1:407-1:422 no-unsafe-return#0
+a.ts:1:253-1:266 no-unsafe-return#1
+a.ts:1:298-1:312 no-unsafe-return#1
+a.ts:1:347-1:360 no-unsafe-return#1
+a.ts:1:407-1:422 no-unsafe-return#1
 a.ts:1:459-1:470 no-unsafe-return:assignment#0
-a.ts:1:507-1:512 no-unsafe-return#0
+a.ts:1:507-1:512 no-unsafe-return#1

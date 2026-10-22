@@ -1,2 +1,2 @@
-a.ts:2:7-2:29 no-unsafe-assignment#0
-a.ts:3:7-3:32 no-unsafe-assignment#0
+a.ts:2:7-2:29 no-unsafe-assignment#1
+a.ts:3:7-3:32 no-unsafe-assignment#1
