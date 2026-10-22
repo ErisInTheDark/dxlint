@@ -263,7 +263,8 @@ fn condition_comparable_nullish(literal, other, loose) = !contains(["null", "und
   || literal.type == "undefined" && ts_value_has_void(other) == true
   || loose && condition_domain(other).nullish
 fn condition_structural_truthy(arms) = arms != null && count(arms) > 0 && all(arms, arm =>
-  any(arm, part => contains(part.traits, "structural")) && all(arm, part =>
+  any(arm, part => contains(part.traits, "truthy") || contains(part.traits, "structural")
+    || contains(part.traits, "object")) && all(arm, part =>
     !any(part.traits, trait => contains(["any", "unknown", "error", "null", "undefined", "falsy"], trait))
     && (!any(part.traits, trait => contains(["boolean", "number", "bigint", "string"], trait))
       || contains(part.traits, "truthy"))))
@@ -273,7 +274,7 @@ in ts_case let condition_comparison { left: parent.discriminant.node, right: tes
 
 @macro condition_boolean_policy {
   when checked.node != null && (checked.subject not ts_logical || checked.subject.operator == "??")
-  let values value_constituent_traits(checked.subject, ["any", "unknown", "error", "null", "undefined", "falsy", "boolean", "number", "bigint", "string", "truthy", "structural"])
+  let values value_constituent_traits(checked.subject, ["any", "unknown", "error", "null", "undefined", "falsy", "boolean", "number", "bigint", "string", "truthy", "structural", "object"])
   let never_value values != null && count(values) == 0
   let certainly_truthy condition_structural_truthy(values) || checked.subject always truthy
   let certainly_falsy if certainly_truthy then false else checked.subject always falsy
