@@ -1,0 +1,40 @@
+# Irregular whitespace and unexpected newlines.
+
+define {
+
+# Runs of irregular spaces, and each irregular line terminator. A BOM
+# starting the file is not one.
+group problem_template ts_template, ts_template_type
+in ts_program layer text match problem_irregular_ws /[\u{000B}\u{000C}\u{0085}\u{00A0}\u{1680}\u{180E}\u{2000}-\u{200B}\u{202F}\u{205F}\u{3000}\u{FEFF}]+|[\u{2028}\u{2029}]/
+in problem_irregular_ws let irregular_whitespace_checked { value overlapping(ts_string); count } == 0
+in problem_irregular_ws rule no-irregular-whitespace {
+  when !(offset == 0 && text == "\u{FEFF}")
+  when irregular_whitespace_checked
+  warn "Irregular whitespace not allowed."
+}
+
+in ts_call let problem_multiline_opener if optional == null && count(argument) > 0 then
+  (if count(type_argument) == 0 then opener.ts_open_paren.node else opener.ts_open_angle.node)
+  else null
+in ts_index let problem_multiline_opener if optional == null then opener.ts_open_bracket.node else null
+in ts_call.problem_multiline_opener, ts_index.problem_multiline_opener, ts_tagged_template.quasi, ts_binary.operator rule no-unexpected-multiline {
+  when is (ts_open_paren, ts_open_angle, ts_open_bracket, ts_template) || text == "/"
+  when re_test(byte_slice(source, token(node, "before").end ?? offset, offset), /[\r\n\u{2028}\u{2029}]/)
+  let multiline_kind if parent is ts_call && parent.optional == null && count(parent.argument) > 0
+      && (is ts_open_paren && count(parent.type_argument) == 0 || is ts_open_angle && count(parent.type_argument) > 0) then "function"
+    else if is ts_open_bracket && parent is ts_index && parent.optional == null then "property"
+    else if is ts_tagged_template.quasi then "taggedTemplate"
+    else if is ts_binary.operator && text == "/" && parent is ts_binary.left && parent.operator == "/" && parent.parent.operator == "/" then {
+      value flags: parent.parent.right.first_token
+      value slash: parent.parent.right.token_neighbours.before
+      value if flags is ts_identifier && flags.text ~ /^[dgimsuvy]+$/ && slash.text == "/" && slash.end == flags.start then "division" else null
+    } else null
+  when multiline_kind != null
+  report at { start: offset, end: offset + 1 }
+  warn if multiline_kind == "function" then "Unexpected newline between function and ( of function call."
+    else if multiline_kind == "property" then "Unexpected newline between object and [ of property access."
+    else if multiline_kind == "taggedTemplate" then "Unexpected newline between template tag and template literal."
+    else "Unexpected newline between numerator and division operator."
+}
+
+}

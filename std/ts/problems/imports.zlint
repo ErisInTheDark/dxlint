@@ -1,0 +1,43 @@
+# Imports that are assigned to, invisible or unused.
+
+define {
+
+in ts_identifier rule no-import-assign {
+  when reference_kind == "import" && @is_write
+  report at name_write_owner
+  warn "'{text}' is read-only."
+}
+# Members of a namespace import: `ns.x = 1`, `ns.x++`, `delete ns.x`.
+in ts_member, ts_index rule no-import-assign:member {
+  when write_site != null && object.imported_name == "*"
+  report at name_write_owner
+  warn "The members of '{unparenthesised_node(object.node)}' are read-only."
+}
+# `Object.assign(ns, ...)`, `Reflect.set(ns, ...)` and the like.
+in ts_member let on_real_global object.is_real_global == true || object.on_real_global == true
+in ts_parenthesized, ts_non_null let on_real_global expression.on_real_global == true
+in ts_call rule no-import-assign:call {
+  when callee.on_real_global == true
+  when {
+    value callee
+    re_replace /[\s()]/ ""
+    re_test /^(?:Object\??\.(?:assign|defineProperty|defineProperties|freeze|setPrototypeOf)|Reflect\??\.(?:defineProperty|deleteProperty|set|setPrototypeOf))$/
+  }
+  when first([] argument.imported_name) == "*"
+  warn "The members of '{unparenthesised_node(first(argument))}' are read-only."
+}
+
+in ts_import rule no-unassigned-import {
+  when default_import == null && namespace == null && count(specifier) == 0
+  warn "Imported module should be assigned"
+}
+
+in ts_import.default_import, ts_import.namespace, ts_import_specifier.local, ts_import_specifier.imported, ts_import_equals.name rule no-unused-imports {
+  when is ts_identifier
+  when declaration_kind == "import" && uses == 0
+  # TypeScript counts `{@link X}` in JSDoc as a use.
+  when !{ value result: "\\x7B@link(?:code|plain)?\\s+" re_escape(text) "\\b"; value re_test(source, result) }
+  warn "'{text}' is defined but never used."
+}
+
+}

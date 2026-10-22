@@ -1,0 +1,47 @@
+# String content: escapes, script urls and line continuation.
+
+define {
+
+in ts_string rule no-nonoctal-decimal-escape {
+  each decimal_escape in {
+    value overlapping(ts_literal_piece, offset, end_offset)
+    filter (piece) re_test(piece.text, /^\\[89]$/)
+    unique_by (piece) {start: piece.offset, end: piece.end_offset}
+  } {
+    report at decimal_escape.node
+    warn "Don't use '{decimal_escape.text}' escape sequence."
+  }
+}
+
+in ts_string, ts_template rule no-script-url {
+  when literal_value.type == "string" && re_test(literal_value.value, /(?i)^javascript:/)
+  when parent not ts_tagged_template
+  warn "Script URL is a form of eval."
+}
+
+in ts_string let octal_escape {
+  value text
+  re_find /(?:^|[^\\])(?:\\\\)*\\(?:[0-3][0-7]{1,2}|[4-7][0-7]|0[89]|[1-7])/
+  re_find /\\(?:[0-3][0-7]{1,2}|[4-7][0-7]|0[89]|[1-7])$/
+}
+in ts_string rule no-octal-escape {
+  when octal_escape != null
+  warn "Don't use octal: '{if re_test(octal_escape, /^\\0[89]$/) then '\\0' else octal_escape}'. Use '\\u....' instead."
+}
+
+in ts_string rule no-multi-str {
+  when re_test(text, /[\r\n\u{2028}\u{2029}]/) && parent not (ts_jsx_attribute, ts_jsx_expression, ts_jsx_element)
+  warn "Multiline support is limited to browsers supporting ES5 only."
+}
+
+in ts_string, ts_template, ts_regex rule no-useless-escape {
+  option allowRegexCharacters string[] = [] "allow otherwise unnecessary regex escapes"
+  when contains(text, "\\")
+  each escape_info in regexp_useless_escapes {
+    when !escape_info.regex || !contains(allowRegexCharacters, escape_info.character)
+    report at { start: escape_info.offset, end: escape_info.offset + 1 }
+    warn "Unnecessary escape character: \\{escape_info.character}."
+  }
+}
+
+}

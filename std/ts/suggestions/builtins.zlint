@@ -1,0 +1,109 @@
+# Built-in globals, prototypes and their aliases.
+
+define {
+
+# The global `eval`, called or referenced (`(0, eval)`, `globalThis.eval`).
+@macro suggestion_eval_policy {
+  option allowIndirect boolean = false "allow indirect eval references and calls"
+  when if is ts_identifier then text == "eval" else static_name == "eval"
+  let eval_info eval_usage
+  when eval_info != null && (!allowIndirect || eval_info.direct && !eval_info.optional)
+  report at { start: eval_info.offset, end: eval_info.end }
+  warn "`eval` can be harmful."
+}
+in ts_identifier rule no-eval { @suggestion_eval_policy }
+in ts_member, ts_index rule no-eval:member { @suggestion_eval_policy }
+
+in ts_declarator rule no-undef-init {
+  when init == "undefined" && init.resolved == "global" && re_test(ts_variable_declaration.kind, /^(var|let)$/)
+  let undef_initializer { offset: type.end_offset ?? name.end_offset, end_offset: init.end_offset }
+  fix at { start: undef_initializer.offset, end: undef_initializer.end_offset } if ts_variable_declaration.kind == "let" && name is ts_identifier && expression_fix_clean(undef_initializer) as ""
+  warn "It's not necessary to initialize '{name}' to undefined."
+}
+
+fn parse_int_target(n) = if enabled_global_identifier(n, "parseInt") || n is (ts_member, ts_index) && n.static_name == "parseInt" && { value n.object.node; unparenthesised_node; enabled_global_identifier "Number" } then n.text else null
+in ts_call let parse_int_name { value callee.node; unparenthesised_node; parse_int_target }
+fn valid_radix(value) = value.type == "number" && value.value >= 2 && value.value <= 36 && value.value % 1 == 0
+fn invalid_radix(n) = n is ts_identifier && n.text == "undefined" && n.resolved == "global" || (n is (ts_number, ts_string, ts_boolean, ts_null, ts_regex, ts_bigint) || n is ts_unary && contains(["+", "-"], n.operator) && n.argument is ts_number) && !valid_radix(n.literal_value)
+
+in ts_call rule radix {
+  option mode ("always" | "as-needed") = "always" "legacy radix policy"
+  when parse_int_name != null
+  let argument_count count(argument)
+  let first_argument { value argument.nodes; first; unparenthesised_node }
+  let second_argument {
+    value argument.nodes
+    slice 1
+    first
+    unparenthesised_node
+  }
+  when first_argument not ts_spread && second_argument not ts_spread
+  when argument_count < 2 || invalid_radix(second_argument)
+  warn when {
+    argument_count == 0 then "Missing parameters."
+    argument_count == 1 then "Missing radix parameter."
+    else then "Invalid radix parameter, must be an integer between 2 and 36."
+  }
+}
+
+in ts_identifier rule no-shadow-restricted-names {
+  option reportGlobalThis boolean = true "include globalThis among restricted names"
+  when restricted_binding && (text != "globalThis" || reportGlobalThis)
+  warn "Shadowing of global property '{text}'."
+}
+
+in ts_member, ts_index rule no-proto {
+  when static_name == "__proto__"
+  warn "The '__proto__' property is deprecated."
+}
+
+in ts_member, ts_index rule no-iterator {
+  when static_name == "__iterator__"
+  warn "Reserved name '__iterator__'."
+}
+
+in ts_call rule symbol-description {
+  when callee == "Symbol" && callee.resolved == "global" && count(argument) == 0
+  warn "Expected Symbol to have a description."
+}
+
+in ts_call rule prefer-numeric-literals {
+  when count(argument) == 2 && parse_int_name != null
+  when first([] argument.literal_value).type == "string"
+  when { value argument; last_argument: last; value contains(["2", "8", "16"], last_argument) }
+  let radix_label when {
+    last(argument) == "2" then "binary"
+    last(argument) == "8" then "octal"
+    else then "hexadecimal"
+  }
+  warn "Use {radix_label} literals instead of {parse_int_name}()."
+  let literal first(argument.nodes)
+  let base last(argument)
+  let digits literal.literal_value.value
+  let valid_digits when {
+    base == "2" then /\A[01]+\z/
+    base == "8" then /\A[0-7]+\z/
+    else then /\A[0-9a-fA-F]+\z/
+  }
+  let replacement (when {
+    base == "2" then "0b"
+    base == "8" then "0o"
+    else then "0x"
+  }) digits
+  fix if (literal is ts_string || literal is ts_template && count(literal.expression) == 0) && re_test(digits, valid_digits) && expression_fix_clean(node) as expression_fix_edges(node, replacement)
+}
+
+in ts_member, ts_index rule no-console {
+  option allow string[] = [] "console methods to allow"
+  when object == "console" && object.resolved == "global" && !contains(allow, static_name)
+  warn if count(allow) == 0 then "Unexpected console statement." else "Unexpected console statement. Only these console methods are allowed: {join(allow, ', ')}."
+}
+
+in ts_call rule prefer-object-has-own {
+  when own_property_call
+  warn "Use 'Object.hasOwn()' instead of 'Object.prototype.hasOwnProperty.call()'."
+  let target unparenthesised_node(callee.node)
+  fix at target if expression_fix_clean(target) as expression_fix_edges(target, "Object.hasOwn")
+}
+
+}

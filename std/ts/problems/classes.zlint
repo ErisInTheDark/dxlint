@@ -1,0 +1,39 @@
+# Class construction order and accessor returns.
+
+define {
+
+in ts_method let problem_super_calls {
+  value missing: flow_complete_without(body.node, "constructed", ["returned"])
+  value called: flow_complete_with(body.node, "constructed", ["returned"])
+  value if missing == false then "all" else if missing == true then if called == true then "some" else if called == false then "none" else null else null
+}
+
+in ts_method.key rule constructor-super {
+  when text == "constructor" && ts_class.extends != null
+  when parent.problem_super_calls == "none" || parent.problem_super_calls == "some"
+  warn if parent.problem_super_calls == "none" then "Expected to call 'super()'." else "Lacked a call of 'super()' in some code paths."
+}
+in ts_call rule constructor-super:call {
+  when callee is ts_super && flow_constructor != null && reachable(node) == true && (flow_prior_event(node, "constructed") == true || flow_constructor.parent.extends.flow_constructor_heritage == false)
+  warn if flow_prior_event(node, "constructed") == true then "Unexpected duplicate 'super()'." else "Unexpected 'super()' because 'super' is not a constructor."
+}
+in ts_this rule no-this-before-super {
+  when flow_constructor != null && reachable(node) == true && flow_required(node, "constructed") == false
+  warn "'this' is not allowed before 'super()'."
+}
+in ts_member, ts_index rule no-this-before-super:super {
+  when object is ts_super && flow_constructor != null && reachable(node) == true && flow_required(node, "constructed") == false
+  warn "'super' is not allowed before 'super()'."
+}
+
+in ts_return rule no-setter-return {
+  when argument != null && enclosing_accessor == "set"
+  warn "Setter cannot return a value."
+}
+# `{ set: v => value }`: the arrow's value is its return.
+in ts_arrow.body rule no-setter-return:arrow {
+  when parent.accessor == "set" && not ts_block
+  warn "Setter cannot return a value."
+}
+
+}

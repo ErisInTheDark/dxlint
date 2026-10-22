@@ -1,0 +1,22 @@
+# Shared helpers for the `.ts/problems` topic files.
+
+define {
+
+@macro normalize_space(x) re_replace(x, /\s+/, " ")
+group ts_literal ts_string, ts_number, ts_boolean, ts_null, ts_bigint, ts_regex
+
+# A global (not shadowed, not switched off) of this name.
+@macro is_global(name) (text == name && (global == "readonly" || global == "writable"))
+in ts_identifier let is_real_global global == "readonly" || global == "writable"
+
+@macro is_write (access == "write" || access == "read_write")
+
+in ts_node let problem_expression_value_used
+  if parent == null || is (ts_expression_statement.expression, ts_for.init, ts_for.update) then false
+  else if is (ts_parenthesized.expression, ts_as.expression, ts_satisfies.expression, ts_non_null.expression, ts_type_assertion.expression, ts_instantiation.expression) then parent.problem_expression_value_used
+  else if is ts_sequence.expression then index == count(parent.expression) - 1 && parent.problem_expression_value_used
+  else if is (ts_logical.right, ts_conditional.consequent, ts_conditional.alternate) then parent.problem_expression_value_used
+  else if is ts_unary.argument && parent.operator == "void" then false
+  else true
+
+}

@@ -1,0 +1,154 @@
+# Expression mistakes: comparisons, conditions, assignments and literals.
+
+define {
+
+in ts_member rule no-caller {
+  when object == "arguments" && property ~ /callee|caller/
+  warn "Avoid arguments.{property}."
+}
+
+in ts_binary rule no-compare-neg-zero {
+  when operator ~ /===?|!==?|<=?|>=?/ && (re_test(left, /^-\s*0$/) || re_test(right, /^-\s*0$/))
+  warn "Do not use the '{operator}' operator to compare against -0."
+}
+
+# Assignments as conditions, unless wrapped in their own parentheses (a `?:`
+# test needs two pairs: it has none of its own). With "always", any
+# assignment inside a condition.
+in ts_assignment let is_assignment true
+in ts_parenthesized let wraps_assignment expression.is_assignment == true
+in ts_if.test, ts_while.test, ts_do_while.test, ts_for.test, ts_conditional.test rule no-cond-assign {
+  option mode "except-parens" | "always" = "except-parens"
+  when mode == "except-parens"
+  when is ts_assignment || parent is ts_conditional && is ts_parenthesized && wraps_assignment == true
+  report at unparenthesised_node(node)
+  warn "Expected a conditional expression and instead saw an assignment."
+}
+in ts_assignment rule no-cond-assign:always {
+  option mode "except-parens" | "always" = "except-parens"
+  let where if conditional_ancestor is ts_if then "an 'if' statement" else if conditional_ancestor is ts_while then "a 'while' statement" else if conditional_ancestor is ts_do_while then "a 'do...while' statement" else if conditional_ancestor is ts_for then "a 'for' statement" else "ConditionalExpression"
+  when mode == "always" && conditional_ancestor != null
+  warn "Unexpected assignment within {where}."
+}
+
+# Comparisons with `NaN` (or `Number.NaN`, or a sequence ending in it).
+in ts_identifier let is_nan text == "NaN" && is_real_global
+in ts_member, ts_index let is_nan object == "Number" && object.is_real_global == true && static_name == "NaN"
+in ts_parenthesized let is_nan expression.is_nan == true
+in ts_sequence let is_nan last([] expression.is_nan) == true
+in ts_binary rule use-isnan {
+  when operator ~ /(?:[<>]|[!=]=)=?/ && (left.is_nan == true || right.is_nan == true)
+  warn "Use the isNaN function to compare with NaN."
+}
+group use_isnan_searches
+in ts_switch rule use-isnan:switch {
+  when discriminant.is_nan == true
+  warn "'switch(NaN)' can never match a case clause. Use Number.isNaN instead of the switch."
+}
+in ts_case rule use-isnan:case {
+  when test.is_nan == true
+  warn "'case NaN' can never match. Use Number.isNaN before the switch."
+}
+in use_isnan_searches rule use-isnan:index-of {
+  when (callee.static_name == "indexOf" || callee.static_name == "lastIndexOf") && count(argument) <= 2 && first([] argument.is_nan) == true
+  warn "Array prototype method '{callee.static_name}' cannot find NaN."
+}
+
+# `typeof x === "strnig"`, either way round.
+in ts_unary let is_typeof operator == "typeof"
+in ts_parenthesized let is_typeof expression.is_typeof == true
+in ts_binary {
+  let left_is_typeof left.is_typeof == true
+  let right_is_typeof right.is_typeof == true
+}
+@macro valid_typeof_names ["symbol", "undefined", "object", "boolean", "number", "string", "function", "bigint"]
+in ts_binary.left, ts_binary.right rule valid-typeof {
+  option requireStringLiterals boolean = false "compare only with string literals"
+  let compared_with_typeof parent.operator ~ /[=!]==?/ && (if is ts_node.left then parent.right_is_typeof else parent.left_is_typeof)
+  when compared_with_typeof
+  when literal_value != null && (literal_value.type != "string" || !contains(@valid_typeof_names, literal_value.value))
+    || is_global_undefined
+    || requireStringLiterals && literal_value == null && is_typeof != true
+  report at unparenthesised_node(node)
+  warn if requireStringLiterals && literal_value == null then "Typeof comparisons should be to string literals." else "Invalid typeof comparison value."
+}
+in ts_identifier let is_global_undefined text == "undefined" && global == "readonly"
+in ts_parenthesized let is_global_undefined expression.is_global_undefined == true
+
+# `a = a`, also inside destructuring and members (`a.b = a.b`).
+fn problem_self_assignment_pairs(a, b) = {
+  value left: unparenthesised_node(a)
+  value right: unparenthesised_node(b)
+  value if left == null || right == null then []
+    else if left is (ts_array, ts_array_pattern) && right is ts_array then {
+      value items: right.element.nodes
+      value last: find(items, item => item is ts_spread).index ?? (count(items) - 1)
+      value left.element.nodes
+      zip items (target, value) { left: target, right: value }
+      take_while (pair, i) i <= last && !(pair.left is (ts_spread, ts_rest) && i < count(items) - 1)
+    }
+    else if left is (ts_spread, ts_rest) && right is ts_spread then [{left: left.argument.node, right: right.argument.node}]
+    else if left is (ts_object, ts_object_pattern) && right is ts_object then {
+      value spread: find_last(right.property.nodes, property => property is ts_spread)
+      value items: { value right.property.nodes; slice (if spread == null then 0 else spread.index + 1) }
+      value left.property.nodes
+      flat_map (target) map(items, value => {left: target, right: value})
+    }
+    else if left is (ts_property, ts_pattern_property) && right is ts_property && (right.kind == null || right.kind == "init")
+      && left.static_name != null && left.static_name == right.static_name then
+        [{left: left.value.node ?? left.key.node, right: right.value.node ?? right.key.node}]
+    else []
+}
+fn problem_self_assignments(a, b) = {
+  value {left: a, right: b, path: ""}
+  walk (item) {
+    value pairs: problem_self_assignment_pairs(item.left, item.right)
+    value width: len(str(len(pairs)))
+    value map(pairs, (pair, index) => {left: pair.left, right: pair.right, path: item.path pad_start(str(index), width, "0")})
+  }
+  sort_by (item) item.path
+  filter (item) {
+    value left: unparenthesised_node(item.left)
+    value right: unparenthesised_node(item.right)
+    value left is ts_identifier && right is ts_identifier && left.identifier_name == right.identifier_name
+      || left is (ts_member, ts_index) && right is (ts_member, ts_index)
+        && left.reference_key != null && left.reference_key == right.reference_key
+  }
+  map (item) unparenthesised_node(item.right)
+}
+in ts_assignment rule no-self-assign {
+  option props boolean = true
+  when contains(["=", "&&=", "||=", "??="], operator)
+  each self in map(problem_self_assignments(left.node, right.node), assigned => { node: assigned, name: re_replace(assigned.text, /\s+/, "") }) {
+    when props || self.node is ts_identifier
+    report at self.node
+    warn "'{self.name}' is assigned to itself."
+  }
+}
+
+# Comparisons and short circuits whose result cannot change.
+in ts_binary, ts_logical let constant_relation_checked false
+in ts_binary, ts_logical rule no-constant-binary-expression {
+  let c constant_comparison
+  when c != null || constant_relation_checked && constant_relation
+  report at if c != null then c.node else node
+  warn if c == null then "Unexpected constant relational comparison. Both sides of the `{operator}` are literal values."
+    else if c.kind == "constantShortCircuit" then "Unexpected constant {c.detail} on the left-hand side of a `{operator}` expression."
+    else if c.kind == "constantBinaryOperand" then "Unexpected constant binary expression. Compares constantly with the {c.detail}-hand side of the `{operator}`."
+    else if c.kind == "alwaysNew" then "Unexpected comparison to newly constructed object. These two values can never be equal."
+    else "Unexpected comparison of two newly constructed objects. These two values can never be equal."
+}
+
+# `!a in b`: the `!` applies to `a` alone.
+in ts_binary let unsafe_negation_checked contains(["in", "instanceof"], operator)
+in ts_binary.left rule no-unsafe-negation {
+  when is ts_unary && re_test(text, /^!/)
+  when parent.unsafe_negation_checked
+  warn "Unexpected negating the left operand of '{parent.operator}' operator."
+}
+
+in ts_string rule no-template-curly-in-string warn "Unexpected template string expression." {
+  when text ~ /.*\$\{[^}\r\n]+\}.*/
+}
+
+}

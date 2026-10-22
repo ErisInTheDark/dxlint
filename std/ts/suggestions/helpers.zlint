@@ -1,0 +1,17 @@
+# Shared state and value helpers for the `.ts/suggestions` topic files.
+
+define {
+
+in ts_block let statement_count count([] body)
+
+in ts_parenthesized let unwrapped_node expression.unwrapped_node.nonempty ?? expression.node
+in ts_parenthesized let unwrapped_text expression.unwrapped_text.nonempty ?? expression
+
+in ts_parenthesized let inner_comparison_tokens expression.unparenthesised_tokens
+in ts_node let unparenthesised_tokens if is ts_parenthesized then inner_comparison_tokens else token_texts
+
+in ts_block let uncommented_empty_block count(body) == 0 && { value descendants(ts_comment); count } == 0
+
+fn enabled_global_identifier(n, name) = n is ts_identifier && n.text == name && n.resolved == "global" && n.global != "off"
+
+}

@@ -1,0 +1,59 @@
+# Regular expression literal preferences.
+
+define {
+
+in ts_template let static_template count(expression) == 0
+in ts_parenthesized forward static_template from expression
+
+in ts_regex, ts_call, ts_new rule prefer-named-capture-group {
+  each capture in regexp_unnamed_captures {
+    warn "Capture group '{capture}' should be converted to a named or non-capturing group."
+  }
+}
+
+in ts_regex rule no-div-regex {
+  when re_test(text, "^/=")
+  fix at { start: offset + 1, end: offset + 2 } as "[=]"
+  warn "A regular expression literal can be confused with '/='."
+}
+
+fn regex_raw_tag(tag) = tag is (ts_member, ts_index) && tag.static_name == "raw" && { value tag.object.node; unparenthesised_node; enabled_global_identifier "String" }
+fn regex_static_argument(n) = n is ts_string || n is ts_template && n.static_template == true || n is ts_tagged_template && n.quasi.static_template == true && { value n.tag.node; unparenthesised_node; regex_raw_tag }
+fn regex_construction_kind(args) =
+  when {
+    len(args) < 1 || len(args) > 2 then null
+    all(args, arg => { value arg; unparenthesised_node; regex_static_argument }) then "static"
+    { value args; first; unparenthesised_node } is ts_regex && (len(args) == 1 || {
+      value args
+      last
+      unparenthesised_node
+      regex_static_argument
+    }) then (if len(args) == 1 then "wrapped" else "flags")
+    else then null
+  }
+
+in ts_call, ts_new rule prefer-regex-literals {
+  option disallowRedundantWrapping boolean = false "disallow constructors wrapping regex literals"
+  when callee.global_value == "RegExp"
+  let regex_preference regex_construction_kind(argument.nodes)
+  when regex_preference != null && (regex_preference == "static" || disallowRedundantWrapping)
+  warn when {
+    regex_preference == "static" then "Use a regular expression literal instead of the 'RegExp' constructor."
+    regex_preference == "wrapped" then "Regular expression literal is unnecessarily wrapped within a 'RegExp' constructor."
+    else then "Use regular expression literal with flags instead of the 'RegExp' constructor."
+  }
+}
+
+in ts_regex, ts_call, ts_new rule require-unicode-regexp {
+  option requireFlag ("u" | "v" | null) = null "require a particular unicode mode"
+  let unicode_info regexp_unicode_info
+  when unicode_info != null
+  when (when {
+    requireFlag == "u" then !re_test(unicode_info.flags, /u/)
+    requireFlag == "v" then !re_test(unicode_info.flags, /v/)
+    else then !re_test(unicode_info.flags, /[uv]/)
+  })
+  warn if requireFlag == "v" then "Use the 'v' flag." else "Use the 'u' flag."
+}
+
+}

@@ -1,0 +1,260 @@
+# Function forms, bindings, bodies and calls.
+
+define {
+
+in ts_return let return_value_object (argument.unwrapped_node.nonempty ?? argument.node) is ts_object
+in ts_return let return_value_braced { value result: "{{"; value starts_with(argument, result) }
+in ts_block let single_return count([] body) == 1 && first(body.nodes) is ts_return
+in ts_block let return_value_object first([] body.return_value_object) == true
+in ts_block let return_value_braced first([] body.return_value_braced) == true
+
+in ts_function let function_this function_uses_this(node)
+in ts_member let bind_property_site property.node
+in ts_index let bind_property_site index.node
+in ts_member, ts_index let bind_target when {
+  static_name != "bind" then null
+  (object.unwrapped_node.nonempty ?? object.node) is ts_arrow || (object.unwrapped_node.nonempty ?? object.node) is ts_function && object.function_this != true then bind_property_site
+  else then null
+}
+in ts_parenthesized forward function_this, bind_target from expression
+
+in ts_parameter let required_parameter init == null && optional == null && name not ts_rest && !starts_with(text, "...")
+in ts_function, ts_arrow, ts_method let parameter_required [] parameter.required_parameter
+
+in ts_node let return_assignment_context when {
+  parent is ts_return then { arrow: false, offset: parent.offset }
+  is ts_arrow.body then { arrow: true, offset: parent.offset }
+  parent is (ts_function, ts_method, ts_arrow, ts_class, ts_block, ts_static_block, ts_expression_statement, ts_variable_declaration, ts_if, ts_for, ts_for_in, ts_for_of, ts_while, ts_do_while, ts_switch, ts_throw, ts_with, ts_labeled, ts_try, ts_export) then null
+  else then parent.return_assignment_context
+}
+
+in ts_unary let void_operator operator == "void"
+in ts_parenthesized let inner_null_receiver expression.null_call_receiver
+in ts_node let null_call_receiver if is ts_parenthesized then inner_null_receiver else is ts_null || is ts_identifier && text == "undefined" || is ts_unary && void_operator == true
+in ts_member, ts_index let member_receiver_tokens object.unparenthesised_tokens
+in ts_member, ts_index let invoked_receiver if object == null then null else { member: (object.unwrapped_node.nonempty ?? object.node) is (ts_member, ts_index), tokens: object.member_receiver_tokens }
+in ts_member let direct_method_name property
+in ts_member, ts_index let called_method_name static_name
+in ts_parenthesized forward member_receiver_tokens, invoked_receiver, direct_method_name, called_method_name from expression
+fn unchanged_call_receiver(receiver, tokens, null_receiver) = receiver != null && (if receiver.member then receiver.tokens == tokens else null_receiver == true)
+
+# `.bind(x)` on a function that never uses `this` (or on an arrow).
+fn suggestion_bind_fix(n) = {
+  value wrapped_callee: n.callee.node
+  value member: unparenthesised_node(wrapped_callee)
+  value receiver: member.object.node
+  value property_start: receiver.token_neighbours.after
+  value argument_start: wrapped_callee.token_neighbours.after
+  value argument: first(n.argument.nodes)
+  value bare_argument: unparenthesised_node(argument)
+  value region: {offset: property_start.start, end_offset: n.end_offset}
+  value edits: [
+    {start: property_start.start, end: member.end_offset, text: ""},
+    {start: argument_start.start, end: n.end_offset, text: ""}
+  ]
+  value suffix: byte_slice(n.text, property_start.start - n.offset)
+  value if property_start == null || argument_start == null
+    || bare_argument not (ts_string, ts_number, ts_boolean, ts_null, ts_bigint, ts_regex, ts_identifier, ts_this, ts_function)
+    || !expression_fix_clean(region) then null
+    else {start: property_start.start, end: n.end_offset, text: expression_fix_edits(suffix, property_start.start, edits)}
+}
+in ts_call rule no-extra-bind {
+  when count(argument) == 1 && first(argument.nodes) not ts_spread && callee.bind_target != null
+  report at callee.bind_target
+  warn "The function binding is unnecessary."
+  let replacement suggestion_bind_fix(node)
+  fix at replacement ?? node if replacement != null as replacement.text
+}
+
+in ts_identifier rule prefer-rest-params {
+  when text == "arguments" && resolved == "local" && declaration == null && (ts_function != null || ts_method != null)
+  when !(parent is ts_member && index == 0)
+  warn "Use the rest parameters instead of 'arguments'."
+}
+
+in ts_call rule prefer-spread {
+  when callee.called_method_name == "apply" && count(argument) == 2
+  let second_argument_node {
+    value [] argument.unwrapped_node
+    slice 1
+    first
+    nonempty
+  } ?? { value argument.nodes; slice 1; first }
+  when second_argument_node not (ts_array, ts_spread)
+  when {
+    value [] argument.unparenthesised_tokens
+    tokens: first
+    value [] argument.null_call_receiver
+    null_receiver: first
+    value unchanged_call_receiver(callee.invoked_receiver, tokens, null_receiver)
+  }
+  warn "Use the spread operator instead of '.apply()'."
+}
+
+in ts_parameter rule default-param-last {
+  when parent is (ts_function, ts_arrow, ts_method) && (init != null || optional != null)
+  when { value parent.parameter_required; slice (index + 1); any (p) p == true }
+  warn "Default parameters should be last."
+}
+
+fn suggestion_function_style(n) = {
+  value declaration: n is ts_function && n is (ts_node.body, ts_node.declaration, ts_if.consequent, ts_if.alternate)
+  value outer: outer_parenthesised_node(n)
+  value holder: if declaration then n else if outer.parent is ts_declarator then outer.parent.node else null
+  value export: if declaration then n.parent.node else holder.parent.parent.node
+  value exported: export is ts_export
+  value default_export: exported && export.kind == "default"
+  value owner: if exported || n.parent is ts_case then n.parent.parent.node else n.parent.node
+  value siblings: flat_map(owner.children.nodes, sibling => if sibling is ts_case then sibling.body.nodes else [sibling])
+  value declarations: map(siblings, sibling => if sibling is ts_export then sibling.declaration.node ?? sibling else sibling)
+  value overloaded: declaration && n.name.node != null && any(declarations, sibling =>
+    sibling is ts_function && sibling.body.node == null && sibling.name.text == n.name.text)
+  value nested: walk(n.children.nodes, current =>
+    if current is (ts_function, ts_arrow, ts_method) then [] else current.children.nodes)
+  value if holder == null then null else {
+    declaration: declaration,
+    exported: exported && !default_export,
+    exempt: default_export || overloaded || n.body.node == null,
+    arrow: n is ts_arrow,
+    captures: n is ts_arrow && any(nested, current => current is (ts_this, ts_super)),
+    annotated: holder.type.node != null,
+    offset: holder.offset
+  }
+}
+
+in ts_function, ts_arrow rule func-style {
+  option style ("declaration" | "expression") = "expression" "function syntax policy"
+  option allowArrowFunctions boolean = false "allow arrow expressions"
+  option allowTypeAnnotation boolean = false "allow annotated function variables"
+  option overrides { namedExports: "" | "declaration" | "expression" | "ignore" } = { namedExports: "" } "named export policy"
+  let function_info suggestion_function_style(node)
+  when function_info != null && !function_info.exempt
+  let requested_style if function_info.exported && overrides.namedExports != "" then overrides.namedExports else style
+  when requested_style == "expression" && function_info.declaration || requested_style == "declaration" && !function_info.declaration && !(function_info.arrow && (allowArrowFunctions || function_info.captures)) && !(allowTypeAnnotation && function_info.annotated)
+  report at function_info.offset
+  warn "Expected a function {requested_style}."
+}
+
+in ts_assignment rule no-return-assign {
+  option mode ("except-parens" | "always") = "except-parens" "assignment return policy"
+  let return_info return_assignment_context
+  when return_info != null && (mode == "always" || parent not ts_parenthesized)
+  report at return_info.offset
+  warn if return_info.arrow then "Arrow function should not return assignment." else "Return statement should not contain assignment."
+}
+
+fn arrow_body_expression_fix(source, n) = if n.body.single_return != true || first(n.body.body.nodes).argument == null then null else {
+  value body: n.body.node
+  value statement: first(body.body.nodes)
+  value argument: statement.argument.node
+  value after: body.token_neighbours.after.text
+  value hazard: after != null && expression_fix_continuation(after)
+  value parens: expression_fix_parens(source, body, argument)
+  value initialiser: { value n; walk (current) current.parent.node; any (current) current is ts_for.init }
+  value binaries: overlapping(ts_binary, body.offset, body.end_offset)
+  value has_in: any(binaries, binary => binary.operator == "in")
+  value wrap: argument not ts_parenthesized && (parens > 0 || initialiser && has_in)
+  value semicolons: overlapping(ts_semicolon, argument.end_offset, body.end_offset)
+  value semicolon: first(semicolons)
+  value last_end: semicolon.end_offset ?? argument.end_offset
+  value comments: overlapping(ts_comment, body.offset, body.end_offset)
+  value outside_comments: any(comments, comment => comment.offset < argument.offset || comment.offset >= argument.end_offset)
+  value edits: if outside_comments then
+    [{ start: body.offset, end: body.offset + 1, text: "" },
+     { start: statement.offset, end: statement.offset + 6, text: "" },
+     { start: body.end_offset - 1, end: body.end_offset, text: "" }]
+    else [{ start: body.offset, end: argument.offset, text: "" }, { start: last_end, end: body.end_offset, text: "" }]
+  value punctuation: ((if semicolon != null then [{ start: semicolon.offset, end: semicolon.end_offset, text: "" }] else [])
+    (if wrap then [{ start: argument.offset, end: argument.offset, text: "(" }, { start: last_end, end: last_end, text: ")" }] else []))
+  value changes: punctuation edits
+  value replacement: expression_fix_edits(body.text, body.offset, changes)
+  value if argument == null || hazard || parens == null || !expression_fix_retains_comments(body, replacement) then null
+    else { start: body.offset, end: body.end_offset, text: replacement }
+}
+fn arrow_body_block_fix(source, n) = {
+  value body: n.body.node
+  value tokens: overlapping(ts_open_paren, body.offset, body.offset + 1)
+  value opening: first(tokens)
+  value next: opening.token_neighbours.after
+  value objects: if next.text == "{{" then overlapping(ts_object, next.start, next.end) else []
+  value object: any(objects, candidate => candidate.offset == next.start)
+  value newline: object && { value source; byte_slice opening.end_offset next.start; re_test /[\n\r\u{2028}\u{2029}]/ }
+  value edits: if object then
+    ([{ start: opening.offset, end: opening.end_offset, text: if newline then "{{" else "{{return " },
+     { start: opening.paired_token.start, end: opening.paired_token.end, text: "" },
+     { start: body.end_offset, end: body.end_offset, text: "}}" }]
+    (if newline then [{ start: next.start, end: next.start, text: "return " }] else []))
+    else [{ start: body.offset, end: body.offset, text: "{{return " }, { start: body.end_offset, end: body.end_offset, text: "}}" }]
+  value replacement: expression_fix_edits(body.text, body.offset, edits)
+  value if !expression_fix_retains_comments(body, replacement) then null
+    else { start: body.offset, end: body.end_offset, text: replacement }
+}
+in ts_arrow rule arrow-body-style {
+  option mode ("always" | "never" | "as-needed") = "as-needed" "arrow body block policy"
+  option requireReturnForObjectLiteral boolean = false "require a block for object values"
+  when body != null
+  let body_block body is ts_block
+  let body_object if body_block then body.return_value_object == true else (body.unwrapped_node.nonempty ?? body.node) is ts_object
+  when body_block && (mode == "never" || mode == "as-needed" && body.single_return == true && !(requireReturnForObjectLiteral && body_object)) || !body_block && (mode == "always" || mode == "as-needed" && requireReturnForObjectLiteral && body_object)
+  report at unparenthesised_node(body.node)
+  warn when {
+    !body_block then "Expected block statement surrounding arrow body."
+    body.statement_count == 0 then "Unexpected block statement surrounding arrow body; put a value of `undefined` immediately after the `=>`."
+    body.single_return != true then "Unexpected block statement surrounding arrow body."
+    body.return_value_braced == true then "Unexpected block statement surrounding arrow body; parenthesize the returned value and move it immediately after the `=>`."
+    else then "Unexpected block statement surrounding arrow body; move the returned value immediately after the `=>`."
+  }
+  let edit if body_block then arrow_body_expression_fix(source, node) else arrow_body_block_fix(source, node)
+  fix at (edit ?? { start: body.offset, end: body.end_offset }) if edit != null as edit.text
+}
+
+fn empty_function_constructor(n) = n is ts_method && n.parent is ts_class && n.key.text == "constructor" && !contains(n.modifier, "static")
+fn empty_function_category(n, constructor) = when {
+  n is ts_arrow then "arrowFunctions"
+  constructor then "constructors"
+  n is ts_method && n.kind == "get" then "getters"
+  n is ts_method && n.kind == "set" then "setters"
+  contains(n.modifier, "*") then (if n is ts_method then "generatorMethods" else "generatorFunctions")
+  contains(n.modifier, "async") then (if n is ts_method then "asyncMethods" else "asyncFunctions")
+  n is ts_method then "methods"
+  else then "functions"
+}
+fn empty_function_decorated(n, constructor) = n is ts_method && !constructor && count(n.decorator.node) > 0
+
+in ts_function, ts_arrow, ts_method rule no-empty-function {
+  option allow string[] = [] "function categories that may be empty"
+  when body.uncommented_empty_block == true
+  let constructor empty_function_constructor(node)
+  when !constructor || !any(parameter.nodes, param => count(param.modifier) > 0)
+  when !{
+    value node
+    empty_function_category: empty_function_category constructor
+    value contains(allow, empty_function_category)
+  }
+  when !(constructor && contains(modifier, "private") && (contains(allow, "privateConstructors") || contains(allow, "private-constructors")))
+  when !(constructor && contains(modifier, "protected") && (contains(allow, "protectedConstructors") || contains(allow, "protected-constructors")))
+  when !(empty_function_decorated(node, constructor) && contains(allow, "decoratedFunctions"))
+  when !(is ts_method && !constructor && contains(modifier, "override") && contains(allow, "overrideMethods"))
+  report at body.node
+  warn "Unexpected empty { function_name.nonempty ?? 'function' }."
+}
+
+in ts_call rule no-useless-call {
+  let method_name callee.direct_method_name
+  when method_name == "call" && count(argument) > 0 || method_name == "apply" && count(argument) == 2 && ({
+    value [] argument.unwrapped_node
+    slice 1
+    first
+    nonempty
+  } ?? { value argument.nodes; slice 1; first }) is ts_array
+  when {
+    value [] argument.unparenthesised_tokens
+    tokens: first
+    value [] argument.null_call_receiver
+    null_receiver: first
+    value unchanged_call_receiver(callee.invoked_receiver, tokens, null_receiver)
+  }
+  warn "Unnecessary '.{method_name}()'."
+}
+
+}

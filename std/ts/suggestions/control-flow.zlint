@@ -1,0 +1,204 @@
+# Loops, branches, statements and clauses.
+
+define {
+
+# Statement properties stay lazy: rules request only the shape they need.
+in ts_if, ts_for, ts_for_in, ts_for_of, ts_while, ts_with, ts_labeled let unmatched_tail curly_unmatched_tail(node)
+in ts_if, ts_for, ts_for_in, ts_for_of, ts_while, ts_with, ts_labeled, ts_block let enclosing_else_boundary curly_enclosing_else(node)
+in ts_block let else_block is ts_if.alternate
+
+in ts_return let return_end true
+in ts_block let return_end last(body.nodes) is ts_return
+in ts_return let branch_exit true
+in ts_if let branch_exit consequent.return_end == true && alternate.return_end == true
+in ts_return, ts_if let returning_branch branch_exit == true
+in ts_block let returning_branch any([] body.branch_exit, r => r == true)
+in ts_if let chain_else_node when {
+  consequent.returning_branch != true || alternate == null then null
+  alternate is ts_if then alternate.chain_else_node
+  else then alternate.node
+}
+in ts_if let chain_else_offset chain_else_node.offset
+
+in ts_unary let negative_test operator == "!"
+in ts_binary let negative_test operator == "!=" || operator == "!=="
+in ts_parenthesized let negative_test expression.negative_test == true
+in ts_continue let continue_guard true
+in ts_block let continue_guard count([] body) == 1 && first(body.nodes) is ts_continue
+in ts_if let conditional_continue consequent.continue_guard == true
+in ts_block let guarded_iteration count([] body) == 0 || first(body.nodes) is ts_if && (count([] body) == 1 || first([] body.conditional_continue) == true)
+
+in ts_variable_declaration let async_resource_declaration kind == "await using"
+in ts_for_of let asynchronous_iteration contains([] modifier, "await")
+in ts_labeled let declared_label label
+in ts_node let repeated_evaluation when {
+  parent is ts_function_like || parent is ts_for_of && parent.asynchronous_iteration == true then false
+  is (ts_for.body, ts_for.test, ts_for.update, ts_for_in.body, ts_for_of.body) || is (ts_for_in.left, ts_for_of.left) && async_resource_declaration == true || is (ts_while.body, ts_while.test, ts_do_while.body, ts_do_while.test) then true
+  else then parent.repeated_evaluation == true
+}
+in ts_node let nearest_break_target when {
+  is (ts_loop, ts_switch) then { label: if parent is ts_labeled then parent.declared_label else null }
+  is ts_function_like || is ts_labeled && declared_label == get(parent.nearest_break_target, "label") then null
+  else then parent.nearest_break_target
+}
+
+in ts_with rule no-with {
+  report at { start: first_token.start, end: first_token.end }
+  warn "Unexpected use of 'with' statement."
+}
+
+in ts_case rule default-case-last {
+  when test == null && index < count(parent.case) - 1
+  warn "Default clause should be the last clause."
+}
+
+in ts_switch let empty_switch count(case) == 0
+in ts_block, ts_switch rule no-empty {
+  option allowEmptyCatch boolean = false "allow empty catch blocks"
+  when parent not (ts_function_like, ts_static_block)
+  when !allowEmptyCatch || not ts_try.handler
+  let empty_start if is ts_switch then opener.ts_open_brace.offset else offset
+  when empty_start != null
+  when if is ts_switch then empty_switch && !{ value descendants(ts_comment); any (comment) comment.offset > empty_start && comment.end_offset < end_offset } else uncommented_empty_block
+  report at { start: empty_start, end: end_offset }
+  warn "Empty {if is ts_switch then 'switch' else 'block'} statement."
+}
+
+in ts_block rule no-lone-blocks {
+  let nested parent is ts_block
+  when nested || parent is ts_program || parent is ts_case && count(parent.body) != 1
+  when nested && count(parent.body) == 1 || !any(body.nodes, statement => if statement is ts_variable_declaration then statement.kind != "var" else statement is ts_class || statement is ts_function && statement.scoping_strict_code)
+  warn if nested then "Nested block is redundant." else "Block is redundant."
+}
+
+fn suggestion_lonely_if_fix(source, n) = {
+  value body: n.parent.node
+  value before_gap: { value byte_slice(source, body.first_token.end, n.offset); trim }
+  value after_gap: { value byte_slice(source, n.end_offset, body.last_token.start); trim }
+  value last_token: n.consequent.last_token
+  value after: body.token_neighbours.after
+  value hazard: n.consequent not ts_block && last_token.text != ";" && after != null
+    && (position(n.consequent.end_offset).js_line == position(after.start).js_line
+      || expression_fix_continuation(after.text) || contains(["++", "--"], last_token.text))
+  value if before_gap != "" || after_gap != "" || hazard then null
+    else (if body.token_neighbours.before.end == body.offset then " " else "") n.text
+}
+in ts_if rule no-lonely-if {
+  when parent.else_block == true && parent.statement_count == 1
+  when !(unmatched_tail && parent.enclosing_else_boundary == true)
+  let lonely_if_fix suggestion_lonely_if_fix(source, node)
+  fix at parent.node if lonely_if_fix != null as lonely_if_fix
+  warn "Unexpected if as the only statement in an else block."
+}
+
+in ts_if, ts_conditional rule no-negated-condition {
+  when is ts_conditional || alternate != null && alternate not ts_if
+  when test.negative_test == true
+  warn "Unexpected negated condition."
+}
+
+in ts_switch rule default-case {
+  option commentPattern regex | null = null "comments that allow a missing default"
+  when count(case) > 0 && !any(case.nodes, branch => branch.test.node == null)
+  let final_comment switch_default_comment
+  when final_comment == null || !{
+    value final_comment.structure_comment_body
+    trim: trim
+    value default: commentPattern.nonempty ?? "(?i)^no default$"
+    value re_test(trim, default)
+  }
+  warn "Expected a default case."
+}
+
+in ts_break, ts_continue rule no-extra-label {
+  when label != null && label == get(parent.nearest_break_target, "label")
+  report at label.node
+  fix at { start: first_token.end, end: label.end_offset } if !label.node.space_before.comments as ""
+  warn "This label '{label}' is unnecessary."
+}
+
+in ts_await, ts_for_of, ts_variable_declaration rule no-await-in-loop {
+  when is ts_await || asynchronous_iteration == true || async_resource_declaration == true
+  when repeated_evaluation
+  warn "Unexpected `await` inside a loop."
+}
+
+in ts_for_in rule guard-for-in {
+  when body != null
+  when body not (ts_empty, ts_if) && body.guarded_iteration != true
+  warn "The body of a for-in should be wrapped in an if statement to filter unwanted properties from the prototype."
+}
+
+fn suggestion_else_within(node, owner) = { value node; walk (current) current.parent.node; any (current) current == owner }
+fn suggestion_else_scope_safe(body, destination, declarations) = body not ts_function && (body not ts_block || {
+  value moved: { value declarations; filter (item) item.scope.node == body }
+  value names: { value moved; map (item) item.identifier_name }
+  value collision: {
+    value declarations
+    any (item) contains(names, item.identifier_name) && (item.scope.node == destination
+      || item.declaration_kind == "var" && destination.offset <= item.offset && item.end_offset <= destination.end_offset)
+  }
+  value identifiers: overlapping(ts_identifier, destination.offset, destination.end_offset)
+  value captured: {
+    value identifiers
+    any (item) contains(names, item.identifier_name) && item.scope != null
+      && !(body.offset <= item.offset && item.end_offset <= body.end_offset)
+      && item.declaration.node != item
+      && (item.declaration == null || !suggestion_else_within(item.declaration.scope.node, destination))
+  }
+  value uncertain: any(moved, item => item.declaration_kind == "function")
+  value !collision && !captured && !uncertain
+})
+fn suggestion_else_fix(body, declarations) = {
+  value conditional: body.parent.node
+  value consequent: conditional.consequent.node
+  value destination: when {
+    conditional.parent is ts_case then conditional.parent.parent.node
+    conditional.parent is ts_block && conditional.parent.parent is ts_function_like then conditional.parent.parent.node
+    else then conditional.parent.node
+  }
+  value owner: {
+    value conditional
+    walk (current) if current is (ts_function_like, ts_program) then null else current.parent.node
+    last
+  }
+  value first_statement: first(body.body.nodes)
+  value last_statement: last(body.body.nodes)
+  value before: consequent.last_token
+  value first_content: if body is ts_block then first_statement.first_token ?? body.last_token else body.first_token
+  value last_content: if body is ts_block then last_statement.last_token ?? body.first_token else body.last_token
+  value after: body.token_neighbours.after
+  value before_hazard: consequent not ts_block && before.text != ";" && expression_fix_continuation(first_content.text)
+  value after_hazard: last_content.text != ";" && after != null && (expression_fix_continuation(after.text)
+    || position(after.start).js_line == position(last_content.start).js_line && after.text != "}}")
+  value content: if body is ts_block then byte_slice(body.text, 1, body.end_offset - body.offset - 1) else body.text
+  value replacement: byte_slice(owner.text, 0, body.token_neighbours.before.start - owner.offset) content byte_slice(owner.text, body.end_offset - owner.offset)
+  value if before_hazard || after_hazard || !suggestion_else_scope_safe(body, destination, declarations) || !expression_fix_retains_comments(owner, replacement) then null
+    else {start: owner.offset, end: owner.end_offset, text: replacement}
+}
+in ts_if rule no-else-return {
+  option allowElseIf boolean = true "allow returning else-if branches"
+  when parent is (ts_program, ts_block, ts_case) && consequent.returning_branch == true && alternate != null
+  let else_report if allowElseIf then chain_else_offset else alternate.offset
+  when else_report != null
+  report at else_report
+  warn "Unnecessary 'else' after 'return'."
+  let body if allowElseIf then chain_else_node else alternate.node
+  let replacement suggestion_else_fix(body, ts_program.binding_declarations)
+  fix at replacement ?? node if replacement != null as replacement.text
+}
+
+in ts_labeled rule no-label-var {
+  when label_binding
+  warn "Found identifier with same name as label."
+}
+
+group unreachable_loop ts_while, ts_do_while, ts_for, ts_for_in, ts_for_of
+in unreachable_loop rule no-unreachable-loop {
+  let continued flow_exits(body.node, "continued")
+  when reachable(body.node) == true && flow_normal(body.node) == false
+  when continued != null && !any(continued, effect => effect.target == node)
+  warn "Invalid loop. Its body allows only one iteration."
+}
+
+}

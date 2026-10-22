@@ -1,0 +1,67 @@
+# Writes to bindings, undefined names and unusable assignments.
+
+define {
+
+in ts_assignment.name_write_identifiers, ts_update.name_write_identifiers, ts_for_in.name_write_identifiers, ts_for_of.name_write_identifiers, ts_declarator.name_write_identifiers rule no-ex-assign {
+  when reference_kind == "catch" && @is_write
+  warn "Do not assign to the exception parameter."
+}
+in ts_identifier rule no-const-assign {
+  when (reference_kind == "const" || reference_kind == "using") && @is_write
+  warn "'{text}' is constant."
+}
+in ts_identifier rule no-class-assign {
+  when (reference_kind == "class" || reference_kind == "class_name") && @is_write
+  warn "'{text}' is a class."
+}
+in ts_identifier rule no-func-assign {
+  when (reference_kind == "function" || reference_kind == "function_name") && @is_write
+  warn "'{text}' is a function."
+}
+
+in ts_unary rule no-delete-var {
+  when operator == "delete" && is_identifier(argument)
+  warn "Variables should not be deleted."
+}
+
+in ts_variable_declaration let declares_loop_variable parent is (ts_for_of, ts_for_in)
+# `let x;` that is read but never written.
+in ts_declarator rule no-unassigned-vars {
+  when init == null && is_identifier(name) && ts_variable_declaration.kind != "const"
+  when name.writes == 0 && name.uses > 0 && name.ambient == false && parent.declares_loop_variable != true
+  warn "'{name}' is always 'undefined' because it's never assigned."
+}
+
+# Writes to the built-in globals.
+in ts_assignment.name_write_identifiers, ts_update.name_write_identifiers, ts_for_in.name_write_identifiers, ts_for_of.name_write_identifiers, ts_declarator.name_write_identifiers rule no-global-assign {
+  option exceptions string[] = [] "read-only globals that may be modified"
+  when global == "readonly" && @is_write && !contains(exceptions, identifier_name)
+  warn "Read-only global '{text}' should not be modified."
+}
+
+in ts_identifier rule no-undef {
+  option typeof boolean = false "also report `typeof x` of an undeclared `x`"
+  when resolved == "global" && (global == null || global == "off") && access != "type"
+  when typeof || !under_typeof
+  warn "'{text}' is not defined."
+}
+# The operand of `typeof`, through parentheses.
+in ts_identifier, ts_parenthesized let under_typeof parent is ts_unary && parent.operator == "typeof" || parent is ts_parenthesized && parent.under_typeof == true
+
+in ts_node let problem_in_try
+  if is (ts_program, ts_function, ts_arrow, ts_method, ts_static_block) then false
+  else if is ts_try.block then true else parent.problem_in_try
+in ts_node let problem_assignment_export_read
+  any(references, reference => reference is ts_export_specifier.local)
+  || ts_usage_global(ts_usage_binding, scoping_program) && contains(ts_exported_names(scoping_program), identifier_name)
+
+# Disallow variable assignments when the value is not used
+in ts_identifier rule no-useless-assignment {
+  when declaration != null && declaration.exported != true && !problem_in_try
+  when name_write_owner != null || is ts_declarator.name && parent.init != null
+  when declaration.scoping_binding_execution_scope.id != null && declaration.scoping_binding_execution_scope.id == scoping_execution_scope.id
+  when !declaration.problem_assignment_export_read && flow_has_reads(declaration.node) == true && flow_value_used(node) == false
+  warn "The value assigned to '{text}' is not used in subsequent statements."
+}
+
+}

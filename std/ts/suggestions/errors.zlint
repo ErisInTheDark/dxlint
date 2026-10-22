@@ -1,0 +1,106 @@
+# Thrown values, useless catches and preserved caught errors.
+
+define {
+
+in ts_throw let thrown_identifier if (argument.unwrapped_node.nonempty ?? argument.node) is ts_identifier then argument.unwrapped_text.nonempty ?? argument else null
+in ts_block let first_throw first([] body.thrown_identifier)
+in ts_try let catch_rethrows parameter is ts_identifier && handler.first_throw == parameter
+
+in ts_try rule no-useless-catch {
+  when catch_rethrows && finalizer == null
+  warn "Unnecessary try/catch wrapper."
+}
+in ts_try.kind rule no-useless-catch:clause {
+  when parent.catch_rethrows && parent.finalizer != null
+  report at { start: offset, end: parent.handler.end_offset }
+  warn "Unnecessary catch clause."
+}
+
+fn suggestion_possible_error(n) = {
+  value n
+  walk (current) {
+    value bare: unparenthesised_node(current)
+    value when {
+      bare is ts_assignment && contains(["=", "&&="], bare.operator) then bare.right.node
+      bare is ts_assignment && contains(["||=", "??="], bare.operator) then [bare.left.node, bare.right.node]
+      bare is ts_logical then if bare.operator == "&&" then bare.right.node else [bare.right.node, bare.left.node]
+      bare is ts_conditional then [bare.consequent.node, bare.alternate.node]
+      bare is ts_sequence then last(bare.expression.nodes)
+      else then null
+    }
+  }
+  any (current) unparenthesised_node(current) is (ts_identifier, ts_call, ts_new, ts_member, ts_index, ts_tagged_template, ts_yield, ts_await)
+}
+in ts_node let could_be_error suggestion_possible_error(node)
+in ts_identifier let error_undefined_identifier identifier_name == "undefined"
+in ts_parenthesized forward error_undefined_identifier from expression
+in ts_identifier let error_undefined_global identifier_name == "undefined" && resolved == "global"
+in ts_parenthesized forward error_undefined_global from expression
+in ts_throw rule no-throw-literal {
+  when !argument.could_be_error || argument.error_undefined_global == true
+  warn if argument.could_be_error then "Do not throw undefined." else "Expected an error object to be thrown."
+}
+
+fn caught_throw_property_value(property) = unparenthesised_node(property.value.node ?? property)
+fn caught_throw_property_kind(parameter, property) = {
+  value value: caught_throw_property_value(property)
+  value when {
+    property == null then "missing"
+    value not ts_identifier || value.text != parameter.text then "incorrect"
+    value.declaration.node != parameter then "shadowed"
+    else then "preserved"
+  }
+}
+fn caught_throw_cause_kind(parameter, argument, preceding) =
+  if any(preceding, arg => unparenthesised_node(arg) is ts_spread)
+    || argument != null && (argument not ts_object || any([] argument.property.nodes, property => property is ts_spread)) then "unknown"
+  else {
+    value [] argument.property.nodes
+    property_2: find_last (property) property.static_name == "cause"
+    value caught_throw_property_kind(parameter, property_2)
+  }
+
+in ts_throw rule preserve-caught-error {
+  option requireCatchParameter boolean = false "require a catch parameter when throwing a symptom error"
+  option errorClassNames (string | { name: string; argumentPosition: number })[] = [] "additional error constructors and options positions"
+  let caught_info catch_throw
+  when caught_info != null
+  let caught_parameter get(caught_info, "parameter")
+  let catch_kind when {
+    caught_parameter == null then "missing"
+    caught_parameter is ts_identifier then "present"
+    else then "destructured"
+  }
+  let builtin_error caught_info.global && contains(["Error", "EvalError", "RangeError", "ReferenceError", "SyntaxError", "TypeError", "URIError", "AggregateError"], caught_info.name)
+  let configured_error find_last(errorClassNames, x => caught_info.name == (if type_of(x) == "str" then x else x.name))
+  when builtin_error || configured_error != null
+  let cause_position when {
+    builtin_error then (if caught_info.name == "AggregateError" then 2 else 1)
+    type_of(configured_error) == "str" then 1
+    else then configured_error.argumentPosition - 1
+  }
+  let cause_argument {
+    value argument: { value caught_info.arguments; slice cause_position; first }
+    value unparenthesised_node(argument)
+  }
+  let cause_kind {
+    value preceding: if cause_argument == null then caught_info.arguments else slice(caught_info.arguments, 0, cause_position)
+    value caught_throw_cause_kind(caught_parameter, cause_argument, preceding)
+  }
+  let cause_property { value [] cause_argument.property.nodes; find_last (property) property.static_name == "cause" }
+  when catch_kind == "destructured" || catch_kind == "missing" && requireCatchParameter || catch_kind == "present" && contains(["missing", "incorrect", "shadowed"], cause_kind)
+  report at when {
+    catch_kind == "destructured" then caught_info.catch_offset
+    catch_kind == "present" && cause_kind == "incorrect" then caught_throw_property_value(cause_property).offset
+    else then caught_info.throw_offset
+  }
+  warn when {
+    catch_kind == "destructured" then "Re-throws cannot preserve the caught error as a part of it is being lost due to destructuring."
+    catch_kind == "missing" then "The caught error is not accessible because the catch clause lacks the error parameter. Start referencing the caught error using the catch parameter."
+    cause_kind == "missing" then "There is no `cause` attached to the symptom error being thrown."
+    cause_kind == "incorrect" then "The symptom error is being thrown with an incorrect `cause`."
+    else then "The caught error is being attached as `cause`, but is shadowed by a closer scoped redeclaration."
+  }
+}
+
+}

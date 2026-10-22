@@ -1349,6 +1349,29 @@ and `final-newline`.
 | `.ts/type-specifiers` | shared type/value origin matching helpers (`matches_type_specifier`, `type_is_allowed`) |
 | `.ts/methods` | type-aware method policy (`prefer-find`), imported by `.ts/typed`; filter result zero-index/bracket/at access, computed constant methods, sequences and both conditional branches; diagnostic-only |
 | `.ts/selectors` | open `restricted_syntax` group and prohibition rule (`no-restricted-syntax`), imported by `.ts` |
+| `.ts/problems/helpers` | shared problem state and macros (`ts_literal`, `is_global`, `is_real_global`, `is_write`, `problem_expression_value_used`); imported by `.ts/problems` |
+| `.ts/problems/declarations` | writes to bindings, undefined names and unused assignments; imported by `.ts/problems` |
+| `.ts/problems/imports` | import writes, unused and unassigned imports; imported by `.ts/problems` |
+| `.ts/problems/control-flow` | loops, branches, reachability, returns and switch fallthrough; imported by `.ts/problems` |
+| `.ts/problems/duplicates` | duplicate object keys, class members, parameters and enum values; imported by `.ts/problems` |
+| `.ts/problems/expressions` | comparison, condition, assignment and literal mistakes; imported by `.ts/problems` |
+| `.ts/problems/classes` | `super()` ordering, `this`-before-`super` and setter returns; imported by `.ts/problems` |
+| `.ts/problems/statements` | debugger, empty patterns and blocks, octal literals and array holes; imported by `.ts/problems` |
+| `.ts/problems/calls` | impossible calls, async Promise executors and borrowed prototype methods; imported by `.ts/problems` |
+| `.ts/problems/regexp` | regular expression validation rules; imported by `.ts/problems` |
+| `.ts/problems/typescript` | `@ts-` directives, `Function` types and empty interfaces; imported by `.ts/problems` |
+| `.ts/problems/non-null` | non-null assertions and unsafe optional chains; imported by `.ts/problems` |
+| `.ts/problems/whitespace` | irregular whitespace and unexpected newlines; imported by `.ts/problems` |
+| `.ts/suggestions/helpers` | shared suggestion state and value helpers; imported by `.ts/suggestions` |
+| `.ts/suggestions/control-flow` | loops, branches, statements and clauses; imported by `.ts/suggestions` |
+| `.ts/suggestions/functions` | function forms, bindings, bodies and calls; imported by `.ts/suggestions` |
+| `.ts/suggestions/constructors` | constructors and native prototype extension; imported by `.ts/suggestions` |
+| `.ts/suggestions/expressions` | sequences, comparisons, concatenation, ternaries and coercions; imported by `.ts/suggestions` |
+| `.ts/suggestions/errors` | thrown values, useless catches and preserved caught errors; imported by `.ts/suggestions` |
+| `.ts/suggestions/strings` | string content: escapes, script urls and line continuation; imported by `.ts/suggestions` |
+| `.ts/suggestions/regexp` | regular expression literal preferences; imported by `.ts/suggestions` |
+| `.ts/suggestions/builtins` | built-in globals, prototypes and their aliases; imported by `.ts/suggestions` |
+| `.ts/suggestions/directives` | `use strict` directive policy; imported by `.ts/suggestions` |
 | `.rs` | also the `rs-*` layout rules |
 | `.md` | code fences, inline code, HTML comments |
 

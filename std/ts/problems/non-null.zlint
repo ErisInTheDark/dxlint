@@ -1,0 +1,78 @@
+# Non-null assertions and optional chains used where a short circuit throws.
+
+define {
+
+in ts_parenthesized let under_non_null parent is ts_non_null || parent is ts_parenthesized && parent.under_non_null == true
+# The object or callee of `?.`, through parentheses.
+group optional_chain_head ts_non_null, ts_parenthesized
+in optional_chain_head let heads_optional_chain is (ts_member.object, ts_index.object) && parent.optional != null
+  || is ts_call.callee && parent.optional != null
+  || parent is ts_parenthesized && parent.heads_optional_chain == true
+in ts_non_null rule no-extra-non-null-assertion {
+  when parent is ts_non_null || parent is ts_parenthesized && parent.under_non_null == true || heads_optional_chain
+  fix as { value result: len(text) - 1; value slice(text, 0, result) }
+  warn "Forbidden extra non-null assertion."
+}
+# `x?.y!` (at the end of the chain), `(x?.y)!`.
+@macro non_null_chain_message "Optional chain expressions can return undefined by design - using a non-null assertion is unsafe and wrong."
+in ts_non_null rule no-non-null-asserted-optional-chain {
+  when expression.in_optional_chain == true
+  when not (ts_member.object, ts_index.object, ts_call.callee)
+  warn @non_null_chain_message
+}
+in ts_non_null.expression rule no-non-null-asserted-optional-chain:paren {
+  when is ts_parenthesized && wraps_optional_chain == true
+  report at unparenthesised_node(node)
+  warn @non_null_chain_message
+}
+
+# Each optional chain whose `undefined` the node would trip on, at the chain.
+fn problem_optional_pattern(n) = unparenthesised_node(n) is (ts_array, ts_array_pattern, ts_object, ts_object_pattern)
+fn problem_optional_operand(n) =
+  if n is ts_assignment && n.operator == "=" && problem_optional_pattern(n.left.node)
+    || n is ts_assignment_pattern && problem_optional_pattern(n.left.node) then n.right.node
+  else if n is (ts_declarator, ts_parameter) && problem_optional_pattern(n.name.node) then n.init.node
+  else if n is ts_class then n.extends.node
+  else if n is ts_call && n.optional == null || n is ts_new then n.callee.node
+  else if n is (ts_member, ts_index) && n.optional == null then n.object.node
+  else if n is ts_tagged_template then n.tag.node
+  else if n is ts_for_of || n is ts_binary && contains(["in", "instanceof"], n.operator) then n.right.node
+  else if n is ts_spread && n.parent not ts_object || n is ts_yield && n.operator == "*" then n.argument.node
+  else if n is ts_with then n.object.node
+  else null
+fn problem_optional_root(n) = {
+  value n
+  walk (current) if current is (ts_member.object, ts_index.object, ts_call.callee, ts_non_null.expression)
+    && current.parent.in_optional_chain == true then current.parent.node else null
+  last
+}
+fn problem_optional_use(n) = {
+  value n
+  walk (current) {
+    value parent: current.parent.node
+    value if parent is ts_parenthesized || parent is ts_await
+      || parent is ts_logical && (parent.operator == "&&" || current is ts_logical.right)
+      || parent is ts_sequence && current == last(parent.expression.nodes)
+      || current is (ts_conditional.consequent, ts_conditional.alternate)
+      then parent else null
+  }
+  last
+}
+in ts_member.optional, ts_index.optional, ts_call.optional rule no-unsafe-optional-chaining {
+  option disallowArithmeticOperators boolean = false
+  when (if parent is ts_call then parent.callee.in_optional_chain else parent.object.in_optional_chain) != true
+  let chain problem_optional_root(parent.node)
+  when chain is (ts_member, ts_index, ts_call)
+  let operand problem_optional_use(chain)
+  let user operand.parent.node
+  let arithmetic disallowArithmeticOperators
+    && (user is ts_binary && contains(["+", "-", "/", "*", "%", "**"], user.operator)
+      || user is ts_unary && contains(["+", "-"], user.operator)
+      || user is ts_assignment && contains(["+=", "-=", "/=", "*=", "%=", "**="], user.operator) && operand == user.right.node)
+  when arithmetic || problem_optional_operand(user) == operand
+  report at chain
+  warn if !arithmetic then "Unsafe usage of optional chaining. If it short-circuits with 'undefined' the evaluation will throw TypeError."
+    else "Unsafe arithmetic operation on optional chaining. It can result in NaN."
+}
+
+}

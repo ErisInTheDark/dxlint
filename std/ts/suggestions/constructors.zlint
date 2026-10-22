@@ -1,0 +1,54 @@
+# Constructors and native prototype extension.
+
+define {
+
+in ts_new rule no-new-wrappers {
+  when re_test(global_callee, /^(String|Number|Boolean)$/)
+  warn "Do not use {global_callee} as a constructor."
+}
+
+fn array_constructor_fix(source, n) = {
+  value open: {
+    value overlapping(ts_open_paren, n.callee.end_offset, n.end_offset)
+    find (token) token.paired_token.end == n.end_offset
+  }
+  value arguments: if open != null then byte_slice(source, open.end_offset, open.paired_token.start) else ""
+  value replacement: "[" arguments "]"
+  value statement: expression_fix_statement(n)
+  value owners: if statement != null then expression_fix_before_nodes(n) else []
+  value semicolon: if statement != null then expression_fix_asi(statement, n.token_neighbours.before, owners, replacement) else false
+  value if open == null && count(n.argument) > 0 || semicolon == null then null
+    else (if semicolon then ";" else "") replacement
+}
+in ts_call, ts_new rule no-array-constructor {
+  when global_callee == "Array" && count(type_argument) == 0
+  when count(argument) != 1 || { value argument; first; re_test /^\.\.\./ }
+  warn "The array literal notation [] is preferable."
+  let replacement array_constructor_fix(source, node)
+  fix at node if replacement != null as replacement
+}
+
+in ts_call, ts_new rule no-object-constructor {
+  when global_callee == "Object" && count(argument) == 0
+  warn "The object literal notation {{}} is preferable."
+}
+
+in ts_expression_statement.expression rule no-new {
+  when is ts_new
+  warn "Do not use 'new' for side effects."
+}
+
+in ts_member, ts_index let global_function_method object == "Function" && object.resolved == "global" && contains(["apply", "bind", "call"], static_name)
+in ts_parenthesized let global_function_method expression.global_function_method
+in ts_call, ts_new rule no-new-func {
+  when callee == "Function" && callee.resolved == "global" || callee.global_function_method == true
+  warn "The Function constructor is eval."
+}
+
+in ts_assignment, ts_call rule no-extend-native {
+  option exceptions string[] = [] "builtins that may be extended"
+  when extended_native != null && !contains(exceptions, extended_native)
+  warn "{extended_native} prototype is read only, properties should not be added."
+}
+
+}

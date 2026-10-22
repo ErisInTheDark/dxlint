@@ -1,0 +1,70 @@
+# Duplicate object keys, class members, parameters and enum values.
+
+define {
+
+# Getters and setters of one name pair up; anything else of the same name
+# (in the same object, or the same static-ness of a class) is a duplicate.
+in ts_method let accessor_kind if kind == "get" || kind == "set" then kind else "init"
+in ts_property, ts_class_property let accessor_kind "init"
+@macro duplicate_of(e) (e != null && e.name == static_name && (accessor_kind == "init" || e.kind == "init" || e.kind == accessor_kind))
+# (`""` is a name: `type_of` tells it from null.)
+@macro has_static_name (type_of(static_name) == "str")
+# `__proto__: x` sets the prototype rather than defining a key.
+in ts_property let proto_setter static_name == "__proto__" && value != null && !starts_with(key, "[")
+in ts_method let proto_setter false
+in ts_property, ts_method let key_entry if !@has_static_name || proto_setter then null else { name: static_name, kind: accessor_kind }
+in ts_object let keyed [] property.key_entry
+in ts_property, ts_method let duplicate_key parent is ts_object && parent.flow_destructuring_target != true && key_entry != null && { value parent.keyed; slice 0 index; any (e) @duplicate_of(e) }
+# At the name: a computed key reports the expression inside its brackets.
+@macro at_key_name (if node is ts_computed_key then node.expression.node else node)
+in ts_property.key, ts_method.key rule no-dupe-keys {
+  when parent.duplicate_key
+  report at @at_key_name
+  warn "Duplicate key '{parent.static_name}'."
+}
+
+# Overload signatures (no body) are not members of their own. (`is_static`
+# comes from .ts/style.)
+in ts_method let member_entry if !@has_static_name || body == null || static_name == "constructor" && !is_static && !starts_with(key, "[") then null else { name: static_name, kind: accessor_kind, static: is_static }
+in ts_class_property let member_entry if !@has_static_name then null else { name: static_name, kind: accessor_kind, static: is_static }
+in ts_class let member_entries [] member.member_entry
+in ts_method, ts_class_property let duplicate_member parent is ts_class && member_entry != null && { value parent.member_entries; slice 0 index; any (e) @duplicate_of(e) && e.static == is_static }
+in ts_method.key, ts_class_property.key rule no-dupe-class-members {
+  when parent.duplicate_member
+  report at @at_key_name
+  warn "Duplicate name '{parent.static_name}'."
+}
+
+fn problem_duplicate_parameters(owner) = {
+  value walk(owner.parameter.name.nodes,
+    child => if child is (ts_function, ts_arrow, ts_method, ts_class) then [] else child.children.nodes)
+  filter (site) site is ts_identifier && site.ts_name_site == owner && site.ts_name_kind == "parameter"
+  map (site) name_binding(site)
+  filter (binding) binding != null
+  unique_by (binding) binding.key
+  filter (binding) count(filter(binding.declarations,
+    site => site.ts_name_site == owner && site.ts_name_kind == "parameter")) >= 2
+  map (binding) binding.key
+}
+in ts_function rule no-dupe-args {
+  when body != null
+  let duplicate_open node_at(function_head_site(node).end)
+  when duplicate_open is ts_open_paren
+  each duplicate_param in problem_duplicate_parameters(node) {
+    report at { start: duplicate_open.offset, end: return_type.end_offset ?? duplicate_open.paired_token.end }
+    warn "Duplicate param '{duplicate_param}'."
+  }
+}
+
+in ts_enum_member let enum_value init.literal_value
+in ts_enum let enum_values [] member.enum_value
+in ts_enum_member rule no-duplicate-enum-values {
+  when enum_value != null && {
+    value parent.enum_values
+    slice 0 index
+    any (v) v != null && v.type == enum_value.type && v.value == enum_value.value
+  }
+  warn "Duplicate enum member value {if enum_value.value == '-0' then '0' else enum_value.value}."
+}
+
+}
