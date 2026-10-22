@@ -57,6 +57,8 @@ struct ProgramMemo<'a> {
     outside: RefCell<crate::fx_hash::FxHashMap<*const Settings, (u64, Option<PathBuf>)>>,
     /// Run-shared module answers this world used, by revision and question.
     shared_local: RefCell<crate::fx_hash::FxHashMap<(u64, super::program::StableQuestion), super::reads::Cached<Vec<Target>>>>,
+    /// The global ones among them by (revision, class) and name.
+    shared_globals: RefCell<crate::fx_hash::FxHashMap<(u64, u64), crate::fx_hash::FxHashMap<Box<str>, super::reads::Cached<Vec<Target>>>>>,
 }
 
 /// One lint's world. Engines hold it as `&dyn World` through [`Files`].
@@ -506,21 +508,14 @@ impl<'a> Files<'a> {
                         }).collect()));
                         let shared = snapshot.candidates((settings, program, Box::from(name)), || {
                             let sources = survey.get();
-                            // A name of word characters can only occur inside
-                            // one word: look it up among the inputs' distinct
-                            // words instead of scanning every text per name.
-                            if super::program::is_word(name) {
-                                let words = snapshot.words((settings, program), || super::program::index_words(&sources)).get();
-                                let mut holding = vec![false; sources.len()];
-                                words.mark(name, &mut holding);
-                                return sources.iter().zip(holding)
-                                    .filter(|((_, _, hinted), holds)| *hinted || *holds)
-                                    .map(|((path, ..), _)| path.clone()).collect();
-                            }
-                            let finder = memchr::memmem::Finder::new(name.as_bytes());
-                            sources.iter()
-                                .filter(|(_, text, hinted)| *hinted || text.as_deref().is_some_and(|text| finder.find(text.as_bytes()).is_some()))
-                                .map(|(path, ..)| path.clone()).collect()
+                            // Only texts holding every trigram of the name are
+                            // searched for it, not every input per name.
+                            let sketches = snapshot.words((settings, program), || super::program::sketch_texts(&sources)).get();
+                            let mut holding = vec![false; sources.len()];
+                            sketches.mark(name, &sources, &mut holding);
+                            sources.iter().zip(holding)
+                                .filter(|((_, _, hinted), holds)| *hinted || *holds)
+                                .map(|((path, ..), _)| path.clone()).collect()
                         });
                         Known::Yes(shared.get())
                     }
@@ -1204,7 +1199,21 @@ impl World for Files<'_> {
                 let Some(path) = self.shared_path(scope.file) else { return compute() };
                 super::program::StableQuestion::Publication { kind, path, scope: scope.scope, name: name.into(), class }
             }
-            SharedQuestion::Global { name, class } => super::program::StableQuestion::Global { name: name.into(), class },
+            SharedQuestion::Global { name, class } => {
+                // The hottest module question (a million a run): repeats are
+                // found by the borrowed name, building no key.
+                let revision = self.0.revision();
+                if let Some(found) = self.0.program.shared_globals.borrow().get(&(revision, class)).and_then(|names| names.get(name)) {
+                    super::reads::note_group(&found.reads);
+                    return Known::Yes(found.value.clone());
+                }
+                let question = super::program::StableQuestion::Global { name: name.into(), class };
+                let answer = self.shared(question.clone(), compute);
+                if let Some(found) = self.0.program.shared_local.borrow().get(&(revision, question)) {
+                    self.0.program.shared_globals.borrow_mut().entry((revision, class)).or_default().insert(name.into(), found.clone());
+                }
+                return answer;
+            }
         };
         self.shared(question, compute)
     }

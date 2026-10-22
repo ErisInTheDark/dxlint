@@ -337,74 +337,47 @@ pub(super) enum StableQuestion {
 /// global name).
 pub(super) type Survey = Arc<[(PathBuf, Option<Arc<str>>, bool)]>;
 
-/// A survey's distinct words (maximal runs of alphanumerics and `_`), each
-/// with the indexes of the inputs holding it (ascending), and the words by
-/// each byte trigram they contain.
-pub(super) struct WordIndex {
-    words: Vec<(Box<str>, Vec<u32>)>,
-    trigrams: FxHashMap<[u8; 3], Vec<u32>>,
+/// Per surveyed input, the byte trigrams its text holds, hashed into a
+/// fixed bit set (4 KiB per input): a name can only occur in a text holding
+/// every trigram of it, so only those texts are searched.
+pub(super) struct Sketches(Vec<Option<Box<[u64; SKETCH_WORDS]>>>);
+
+const SKETCH_WORDS: usize = 512;
+const SKETCH_BITS: usize = SKETCH_WORDS * 64;
+
+pub(super) type Words = Arc<Sketches>;
+
+fn trigram_bit(gram: &[u8]) -> usize {
+    let packed = u32::from(gram[0]) | u32::from(gram[1]) << 8 | u32::from(gram[2]) << 16;
+    (packed.wrapping_mul(0x9E37_79B1) >> 15) as usize % SKETCH_BITS
 }
 
-pub(super) type Words = Arc<WordIndex>;
-
-impl WordIndex {
-    /// Marks in `holding` (one flag per surveyed input) the inputs whose
-    /// text contains `name`, a word-character name: exactly the texts a
-    /// substring scan finds, since such a name never spans two words.
-    pub(super) fn mark(&self, name: &str, holding: &mut [bool]) {
+impl Sketches {
+    /// Marks in `holding` (one flag per input of `survey`, which these
+    /// sketches were built from) exactly the inputs whose text contains
+    /// `name`, as a substring search of every text would.
+    pub(super) fn mark(&self, name: &str, survey: &Survey, holding: &mut [bool]) {
         let finder = memchr::memmem::Finder::new(name.as_bytes());
-        let mut check = |word: u32| {
-            let (text, files) = &self.words[word as usize];
-            if finder.find(text.as_bytes()).is_some() {
-                for &file in files { holding[file as usize] = true }
+        let bits: Vec<usize> = name.as_bytes().windows(3).map(trigram_bit).collect();
+        for ((sketch, (_, text, _)), holds) in self.0.iter().zip(survey.iter()).zip(holding.iter_mut()) {
+            let (Some(sketch), Some(text)) = (sketch, text) else { continue };
+            if bits.iter().all(|&bit| sketch[bit / 64] & 1 << (bit % 64) != 0) && finder.find(text.as_bytes()).is_some() {
+                *holds = true;
             }
-        };
-        let bytes = name.as_bytes();
-        if bytes.len() < 3 {
-            (0..self.words.len() as u32).for_each(&mut check);
-            return;
         }
-        let rarest = bytes.windows(3).map(|gram| self.trigrams.get(&[gram[0], gram[1], gram[2]]).map_or(&[][..], Vec::as_slice))
-            .min_by_key(|words| words.len()).unwrap_or(&[]);
-        rarest.iter().copied().for_each(check);
     }
 }
 
-/// Whether `name` is made of word characters only: then every occurrence
-/// lies inside one word of [`Words`].
-pub(super) fn is_word(name: &str) -> bool {
-    !name.is_empty() && name.chars().all(word_char)
-}
-
-fn word_char(c: char) -> bool {
-    c.is_alphanumeric() || c == '_'
-}
-
-/// The word index of `survey`'s texts.
-pub(super) fn index_words(survey: &Survey) -> Words {
-    let mut ids: FxHashMap<&str, u32> = FxHashMap::default();
-    let mut words: Vec<(Box<str>, Vec<u32>)> = Vec::new();
-    for (index, (_, text, _)) in survey.iter().enumerate() {
-        let Some(text) = text else { continue };
-        let index = u32::try_from(index).expect("inputs fit u32");
-        for word in text.split(|c: char| !word_char(c)).filter(|word| !word.is_empty()) {
-            let id = *ids.entry(word).or_insert_with(|| {
-                words.push((word.into(), Vec::new()));
-                u32::try_from(words.len() - 1).expect("words fit u32")
-            });
-            let files = &mut words[id as usize].1;
-            if files.last() != Some(&index) { files.push(index) }
+/// The trigram sketches of `survey`'s texts.
+pub(super) fn sketch_texts(survey: &Survey) -> Words {
+    Arc::new(Sketches(survey.iter().map(|(_, text, _)| text.as_ref().map(|text| {
+        let mut sketch = Box::new([0u64; SKETCH_WORDS]);
+        for gram in text.as_bytes().windows(3) {
+            let bit = trigram_bit(gram);
+            sketch[bit / 64] |= 1 << (bit % 64);
         }
-    }
-    let mut trigrams: FxHashMap<[u8; 3], Vec<u32>> = FxHashMap::default();
-    for (id, (word, _)) in words.iter().enumerate() {
-        let id = id as u32;
-        for gram in word.as_bytes().windows(3) {
-            let posting = trigrams.entry([gram[0], gram[1], gram[2]]).or_default();
-            if posting.last() != Some(&id) { posting.push(id) }
-        }
-    }
-    Arc::new(WordIndex { words, trigrams })
+        sketch
+    })).collect()))
 }
 
 /// Module scope (path, scope) -> the scopes that augment it.
@@ -495,7 +468,7 @@ impl Snapshot {
         once(&self.surveys, key, read)
     }
 
-    /// A survey's word index, built once per run.
+    /// A survey's trigram sketches, built once per run.
     pub(super) fn words(&self, key: (usize, u64), build: impl FnOnce() -> Words) -> Cached<Words> {
         once(&self.words, key, build)
     }

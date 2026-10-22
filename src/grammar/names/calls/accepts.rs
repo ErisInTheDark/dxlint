@@ -3,6 +3,10 @@ use crate::fx_hash::FxHashMap;
 use crate::grammar::names::question::{Known, Leaf, NodeValue, Target};
 use crate::grammar::names::values::{Key, Values};
 
+/// How many times one relation (by declarations, whatever their
+/// instantiations) may nest inside itself.
+const DEEPLY_NESTED: usize = 5;
+
 pub(super) fn accepts(expected: &NodeValue, actual: &NodeValue, values: &Values<'_>) -> Known<bool> {
     let Known::Yes(mut run) = Run::new(values, &[], &[]) else { return Known::Unknown };
     run.compare(expected, actual)
@@ -176,6 +180,19 @@ impl<'a, 'world> Run<'a, 'world> {
         let Some(_nest) = self.values.question.budget.nest() else { return Known::Unknown };
         let pair = (expected.clone(), actual.clone());
         if self.pending.contains(&pair) { return Known::Unknown }
+        // The same declarations related inside themselves again and again,
+        // each time through fresh instances (`Promise<Promise<...>>`), only
+        // regress: stop undecided, as TypeScript's deeply nested check,
+        // instead of nesting until the question runs out of depth.
+        let declarations = |value: &NodeValue| match value {
+            NodeValue::Alternatives(rows) => Some(rows.iter().map(|row| row.iter().map(|leaf| leaf.target).collect::<Vec<_>>()).collect::<Vec<_>>()),
+            NodeValue::Unknown => None,
+        };
+        let (expected_declarations, actual_declarations) = (declarations(expected), declarations(actual));
+        if self.pending.iter().filter(|(e, a)| declarations(e) == expected_declarations && declarations(a) == actual_declarations)
+            .nth(DEEPLY_NESTED - 1).is_some() {
+            return Known::Unknown;
+        }
         self.pending.push(pair);
         let result = self.compare(expected, actual);
         self.pending.pop();
@@ -348,6 +365,7 @@ impl<'a, 'world> Run<'a, 'world> {
             }
             if !self.positions.is_empty() && self.related_arguments(*expected, *actual) { return Known::Yes(true) }
         }
+        if !self.positions.is_empty() && expected.len() > 1 && self.related_merged(expected, actual) { return Known::Yes(true) }
         // Merged declarations make one row of several leaves: pair them up.
         if self.positions.is_empty() && !expected.is_empty() && expected.len() == actual.len()
             && expected.iter().zip(actual).all(|(expected, actual)| self.same_instantiation(*expected, *actual)) {
@@ -473,6 +491,36 @@ impl<'a, 'world> Run<'a, 'world> {
         let related = left.arguments.iter().zip(&right.arguments).all(|(left, right)| self.relate(left, right) == Known::Yes(true));
         if !related { self.candidates = saved }
         related
+    }
+
+    /// [`Self::related_arguments`] for one generic merged from several
+    /// declarations (`Map` across lib files), a row of one leaf per
+    /// declaration: each expected declaration's arguments inferred from the
+    /// actual instance of that same declaration. Relating their members
+    /// instead walks every member of every declaration and recurses through
+    /// each `this`-returning method into a fresh instance of the same type.
+    fn related_merged(&mut self, expected: &[Leaf], actual: &[Leaf]) -> bool {
+        let values = self.values;
+        if expected.len() != actual.len() { return false }
+        if expected.iter().chain(actual).any(|leaf| matches!(leaf.target, Target::Modified(_))) { return false }
+        let carriers = |row: &[Leaf]| row.iter().map(|&leaf| match values.carrier(leaf) {
+            Known::Yes(Some(carrier)) if !carrier.arguments.is_empty() => Some(carrier),
+            _ => None,
+        }).collect::<Option<Vec<_>>>();
+        let (Some(left), Some(right)) = (carriers(expected), carriers(actual)) else { return false };
+        let saved = self.candidates.clone();
+        for expected in &left {
+            let Some(actual) = right.iter().find(|actual| actual.declaration == expected.declaration) else {
+                self.candidates = saved;
+                return false;
+            };
+            if expected.arguments.len() != actual.arguments.len()
+                || !expected.arguments.iter().zip(&actual.arguments).all(|(left, right)| self.relate(left, right) == Known::Yes(true)) {
+                self.candidates = saved;
+                return false;
+            }
+        }
+        true
     }
 
     /// Whether both are instances of the same generic declaration with
