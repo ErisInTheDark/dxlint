@@ -47,10 +47,11 @@ expectation stays tsc's answer until the type layer matches it.
 | `intersections` | 16 | 1 | `T extends ({ p: number } & infer F)` stays `unknown` instead of `0`. |
 | `object-keyword` | 9 | 1 | `object` rejects arrays (`IsObject<number[]>` is `0`, tsc says `1`). |
 | `printing-cosmetic` | 6 | 6 | print-format only, see below. |
+| `enum-object` | 22 | 20 | `keyof` stays `unknown` (direct and through `T[keyof T]`), so `ia`/`ex` stay `unknown`/`any`; enum objects and members print `object`, `number & 0`, `string & "x"` instead of `typeof E`, `E.A`, `S`; a number index on a string or const enum is `unknown`, not `any`. Numeric reverse mapping (`E[0]`, `typeofE[0]` = `string`) matches. |
 
 Passing today: `printing`, `conditional-infer`, `awaited`.
 
-A default `zlint fixtures` run includes this family, so the six known-gap
+A default `zlint fixtures` run includes this family, so the seven known-gap
 scenarios above report as failures there too until they are fixed.
 
 `printing-cosmetic` isolates print differences so the other scenarios can pass:

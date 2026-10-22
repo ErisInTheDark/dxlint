@@ -43,6 +43,10 @@ in ts_enum {
     else if all(member.nodes, item => item.ts_value_enum_kind == "number") then "number"
     else if all(member.nodes, item => item.ts_value_enum_kind == "string") then "string"
     else null
+  let ts_value_enum_numeric any(member.nodes, item => item.ts_value_enum_kind == "number")
+  # A numeric member's value is also an ordinal key of the object, mapping back
+  # to its name; string members have no reverse mapping.
+  when ts_value_enum_numeric && !contains(modifier, "const") { indexed ordinal member using trait string in statics }
   fits enum in enum_origin
   fits number in enum_origin when ts_value_enum_backing == "number"
   fits string in enum_origin when ts_value_enum_backing == "string"

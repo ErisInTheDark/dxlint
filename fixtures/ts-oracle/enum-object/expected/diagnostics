@@ -1,0 +1,22 @@
+a.ts:11:1-11:3 ts-oracle#0 value typeof E
+a.ts:12:1-12:6 ts-oracle#0 value "A" | "B"
+a.ts:13:1-13:7 ts-oracle#0 value E
+a.ts:14:1-14:7 ts-oracle#0 value Exclude<T[keyof T], AnyFunction>
+a.ts:15:1-15:9 ts-oracle#0 value typeof E
+a.ts:16:1-16:12 ts-oracle#0 value string
+a.ts:17:1-17:5 ts-oracle#0 value E.A
+a.ts:18:1-18:6 ts-oracle#0 value string
+a.ts:19:1-19:3 ts-oracle#0 value typeof S
+a.ts:20:1-20:6 ts-oracle#0 value "X"
+a.ts:21:1-21:7 ts-oracle#0 value S
+a.ts:22:1-22:7 ts-oracle#0 value Exclude<T[keyof T], AnyFunction>
+a.ts:23:1-23:9 ts-oracle#0 value typeof S
+a.ts:24:1-24:12 ts-oracle#0 value any
+a.ts:25:1-25:5 ts-oracle#0 value S
+a.ts:26:1-26:3 ts-oracle#0 value typeof C
+a.ts:27:1-27:6 ts-oracle#0 value "P" | "Q"
+a.ts:28:1-28:7 ts-oracle#0 value C
+a.ts:29:1-29:7 ts-oracle#0 value Exclude<T[keyof T], AnyFunction>
+a.ts:30:1-30:9 ts-oracle#0 value typeof C
+a.ts:31:1-31:12 ts-oracle#0 value any
+a.ts:32:1-32:5 ts-oracle#0 value C.P
