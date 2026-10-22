@@ -125,7 +125,7 @@ in ts_node let deprecation_import
 in ts_node let deprecation_pattern_key is ts_pattern_property.key || is ts_property.key && parent.flow_destructuring_target
 in ts_node let deprecation_shorthand is ts_property.key && parent.value.node == null && !deprecation_pattern_key
 in ts_node let deprecation_excluded
-  deprecation_import || uses != null && !deprecation_pattern_key || is (ts_function.name, ts_class.name, ts_interface.name, ts_type_alias.name, ts_enum.name, ts_namespace.name, ts_method.key, ts_class_property.key, ts_property_signature.key, ts_method_signature.key) || is ts_property.key && !deprecation_shorthand && !deprecation_pattern_key || is (ts_enum_member.name, ts_parameter.name, ts_type_parameter.name, ts_import_equals.name, ts_export_specifier.exported, ts_jsx_closing.name, ts_index.index)
+  deprecation_import || uses != null && !deprecation_pattern_key || is (ts_function.name, ts_class.name, ts_interface.name, ts_type_alias.name, ts_enum.name, ts_namespace.name, ts_method.key, ts_class_property.key, ts_property_signature.key, ts_method_signature.key) || is ts_property.key && !deprecation_shorthand && !deprecation_pattern_key || is (ts_enum_member.name, ts_parameter.name, ts_type_parameter.name, ts_import_equals.name, ts_export_specifier.exported, ts_export.namespace, ts_jsx_closing.name, ts_index.index)
 in ts_index let deprecation_key index.node
 in ts_node let deprecation_export_name if is ts_export_specifier.local then parent.exported.node ?? node else null
 in ts_node let no_deprecated_checked true
