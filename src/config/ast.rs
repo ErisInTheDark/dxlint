@@ -19,7 +19,7 @@ pub struct Name {
     pub span: Span,
 }
 
-#[derive(Default, Debug)]
+#[derive(Clone, Default, Debug)]
 pub struct Config {
     pub langs: Vec<LangDef>,
     pub language_options: Vec<LanguageOptions>,
@@ -143,7 +143,7 @@ impl Dropped {
 
 /// `in a or b let name expr`: a value computed for every node of these
 /// layers, readable as `name` on the node and `field.name` from its parent.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct AttrDef {
     pub name: Name,
     pub targets: Vec<Name>,
@@ -272,7 +272,7 @@ pub struct IndentDecl {
 
 /// `group name a or b`: adds members to a named, open list of layers. Every
 /// `group name ...` line adds; `in name match x` reaches all of them.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct GroupDef {
     pub name: Name,
     pub parents: Vec<Parent>,
@@ -280,13 +280,13 @@ pub struct GroupDef {
 }
 
 /// `lang rust "*.rs" "*.rs.in"`
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct LangDef {
     pub name: Name,
     pub globs: Vec<(String, Span)>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct LanguageOptions {
     pub language: Name,
     pub options: Vec<OptionDef>,
@@ -325,7 +325,7 @@ impl Parent {
 
 /// `[in A or B [layer L]] match name [pattern]`. Without a pattern it
 /// attaches an existing matcher to more parents.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct MatcherDef {
     pub name: Name,
     pub parents: Vec<Parent>,
@@ -389,7 +389,7 @@ pub enum Target {
 }
 
 /// `option name schema = default "description"`
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct OptionDef {
     pub name: Name,
     pub schema: Schema,
@@ -401,7 +401,7 @@ pub struct OptionDef {
 }
 
 /// `in target rule name [severity [message]] [fix as expr] [{ clauses }]`
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct RuleDef {
     pub name: Name,
     /// `in a or b`: every layer (or field, language, group) it applies to.
@@ -508,7 +508,7 @@ impl RuleDef {
 
 /// `in a, b forward x, y from field`: these attributes, where the layers do
 /// not define them, are read from that field's node (transparent wrappers).
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ForwardDef {
     pub targets: Vec<Name>,
     pub attrs: Vec<Name>,
@@ -541,7 +541,7 @@ pub enum Report {
 /// `rule name [severity [message]] [{ set option value; clauses }]`
 /// without a context: turns existing rules on (at their default severity
 /// unless one is given), sets options and adds clauses. `name` may glob.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct RuleConfig {
     /// The name or glob in `patch.name`; the severity, message, `fix` and
     /// `report` replace the rule's own, `when`/`let`/`files`/`ignore` add.

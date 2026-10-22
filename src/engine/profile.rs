@@ -30,6 +30,43 @@ thread_local! {
     /// Per open self-timed region (outermost first), the time its nested
     /// regions took so far.
     static NESTED_TIME: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
+    /// Budget steps this thread counted ([`Profile::count_step`]).
+    static THREAD_STEPS: Cell<u64> = const { Cell::new(0) };
+    /// How many [`Profile::foreign_scope`]s are open.
+    static FOREIGN_DEPTH: Cell<u32> = const { Cell::new(0) };
+}
+
+/// A node outside the linted file whose value lint threads computed:
+/// how many times (once per world that needed it) and the steps it took.
+#[derive(Clone, Default)]
+pub struct ForeignNode {
+    pub computations: u64,
+    pub steps: u64,
+    /// The linted files whose lints computed it (path hashes).
+    pub linted: crate::fx_hash::FxHashSet<u64>,
+}
+
+/// Holds one [`Profile::foreign_scope`]; the outermost records its steps.
+pub struct ForeignScope<'a> {
+    profile: &'a Profile,
+    node: Option<(PathBuf, u32)>,
+    linted: u64,
+    started: u64,
+}
+
+impl Drop for ForeignScope<'_> {
+    fn drop(&mut self) {
+        FOREIGN_DEPTH.with(|depth| depth.set(depth.get() - 1));
+        let Some(node) = self.node.take() else { return };
+        let steps = THREAD_STEPS.with(Cell::get) - self.started;
+        if steps == 0 { return }
+        Profile::add(&self.profile.foreign_steps, steps);
+        let mut nodes = self.profile.foreign_nodes.lock().expect("foreign nodes lock");
+        let entry = nodes.entry(node).or_default();
+        entry.computations += 1;
+        entry.steps += steps;
+        entry.linted.insert(self.linted);
+    }
 }
 
 /// One self-timed region: semantic queries, value evaluations and name
@@ -209,6 +246,28 @@ pub struct Profile {
     pub semantic_budget_steps_limited: AtomicU64,
     pub semantic_state_discards: AtomicU64,
     pub semantic_memo_discards: AtomicU64,
+    /// Budget steps spent on values of nodes outside the linted file
+    /// (work other files' lints can repeat), and per such node its
+    /// computations ([`Profile::foreign_scope`]).
+    /// Graph builds of a body some other frame already built, and how many
+    /// of those came out the same as an earlier build.
+    pub effect_graph_frame_rebuilds: AtomicU64,
+    pub effect_graph_frame_duplicates: AtomicU64,
+    /// Graphs a frame took from another frame's build instead of building.
+    pub effect_graph_frame_reuses: AtomicU64,
+    /// Run-shared module answers published, by question kind
+    /// (publication, global, scopes, relative and bare resolves,
+    /// augmentations): count, own deps and group references they keep.
+    pub shared_answers: [AtomicU64; 6],
+    pub shared_answer_deps: [AtomicU64; 6],
+    pub shared_answer_groups: [AtomicU64; 6],
+    pub foreign_steps: AtomicU64,
+    pub foreign_nodes: Mutex<FxHashMap<(PathBuf, u32), ForeignNode>>,
+    /// Root questions asked again (same file, node and query) after their
+    /// budget cut them: repeats cut again, and repeats that finished.
+    pub repeat_cuts: AtomicU64,
+    pub repeat_recovered: AtomicU64,
+    cut_keys: Mutex<crate::fx_hash::FxHashSet<(PathBuf, u32, &'static str)>>,
     pub program_catalogue_builds: AtomicU64,
     pub catalogue_read_validations: AtomicU64,
     pub effect_graph_builds: AtomicU64,
@@ -437,7 +496,7 @@ impl Profile {
                 .map(|query| query.name).chain(crate::expr::queries::QUERIES.iter().map(|query| query.name))
                 .chain(crate::grammar::names::calls::ProfileQuery::ALL.iter().map(|query| query.name()))
                 .chain(crate::grammar::names::modules::queries::PROFILE_QUERIES.iter().copied())
-                .chain(["units.native", "units.view", "modules.resolve.search", "modules.resolve.shared", "modules.resolve.shared.key", "modules.resolve.shared.select", "modules.resolve.shared.identity","modules.resolve.shared.lookup", "modules.resolve.shared.targets", "modules.resolve.shared.record", "modules.resolve.shared.publish", "modules.resolve.catalog", "modules.roots.inputs", "modules.roots.survey", "modules.roots.candidates", "modules.roots.prefetch", "modules.roots.attach"])
+                .chain(["units.native", "units.view", "modules.resolve.search", "modules.resolve.shared", "modules.resolve.shared.key", "modules.resolve.shared.select", "modules.resolve.shared.identity","modules.resolve.shared.lookup", "modules.resolve.shared.targets", "modules.resolve.shared.record", "modules.resolve.shared.publish", "modules.resolve.catalog", "modules.roots.inputs", "modules.roots.survey", "modules.roots.candidates", "modules.roots.prefetch", "modules.roots.attach", "modules.identity.inputs", "modules.identity.scan"])
                 .map(|name| (name, SemanticQueryProfile::default())).collect(),
             ..Profile::default()
         }
@@ -545,6 +604,7 @@ impl Profile {
     /// One budget step, against the root question, the current semantic
     /// query and step site.
     pub fn count_step() {
+        THREAD_STEPS.with(|steps| steps.set(steps.get() + 1));
         let root = ROOT.with(Cell::get).unwrap_or(("-", usize::MAX));
         let query = SEMANTIC_QUERY.with(Cell::get).unwrap_or("-");
         let site = STEP_SITE.with(Cell::get);
@@ -552,6 +612,30 @@ impl Profile {
         if DETACHED.with(Cell::get) == 0 {
             CHARGED_COUNTS.with(|counts| *counts.borrow_mut().entry((query, site)).or_default() += 1);
         }
+    }
+
+    /// Steps counted while held evaluate node `node` of the file at `path`,
+    /// which is not the linted file; the outermost open scope owns them.
+    pub fn foreign_scope(&self, path: &Path, node: u32, linted: &Path) -> ForeignScope<'_> {
+        use std::hash::BuildHasher;
+        let outermost = FOREIGN_DEPTH.with(|depth| depth.replace(depth.get() + 1)) == 0;
+        ForeignScope { profile: self, node: outermost.then(|| (path.to_owned(), node)),
+            linted: crate::fx_hash::FxBuild::default().hash_one(linted), started: THREAD_STEPS.with(Cell::get) }
+    }
+
+    /// `(steps on foreign nodes, nodes, nodes computed more than once, steps
+    /// those repeats spent, steps repeated by other linted files)`: what
+    /// sharing foreign values across files can save (the last excludes a
+    /// file's own repeats under other frames).
+    pub fn foreign_summary(&self) -> (u64, usize, usize, u64, u64) {
+        let nodes = self.foreign_nodes.lock().expect("foreign nodes lock");
+        let repeated = nodes.values().filter(|node| node.computations > 1);
+        let repeat_steps = repeated.clone().map(|node| node.steps - node.steps / node.computations).sum();
+        let cross_steps = nodes.values().map(|node| {
+            let files = node.linted.len() as u64;
+            if files > 1 { node.steps - node.steps / files } else { 0 }
+        }).sum();
+        (Profile::get(&self.foreign_steps), nodes.len(), repeated.count(), repeat_steps, cross_steps)
     }
 
     /// Steps counted while held run on an allowance of their own: they
@@ -592,6 +676,18 @@ impl Profile {
         if cut {
             row.cut += 1;
             row.cut_steps += steps;
+        }
+    }
+
+    /// One root question's outcome at `node` of the file at `path`, against
+    /// the semantic query asking it ([`Self::repeat_cuts`]).
+    pub fn note_root_outcome(&self, path: &Path, node: u32, cut: bool) {
+        let key = (path.to_owned(), node, SEMANTIC_QUERY.with(Cell::get).unwrap_or("-"));
+        let mut keys = self.cut_keys.lock().expect("cut keys lock");
+        if keys.contains(&key) {
+            if cut { Profile::add(&self.repeat_cuts, 1) } else { Profile::add(&self.repeat_recovered, 1); keys.remove(&key); }
+        } else if cut {
+            keys.insert(key);
         }
     }
 

@@ -1720,8 +1720,7 @@ impl<'a> Ctx<'a> {
         let parent = self.tree.parent(self.node)?;
         let me = self.tree.node(self.node);
         self.tree
-            .node(parent)
-            .children
+            .children(parent)
             .iter()
             .map(|e| e.node)
             .filter(|&c| c != self.node)

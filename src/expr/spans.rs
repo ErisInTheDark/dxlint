@@ -100,7 +100,7 @@ impl<'a> Ctx<'a> {
             if sel.matches(self.tree, id) {
                 nodes.push((node.start, node.end, id));
             }
-            stack.extend(node.children.iter().map(|edge| edge.node));
+            stack.extend(self.tree.children(id).iter().map(|edge| edge.node));
         }
         let spans = std::rc::Rc::new(LayerSpans::new(nodes));
         self.memo.spans.borrow_mut().insert(sel.clone(), spans.clone());

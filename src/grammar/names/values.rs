@@ -231,6 +231,13 @@ impl<'a> std::ops::Deref for Values<'a> {
 
 impl Values<'_> {
     pub fn values(&self, leaf: Leaf) -> NodeValue {
+        // File 0 is the linted file; others' values are work every file
+        // that reads them repeats.
+        let _foreign = match (self.world.profile(), leaf.target) {
+            (Some(profile), Target::Node(node)) if node.file != 0 => self.world.path(node.file).zip(self.world.path(0))
+                .map(|(path, linted)| profile.foreign_scope(path, node.node, linted)),
+            _ => None,
+        };
         eval::values(self, leaf)
     }
 

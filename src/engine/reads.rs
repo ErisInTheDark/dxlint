@@ -18,14 +18,27 @@ pub type DepPath = Arc<Path>;
 
 /// The interned [`DepPath`] for `path`.
 pub fn dep_path(path: &Path) -> DepPath {
-    static PATHS: OnceLock<RwLock<HashSet<DepPath>>> = OnceLock::new();
-    let paths = PATHS.get_or_init(Default::default);
-    if let Some(found) = paths.read().expect("dep paths").get(path) { return found.clone() }
-    let mut paths = paths.write().expect("dep paths");
-    if let Some(found) = paths.get(path) { return found.clone() }
-    let interned: DepPath = Arc::from(path);
-    paths.insert(interned.clone());
-    interned
+    /// Interned paths; ones nothing else holds any more (resolution probes
+    /// of missing files, finished lints' reads) are swept whenever the set
+    /// doubles, so it stays proportional to the live paths.
+    #[derive(Default)]
+    struct Interned {
+        paths: HashSet<DepPath>,
+        sweep_at: usize,
+    }
+    const FIRST_SWEEP: usize = 4096;
+    static PATHS: OnceLock<RwLock<Interned>> = OnceLock::new();
+    let interned = PATHS.get_or_init(Default::default);
+    if let Some(found) = interned.read().expect("dep paths").paths.get(path) { return found.clone() }
+    let mut interned = interned.write().expect("dep paths");
+    if let Some(found) = interned.paths.get(path) { return found.clone() }
+    if interned.paths.len() >= interned.sweep_at {
+        interned.paths.retain(|held| Arc::strong_count(held) > 1);
+        interned.sweep_at = (interned.paths.len() * 2).max(FIRST_SWEEP);
+    }
+    let path: DepPath = Arc::from(path);
+    interned.paths.insert(path.clone());
+    path
 }
 
 /// One thing a lint read, with what it read.

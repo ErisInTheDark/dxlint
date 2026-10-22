@@ -10,9 +10,10 @@ use crate::grammar::names::semantic::Semantic;
 
 #[derive(Default)]
 pub(crate) struct State {
-    graphs: RefCell<FxHashMap<Leaf, Known<Rc<Execution>>>>,
+    /// Graphs by entry and whether they carry read events.
+    graphs: RefCell<FxHashMap<(Leaf, bool), Known<Rc<Execution>>>>,
     /// Each body's distinct graphs, shared by the frames that build alike.
-    variants: RefCell<FxHashMap<Target, Vec<Rc<Execution>>>>,
+    variants: RefCell<FxHashMap<(Target, bool), Vec<Variant>>>,
     reads: RefCell<FxHashMap<Leaf, Known<Rc<Reads>>>>,
     entry_owners: RefCell<FxHashMap<Leaf, Leaf>>,
     /// Per file, every write's target in tree order (for `unwritten`).
@@ -23,6 +24,17 @@ pub(crate) struct State {
     /// Bodies whose graph build ran its own allowance out
     /// ([`Effects::execution`]); kept across roots (never rolled back).
     outgrown: RefCell<FxHashSet<Leaf>>,
+    /// File roots whose read catalogue ran its allowance out.
+    reads_outgrown: RefCell<FxHashSet<Leaf>>,
+}
+
+/// One built graph of a body, with the conditions its build decided (by
+/// target, all in the build's frame): another frame where they answer
+/// alike builds the same graph. `None` when a condition sat in another
+/// frame, so the build can't be replayed by its conditions.
+struct Variant {
+    graph: Rc<Execution>,
+    decided: Option<Rc<[(Target, u32, bool)]>>,
 }
 
 /// One write found walking a file: its target, or a node whose writes
@@ -48,7 +60,7 @@ struct Discarded {
 impl State {
     pub(crate) fn rollback(&self) {
         let mut discarded = self.discarded.borrow_mut();
-        self.graphs.borrow_mut().retain(|&entry, graph| {
+        self.graphs.borrow_mut().retain(|&(entry, _), graph| {
             if matches!(graph, Known::Yes(_)) { return true }
             if let Some(discarded) = discarded.as_mut() { discarded.graphs.insert(entry); }
             false
@@ -118,8 +130,23 @@ impl Effects<'_> {
         let Some(root) = self.semantic.leaf(root).known() else { return Known::Unknown };
         if let Some(reads) = self.semantic.effects.reads.borrow().get(&root) { return reads.clone() }
         let Some(effect) = self.semantic.tables.vocabulary.effect("read") else { return Known::Unknown };
+        // A file whose catalogue outgrew its allowance outgrows every later
+        // one: answer as the build did, without rebuilding.
+        if self.semantic.effects.reads_outgrown.borrow().contains(&root) {
+            self.semantic.question.budget.exhaust();
+            return Known::Unknown;
+        }
         self.semantic.effects.reads.borrow_mut().insert(root, Known::Unknown);
-        let collect = || self.collect_reads(at, node, tree, effect);
+        // Kept for every later question of the file: built on an allowance for
+        // the file's size, not on what the asking question has left (each
+        // question cut it short and rebuilt it from the start).
+        let allowance = u32::try_from(tree.nodes.len()).unwrap_or(u32::MAX).saturating_mul(Self::BUILD_STEPS_PER_NODE)
+            .max(crate::grammar::names::question::Budget::DEFAULT);
+        let collect = || self.semantic.question.budget.detached(allowance, || self.collect_reads(at, node, tree, effect))
+            .unwrap_or_else(|| {
+                self.semantic.effects.reads_outgrown.borrow_mut().insert(root);
+                Known::Unknown
+            });
         let reads = match self.semantic.world.profile() {
             Some(profile) => {
                 let rebuild = self.semantic.effects.discarded.borrow_mut()
@@ -327,10 +354,41 @@ impl Effects<'_> {
         self.semantic.leaf(Leaf { target: Target::Node(NodeRef { node: tree.root, ..node }), ..at })
     }
 
+    /// `entry`'s flow graph, read events included.
     pub fn execution(&self, entry: Leaf) -> Known<Rc<Execution>> {
+        self.graph(entry, true)
+    }
+
+    /// `entry`'s flow graph for narrowing, which reads no read events: built
+    /// without them unless a full graph already exists (then that one, so
+    /// one entry's narrowing always sees the same steps).
+    pub fn narrowing_execution(&self, entry: Leaf) -> Known<Rc<Execution>> {
+        let Some(entry) = self.semantic.leaf(entry).known() else { return Known::Unknown };
+        if Self::force_reads() { return self.graph(entry, true) }
+        let full = self.semantic.effects.graphs.borrow().get(&(entry, true)).cloned();
+        if let Some(full @ Known::Yes(_)) = full {
+            let mut graphs = self.semantic.effects.graphs.borrow_mut();
+            return graphs.entry((entry, false)).or_insert(full).clone();
+        }
+        self.graph(entry, false)
+    }
+
+    /// `ZLINT_GRAPH_PER_FRAME=1`: every frame builds its own graph (A/B ruler).
+    fn per_frame() -> bool {
+        static PER_FRAME: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *PER_FRAME.get_or_init(|| std::env::var_os("ZLINT_GRAPH_PER_FRAME").is_some())
+    }
+
+    /// `ZLINT_GRAPH_READS=1`: narrowing builds full graphs (A/B ruler).
+    fn force_reads() -> bool {
+        static FORCE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *FORCE.get_or_init(|| std::env::var_os("ZLINT_GRAPH_READS").is_some())
+    }
+
+    fn graph(&self, entry: Leaf, reads: bool) -> Known<Rc<Execution>> {
         let Some(entry) = self.semantic.leaf(entry).known() else { return Known::Unknown };
         let state = &self.semantic.effects.graphs;
-        if let Some(graph) = state.borrow().get(&entry) { return graph.clone() }
+        if let Some(graph) = state.borrow().get(&(entry, reads)) { return graph.clone() }
         let budget = &self.semantic.question.budget;
         // A body whose graph outgrew a nearly whole budget outgrows every
         // later one: its question ends the same way, without the rebuild.
@@ -338,8 +396,18 @@ impl Effects<'_> {
             budget.exhaust();
             return Known::Unknown;
         }
-        state.borrow_mut().insert(entry, Known::Unknown);
-        let source = super::source::Runtime::new(self.semantic);
+        // A body built in another frame builds alike when the conditions its
+        // build decided answer alike here (graphs read written values
+        // through `Execution::owner`, so the rest doesn't depend on frames).
+        if !Self::per_frame() {
+            if let Some(graph) = self.replayed(entry, reads) {
+                if let Some(profile) = self.semantic.world.profile() { crate::engine::Profile::add(&profile.effect_graph_frame_reuses, 1) }
+                state.borrow_mut().insert((entry, reads), Known::Yes(graph.clone()));
+                return Known::Yes(graph);
+            }
+        }
+        state.borrow_mut().insert((entry, reads), Known::Unknown);
+        let source = if reads { super::source::Runtime::new(self.semantic) } else { super::source::Runtime::without_reads(self.semantic) };
         // Graphs are kept for every later question: a build runs on an
         // allowance for its file's size, not on what the asking question
         // has left (big bodies were cut and rebuilt question after question,
@@ -374,7 +442,10 @@ impl Effects<'_> {
             None => build(),
         };
         let graph = match graph {
-            Known::Yes(graph) => Known::Yes(self.shared(entry, graph.built_in(entry.frame))),
+            Known::Yes(graph) => {
+                let decided = self.replayable(entry, source.decided());
+                Known::Yes(self.shared(entry, reads, graph.built_in(entry.frame), decided))
+            }
             Known::Unknown => Known::Unknown,
         };
         // Only a body whose own steps took a large share counts as outgrown
@@ -382,19 +453,53 @@ impl Effects<'_> {
         if outgrew.get() && built.get() as u64 * 4 >= u64::from(crate::grammar::names::question::Budget::DEFAULT) {
             self.semantic.effects.outgrown.borrow_mut().insert(entry);
         }
-        state.borrow_mut().insert(entry, graph.clone());
+        state.borrow_mut().insert((entry, reads), graph.clone());
         graph
     }
 
     /// `graph`, or the same graph another frame's build of the body already
     /// made: a body asked about in hundreds of frames mostly builds alike.
-    fn shared(&self, entry: Leaf, graph: Execution) -> Rc<Execution> {
+    fn shared(&self, entry: Leaf, reads: bool, graph: Execution, decided: Option<Rc<[(Target, u32, bool)]>>) -> Rc<Execution> {
         let mut variants = self.semantic.effects.variants.borrow_mut();
-        let variants = variants.entry(entry.target).or_default();
-        if let Some(same) = variants.iter().find(|variant| variant.same_as(&graph)) { return same.clone() }
+        let variants = variants.entry((entry.target, reads)).or_default();
+        if let Some(profile) = self.semantic.world.profile() {
+            if !variants.is_empty() { crate::engine::Profile::add(&profile.effect_graph_frame_rebuilds, 1) }
+        }
+        if let Some(same) = variants.iter().find(|variant| variant.graph.same_as(&graph)) {
+            if let Some(profile) = self.semantic.world.profile() { crate::engine::Profile::add(&profile.effect_graph_frame_duplicates, 1) }
+            return same.graph.clone();
+        }
         let graph = Rc::new(graph);
-        variants.push(graph.clone());
+        variants.push(Variant { graph: graph.clone(), decided });
         graph
+    }
+
+    /// A build's decided conditions by target, when each sat in the
+    /// entry's own frame (so another entry frame can ask them again).
+    fn replayable(&self, entry: Leaf, decided: Vec<(Leaf, u32, bool)>) -> Option<Rc<[(Target, u32, bool)]>> {
+        decided.into_iter().map(|(at, condition, holds)| {
+            let here = self.semantic.leaf(Leaf { target: at.target, frame: entry.frame }).known()?;
+            (here == at).then_some((at.target, condition, holds))
+        }).collect()
+    }
+
+    /// A graph another frame built for `entry`'s body whose decided
+    /// conditions answer alike in `entry`'s frame.
+    fn replayed(&self, entry: Leaf, reads: bool) -> Option<Rc<Execution>> {
+        let built: Vec<_> = self.semantic.effects.variants.borrow().get(&(entry.target, reads))?.iter()
+            .filter_map(|variant| Some((variant.graph.clone(), variant.decided.clone()?))).collect();
+        'variants: for (graph, decided) in built {
+            for &(target, condition, holds) in decided.iter() {
+                let at = self.semantic.leaf(Leaf { target, frame: entry.frame }).known()?;
+                match self.semantic.world.condition(at, condition, self.semantic) {
+                    Known::Yes(answer) if answer == holds => {}
+                    Known::Yes(_) => continue 'variants,
+                    Known::Unknown => return None,
+                }
+            }
+            return Some(graph);
+        }
+        None
     }
 
     pub fn normal(&self, entry: Leaf) -> Known<bool> {
@@ -448,7 +553,7 @@ impl Effects<'_> {
                 if unique.insert((record.site, record.target, record.value, record.possible)) { declared.push(record) }
             }
             let Target::Node(at) = at.target else { return Known::Unknown };
-            pending.extend(tree.node(at.node).children.iter().rev().map(|edge| edge.node));
+            pending.extend(tree.children(at.node).iter().rev().map(|edge| edge.node));
         }
         Known::Yes(declared)
     }

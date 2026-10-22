@@ -6,50 +6,64 @@ use std::collections::BinaryHeap;
 
 type Key = (u32, Reverse<u32>, u32);
 
+/// A reachable node's subtree: pre-order positions `enter..end` and the
+/// range of its descendants' starts. Packed: one is kept per tree node for
+/// the whole run.
 #[derive(Clone, Copy)]
 struct Bounds {
-    enter: usize,
-    end: usize,
+    enter: u32,
+    /// The subtree's end, with [`FALLBACK`] set when it must be walked
+    /// (shared or foreign children).
+    end: u32,
     first_start: u32,
     last_start: u32,
-    fallback: bool,
+}
+
+const UNREACHED: u32 = u32::MAX;
+const FALLBACK: u32 = 1 << 31;
+
+impl Bounds {
+    fn reached(self) -> Option<Self> { (self.enter != UNREACHED).then_some(self) }
+    fn end(self) -> u32 { self.end & !FALLBACK }
+    fn fallback(self) -> bool { self.end & FALLBACK != 0 }
 }
 
 pub(super) struct Index {
-    bounds: Vec<Option<Bounds>>,
+    bounds: Vec<Bounds>,
     kinds: FxHashMap<u32, Vec<u32>>,
     fields: FxHashMap<(u32, u16), Vec<u32>>,
 }
 
 impl Index {
     pub(super) fn new(tree: &Tree) -> Self {
-        let mut bounds = vec![None; tree.nodes.len()];
+        let unreached = Bounds { enter: UNREACHED, end: 0, first_start: 0, last_start: 0 };
+        let mut bounds = vec![unreached; tree.nodes.len()];
         let mut seen = vec![false; tree.nodes.len()];
         let mut owners = vec![None; tree.nodes.len()];
         for (enter, &id) in tree.order.iter().enumerate() {
             let node = tree.node(id);
-            let fallback = node.children.iter().fold(false, |fallback, edge| {
+            let fallback = tree.children(id).iter().fold(false, |fallback, edge| {
                 let duplicate = std::mem::replace(&mut seen[edge.node as usize], true);
                 fallback || duplicate || tree.parent(edge.node) != Some(id) || tree.node(edge.node).matcher == ROOT
             });
-            bounds[id as usize] = Some(Bounds {
-                enter, end: enter + 1, first_start: node.start, last_start: node.start, fallback,
-            });
+            let enter = enter as u32;
+            bounds[id as usize] = Bounds {
+                enter, end: (enter + 1) | if fallback { FALLBACK } else { 0 }, first_start: node.start, last_start: node.start,
+            };
             owners[id as usize] = tree.parent(id).and_then(|parent| {
                 if tree.node(parent).matcher == TEXT { owners[parent as usize] } else { Some(parent) }
             });
         }
         for &id in tree.order.iter().rev() {
-            let mut own = bounds[id as usize].expect("reachable node");
-            for edge in &tree.node(id).children {
+            let mut own = bounds[id as usize].reached().expect("reachable node");
+            for edge in tree.children(id) {
                 if tree.parent(edge.node) != Some(id) { continue; }
-                let child = bounds[edge.node as usize].expect("reachable child");
-                own.end = own.end.max(child.end);
+                let child = bounds[edge.node as usize].reached().expect("reachable child");
+                own.end = own.end().max(child.end()) | (own.end | child.end) & FALLBACK;
                 own.first_start = own.first_start.min(child.first_start);
                 own.last_start = own.last_start.max(child.last_start);
-                own.fallback |= child.fallback;
             }
-            bounds[id as usize] = Some(own);
+            bounds[id as usize] = own;
         }
         let mut order = tree.order.clone();
         order.sort_unstable_by_key(|&id| key(tree, id));
@@ -65,8 +79,8 @@ impl Index {
     }
 
     pub(super) fn iter<'a>(&'a self, tree: &'a Tree, node: u32, kinds: &[u32], field: Option<u16>) -> Option<Iter<'a>> {
-        let bounds = self.bounds[node as usize]?;
-        if bounds.fallback { return None; }
+        let bounds = self.bounds[node as usize].reached()?;
+        if bounds.fallback() { return None; }
         let mut cursors: Vec<_> = kinds.iter().filter_map(|kind| {
             let items = match field {
                 Some(label) => self.fields.get(&(*kind, label)),
@@ -103,8 +117,8 @@ impl Iterator for Cursor<'_> {
     fn next(&mut self) -> Option<u32> {
         while let Some((&id, rest)) = self.items.split_first() {
             self.items = rest;
-            let entry = self.index.bounds[id as usize].expect("indexed node").enter;
-            if self.bounds.enter < entry && entry < self.bounds.end { return Some(id); }
+            let entry = self.index.bounds[id as usize].reached().expect("indexed node").enter;
+            if self.bounds.enter < entry && entry < self.bounds.end() { return Some(id); }
         }
         None
     }

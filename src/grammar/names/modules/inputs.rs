@@ -10,6 +10,15 @@ pub fn program_inputs(settings: &Settings, host: &dyn Host, question: &QueryCont
     Inputs { resolver: Resolver { host, settings }, question, libraries: Vec::new(), sources: Vec::new() }.collect().map_or(Known::Unknown, Known::Yes)
 }
 
+/// What [`program_inputs`] depends on besides `settings`: the program's
+/// configuration file, else (none found) the program directory. Files of
+/// one project share it, so their input list is collected once.
+pub fn program_anchor(settings: &Settings, host: &dyn Host, question: &QueryContext) -> Known<PathBuf> {
+    let resolver = Resolver { host, settings };
+    let (Ok(directory), Ok(config)) = (resolver.program_directory(), resolver.configuration(question)) else { return Known::Unknown };
+    Known::Yes(config.path.clone().unwrap_or(directory))
+}
+
 struct Inputs<'a> {
     resolver: Resolver<'a, dyn Host + 'a>,
     question: &'a QueryContext,

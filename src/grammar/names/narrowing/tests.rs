@@ -244,7 +244,7 @@ mod places {
 
         fn branches() -> Self {
             let mut world = Self::new();
-            let mut nodes = world.tree.nodes.clone();
+            let mut nodes = world.tree.built();
             nodes[0].matcher = 9;
             nodes[0].children = [1, 2, 15, 18].map(|node| Edge { label: 0, node }).to_vec();
             for node in &mut nodes[5..11] { node.children.clear(); }
@@ -324,7 +324,7 @@ mod places {
         use crate::grammar::parse::TEXT;
         use crate::pattern::compile::NO_LABEL;
         let mut world = TestWorld::new();
-        let mut nodes = world.tree.nodes.clone();
+        let mut nodes = world.tree.built();
         for target in [3, 15] {
             nodes.push(Node {
                 matcher: TEXT, start: 0, end: 0,
@@ -416,7 +416,7 @@ mod places {
     fn predicate_call() -> (TestWorld, Names) {
         use crate::grammar::names::calls::{Conditional, Invoke, Signature};
         let mut world = TestWorld::new();
-        let mut nodes = world.tree.nodes.clone();
+        let mut nodes = world.tree.built();
         nodes.extend([8, 9, 10, 0, 0, 11].map(|matcher| Node { matcher, start: 0, end: 0, children: vec![] }));
         nodes[15].children = vec![Edge { label: 8, node: 16 }, Edge { label: 9, node: 17 }];
         nodes[16].children.push(Edge { label: 10, node: 18 });
@@ -483,7 +483,7 @@ mod places {
     #[test]
     fn possible_predicate_signatures_remain_alternatives_on_both_sides() {
         let (mut world, mut tables) = predicate_call();
-        let mut nodes = world.tree.nodes.clone();
+        let mut nodes = world.tree.built();
         nodes.extend([8, 9, 10, 0, 0].map(|matcher| Node { matcher, start: 0, end: 0, children: vec![] }));
         nodes[21].children = vec![Edge { label: 8, node: 22 }, Edge { label: 9, node: 23 }];
         nodes[22].children.push(Edge { label: 10, node: 24 });
@@ -535,7 +535,7 @@ mod places {
         // 3: a name nothing declares; 4: a target that is no name at all.
         for (write, captured_guard) in [(None, true), (Some(0), false), (Some(1), true), (Some(2), true), (Some(3), false), (Some(4), true)] {
             let mut world = TestWorld::branches();
-            let mut nodes = world.tree.nodes.clone();
+            let mut nodes = world.tree.built();
             nodes[16].matcher = 10;
             nodes[16].children.push(Edge { label: 7, node: 19 });
             nodes.push(Node { matcher: 0, start: 0, end: 0, children: vec![] });
@@ -548,7 +548,7 @@ mod places {
                 span: crate::config::source::Span::new(crate::config::source::FileId(0), 0, 1),
             });
             if let Some(write) = write {
-                let mut nodes = world.tree.nodes.clone();
+                let mut nodes = world.tree.built();
                 nodes[0].children.push(Edge { label: 0, node: 20 });
                 nodes.push(Node { matcher: 11, start: 0, end: 0, children: vec![Edge { label: 8, node: 21 }] });
                 nodes.push(Node { matcher: if write == 1 { 1 } else { 0 }, start: 0, end: 0,
@@ -609,7 +609,7 @@ mod places {
     fn only_a_definite_early_exit_carries_the_surviving_branch_proof_after_the_join() {
         for possible in [false, true] {
             let mut world = TestWorld::branches();
-            let mut nodes = world.tree.nodes.clone();
+            let mut nodes = world.tree.built();
             nodes[17].matcher = 10;
             world.tree = Tree::from_native(nodes, 0);
             let mut tables = branch_tables();

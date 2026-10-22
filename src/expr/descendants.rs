@@ -10,12 +10,12 @@ impl NodeSel {
 
     fn walk(&self, tree: &Tree, node: u32) -> Vec<u32> {
         let mut found = Vec::new();
-        let mut stack: Vec<u32> = tree.node(node).children.iter().map(|edge| edge.node).collect();
+        let mut stack: Vec<u32> = tree.children(node).iter().map(|edge| edge.node).collect();
         while let Some(id) = stack.pop() {
             let child = tree.node(id);
             if child.matcher == ROOT { continue; }
             if self.matches(tree, id) { found.push((child.start, std::cmp::Reverse(child.end), id)); }
-            stack.extend(child.children.iter().map(|edge| edge.node));
+            stack.extend(tree.children(id).iter().map(|edge| edge.node));
         }
         found.sort_unstable();
         found.into_iter().map(|(_, _, id)| id).collect()

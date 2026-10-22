@@ -1,7 +1,7 @@
 //! The finished layer tree of one file: nodes reachable from the root, with
 //! parents and field labels resolved.
 
-use super::parse::{Node, Parser, ROOT, TEXT};
+use super::parse::{Edge, Node, Parser, Syntax, ROOT, TEXT};
 use super::Grammar;
 use crate::pattern::compile::NO_LABEL;
 use crate::fx_hash::FxHashMap;
@@ -20,7 +20,10 @@ pub enum FieldOne {
 }
 
 pub struct Tree {
-    pub nodes: Vec<Node>,
+    pub nodes: Vec<Syntax>,
+    /// `edges[first[id]..first[id + 1]]` are node `id`'s children, sorted by start.
+    first: Vec<u32>,
+    edges: Vec<Edge>,
     parent: Vec<u32>,
     label: Vec<u16>,
     field_indices: OnceLock<Vec<usize>>,
@@ -102,23 +105,30 @@ impl Tree {
         self.layer_roots.iter().find(|&&(_, x)| x == l).map(|&(r, _)| r)
     }
 
-    fn from_nodes(mut nodes: Vec<Node>, holes: Vec<(u32, u32, u32)>, root: u32, too_deep: bool) -> Tree {
-        let spans: Vec<_> = nodes.iter().map(|n| (n.start, n.end)).collect();
+    fn from_nodes(built: Vec<Node>, holes: Vec<(u32, u32, u32)>, root: u32, too_deep: bool) -> Tree {
+        let nodes: Vec<Syntax> = built.iter().map(|n| Syntax { matcher: n.matcher, start: n.start, end: n.end }).collect();
+        let mut first = Vec::with_capacity(built.len() + 1);
+        let mut edges = Vec::with_capacity(built.iter().map(|n| n.children.len()).sum());
         let mut overlapping = Vec::new();
-        for (id, node) in nodes.iter_mut().enumerate() {
-            if !node.children.windows(2).all(|pair| spans[pair[0].node as usize].0 <= spans[pair[1].node as usize].0) {
-                node.children.sort_by_key(|e| spans[e.node as usize].0);
+        for (id, node) in built.into_iter().enumerate() {
+            first.push(edges.len() as u32);
+            let from = edges.len();
+            edges.extend(node.children);
+            let children = &mut edges[from..];
+            if !children.windows(2).all(|pair| nodes[pair[0].node as usize].start <= nodes[pair[1].node as usize].start) {
+                children.sort_by_key(|e| nodes[e.node as usize].start);
             }
             let mut reach = 0;
-            for e in &node.children {
-                let (s, e) = spans[e.node as usize];
-                if s < reach && s < e {
+            for e in children.iter() {
+                let Syntax { start, end, .. } = nodes[e.node as usize];
+                if start < reach && start < end {
                     overlapping.push(id as u32);
                     break;
                 }
-                reach = reach.max(e);
+                reach = reach.max(end);
             }
         }
+        first.push(edges.len() as u32);
         let n = nodes.len();
         let mut parent = vec![NONE; n];
         let mut label = vec![NO_LABEL; n];
@@ -130,7 +140,7 @@ impl Tree {
         // first one reached in document order owns them.
         while let Some(id) = stack.pop() {
             order.push(id);
-            for edge in nodes[id as usize].children.iter().rev() {
+            for edge in edges[first[id as usize] as usize..first[id as usize + 1] as usize].iter().rev() {
                 let c = edge.node as usize;
                 if parent[c] == NONE {
                     parent[c] = id;
@@ -140,7 +150,31 @@ impl Tree {
             }
         }
         parent[root as usize] = NONE;
-        Tree { nodes, parent, label, field_indices: OnceLock::new(), descendants: OnceLock::new(), module_index: OnceLock::new(), order, root, holes, too_deep, layer_roots: Vec::new(), overlapping }
+        Tree { nodes, first, edges, parent, label, field_indices: OnceLock::new(), descendants: OnceLock::new(), module_index: OnceLock::new(), order, root, holes, too_deep, layer_roots: Vec::new(), overlapping }
+    }
+
+    /// The node's children in document order.
+    pub fn children(&self, id: u32) -> &[Edge] {
+        &self.edges[self.first[id as usize] as usize..self.first[id as usize + 1] as usize]
+    }
+
+    /// Rebuilds the tree after `change` edits its nodes (tests shape trees by hand).
+    #[cfg(test)]
+    pub(crate) fn edit(&mut self, change: impl FnOnce(&mut Vec<Node>)) {
+        let mut nodes = self.built();
+        change(&mut nodes);
+        let layer_roots = std::mem::take(&mut self.layer_roots);
+        *self = Tree::from_nodes(nodes, std::mem::take(&mut self.holes), self.root, self.too_deep);
+        self.layer_roots = layer_roots;
+    }
+
+    /// The tree's nodes as building nodes, for tests that derive trees from it.
+    #[cfg(test)]
+    pub(crate) fn built(&self) -> Vec<Node> {
+        (0..self.nodes.len() as u32).map(|id| {
+            let Syntax { matcher, start, end } = self.nodes[id as usize];
+            Node { matcher, start, end, children: self.children(id).to_vec() }
+        }).collect()
     }
 
     pub(crate) fn descendant_nodes(&self, node: u32, kinds: &[u32], field: Option<u16>) -> Option<impl Iterator<Item = u32> + '_> {
@@ -173,7 +207,7 @@ impl Tree {
 
     pub(crate) fn capture_child(&self, node: u32) -> Option<u32> {
         let syntax = self.nodes.get(node as usize)?;
-        match syntax.children.as_slice() {
+        match self.children(node) {
             [child] if syntax.matcher == TEXT && child.label == NO_LABEL => Some(child.node),
             _ => None,
         }
@@ -222,7 +256,7 @@ impl Tree {
         Some((self.holes[i].1, self.holes[i].2))
     }
 
-    pub fn node(&self, id: u32) -> &Node {
+    pub fn node(&self, id: u32) -> &Syntax {
         &self.nodes[id as usize]
     }
 
@@ -240,7 +274,7 @@ impl Tree {
     pub fn field_sibling(&self, id: u32, after: bool) -> Option<u32> {
         let parent = self.parent(id)?;
         let label = self.label(id)?;
-        let mut same = self.node(parent).children.iter().filter(|edge| edge.label == label);
+        let mut same = self.children(parent).iter().filter(|edge| edge.label == label);
         let mut previous = None;
         while let Some(edge) = same.next() {
             if edge.node == id {
@@ -266,7 +300,7 @@ impl Tree {
             let mut counts = FxHashMap::<u16, usize>::default();
             for &parent in &self.order {
                 counts.clear();
-                for edge in &self.node(parent).children {
+                for edge in self.children(parent) {
                     inspected();
                     let child = edge.node as usize;
                     // A shared node belongs to its resolved parent; duplicate edges
@@ -305,7 +339,7 @@ impl Tree {
     /// [`Self::fields`] without building the list: `visit` sees each in
     /// order until it returns false. False when it stopped early.
     pub fn visit_fields(&self, id: u32, label: u16, visit: &mut impl FnMut(u32) -> bool) -> bool {
-        for e in &self.nodes[id as usize].children {
+        for e in self.children(id) {
             let go_on = if e.label == label {
                 visit(e.node)
             } else if self.nodes[e.node as usize].matcher == TEXT {
@@ -363,7 +397,7 @@ impl Tree {
     pub fn innermost_with_text(&self, g: &Grammar, pos: u32, skip: u32) -> u32 {
         let mut id = self.root;
         'descend: loop {
-            let children = &self.nodes[id as usize].children;
+            let children = self.children(id);
             // Children are sorted by start and mostly disjoint: the container
             // can only be a late child starting at or before `pos`. Where
             // they overlap, an earlier one may hold `pos` past a later one.
@@ -446,10 +480,10 @@ mod tests {
             Node { matcher: ROOT, start: 0, end: 12, children: vec![edge(2, 11), edge(1, 10)] },
         ], 7);
         for id in 0..tree.nodes.len() as u32 {
-            let expected = tree.parent(id).map(|parent| tree.node(parent).children.iter()
+            let expected = tree.parent(id).map(|parent| tree.children(parent).iter()
                 .take_while(|edge| edge.node != id).filter(|edge| Some(edge.label) == tree.label(id)).count());
             assert_eq!(tree.field_index(id), expected, "shared node {id}");
-            let siblings: Vec<_> = tree.parent(id).into_iter().flat_map(|parent| tree.node(parent).children.iter())
+            let siblings: Vec<_> = tree.parent(id).into_iter().flat_map(|parent| tree.children(parent).iter())
                 .filter(|edge| Some(edge.label) == tree.label(id)).map(|edge| edge.node).collect();
             let at = siblings.iter().position(|&node| node == id);
             assert_eq!(tree.field_sibling(id, false), at.and_then(|at| at.checked_sub(1)).map(|at| siblings[at]));
@@ -461,7 +495,7 @@ mod tests {
                 .map(|i| edge(i, if i % 3 == 0 { NO_LABEL } else { (i % 3) as u16 })).collect() });
             let tree = Tree::from_native(nodes, count);
             for id in 0..=count {
-                let expected = tree.parent(id).map(|parent| tree.node(parent).children.iter()
+                let expected = tree.parent(id).map(|parent| tree.children(parent).iter()
                     .take_while(|edge| edge.node != id).filter(|edge| Some(edge.label) == tree.label(id)).count());
                 assert_eq!(tree.field_index(id), expected, "width {count}, node {id}");
             }

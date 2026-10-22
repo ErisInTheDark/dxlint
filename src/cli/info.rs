@@ -243,8 +243,7 @@ pub fn explain(output: &mut Output<'_>, linter: &Linter, file: &Path, at: &str) 
         container = tree.parent(container).unwrap_or(tree.root);
     }
     let winner = tree
-        .node(container)
-        .children
+        .children(container)
         .iter()
         .map(|e| e.node)
         .find(|&c| tree.node(c).start as usize == pos && !tree.is_text(c))
@@ -481,6 +480,23 @@ pub fn profile(output: &mut Output<'_>, linter: &Linter, format: super::Format, 
         "  memo entries discarded at limit: {}",
         Profile::get(&p.semantic_memo_discards)
     ));
+    let (foreign_steps, foreign_nodes, repeated_nodes, repeated_steps, cross_steps) = p.foreign_summary();
+    output.err(format_args!(
+        "  steps on other files' node values: {foreign_steps} over {foreign_nodes} nodes; {repeated_nodes} nodes computed more than once, their repeats {repeated_steps} steps ({cross_steps} by other linted files)"
+    ));
+    output.err(format_args!(
+        "  root questions asked again after a cut: {} cut again, {} finished",
+        Profile::get(&p.repeat_cuts), Profile::get(&p.repeat_recovered)
+    ));
+    output.err(format_args!(
+        "  graph builds of a body another frame already built: {}, {} of them identical to an earlier build; {} reused without building",
+        Profile::get(&p.effect_graph_frame_rebuilds), Profile::get(&p.effect_graph_frame_duplicates), Profile::get(&p.effect_graph_frame_reuses)
+    ));
+    let shared: Vec<String> = ["publication", "global", "scopes", "relative resolve", "bare resolve", "augmentations"].iter().enumerate().map(|(kind, name)| format!(
+        "{name} {} ({} deps, {} groups)",
+        Profile::get(&p.shared_answers[kind]), Profile::get(&p.shared_answer_deps[kind]), Profile::get(&p.shared_answer_groups[kind])
+    )).collect();
+    output.err(format_args!("  run-shared module answers kept: {}", shared.join(", ")));
     output.err(format_args!(
         "  semantic budget: {} steps total ({} in roots cut short), {} max per root question, {} questions over half budget",
         Profile::get(&p.semantic_budget_steps_total),

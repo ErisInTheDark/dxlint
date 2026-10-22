@@ -67,7 +67,7 @@ impl Linter {
         let mut chain = Vec::new();
         let mut at = tree.root;
         'down: loop {
-            for e in &tree.node(at).children {
+            for e in tree.children(at) {
                 let n = tree.node(e.node);
                 if (n.start as usize) <= offset && offset < (n.end as usize).max(n.start as usize + 1) {
                     if n.matcher != TEXT {

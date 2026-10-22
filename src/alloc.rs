@@ -400,20 +400,26 @@ pub mod heap {
     use std::cell::Cell;
     use std::sync::atomic::{AtomicIsize, AtomicU8, AtomicUsize, Ordering};
 
-    pub const OWNERS: [&str; 7] = ["other", "units", "names", "semantic", "effects", "rules", "modules"];
+    /// Module work splits by phase: `roots` finds and loads a global name's
+    /// candidate files, `catalog` builds program catalogs, `shared` keeps
+    /// run-wide module answers; `modules` is the rest of module queries.
+    pub const OWNERS: [&str; 10] = ["other", "units", "names", "semantic", "effects", "rules", "modules", "roots", "catalog", "shared"];
     pub const UNITS: usize = 1;
     pub const NAMES: usize = 2;
     pub const SEMANTIC: usize = 3;
     pub const EFFECTS: usize = 4;
     pub const RULES: usize = 5;
     pub const MODULES: usize = 6;
+    pub const ROOTS: usize = 7;
+    pub const CATALOG: usize = 8;
+    pub const SHARED: usize = 9;
     /// 0 undecided, 1 off, 2 on.
     static MODE: AtomicU8 = AtomicU8::new(0);
-    static LIVE: [AtomicIsize; 7] = [const { AtomicIsize::new(0) }; 7];
+    static LIVE: [AtomicIsize; OWNERS.len()] = [const { AtomicIsize::new(0) }; OWNERS.len()];
     static TOTAL: AtomicIsize = AtomicIsize::new(0);
     static PEAK: AtomicUsize = AtomicUsize::new(0);
     /// [`LIVE`] when [`PEAK`] was last raised.
-    static AT_PEAK: [AtomicIsize; 7] = [const { AtomicIsize::new(0) }; 7];
+    static AT_PEAK: [AtomicIsize; OWNERS.len()] = [const { AtomicIsize::new(0) }; OWNERS.len()];
 
     thread_local! {
         static OWNER: Cell<u8> = const { Cell::new(0) };

@@ -91,6 +91,26 @@ pub struct Parser<'a> {
     defining: usize,
     /// Conditions of the `when cond { ... }` blocks around the current item.
     conditions: Vec<Expr>,
+    /// Items started so far, nested ones included.
+    items_started: usize,
+}
+
+/// A built-in import parsed as a configuration's first item: everything it
+/// added, so the next configuration on this thread starting the same way
+/// takes it instead of parsing the library again (built-in texts are fixed
+/// for the process).
+struct LibraryParse {
+    config: Config,
+    stream: super::stream::StreamState,
+    imported: Vec<String>,
+    errors: Vec<ConfigError>,
+    files: Vec<(String, Option<PathBuf>, std::sync::Arc<str>)>,
+    id: super::source::FileId,
+}
+
+thread_local! {
+    /// By import key and the stream position before it.
+    static LIBRARY_PARSES: std::cell::RefCell<std::collections::HashMap<(String, (u64, bool)), Rc<LibraryParse>>> = Default::default();
 }
 
 impl<'a> Parser<'a> {
@@ -110,6 +130,7 @@ impl<'a> Parser<'a> {
             local_macros: Vec::new(),
             defining: 0,
             conditions: Vec::new(),
+            items_started: 0,
         }
     }
 
@@ -301,6 +322,7 @@ impl<'a> Parser<'a> {
     /// `match`, `rule` and `indent` lines take their layers from it.
     fn item(&mut self, ctx: Option<&Context>) {
         let Some(t) = self.peek() else { return };
+        self.items_started += 1;
         let before = self.errors.len();
         match (t.kind, &*t.text) {
             (Tk::Ident, "import") => self.import(),
@@ -1346,6 +1368,9 @@ impl<'a> Parser<'a> {
                 return;
             }
             match text {
+                Some(text) if self.items_started == 1 && self.errors.is_empty() && self.ts.macros.is_empty() && self.sources.files().count() == 1 => {
+                    self.library_import(key, text, span);
+                }
                 Some(text) => {
                     let id = self.push_source(key, None, text.to_string());
                     self.config.uses.push(Use::Import(span, id));
@@ -1386,6 +1411,42 @@ impl<'a> Parser<'a> {
             }
             Err(e) => self.errors.push(ConfigError::new(span, format!("cannot import `{}`: {e}", full.display()))),
         }
+    }
+
+    /// A built-in import that is the configuration's first item (nothing
+    /// before it can change how it parses): parsed to its end once per
+    /// thread, then replayed ([`LibraryParse`]).
+    fn library_import(&mut self, key: String, text: &str, span: Span) {
+        let at = (key.clone(), self.ts.position());
+        let parsed = match LIBRARY_PARSES.with(|parses| parses.borrow().get(&at).cloned()) {
+            Some(parsed) => parsed,
+            None => {
+                let (first, imported, depth) = (self.sources.files().count(), self.imported.clone(), self.ts.depth());
+                let id = self.push_source(key, None, text.to_string());
+                while self.ts.more_above(depth) {
+                    self.item(None);
+                }
+                let parsed = Rc::new(LibraryParse {
+                    config: self.config.clone(),
+                    stream: self.ts.state(),
+                    imported: self.imported.difference(&imported).cloned().collect(),
+                    errors: self.errors.clone(),
+                    files: self.sources.files().skip(first).map(|(_, file)| (file.name.clone(), file.path.clone(), file.text.clone())).collect(),
+                    id,
+                });
+                LIBRARY_PARSES.with(|parses| parses.borrow_mut().insert(at, parsed));
+                self.config.uses.push(Use::Import(span, id));
+                return;
+            }
+        };
+        for (name, path, text) in &parsed.files {
+            self.sources.add(name.clone(), path.clone(), text.clone());
+        }
+        self.config = parsed.config.clone();
+        self.ts.restore(parsed.stream.clone());
+        self.imported.extend(parsed.imported.iter().cloned());
+        self.errors.extend(parsed.errors.iter().cloned());
+        self.config.uses.push(Use::Import(span, parsed.id));
     }
 
     /// An import of a file already loaded: still a link to it.
@@ -2397,6 +2458,24 @@ mod tests {
         let (config, errors, _) = parse_str(src);
         assert!(errors.is_empty(), "{errors:#?}");
         config
+    }
+
+    #[test]
+    fn library_imports_replay_what_parsing_them_in_place_gives() {
+        let library = |src: &str| {
+            let (config, errors, sources) = parse_str(src);
+            assert!(errors.is_empty(), "{errors:#?}");
+            let names: Vec<_> = sources.files().map(|(_, file)| file.name.clone()).collect();
+            (format!("{:?}", (&config.matchers, &config.rules, &config.functions, &config.attrs, &config.names, &config.macros)), names)
+        };
+        LIBRARY_PARSES.with(|parses| parses.borrow_mut().clear());
+        // Parsed where it stands (an item before it), then parsed for the
+        // cache, then replayed from it.
+        let in_place = library("ignore \"x\"\nimport .core\n");
+        let cached = library("import .core\nignore \"x\"\n");
+        let replayed = library("import .core\nignore \"x\"\n");
+        assert_eq!(cached, in_place);
+        assert_eq!(replayed, in_place);
     }
 
     fn parents(m: &MatcherDef) -> Vec<String> {

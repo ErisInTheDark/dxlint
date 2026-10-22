@@ -22,11 +22,10 @@ pub(crate) struct State {
     /// Per execution entry and written place, the write steps that can
     /// replace it: every read of one variable in a body shares the scan.
     candidates: super::memo::Memo<(Leaf, Place), std::rc::Rc<[super::effects::StepId]>>,
+    /// Per execution entry, its writes by the binding root they write.
+    writes: super::memo::Memo<Leaf, std::rc::Rc<WriteIndex>>,
     /// Per execution entry, its applicable guards ([`Narrowing::guards`]).
     guards: super::memo::Memo<Leaf, std::rc::Rc<[Guard]>>,
-    /// Per execution entry, region entry steps and tested place: the steps
-    /// a write to the place reaches inside the region ([`Region::valid`]).
-    written_through: super::memo::Memo<(Leaf, Box<[super::effects::StepId]>, Place), std::rc::Rc<[u64]>>,
     /// Per file, the binding roots its guards' proofs can test, with those
     /// guards' owner nodes ([`Narrowing::tested_roots`]); `None` when they
     /// can't be told.
@@ -36,6 +35,16 @@ pub(crate) struct State {
 /// Binding root -> the guard owners (node ids, in the root's file) whose
 /// proofs may test it.
 type TestedRoots = crate::fx_hash::FxHashMap<NodeRef, Vec<u32>>;
+
+/// A body's write steps by the binding root each writes (its syntax shape,
+/// found before any computed key is evaluated): only a place's own root's
+/// writes can replace it.
+#[derive(Default)]
+struct WriteIndex {
+    by_root: crate::fx_hash::FxHashMap<Leaf, Vec<StepId>>,
+    /// Writes whose root can't be told from syntax: every place checks them.
+    open: Vec<StepId>,
+}
 
 /// One `in <field> propagates <proof>` item that holds at its owner.
 #[derive(Clone)]
@@ -51,8 +60,8 @@ impl State {
     pub(super) fn finish(&self, epoch: super::memo::Epoch, failed: bool, cut: u64) -> u64 {
         self.written.finish(epoch, failed, cut, super::memo::Settled::settled)
             + self.candidates.finish(epoch, failed, cut, |_| true)
+            + self.writes.finish(epoch, failed, cut, |_| true)
             + self.guards.finish(epoch, failed, cut, |_| true)
-            + self.written_through.finish(epoch, failed, cut, |_| true)
             + self.tested.finish(epoch, failed, cut, |_| true)
     }
 }
@@ -124,7 +133,7 @@ impl Narrowing<'_> {
         let Known::Yes(at) = self.semantic.leaf(at) else { return base };
         let Target::Node(node) = at.target else { return base };
         let effects = self.semantic.effects();
-        let Known::Yes(execution) = effects.execution(entry) else { return base };
+        let Known::Yes(execution) = effects.narrowing_execution(entry) else { return base };
         let mut uses = Vec::new();
         for site in execution.sites(node, Phase::Enter) {
             match execution.reached(site, &self.semantic.question.budget) {
@@ -256,8 +265,8 @@ impl Narrowing<'_> {
                                     Known::Unknown => return None,
                                 }
                             }
-                            if let Some(data) = tree.nodes.get(node as usize) {
-                                pending.extend(data.children.iter().map(|edge| edge.node));
+                            if tree.nodes.get(node as usize).is_some() {
+                                pending.extend(tree.children(node).iter().map(|edge| edge.node));
                             }
                         }
                     }
@@ -308,15 +317,41 @@ impl Narrowing<'_> {
         if let Some(candidates) = memo.get(&key) { return Some(candidates) }
         let budget = &self.semantic.question.budget;
         let mut candidates = Vec::new();
-        for &id in execution.write_leaves() {
+        let index = self.write_index(execution, entry)?;
+        let own = index.by_root.get(&subject.root).map_or(&[][..], Vec::as_slice);
+        for &id in index.open.iter().chain(own) {
             if !budget.step() { return None }
             let Some(event) = execution.step(id).and_then(|step| step.event()) else { continue };
             if self.write_invalidates(event, subject, entry.frame) { candidates.push(id) }
         }
+        candidates.sort_unstable();
         if budget.exhausted() { return None }
         let candidates: std::rc::Rc<[StepId]> = candidates.into();
         memo.insert(self.semantic.epoch, key, candidates.clone());
         Some(candidates)
+    }
+
+    /// `execution`'s writes by root, sorted once per entry: before, every
+    /// place a body's reads tested scanned every write in the body.
+    fn write_index(&self, execution: &Execution, entry: Leaf) -> Option<std::rc::Rc<WriteIndex>> {
+        let memo = &self.semantic.narrowing_places.writes;
+        if let Some(index) = memo.get(&entry) { return Some(index) }
+        let budget = &self.semantic.question.budget;
+        let mut index = WriteIndex::default();
+        for &id in execution.write_leaves() {
+            if !budget.step() { return None }
+            let Some(event) = execution.step(id).and_then(|step| step.event()) else { continue };
+            let Some(target) = event.target else { index.open.push(id); continue };
+            let at = Leaf { target: Target::Node(target.value), frame: entry.frame };
+            match self.find_place(at, false, false) {
+                Known::Yes((shape, _)) => index.by_root.entry(shape.root).or_default().push(id),
+                Known::Unknown => index.open.push(id),
+            }
+        }
+        if budget.exhausted() { return None }
+        let index = std::rc::Rc::new(index);
+        memo.insert(self.semantic.epoch, entry, index.clone());
+        Some(index)
     }
 
     fn assigned(&self, subject: &Place, execution: &Execution, entry: Leaf, uses: &[StepId], base: NodeValue) -> NodeValue {
@@ -526,6 +561,7 @@ impl Region<'_> {
         if self.captured && !tested.path.is_empty() { return Known::Yes(false) }
         // Nothing in the body writes the tested place: no path can.
         let Some(candidates) = narrowing.write_candidates(tested, self.execution, self.entry) else { return Known::Unknown };
+        if candidates.is_empty() { return Known::Yes(true) }
         let budget = &narrowing.semantic.question.budget;
         let mut starts = Vec::new();
         for &entry in self.entries {
@@ -535,25 +571,14 @@ impl Region<'_> {
                 Known::Yes(true) => starts.push(entry),
             }
         }
-        if candidates.is_empty() || starts.is_empty() { return Known::Yes(true) }
-        // The steps a write reaches inside the region, once per region and
-        // tested place: every read there checks its own steps.
-        let memo = &narrowing.semantic.narrowing_places.written_through;
-        let key = (self.entry, Box::<[StepId]>::from(self.entries), tested.clone());
-        let reached = match memo.get(&key) {
-            Some(reached) => reached,
-            None => {
-                let writes = |event: &Event| narrowing.write_invalidates(event, tested, self.entry.frame);
-                // Kept for every read in the region: a walk over the whole
-                // graph on an allowance for its size, not the asking read's.
-                let walk = budget.detached(self.execution.walk_allowance(), || self.execution.reached_through(&starts, self.entries, writes, budget));
-                let Some(Known::Yes(reached)) = walk else { return Known::Unknown };
-                let reached: std::rc::Rc<[u64]> = reached.into();
-                memo.insert(narrowing.semantic.epoch, key, reached.clone());
-                reached
-            }
-        };
-        Known::Yes(!self.uses.iter().any(|&step| reached[step as usize / 64] & (1 << (step % 64)) != 0))
+        if starts.is_empty() { return Known::Yes(true) }
+        // The candidates are exactly the steps whose write replaces the
+        // tested place (sorted). The walk runs on an allowance for the
+        // graph's size, not the asking read's.
+        let writes = |step: StepId| candidates.binary_search(&step).is_ok();
+        let written = budget.detached(self.execution.walk_allowance(), || self.execution.marked_before(&starts, self.entries, self.uses, writes, budget));
+        let Some(Known::Yes(written)) = written else { return Known::Unknown };
+        Known::Yes(!written)
     }
 }
 

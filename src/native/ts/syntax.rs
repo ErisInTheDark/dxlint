@@ -44,8 +44,7 @@ impl<'t> Syntax<'t> {
     /// `tokens::attach`) are not syntax and are left out.
     pub fn kids(&self, id: u32) -> impl Iterator<Item = (Option<Field>, u32)> + '_ {
         self.tree
-            .node(id)
-            .children
+            .children(id)
             .iter()
             .map(|e| (self.fields.get(e.label as usize).copied().flatten(), e.node))
             .filter(|(f, _)| *f != Some(Field::Token))

@@ -7,6 +7,12 @@ use crate::grammar::names::semantic::Semantic;
 pub(super) struct Runtime<'a> {
     pub semantic: &'a Semantic<'a>,
     failure: std::cell::Cell<Option<Failure>>,
+    /// Whether shapes carry read events (only read-use questions need them;
+    /// they are most of a body's events).
+    reads: bool,
+    /// Every condition the build decided, with its answer: what makes a
+    /// body's graph differ between frames.
+    decided: std::cell::RefCell<Vec<(Leaf, u32, bool)>>,
 }
 
 pub(super) struct Emission {
@@ -17,7 +23,17 @@ pub(super) struct Emission {
 
 impl Runtime<'_> {
     pub fn new<'a>(semantic: &'a Semantic<'a>) -> Runtime<'a> {
-        Runtime { semantic, failure: std::cell::Cell::new(None) }
+        Runtime { semantic, failure: std::cell::Cell::new(None), reads: true, decided: Default::default() }
+    }
+
+    /// The conditions decided so far, in the order asked.
+    pub fn decided(&self) -> Vec<(Leaf, u32, bool)> {
+        self.decided.take()
+    }
+
+    /// A runtime whose shapes leave read events out.
+    pub fn without_reads<'a>(semantic: &'a Semantic<'a>) -> Runtime<'a> {
+        Runtime { reads: false, ..Runtime::new(semantic) }
     }
 
     pub fn failure(&self) -> Failure {
@@ -33,7 +49,9 @@ impl Runtime<'_> {
     }
 
     fn condition(&self, at: Leaf, condition: u32) -> Known<bool> {
-        self.checked(self.semantic.world.condition(at, condition, self.semantic), Failure::Condition)
+        let answer = self.checked(self.semantic.world.condition(at, condition, self.semantic), Failure::Condition);
+        if let Known::Yes(holds) = answer { self.decided.borrow_mut().push((at, condition, holds)) }
+        answer
     }
 
     pub(super) fn binding(&self, at: Leaf, node: NodeRef) -> Known<Option<NodeRef>> {
@@ -64,6 +82,8 @@ impl Runtime<'_> {
     }
 
     pub fn enabled<'a, T>(&self, at: Leaf, items: &'a [Conditional<T>]) -> Known<Vec<&'a Conditional<T>>> {
+        // Most kinds have none of a given item: answer before any lookup.
+        if items.is_empty() { return Known::Yes(Vec::new()) }
         let Some(at) = self.semantic.leaf(at).known() else { return Known::Unknown };
         let mut active = Vec::new();
         let mut seen = FxHashSet::default();
@@ -87,11 +107,13 @@ impl Runtime<'_> {
         let Some(tree) = self.semantic.world.tree(node.file) else { return Known::Unknown };
         let Some(syntax) = tree.nodes.get(node.node as usize) else { return Known::Unknown };
         let Some(kind) = self.semantic.tables.kinds.get(syntax.matcher as usize) else { return Known::Yes(Vec::new()) };
+        if !kind.unwraps.iter().any(|unwrap| unwrap.effect.is_some()) { return Known::Yes(Vec::new()) }
         let mut active = Vec::new();
         let mut seen = FxHashSet::default();
         for unwrap in &kind.unwraps {
             let Some(id) = unwrap.effect else { continue };
             if matches!(self.role(id), Some(EffectRole::Proof | EffectRole::Event { writes: true })) { continue }
+            if !self.reads && self.role(id) == Some(EffectRole::Read) { continue }
             if effect.is_some_and(|effect| id != effect) { continue }
             if !self.semantic.question.budget.step() { return Known::Unknown }
             if let Some(condition) = unwrap.when {
@@ -154,6 +176,7 @@ impl Runtime<'_> {
         let Some(tree) = self.semantic.world.tree(node.file) else { return Known::Unknown };
         let Some(syntax) = tree.nodes.get(node.node as usize) else { return Known::Unknown };
         let Some(kind) = self.semantic.tables.kinds.get(syntax.matcher as usize) else { return Known::Yes(Vec::new()) };
+        if kind.effects.is_empty() { return Known::Yes(Vec::new()) }
         let mut writes = Vec::new();
         for item in &kind.effects {
             if self.role(item.effect) != Some(EffectRole::Event { writes: true })
@@ -286,6 +309,9 @@ impl Runtime<'_> {
         let Some(kind) = self.semantic.tables.kinds.get(syntax.matcher as usize) else {
             return Known::Yes(Shape { flow: Flow::Children, effects: Vec::new(), catches: Vec::new(), after: Vec::new() });
         };
+        // Profile-only: split builder steps by the part of a shape they decide.
+        let site = |name| self.semantic.world.profile().map(|_| crate::engine::StepSite::enter(name));
+        let flow_site = site("effects.build.flow");
         let Some(runs) = self.enabled(at, &kind.execution.runs).known() else { return Known::Unknown };
         if runs.len() > 1 {
             self.failure.set(Some(Failure::Shape));
@@ -318,11 +344,17 @@ impl Runtime<'_> {
                 }
             }
         }
+        drop(flow_site);
+        let declared_site = site("effects.build.declarations");
         let Some(declared) = self.declarations(at, None).known() else { return Known::Unknown };
+        drop(declared_site);
+        let writes_site = site("effects.build.writes");
         let Some(writes) = self.writes(at, None).known() else { return Known::Unknown };
+        drop(writes_site);
         let mut effects: Vec<_> = writes.into_iter().map(|(_, item_id, effect)| (item_id, effect)).collect();
         for emission in declared {
             if self.role(emission.effect) == Some(EffectRole::Read) {
+                let _reads_site = site("effects.build.reads");
                 let Some(target) = self.read(at, &emission).known() else { return Known::Unknown };
                 effects.push((emission.item_id, Effect {
                     event: Event { kind: EventKind::Read, site: node, target: Some(target), value: None, written: None, phase: Phase::Enter },
@@ -357,8 +389,8 @@ impl Runtime<'_> {
         let Some(at) = self.semantic.leaf(at).known() else { return Known::Unknown };
         let Target::Node(node) = at.target else { return Known::Unknown };
         let Some(tree) = self.semantic.world.tree(node.file) else { return Known::Unknown };
-        let Some(syntax) = tree.nodes.get(node.node as usize) else { return Known::Unknown };
-        syntax.children.iter().map(|edge| self.semantic.leaf(Leaf {
+        if tree.nodes.get(node.node as usize).is_none() { return Known::Unknown }
+        tree.children(node.node).iter().map(|edge| self.semantic.leaf(Leaf {
             target: Target::Node(NodeRef { node: edge.node, ..node }), ..at
         }).known()).collect::<Option<Vec<_>>>().map_or(Known::Unknown, Known::Yes)
     }

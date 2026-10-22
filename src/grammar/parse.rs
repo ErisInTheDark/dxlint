@@ -37,12 +37,22 @@ pub struct Edge {
     pub node: u32,
 }
 
+/// A node while a tree is being built; [`crate::grammar::Tree`] packs it
+/// into a [`Syntax`] plus its slice of the tree's edges.
 #[derive(Debug, Clone)]
 pub struct Node {
     pub matcher: u32,
     pub start: u32,
     pub end: u32,
     pub children: Vec<Edge>,
+}
+
+/// A finished tree's node; its children are [`crate::grammar::Tree::children`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Syntax {
+    pub matcher: u32,
+    pub start: u32,
+    pub end: u32,
 }
 
 #[derive(Clone, Copy)]

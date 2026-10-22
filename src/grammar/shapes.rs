@@ -210,7 +210,7 @@ mod tests {
     fn validate(grammar: &Grammar, tree: &Tree) {
         for &id in &tree.order {
             let parent = tree.node(id).matcher;
-            for edge in &tree.node(id).children {
+            for edge in tree.children(id) {
                 let child = tree.node(edge.node).matcher;
                 assert!(grammar.children_kinds(parent).contains(&child), "{parent}: child {child}");
                 assert!(grammar.parent_kinds(child).contains(&parent), "{child}: parent {parent}");

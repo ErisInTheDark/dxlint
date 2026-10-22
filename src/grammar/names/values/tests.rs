@@ -312,7 +312,7 @@ fn declaration_views_keep_the_requested_class_at_the_real_owner_only() {
 fn named_keys_win_over_indexers_and_unbounded_keys_keep_the_source_frame() {
     use crate::config::ast::values::KeyDomain;
     let (mut world, mut tables) = generic_world();
-    world.tree.nodes[0].children.truncate(1);
+    world.tree.edit(|nodes| nodes[0].children.truncate(1));
     for (mode, value) in [
         (IndexedMode::Domain(KeyDomain::Text), Value::Traits(8)),
         (IndexedMode::Keyed(Value::Text("named".into())), Value::Traits(4)),
@@ -380,7 +380,7 @@ fn closed_indexer_domains_prove_disjoint_absence_without_listing_infinite_member
     for domain in [KeyDomain::Text, KeyDomain::Ordinal, KeyDomain::Symbol] {
         for inherited in [false, true] {
             let mut world = TestWorld::new();
-            world.tree.nodes[0].children.push(Edge { label: 7, node: 1 });
+            world.tree.edit(|nodes| nodes[0].children.push(Edge { label: 7, node: 1 }));
             let mut tables = tables();
             for node in [0, 1] {
                 world.names.scopes.push(ScopeInfo { node, classes: 1, parent: None });
@@ -459,7 +459,7 @@ fn symbol_keys_need_the_declared_domain_and_keep_real_declaration_identity() {
 #[test]
 fn repeated_indices_answer_individual_reads_without_inventing_a_finite_inventory() {
     let (mut world, mut tables) = generic_world();
-    world.tree.nodes[0].children.truncate(1);
+    world.tree.edit(|nodes| nodes[0].children.truncate(1));
     tables.kinds[0].indexed.push(IndexedRecipe {
         path: vec![7], mode: super::IndexedMode::Slots { repeated: true, strings: false }, views: 0, value: None, when: None,
     });
@@ -561,7 +561,7 @@ fn reference_arguments_bind_formals_without_leaking_the_declaration_frame() {
         drop(semantic);
         tables.kinds[2].arguments.pop();
     }
-    world.tree.nodes[3].children.truncate(1);
+    world.tree.edit(|nodes| nodes[3].children.truncate(1));
     world.conditions.borrow_mut().clear();
     let semantic = Semantic::new(&world, &tables, &question);
     assert_eq!(semantic.values().bound_argument(Leaf { frame: binding, ..leaf(2) }), Known::Yes(None));
@@ -692,7 +692,7 @@ fn conditional_distribution_rebinds_each_whole_arm_and_keeps_never_empty() {
 #[test]
 fn dynamic_conditionals_use_the_bound_inferred_pattern_before_choosing_branches() {
     let (mut world, mut tables) = generic_world();
-    world.tree.nodes[0].children.truncate(1);
+    world.tree.edit(|nodes| nodes[0].children.truncate(1));
     tables.dynamic = 2;
     tables.kinds[1].fits.clear();
     tables.kinds[1].constraints.push((Value::Union(Vec::new()), None));
@@ -920,8 +920,10 @@ fn variadic_product_inventory_keeps_rest_and_suffix_values_as_alternatives() {
 fn product_flags_check_every_selected_source_before_proving_absence() {
     use super::products::{ProductShapeId, Shape};
     let mut world = TestWorld::new();
-    world.tree.nodes[0].children = vec![Edge { label: 7, node: 1 }, Edge { label: 7, node: 2 }];
-    world.tree.nodes[2].children = vec![Edge { label: 8, node: 1 }];
+    world.tree.edit(|nodes| {
+        nodes[0].children = vec![Edge { label: 7, node: 1 }, Edge { label: 7, node: 2 }];
+        nodes[2].children = vec![Edge { label: 8, node: 1 }];
+    });
     let mut tables = tables();
     tables.products.push(Some(Shape {
         traits: 0, description: crate::expr::Value::Null,
@@ -1065,7 +1067,7 @@ fn selected_definitions_keep_raw_members_and_the_requested_view() {
     assert_eq!(binding[0].target, Target::Node(NodeRef::here(0)));
 
     let (mut world, mut tables) = generic_world();
-    world.tree.nodes[3].children.push(Edge { label: 8, node: 2 });
+    world.tree.edit(|nodes| nodes[3].children.push(Edge { label: 8, node: 2 }));
     tables.kinds[2].arguments.push((vec![8], None));
     tables.kinds[0].defines.push((Value::Current, None));
     for explicit in [false, true] {

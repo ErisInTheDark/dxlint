@@ -437,7 +437,7 @@ fn site_text(semantic: &Semantic<'_>, _: crate::grammar::names::question::Leaf, 
     let (Some(tree), Some(text)) = (semantic.world.tree(file), semantic.world.text(file)) else { return Known::Unknown };
     let Some(data) = tree.nodes.get(node as usize) else { return Known::Yes(Value::Null) };
     let before = tree.parent(node).map_or(0, |parent| {
-        let siblings = &tree.node(parent).children;
+        let siblings = tree.children(parent);
         siblings.iter().map(|edge| tree.node(edge.node)).filter(|sibling| sibling.end <= data.start)
             .map(|sibling| sibling.end).max().unwrap_or(tree.node(parent).start)
     });

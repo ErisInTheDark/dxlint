@@ -126,7 +126,7 @@ impl<'a> Ctx<'a> {
             Builtin::Index => self.tree.field_index(self.node).map_or(Value::Null, Value::from),
             Builtin::GapBefore => {
                 let prev = self.tree.parent(self.node).and_then(|p| {
-                    self.tree.node(p).children.iter().map(|e| e.node).filter(|&c| self.tree.node(c).end as usize <= start && c != self.node).max_by_key(|&c| self.tree.node(c).end)
+                    self.tree.children(p).iter().map(|e| e.node).filter(|&c| self.tree.node(c).end as usize <= start && c != self.node).max_by_key(|&c| self.tree.node(c).end)
                 });
                 match prev {
                     Some(c) => Value::from(&self.source[self.tree.node(c).end as usize..start]),

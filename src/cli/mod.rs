@@ -347,6 +347,8 @@ pub struct Project {
     pub config_ok: bool,
     /// Reading the config with its imports, then building the linter.
     pub load_time: std::time::Duration,
+    /// The part of `load_time` spent lexing.
+    pub lex_time: std::time::Duration,
     pub build_time: std::time::Duration,
     pub build_phases: Vec<(&'static str, std::time::Duration)>,
 }
@@ -383,8 +385,10 @@ fn load_from(output: &mut Output<'_>, path: &Path, provider: &dyn SourceProvider
 fn load_from_with(output: &mut Output<'_>, path: &Path, provider: &dyn SourceProvider, runtime: bool) -> Result<Project, u8> {
     let root = path.parent().map(Path::to_path_buf).unwrap_or_default();
     let started = std::time::Instant::now();
+    config::lexer::take_lexing_time();
     let loaded = config::load_file(path, provider);
     let load_time = started.elapsed();
+    let lex_time = config::lexer::take_lexing_time();
     let built = if runtime { build_for_lint(loaded, root) } else { build(loaded, root) };
     let build_time = started.elapsed() - load_time;
     let config_ok = built.errors.is_empty();
@@ -392,7 +396,7 @@ fn load_from_with(output: &mut Output<'_>, path: &Path, provider: &dyn SourcePro
         render::config_errors(output, &built.errors, &built.sources);
     }
     match built.linter {
-        Some(linter) => Ok(Project { linter, symbols: built.symbols, config_ok, load_time, build_time, build_phases: built.phases }),
+        Some(linter) => Ok(Project { linter, symbols: built.symbols, config_ok, load_time, lex_time, build_time, build_phases: built.phases }),
         None => Err(2),
     }
 }

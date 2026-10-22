@@ -67,7 +67,7 @@ fn tables() -> Names {
 #[test]
 fn expected_recipes_keep_owner_context_or_use_each_real_subject() {
     let mut world = TestWorld::new();
-    let mut nodes = world.tree.nodes.clone();
+    let mut nodes = world.tree.built();
     nodes[3].children = vec![Edge { label: 40, node: 0 }, Edge { label: 40, node: 1 }];
     world.tree = Tree::from_native(nodes, 3);
     for at in [ExpectedAt::Owner, ExpectedAt::Subject] {
@@ -92,7 +92,7 @@ fn expected_recipes_distinguish_missing_context_from_failed_and_empty_values() {
     for at in [ExpectedAt::Owner, ExpectedAt::Subject] {
         for own in [false, true] {
             let mut world = TestWorld::new();
-            let mut nodes = world.tree.nodes.clone();
+            let mut nodes = world.tree.built();
             nodes[3].children.push(Edge { label: 40, node: 0 });
             world.tree = Tree::from_native(nodes, 3);
             let owner = if own { 0 } else { 3 };
@@ -129,7 +129,7 @@ fn expected_recipes_distinguish_missing_context_from_failed_and_empty_values() {
 #[test]
 fn unannotated_returns_have_no_expected_type_when_both_context_sources_are_absent() {
     let mut world = TestWorld::new();
-    let mut nodes = world.tree.nodes.clone();
+    let mut nodes = world.tree.built();
     nodes[3].children.push(Edge { label: 40, node: 0 });
     world.tree = Tree::from_native(nodes, 3);
     let mut tables = tables();
@@ -191,7 +191,7 @@ fn structural_members_compare_values_and_required_presence() {
     ] {
         let mut world = TestWorld::new();
         let mut tables = tables();
-        let mut nodes = world.tree.nodes.clone();
+        let mut nodes = world.tree.built();
         nodes.extend([4, 5, 6, 7].into_iter().map(|matcher| Node {
             matcher, start: 0, end: 0, children: Vec::new(),
         }));
@@ -236,7 +236,7 @@ fn recursive_structures_relate_coinductively_but_still_fail_on_real_mismatches()
     for (y_actual, expected) in [(0, Known::Yes(true)), (1, Known::Yes(false))] {
         let mut world = TestWorld::new();
         let mut tables = tables();
-        let mut nodes = world.tree.nodes.clone();
+        let mut nodes = world.tree.built();
         nodes.extend((4..10).map(|matcher| Node { matcher, start: 0, end: 0, children: Vec::new() }));
         nodes[4].children.extend([Edge { label: 40, node: 6 }, Edge { label: 42, node: 8 }]);
         nodes[5].children.extend([Edge { label: 40, node: 7 }, Edge { label: 42, node: 9 }]);
@@ -392,7 +392,7 @@ fn selection_uses_compatible_headers_and_preserves_caller_argument_frames() {
 #[test]
 fn selected_header_through_keeps_caller_generics_separate_from_callee_environment() {
     let (mut world, mut tables) = call_fixture();
-    let mut nodes = world.tree.nodes.clone();
+    let mut nodes = world.tree.built();
     nodes.extend([6, 3, 7, 3, 3, 8].into_iter().map(|matcher| Node {
         matcher, start: 0, end: 0, children: Vec::new(),
     }));
@@ -435,7 +435,7 @@ fn selected_header_through_keeps_caller_generics_separate_from_callee_environmen
 
 fn generic_fixture() -> (TestWorld, Names) {
     let (mut world, mut tables) = call_fixture();
-    let mut nodes = world.tree.nodes.clone();
+    let mut nodes = world.tree.built();
     nodes.extend([6, 7, 3, 3, 5, 0, 0].into_iter().map(|matcher| Node {
         matcher, start: 0, end: 0, children: Vec::new(),
     }));
@@ -469,7 +469,7 @@ fn generic_fixture() -> (TestWorld, Names) {
 
 fn matching_signature_fixture() -> (TestWorld, Names) {
     let (mut world, mut tables) = call_fixture();
-    let mut nodes = world.tree.nodes.clone();
+    let mut nodes = world.tree.built();
     nodes.extend([3, 3].into_iter().map(|matcher| Node {
         matcher, start: 0, end: 0, children: Vec::new(),
     }));
@@ -487,7 +487,7 @@ fn product_patterns_capture_recipe_holes_without_replacing_them_with_defaults() 
     use crate::grammar::names::question::ProductShapeId;
     use crate::grammar::names::values::products::{ProductElement, Shape};
     let (mut world, mut tables) = matching_signature_fixture();
-    let mut nodes = world.tree.nodes.clone();
+    let mut nodes = world.tree.built();
     nodes.extend([11, 12].into_iter().map(|node| Node {
         matcher: 1, start: 0, end: 0, children: vec![Edge { label: 22, node }],
     }));
@@ -523,7 +523,7 @@ fn rest_inference_keeps_order_optional_markers_and_source_frames() {
     use crate::grammar::names::question::ProductShapeId;
     for length in [0, 2] {
         let (mut world, mut tables) = matching_signature_fixture();
-        let mut nodes = world.tree.nodes.clone();
+        let mut nodes = world.tree.built();
         nodes[4].children.retain(|edge| edge.label != 10);
         if length != 0 {
             nodes[4].children.extend([Edge { label: 10, node: 6 }, Edge { label: 10, node: 7 }]);
@@ -560,7 +560,7 @@ fn rest_inference_keeps_order_optional_markers_and_source_frames() {
 #[test]
 fn matching_captures_signature_parameters_and_results_in_the_source_frame() {
     let (mut world, mut tables) = matching_signature_fixture();
-    let mut nodes = world.tree.nodes.clone();
+    let mut nodes = world.tree.built();
     nodes[4].children.push(Edge { label: 98, node: 3 });
     world.tree = Tree::from_native(nodes, 5);
     tables.kinds[4].generics.push((vec![98], None));
@@ -582,7 +582,7 @@ fn matching_captures_signature_parameters_and_results_in_the_source_frame() {
 fn matching_mixed_variance_selects_candidates_before_checking_compatibility() {
     for result_node in [8, 9] {
         let (mut world, tables) = matching_signature_fixture();
-        let mut nodes = world.tree.nodes.clone();
+        let mut nodes = world.tree.built();
         nodes[4].children.iter_mut().find(|edge| edge.label == 12).unwrap().node = result_node;
         nodes[5].children.iter_mut().find(|edge| edge.label == 12).unwrap().node = 11;
         world.tree = Tree::from_native(nodes, 5);
@@ -599,7 +599,7 @@ fn matching_mixed_variance_selects_candidates_before_checking_compatibility() {
 fn matching_parameter_variance_uses_intersection_or_bivariant_union() {
     for bivariant in [false, true] {
         let (mut world, mut tables) = matching_signature_fixture();
-        let mut nodes = world.tree.nodes.clone();
+        let mut nodes = world.tree.built();
         nodes[4].children.push(Edge { label: 10, node: 7 });
         nodes[5].children = vec![Edge { label: 10, node: 11 }, Edge { label: 10, node: 11 }, Edge { label: 12, node: 8 }];
         world.tree = Tree::from_native(nodes, 5);
@@ -627,7 +627,7 @@ fn matching_parameter_variance_uses_intersection_or_bivariant_union() {
 fn inference_obeys_the_declared_last_overload_without_changing_acceptance() {
     for infer in [false, true] {
         let (mut world, mut tables) = matching_signature_fixture();
-        let mut nodes = world.tree.nodes.clone();
+        let mut nodes = world.tree.built();
         nodes[5].children = vec![
             Edge { label: 10, node: 6 }, Edge { label: 12, node: if infer { 12 } else { 8 } },
         ];
@@ -656,7 +656,7 @@ fn inference_obeys_the_declared_last_overload_without_changing_acceptance() {
 fn matching_raw_patterns_uses_the_real_owners_qualified_view() {
     let mut world = TestWorld::new();
     let mut tables = tables();
-    let mut nodes = world.tree.nodes.clone();
+    let mut nodes = world.tree.built();
     nodes.push(Node { matcher: 4, start: 0, end: 0, children: vec![Edge { label: 40, node: 2 }] });
     world.tree = Tree::from_native(nodes, 4);
     tables.kinds.push(KindNames {
@@ -690,7 +690,7 @@ fn captured_arguments_fall_back_to_known_constraints_and_defer_unknown_bounds() 
     ] {
         let mut world = TestWorld::new();
         let mut tables = tables();
-        let mut nodes = world.tree.nodes.clone();
+        let mut nodes = world.tree.built();
         nodes.push(Node { matcher: 4, start: 0, end: 0, children: vec![Edge { label: 40, node: 2 }] });
         world.tree = Tree::from_native(nodes, 4);
         tables.kinds.push(KindNames { generics: vec![(vec![40], None)], ..KindNames::default() });
@@ -718,7 +718,7 @@ fn captured_arguments_fall_back_to_known_constraints_and_defer_unknown_bounds() 
 fn constrained_validation_does_not_invent_bindings_from_another_alternative() {
     let mut world = TestWorld::new();
     let mut tables = tables();
-    let mut nodes = world.tree.nodes.clone();
+    let mut nodes = world.tree.built();
     nodes.push(Node { matcher: 4, start: 0, end: 0, children: vec![
         Edge { label: 40, node: 2 }, Edge { label: 40, node: 3 },
         Edge { label: 41, node: 2 }, Edge { label: 42, node: 3 },
@@ -741,7 +741,7 @@ fn dependent_constraints_use_the_complete_frame_and_reject_unstable_replacements
     ] {
         let mut world = TestWorld::new();
         let mut tables = tables();
-        let mut nodes = world.tree.nodes.clone();
+        let mut nodes = world.tree.built();
         nodes.push(Node { matcher: 4, start: 0, end: 0, children: vec![
             Edge { label: 40, node: 2 }, Edge { label: 40, node: 3 }, Edge { label: 42, node: 3 },
         ] });
@@ -760,7 +760,7 @@ fn dependent_constraints_use_the_complete_frame_and_reject_unstable_replacements
 #[test]
 fn explicit_arguments_that_violate_constraints_do_not_prove_a_call_result() {
     let (mut world, mut tables) = generic_fixture();
-    let mut nodes = world.tree.nodes.clone();
+    let mut nodes = world.tree.built();
     nodes[5].children.iter_mut().find(|edge| edge.label == 15).unwrap().node = 0;
     nodes[5].children.push(Edge { label: 70, node: 0 });
     world.tree = Tree::from_native(nodes, 5);
@@ -776,7 +776,7 @@ fn matching_member_holes_keeps_failed_alternatives_out_of_chosen_bindings() {
     use crate::grammar::names::values::{IndexedMode, IndexedRecipe};
     let mut world = TestWorld::new();
     let mut tables = tables();
-    let mut nodes = world.tree.nodes.clone();
+    let mut nodes = world.tree.built();
     nodes.extend([4, 5, 6, 7].into_iter().map(|matcher| Node {
         matcher, start: 0, end: 0, children: Vec::new(),
     }));
@@ -820,7 +820,7 @@ fn explicit_type_argument_arity_selects_a_header_that_can_hold_every_slot() {
         for optional in [false, true] {
             for count in 0..=3 {
                 let (mut world, mut tables) = call_fixture();
-                let mut nodes = world.tree.nodes.clone();
+                let mut nodes = world.tree.built();
                 nodes.extend([6, 7, 3, 8].into_iter().map(|matcher| Node {
                     matcher, start: 0, end: 0, children: Vec::new(),
                 }));
@@ -874,7 +874,7 @@ fn explicit_call_arguments_win_over_inference_and_keep_unsupplied_defaults() {
     for construct in [false, true] {
         for unknown in [false, true] {
             let (mut world, mut tables) = generic_fixture();
-            let mut nodes = world.tree.nodes.clone();
+            let mut nodes = world.tree.built();
             nodes.extend([6, 0, if unknown { 9 } else { 1 }].into_iter().map(|matcher| Node {
                 matcher, start: 0, end: 0, children: Vec::new(),
             }));
@@ -936,7 +936,7 @@ fn generic_inference_matches_raw_formals_before_defaults_and_isolates_callers() 
 #[test]
 fn generic_contributions_combine_all_inputs_without_skipping_unknowns() {
     let (mut world, mut tables) = generic_fixture();
-    let mut nodes = world.tree.nodes.clone();
+    let mut nodes = world.tree.built();
     nodes.extend([7, 3, 1, 1].into_iter().map(|matcher| Node {
         matcher, start: 0, end: 0, children: Vec::new(),
     }));
@@ -974,7 +974,7 @@ fn generic_contributions_combine_all_inputs_without_skipping_unknowns() {
 #[test]
 fn plain_parameter_binding_maps_to_raw_caller_arguments_not_type_slots() {
     let (mut world, mut tables) = call_fixture();
-    let mut nodes = world.tree.nodes.clone();
+    let mut nodes = world.tree.built();
     nodes.push(Node { matcher: 3, start: 0, end: 0, children: Vec::new() });
     nodes[7].children.push(Edge { label: 80, node: 11 });
     world.tree = Tree::from_native(nodes, 5);
@@ -994,7 +994,7 @@ fn plain_parameter_binding_maps_to_raw_caller_arguments_not_type_slots() {
 #[test]
 fn indirect_and_uncertain_parameter_bindings_never_project_whole_arguments() {
     let (mut world, mut tables) = call_fixture();
-    let mut nodes = world.tree.nodes.clone();
+    let mut nodes = world.tree.built();
     nodes.push(Node { matcher: 3, start: 0, end: 0, children: Vec::new() });
     nodes.push(Node { matcher: 6, start: 0, end: 0, children: vec![Edge { label: 81, node: 11 }] });
     nodes[7].children.push(Edge { label: 80, node: 12 });
@@ -1008,7 +1008,7 @@ fn indirect_and_uncertain_parameter_bindings_never_project_whole_arguments() {
     let binding = Leaf { frame: selected.choices[0].header.site.frame, ..leaf(11) };
     assert_eq!(semantic.calls().argument_sites(binding), Known::Unknown);
 
-    world.tree.nodes[7].children[0].node = 11;
+    world.tree.edit(|nodes| nodes[7].children[0].node = 11);
     tables.kinds.push(KindNames { fits: vec![(2, 0, Some(0))], ..KindNames::default() });
     world.tree.nodes[10].matcher = 7;
     tables.kinds[4].calls.signatures.remove(0);
@@ -1105,7 +1105,7 @@ fn unavailable_parameter_projection_does_not_hide_a_later_proven_overload() {
 #[test]
 fn container_results_follow_declared_header_sources() {
     let (mut world, mut tables) = call_fixture();
-    let mut nodes = world.tree.nodes.clone();
+    let mut nodes = world.tree.built();
     nodes[4].children = vec![Edge { label: 20, node: 11 }];
     nodes.push(Node { matcher: 6, start: 0, end: 0, children: vec![Edge { label: 21, node: 8 }] });
     world.tree = Tree::from_native(nodes, 5);

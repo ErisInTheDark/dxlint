@@ -9,7 +9,7 @@ pub mod syntax;
 mod text;
 mod tree;
 
-pub use parse::{full_match, probe, Edge, Node, Parser, Probe, ROOT, TEXT};
+pub use parse::{full_match, probe, Edge, Node, Parser, Probe, Syntax, ROOT, TEXT};
 pub use tree::{FieldOne, Tree};
 pub use shapes::FieldTargets;
 
@@ -1036,7 +1036,7 @@ in .t layer candidate match candidate prefix branch "suffix"
             let observed = |tree: Tree| {
                 let signature = tree.order.iter().map(|&id| {
                     let node = tree.node(id);
-                    let edges = node.children.iter().map(|edge| {
+                    let edges = tree.children(id).iter().map(|edge| {
                         let child = tree.node(edge.node);
                         (edge.label, child.matcher, child.start, child.end)
                     }).collect::<Vec<_>>();

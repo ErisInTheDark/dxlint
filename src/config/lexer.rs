@@ -96,8 +96,24 @@ impl Token {
     }
 }
 
+thread_local! {
+    static LEXING: std::cell::Cell<std::time::Duration> = const { std::cell::Cell::new(std::time::Duration::ZERO) };
+}
+
+/// Time this thread spent lexing since the last call (for `--stats`).
+pub fn take_lexing_time() -> std::time::Duration {
+    LEXING.with(|time| time.replace(std::time::Duration::ZERO))
+}
+
 /// Lexes `text`, whose first byte sits at `base` inside file `file`.
 pub fn lex(file: FileId, text: &str, base: usize, errors: &mut Vec<ConfigError>) -> Vec<Token> {
+    let started = std::time::Instant::now();
+    let tokens = lex_text(file, text, base, errors);
+    LEXING.with(|time| time.set(time.get() + started.elapsed()));
+    tokens
+}
+
+fn lex_text(file: FileId, text: &str, base: usize, errors: &mut Vec<ConfigError>) -> Vec<Token> {
     let bytes = text.as_bytes();
     let mut out = Vec::new();
     let mut i = 0;

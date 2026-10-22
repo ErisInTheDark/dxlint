@@ -41,7 +41,59 @@ pub struct Stream {
     at_line_end: bool,
 }
 
+/// What the stream keeps beyond its frames ([`Stream::state`]).
+#[derive(Clone)]
+pub struct StreamState {
+    macros: HashMap<Rc<str>, Rc<MacroDef>>,
+    calls: Vec<(Rc<str>, Span)>,
+    seen: crate::fx_hash::FxHasher,
+    at_line_end: bool,
+    last_span: Option<Span>,
+}
+
 impl Stream {
+    /// Frames still holding tokens.
+    pub fn depth(&mut self) -> usize {
+        self.settle();
+        self.frames.len()
+    }
+
+    /// Consumes the line ends left in the frames above `depth`; whether a
+    /// token remains there.
+    pub fn more_above(&mut self, depth: usize) -> bool {
+        while self.depth() > depth {
+            match self.peek_raw(0) {
+                Some(token) if token.kind == Tk::Newline => { self.next_raw(); }
+                Some(_) => return true,
+                None => return false,
+            }
+        }
+        false
+    }
+
+    /// Where consuming stands: the fingerprint so far, and whether the last
+    /// token ended a line.
+    pub fn position(&self) -> (u64, bool) {
+        (self.fingerprint(), self.at_line_end)
+    }
+
+    pub fn state(&self) -> StreamState {
+        StreamState {
+            macros: self.macros.clone(), calls: self.calls.clone(), seen: self.seen,
+            at_line_end: self.at_line_end, last_span: self.last_span,
+        }
+    }
+
+    /// Takes over `state`, as if the tokens that left it had been consumed.
+    pub fn restore(&mut self, state: StreamState) {
+        let StreamState { macros, calls, seen, at_line_end, last_span } = state;
+        self.macros = macros;
+        self.calls = calls;
+        self.seen = seen;
+        self.at_line_end = at_line_end;
+        self.last_span = last_span;
+    }
+
     pub fn new() -> Self {
         Stream {
             frames: Vec::new(),

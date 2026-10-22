@@ -5,7 +5,7 @@ use super::super::question::{Known, QueryContext, ScopeRef};
 use super::metadata;
 pub use super::metadata::Json;
 pub use super::configuration::Configuration;
-pub use super::inputs::program_inputs;
+pub use super::inputs::{program_anchor, program_inputs};
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct DiscoveryRequest {
@@ -34,6 +34,12 @@ pub trait Host {
     /// as `load` builds it. Hosts may share it between resolutions.
     fn configuration(&self, _settings: &Settings, _directory: &Path, load: &mut dyn FnMut() -> Result<Arc<Configuration>, ()>) -> Result<Arc<Configuration>, ()> {
         load()
+    }
+    /// What package directory `root` offers for `subpath` under
+    /// `conditions`, as `probe` finds it. Every importer below `root` asks
+    /// the same: hosts may share it (with its reads) between resolutions.
+    fn package(&self, _settings: &Settings, _root: &Path, _subpath: &str, _conditions: &[&str], probe: &mut dyn FnMut() -> Result<Probe<PathBuf>, ()>) -> Result<Probe<PathBuf>, ()> {
+        probe()
     }
 }
 
@@ -241,7 +247,8 @@ impl<H: Host + ?Sized> Resolver<'_, H> {
     }
 
     fn package(&self, root: &Path, subpath: &str, conditions: &[&str], question: &QueryContext) -> Result<Probe, ()> {
-        Ok(match self.package_path(root, subpath, conditions, question)? {
+        let found = self.host.package(self.settings, root, subpath, conditions, &mut || self.package_path(root, subpath, conditions, question))?;
+        Ok(match found {
             Probe::Found(path) => self.host.scope(&path, question).known().ok_or(())?.map_or(Probe::Missing, Probe::Found),
             Probe::Blocked => Probe::Blocked,
             Probe::Missing => Probe::Missing,
@@ -302,7 +309,8 @@ impl<H: Host + ?Sized> Resolver<'_, H> {
     }
 }
 
-pub(super) enum Probe<T = ScopeRef> {
+#[derive(Clone)]
+pub enum Probe<T = ScopeRef> {
     Missing,
     Blocked,
     Found(T),

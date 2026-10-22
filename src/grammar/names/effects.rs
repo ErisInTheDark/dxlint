@@ -876,34 +876,36 @@ impl Execution {
         Some(self.dominators.get_or_init(|| dominators))
     }
 
-    /// The steps some path from one of `starts` reaches after passing an
-    /// `event` step without crossing a barrier (a start may be one), as a
-    /// bitset: [`Self::reaches_any_through`] from every start, for every
-    /// target at once.
-    pub fn reached_through(&self, starts: &[StepId], barriers: &[StepId], event: impl Fn(&Event) -> bool, budget: &Budget) -> Known<Vec<u64>> {
-        if starts.iter().chain(barriers).any(|&step| step as usize >= self.steps.len()) { return Known::Unknown }
-        let mut seen = vec![ThroughVisit::default(); self.steps.len()];
-        for &barrier in barriers {
+    /// Whether some path from one of `starts` passes a `marked` step and
+    /// then reaches one of `uses` without crossing a barrier (a start may be
+    /// marked itself). Walks back from the uses: only the steps between them
+    /// and their nearest barriers are visited, not everything after a start.
+    pub fn marked_before(&self, starts: &[StepId], barriers: &[StepId], uses: &[StepId], marked: impl Fn(StepId) -> bool, budget: &Budget) -> Known<bool> {
+        let len = self.steps.len();
+        if starts.iter().chain(barriers).chain(uses).any(|&step| step as usize >= len) { return Known::Unknown }
+        let Some(predecessors) = self.predecessors() else { return Known::Unknown };
+        let mut barrier = vec![false; len];
+        for &step in barriers { barrier[step as usize] = true }
+        let mut start = vec![false; len];
+        for &step in starts { start[step as usize] = true }
+        let mut seen = vec![[false; 2]; len];
+        let mut pending: Vec<(StepId, bool)> = uses.iter().map(|&step| (step, false)).collect();
+        while let Some((step, passed)) = pending.pop() {
             if !budget.step() { return Known::Unknown }
-            seen[barrier as usize].barrier = true;
-        }
-        let mut reached = vec![0u64; self.steps.len().div_ceil(64)];
-        let mut pending: Vec<(StepId, bool, bool)> = starts.iter().map(|&step| (step, false, true)).collect();
-        while let Some((step, matched, start)) = pending.pop() {
-            if !budget.step() { return Known::Unknown }
-            if !start && seen[step as usize].barrier { continue }
-            let matched = matched || self.steps[step as usize].event().is_some_and(&event);
-            let visit = if matched { &mut seen[step as usize].with_event } else { &mut seen[step as usize].without_event };
+            let passed = passed || marked(step);
+            let visit = &mut seen[step as usize][usize::from(passed)];
             if *visit { continue }
             *visit = true;
-            if matched { reached[step as usize / 64] |= 1 << (step % 64) }
-            let Some(edges) = self.edges.get(step) else { return Known::Unknown };
-            for &next in edges {
-                if !budget.step() || next as usize >= self.steps.len() { return Known::Unknown }
-                pending.push((next, matched, false));
+            if barrier[step as usize] {
+                if passed && start[step as usize] { return Known::Yes(true) }
+                continue;
+            }
+            for &previous in predecessors.of(step) {
+                if !budget.step() { return Known::Unknown }
+                pending.push((previous, passed));
             }
         }
-        Known::Yes(reached)
+        Known::Yes(false)
     }
 
     pub fn reaches_through(&self, from: StepId, to: StepId, barriers: &[StepId], event: impl Fn(&Event) -> bool, budget: &Budget) -> Known<bool> {

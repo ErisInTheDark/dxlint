@@ -132,6 +132,19 @@ pub struct KindCalls {
     pub exact_first: Vec<Option<u32>>,
 }
 
+/// How many questions' worth of steps one call's candidate selection may
+/// spend: once spent, the selection serves every later question, so it gets
+/// more than any one of them (a single question's worth lost answers
+/// several questions in a row used to finish together).
+const SELECTION_QUESTIONS: u32 = 4;
+
+/// `ZLINT_ATTACHED_SELECTION=1`: candidate selection spends the asking
+/// question's budget, as before (A/B ruler).
+fn attached_selection() -> bool {
+    static ATTACHED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ATTACHED.get_or_init(|| std::env::var_os("ZLINT_ATTACHED_SELECTION").is_some())
+}
+
 /// A value question's answer: `Yes(None)` when there is none to ask about.
 type ValueAnswer = Known<Option<NodeValue>>;
 type HeaderAnswer = Known<Vec<Vec<Header>>>;
@@ -148,6 +161,9 @@ pub(crate) struct State {
     candidates: Memo<Leaf, select::Answer>,
     refined: Memo<Leaf, select::Answer>,
     values: Memo<(Leaf, ValueQuestion), ValueAnswer>,
+    /// Calls whose candidate selection ran its own allowance out
+    /// ([`Calls::candidates`]); kept across roots.
+    outgrown: std::cell::RefCell<crate::fx_hash::FxHashSet<Leaf>>,
 }
 
 impl State {
@@ -246,10 +262,23 @@ impl Calls<'_> {
     fn candidates(&self, call: Leaf) -> select::Answer {
         self.profile(ProfileQuery::Select, || {
             let Known::Yes(call) = self.semantic.leaf(call) else { return Known::Unknown };
+            // A call whose selection outgrew a whole question's allowance
+            // outgrows it again: unknown, without the work.
+            if self.semantic.calls.outgrown.borrow().contains(&call) { return Known::Unknown }
             let memo = &self.semantic.calls.candidates;
             let values = self.semantic.values();
+            // Selecting a call's candidates runs on an allowance of its own,
+            // a question's worth: kept for every later question, instead of
+            // being cut with each asking question and redone by the next
+            // (long call chains were selected and cut a dozen times).
             values.memoized_with(memo, call, || self.question.budget.step().then(|| self.question.budget.nest()).flatten(),
-                || select::candidates(call, &values))
+                || if attached_selection() { select::candidates(call, &values) } else {
+                    self.question.budget.detached(SELECTION_QUESTIONS.saturating_mul(super::question::Budget::per_question()), || select::candidates(call, &values))
+                        .unwrap_or_else(|| {
+                            self.semantic.calls.outgrown.borrow_mut().insert(call);
+                            Known::Unknown
+                        })
+                })
         })
     }
 
@@ -327,10 +356,11 @@ impl Calls<'_> {
         // type parameters and binds no evaluated arguments: a non-generic
         // class inside a generic function still sees the function's.
         let owner_generic = |owner: super::question::NodeRef| {
-            let Some(node) = self.semantic.world.tree(owner.file).and_then(|tree| tree.nodes.get(owner.node as usize)) else { return true };
+            let Some(tree) = self.semantic.world.tree(owner.file) else { return true };
+            let Some(node) = tree.nodes.get(owner.node as usize) else { return true };
             let Some(kind) = self.semantic.tables.kinds.get(node.matcher as usize) else { return true };
             kind.generics.iter().any(|(path, _)| match path.as_slice() {
-                [label] => node.children.iter().any(|edge| edge.label == *label),
+                [label] => tree.children(owner.node).iter().any(|edge| edge.label == *label),
                 _ => true,
             })
         };

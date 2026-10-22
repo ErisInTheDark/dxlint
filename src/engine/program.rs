@@ -10,7 +10,9 @@ use super::{Profile, reads::{self, Cached, Dep}};
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub(super) struct Context {
-    pub directory: PathBuf,
+    /// The program's configuration file, else its directory
+    /// (`program_anchor`): files of one project share their input list.
+    pub anchor: PathBuf,
     pub settings: usize,
 }
 
@@ -24,7 +26,9 @@ pub(super) struct CatalogKey {
 }
 
 pub(super) struct Declaration {
-    pub path: PathBuf,
+    /// Shared with every other catalog naming the file (a run keeps many
+    /// catalogs of the same program).
+    pub path: reads::DepPath,
     pub scope: u32,
     pub node: u32,
     pub classes: u64,
@@ -37,11 +41,11 @@ pub(super) struct Catalog {
     names: FxHashMap<String, Vec<usize>>,
     wildcards: Vec<usize>,
     sources: Vec<usize>,
-    texts: FxHashMap<PathBuf, u64>,
+    texts: FxHashMap<reads::DepPath, u64>,
 }
 
 impl Catalog {
-    pub fn new(declarations: Vec<Declaration>, texts: FxHashMap<PathBuf, u64>) -> Self {
+    pub fn new(declarations: Vec<Declaration>, texts: FxHashMap<reads::DepPath, u64>) -> Self {
         let mut names = FxHashMap::<String, Vec<usize>>::default();
         let mut wildcards = Vec::new();
         let mut sources = Vec::new();
@@ -237,7 +241,7 @@ pub(super) struct Snapshot {
     /// Program inputs (by input list hash) whose units were loaded in parallel.
     prefetched: Mutex<FxHashMap<u64, Arc<std::sync::OnceLock<()>>>>,
     /// Module resolution's file probes and reads, once per path and revision.
-    probes: RwLock<FxHashMap<PathBuf, (u64, bool)>>,
+    probes: RwLock<FxHashMap<reads::DepPath, (u64, bool)>>,
     /// Directory listings behind those probes (`None`: unreadable).
     listings: RwLock<FxHashMap<PathBuf, (u64, Option<Arc<reads::Listing>>)>>,
     texts: RwLock<FxHashMap<PathBuf, (u64, Option<Arc<str>>, u64)>>,
@@ -250,7 +254,16 @@ pub(super) struct Snapshot {
     configurations: RwLock<FxHashMap<(u64, usize, PathBuf), Cached<Arc<crate::grammar::names::modules::resolution::Configuration>>>>,
     /// Metadata parsed from those texts, by text hash (`None`: malformed).
     metadata: RwLock<FxHashMap<PathBuf, (u64, Option<Arc<crate::grammar::names::modules::resolution::Json>>)>>,
+    /// What each package directory offers, by root, subpath and conditions:
+    /// importers in every directory below it share the probes (and their
+    /// reads, kept once instead of in every importer's answer).
+    packages: RwLock<FxHashMap<PackageKey, Cached<PackageProbe>>>,
 }
+
+type PackageProbe = crate::grammar::names::modules::resolution::Probe<std::path::PathBuf>;
+
+/// (revision, settings, package root, subpath, conditions).
+pub(super) type PackageKey = (u64, usize, std::path::PathBuf, Box<str>, Box<[Box<str>]>);
 
 /// A shared module question ([`crate::grammar::names::modules::SharedQuestion`])
 /// with files by path, under one program and revision.
@@ -336,7 +349,7 @@ impl Snapshot {
             Some(listing) => reads::is_file_listed(path, listing),
             None => reads::is_file_unrecorded(path),
         };
-        self.probes.write().expect("run probes").insert(path.to_owned(), (revision, found));
+        self.probes.write().expect("run probes").insert(reads::dep_path(path), (revision, found));
         found
     }
 
@@ -411,6 +424,20 @@ impl Snapshot {
         self.modules.write().expect("run modules").insert(key, answer);
     }
 
+    /// `key`'s package probe, run once per run (failures are not kept); the
+    /// caller records its reads as one group.
+    pub(super) fn package(&self, key: PackageKey, probe: impl FnOnce() -> Result<PackageProbe, ()>) -> Result<PackageProbe, ()> {
+        if let Some(found) = self.packages.read().expect("run packages").get(&key) {
+            reads::note_group(&found.reads);
+            return Ok(found.value.clone());
+        }
+        let answer = Cached::compute(probe);
+        reads::note_group(&answer.reads);
+        let value = answer.value?;
+        self.packages.write().expect("run packages").insert(key, Cached { value: value.clone(), reads: answer.reads });
+        Ok(value)
+    }
+
     pub fn paths(&self, revision: u64, context: Context, build: impl FnOnce() -> Known<Arc<Vec<PathBuf>>>) -> Known<Arc<Vec<PathBuf>>> {
         self.paths.get((revision, context), None, |_| true, build)
     }
@@ -430,7 +457,7 @@ mod tests {
     #[test]
     fn ambient_matches_prefer_exact_names_and_respect_classes_and_augmentations() {
         let declaration = |scope, name: &str, classes, source: Option<&str>| Declaration {
-            path: PathBuf::from("/catalog/library"), scope, node: scope, classes,
+            path: reads::dep_path(Path::new("/catalog/library")), scope, node: scope, classes,
             name: name.into(), source: source.map(str::to_owned),
         };
         let catalog = Catalog::new(vec![
@@ -489,10 +516,10 @@ mod tests {
             programs.catalog(key.clone(), Some(&profile), |dep| dep.holds(|_| reads::MISSING), || {
                 let text = reads::read(library).unwrap();
                 let mut texts = FxHashMap::default();
-                texts.insert(main.into(), reads::hash_bytes(reads::read(main).unwrap().as_bytes()));
-                texts.insert(library.into(), reads::hash_bytes(text.as_bytes()));
+                texts.insert(reads::dep_path(main), reads::hash_bytes(reads::read(main).unwrap().as_bytes()));
+                texts.insert(reads::dep_path(library), reads::hash_bytes(text.as_bytes()));
                 Known::Yes(Catalog::new(vec![Declaration {
-                    path: library.into(), scope: 1, node: 1, classes: 1,
+                    path: reads::dep_path(library), scope: 1, node: 1, classes: 1,
                     name: text.to_string(), source: None,
                 }], texts))
             })

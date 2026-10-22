@@ -878,7 +878,7 @@ mod tests {
             (true, true, Known::Yes(true), 2, Known::Yes(None)),
         ] {
             let mut files = Files::new();
-            let mut nodes = files.trees[0].nodes.clone();
+            let mut nodes = files.trees[0].built();
             nodes.push(Node { matcher: 2, start: 0, end: 1, children: Vec::new() });
             nodes[0].children.push(Edge { label: 0, node: 3 });
             files.trees[0] = Tree::from_native(nodes, 0);
@@ -986,7 +986,7 @@ mod tests {
         let mut answers = Vec::new();
         for unrelated_globals in [None, Some(false), Some(true)] {
             let mut files = Files::new();
-            let mut nodes = files.trees[0].nodes.clone();
+            let mut nodes = files.trees[0].built();
             for id in 3..1003 {
                 nodes.push(Node { matcher: if id % 2 == 0 { 1 } else { 2 }, start: 2, end: 3, children: Vec::new() });
                 nodes[0].children.push(Edge { label: 0, node: id });
@@ -1232,7 +1232,7 @@ mod tests {
             assert_eq!(semantic.modules().global(0, "Missing", 1), Known::Yes(Vec::new()));
         }
         let mut files = Files::new();
-        let mut nodes = files.trees[0].nodes.clone();
+        let mut nodes = files.trees[0].built();
         for id in 3..503 {
             nodes.push(Node { matcher: 3, start: 2, end: 3, children: Vec::new() });
             nodes[0].children.push(Edge { label: 0, node: id });

@@ -1221,7 +1221,7 @@ fn walk_seq<H: Host>(h: &Runtime<'_, H>, node: u32, s: &Seq, f: &mut Vec<V>, eac
     match s {
         Seq::Value(value) => return walk_value(h, ev(h, node, value, f)?, f, each),
         Seq::Nodes { children: true, item, .. } => {
-            for edge in &tree.node(node).children {
+            for edge in tree.children(node) {
                 let v = ev(h, edge.node, item, f)?;
                 if !each(v, f)? {
                     return Some(false);
@@ -2059,7 +2059,7 @@ fn ev_rare<H: Host>(h: &Runtime<'_, H>, node: u32, e: &VExpr, f: &mut Vec<V>) ->
         }
         VExpr::OwnChild(last, kinds, inner) => {
             let fits = |edge: &&crate::grammar::Edge| kinds.iter().any(|&k| h.grammar().is_a(tree.node(edge.node).matcher, k));
-            let children = &tree.node(node).children;
+            let children = tree.children(node);
             let child = if *last { children.iter().rev().find(fits) } else { children.iter().find(fits) };
             match child {
                 Some(edge) => eval!(edge.node, inner)?,

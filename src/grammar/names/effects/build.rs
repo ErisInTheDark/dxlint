@@ -87,7 +87,7 @@ type Slot = usize;
 enum Task {
     Node { node: Leaf, out: Slot },
     SelectedNode { node: Leaf, flow: Flow, out: Slot },
-    FinishNode { node: Leaf, enter: StepId, body: Slot, shape: Shape, out: Slot },
+    FinishNode { node: Leaf, enter: StepId, body: Slot, effects: Vec<Effect>, out: Slot },
     Flow { node: Leaf, flow: Flow, catches: Vec<Catch>, out: Slot },
     Sequence { node: NodeRef, parts: Vec<Slot>, out: Slot },
     Alternative { node: NodeRef, parts: Vec<Slot>, optional: bool, out: Slot },
@@ -236,7 +236,7 @@ impl<S: Source> Builder<'_, S> {
                     if shape.after.len() > 1 { return None }
                     let enter = self.step(id, Phase::Enter, None);
                     let body = self.slot();
-                    self.tasks.push(Task::FinishNode { node, enter, body, shape: shape.clone(), out });
+                    self.tasks.push(Task::FinishNode { node, enter, body, effects: std::mem::take(&mut shape.effects), out });
                     let flow_out = match shape.after.first() {
                         Some(after) => {
                             let source = self.slot();
@@ -247,15 +247,15 @@ impl<S: Source> Builder<'_, S> {
                     };
                     self.tasks.push(Task::Flow { node, flow: shape.flow, catches: shape.catches, out: flow_out });
                 }
-                Task::FinishNode { node, enter, body, shape, out } => {
+                Task::FinishNode { node, enter, body, effects, out } => {
                     let Target::Node(id) = node.target else { return None };
                     let body = self.take(body);
                     let mut fragment = Fragment { entry: Some(enter), normal: vec![enter], pending: Vec::new() };
-                    self.effects(id, &mut fragment, &shape.effects, Phase::Enter)?;
+                    self.effects(id, &mut fragment, &effects, Phase::Enter)?;
                     if let Some(entry) = body.entry { self.connect(&fragment.normal, entry); }
                     fragment.normal = body.normal;
                     fragment.pending.extend(body.pending);
-                    self.effects(id, &mut fragment, &shape.effects, Phase::Leave)?;
+                    self.effects(id, &mut fragment, &effects, Phase::Leave)?;
                     let leave = self.step(id, Phase::Leave, None);
                     self.connect(&fragment.normal, leave);
                     fragment.pending.retain(|pending| {

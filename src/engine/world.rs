@@ -16,7 +16,7 @@ use crate::grammar::names::question::{FrameId, Known, Leaf, NodeRef, ScopeRef, T
 use crate::grammar::names::semantic::{AttributeKey, Semantic};
 use crate::grammar::names::modules::compile::Action;
 use crate::grammar::names::modules::SharedQuestion;
-use crate::grammar::names::modules::resolution::{parse_metadata, program_inputs, Configuration, DiscoveryRequest, Host, Json, Resolver, Settings};
+use crate::grammar::names::modules::resolution::{parse_metadata, program_anchor, program_inputs, Configuration, Probe, DiscoveryRequest, Host, Json, Resolver, Settings};
 use crate::grammar::names::question::QueryContext;
 use crate::grammar::names::{Resolved, ScopeIndex};
 use crate::grammar::{Grammar, Tree};
@@ -246,6 +246,7 @@ impl<'a> LintWorld<'a> {
             if let (Some(profile), Some(tree)) = (self.ctx.profile, World::tree(&files, file)) {
                 let used = u64::from(crate::grammar::names::question::Budget::per_question() - budget.remaining());
                 profile.record_root(tree.node(node).matcher as usize, used, budget.limited());
+                if let Some(path) = World::path(&files, file) { profile.note_root_outcome(path, node, budget.limited()); }
                 if budget.limited() {
                     let syntax = tree.node(node);
                     let text = World::text(&files, file).and_then(|text| text.get(syntax.start as usize..syntax.end as usize));
@@ -433,18 +434,12 @@ impl<'a> Files<'a> {
         answer
     }
 
-    fn program_context(self, selected: &Settings) -> super::program::Context {
-        super::program::Context {
-            directory: self.0.path.parent().unwrap_or(Path::new("")).to_owned(),
-            settings: selected as *const Settings as usize,
-        }
-    }
-
     fn input_paths(self, selected: &Settings) -> Known<Arc<Vec<PathBuf>>> {
         let key = selected as *const Settings;
         if let Some(cached) = self.0.program.inputs.borrow().get(&key) { return Known::Yes(cached.get()) }
         let cached = super::reads::Cached::compute(|| {
-            let context = self.program_context(selected);
+            let Known::Yes(anchor) = program_anchor(selected, &self, &QueryContext::default()) else { return Known::Unknown };
+            let context = super::program::Context { anchor, settings: selected as *const Settings as usize };
             let load = || self.0.linter.programs.paths(context.clone(), |dep| self.0.linter.holds(dep), || {
                 let question = QueryContext::default();
                 let answer = program_inputs(selected, &self, &question);
@@ -561,6 +556,12 @@ impl<'a> Files<'a> {
     }
 
     fn timed<T>(self, query: &'static str, run: impl FnOnce() -> T) -> T {
+        use crate::alloc::heap;
+        let owner = if query.starts_with("modules.roots") { Some(heap::ROOTS) }
+            else if query.ends_with(".catalog") { Some(heap::CATALOG) }
+            else if query.starts_with("modules.resolve.shared") { Some(heap::SHARED) }
+            else { None };
+        let _owner = owner.map(heap::Owner::enter);
         match self.0.ctx.profile {
             Some(profile) => profile.time_semantic_query(query, run),
             None => run(),
@@ -717,6 +718,19 @@ impl<'a> Files<'a> {
         if let Known::Yes(targets) = &answer.value {
             self.timed("modules.resolve.shared.publish", || {
                 if let Some(stable) = self.stable_targets(targets) {
+                    if let Some(profile) = self.0.ctx.profile {
+                        let kind = match &key.question {
+                            super::program::StableQuestion::Publication { .. } => 0,
+                            super::program::StableQuestion::Global { .. } => 1,
+                            super::program::StableQuestion::Scopes { .. } => 2,
+                            super::program::StableQuestion::Resolve { specifier, .. } if specifier.starts_with('.') => 3,
+                            super::program::StableQuestion::Resolve { .. } => 4,
+                            super::program::StableQuestion::Augmentations { .. } => 5,
+                        };
+                        super::Profile::add(&profile.shared_answers[kind], 1);
+                        super::Profile::add(&profile.shared_answer_deps[kind], answer.reads.deps.len() as u64);
+                        super::Profile::add(&profile.shared_answer_groups[kind], answer.reads.groups.len() as u64);
+                    }
                     snapshot.keep_module_answer(key, super::reads::Cached { value: stable, reads: answer.reads.clone() });
                 }
             });
@@ -746,14 +760,15 @@ impl<'a> Files<'a> {
         if let Some(known) = self.0.program.outside.borrow().get(&(selected as *const Settings)) {
             return Known::Yes(known.clone());
         }
-        let Known::Yes(paths) = self.input_paths(selected) else { return Known::Unknown };
+        let Known::Yes(paths) = self.timed("modules.identity.inputs", || self.input_paths(selected)) else { return Known::Unknown };
         // Worlds of one run share the run's input list (the snapshot holds
         // it for the run), so its address names the program without hashing
         // every path again in every world.
         let program = Arc::as_ptr(&paths) as usize as u64;
         // File names first: whole-path comparison parses every component.
         let name = self.0.path.file_name();
-        let outside = (!paths.iter().any(|path| path.file_name() == name && path == self.0.path)).then(|| self.0.path.to_owned());
+        let outside = self.timed("modules.identity.scan", || (!paths.iter().any(|path| path.file_name() == name && path == self.0.path))
+            .then(|| self.0.path.to_owned()));
         self.0.program.outside.borrow_mut().insert(selected as *const Settings, (program, outside.clone()));
         Known::Yes((program, outside))
     }
@@ -815,7 +830,7 @@ impl<'a> Files<'a> {
                 let mut candidates = Vec::new();
                 for path in paths.iter().chain(key.outside.iter()) {
                     let Some(text) = self.source_text(path) else { return Known::Unknown };
-                    texts.insert(path.clone(), super::reads::hash_bytes(text.as_bytes()));
+                    texts.insert(super::reads::dep_path(path), super::reads::hash_bytes(text.as_bytes()));
                     if selected.globals.may_declare_ambient(&text) { candidates.push(path.clone()) }
                 }
                 self.prefetch_inputs(selected, &candidates);
@@ -824,11 +839,12 @@ impl<'a> Files<'a> {
                     let Some(tree) = World::tree(&self, file) else { return Known::Unknown };
                     if !opening(file, tree) { continue }
                     let Some(names) = World::names(&self, file) else { return Known::Unknown };
+                    let shared_path = super::reads::dep_path(path);
                     for (scope, info) in names.scopes.iter().enumerate() {
                         if classes & info.classes == 0 { continue }
                         let Known::Yes(items) = self.named_scope(ScopeRef { file, scope: scope as u32 }, classes, semantic) else { return Known::Unknown };
                         declarations.extend(items.into_iter().map(|item| super::program::Declaration {
-                            path: path.clone(), scope: item.scope.scope, node: info.node,
+                            path: shared_path.clone(), scope: item.scope.scope, node: info.node,
                             name: item.name, source: item.source, classes: item.classes,
                         }));
                     }
@@ -985,9 +1001,9 @@ impl World for Files<'_> {
             }
         }
         self.0.program.modules.borrow_mut().entry(key).or_default().insert(specifier.into(), ModuleAnswer::Busy(revision));
-        let resolve = || self.timed("modules.resolve.search", || self.0.asking(semantic, at, || Resolver { host: self, settings: selected }.resolve(ctx.file_id, specifier, &[], semantic.question)));
         // Resolution depends only on the importer's directory (not its tree
         // or name), so imports are shared by directory, the linted file's too.
+        let resolve = || self.timed("modules.resolve.search", || self.0.asking(semantic, at, || Resolver { host: self, settings: selected }.resolve(ctx.file_id, specifier, &[], semantic.question)));
         let answer = super::reads::Cached::compute(|| match World::path(self, ctx.file_id).and_then(Path::parent) {
             Some(directory) => {
                 let question = super::program::StableQuestion::Resolve { directory: super::reads::dep_path(directory), specifier: specifier.into() };
@@ -1157,6 +1173,18 @@ impl Host for Files<'_> {
                 Ok(snapshot.configuration(key, load)?.get())
             }
             _ => load(),
+        }
+    }
+
+    fn package(&self, settings: &Settings, root: &Path, subpath: &str, conditions: &[&str],
+        probe: &mut dyn FnMut() -> Result<Probe<PathBuf>, ()>) -> Result<Probe<PathBuf>, ()> {
+        match self.0.snapshot {
+            Some(snapshot) if self.shares(snapshot) => {
+                let key = (self.0.revision(), settings as *const Settings as usize, root.to_owned(), subpath.into(),
+                    conditions.iter().map(|&condition| Box::from(condition)).collect());
+                snapshot.package(key, probe)
+            }
+            _ => probe(),
         }
     }
 
