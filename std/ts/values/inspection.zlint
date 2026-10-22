@@ -32,10 +32,13 @@ fn ts_value_string(text) = {
   value lines: replace(quotes, "\n", "\\n")
   value "\"" lines "\""
 }
-fn ts_value_print_element_mode(parts) = if count(parts ?? []) > 1 then "wrap"
-  else if count(parts ?? []) == 1 && count(first(parts ?? [])) > 1 then "wrap" else "plain"
-# Parenthesise only a union or intersection element: a nested array already
-# carries its own brackets.
+# A literal's truthy/falsy split prints one label, so parenthesise on distinct
+# printed arms: a union needs brackets, a nested array keeps its own.
+fn ts_value_print_element_mode(parts) = {
+  value labels: unique(map(parts ?? [], arm => ts_value_print_arm(arm)))
+  value if count(labels) > 1 then "wrap"
+    else if count(labels) == 1 && contains(first(labels), " & ") then "wrap" else "plain"
+}
 fn ts_value_print_element(parts, text) = if ts_value_print_element_mode(parts) == "wrap" then "(" text ")" else text
 # TypeScript sorts union constituents by type flags (`stableTypeOrdering`),
 # with `null` and `undefined` always printed last.
@@ -87,10 +90,14 @@ fn ts_value_print_part(part) = {
     else scalar ?? "unknown"
 }
 fn ts_value_print_arm(arm) = {
-  value labels: map(arm, part => ts_value_print_part(part))
-  value definite: filter(labels, label => label != "unknown")
-  value kept: if count(definite) == 0 then labels else definite
-  value { value kept; unique; join " & " }
+  value labels: map(arm, part => {
+    value text: ts_value_print_part(part)
+    value { text: text, parameter: contains(part.traits, "parameter") }
+  })
+  value definite: filter(labels, item => item.text != "unknown")
+  value content: filter(definite, item => !item.parameter)
+  value kept: if count(content) > 0 then content else if count(definite) > 0 then definite else [{ text: "unknown" }]
+  value { value kept; map (item) item.text; unique; join " & " }
 }
 fn ts_value_print(parts) = if parts == null then "unknown" else if len(parts) == 0 then "never" else {
   value labels: map(parts, arm => ts_value_print_arm(arm))
@@ -126,8 +133,7 @@ fn ts_value_print_handle_arm(arm, seen, n) = if count(arm.parts) == 0 then "unkn
   })
   value definite: filter(printed, item => item.text != "unknown")
   value content: filter(definite, item => !item.parameter)
-  value kept: if count(content) > 0 then content else definite
-  value if count(kept) == 0 then [{ text: "unknown" }] else kept
+  value kept: if count(content) > 0 then content else if count(definite) > 0 then definite else [{ text: "unknown" }]
   value { value kept; map (item) item.text; unique; join " & " }
 }
 fn ts_value_print_handle_seen(n, seen) = {
@@ -139,15 +145,27 @@ fn ts_value_print_handle_seen(n, seen) = {
 }
 fn ts_value_print_handle(n) = ts_value_print_handle_seen(n, [])
 # The type TypeScript prints for an expression: a type parameter stands for its
-# constraint, and a reference keeps its written name.
+# constraint (`any` counts as `unknown`), and a reference keeps its written name.
 fn ts_value_print_annotation(n) = if n is ts_identifier && name_binding(n) != null
   && name_binding(n).node.parent.type != null then name_binding(n).node.parent.type.node else null
-fn ts_value_print_type(n) = {
+fn ts_value_print_written(n) = {
   value annotation: ts_value_print_annotation(n)
   value named: annotation is ts_type_reference && annotation.name is ts_identifier
     && !ts_value_has_trait(annotation, "parameter")
     && !contains(["Array", "ReadonlyArray"], annotation.name.text)
-  value if named then annotation.text else ts_value_print_handle(n)
+  value if named then annotation.text else null
+}
+fn ts_value_print_annotation_parameter(annotation) = if annotation is ts_type_reference
+  && annotation.name is ts_identifier && count(annotation.type_argument.nodes) == 0
+  && name_binding(annotation.name.node) != null
+  && name_binding(annotation.name.node).node.parent is ts_type_parameter
+  then name_binding(annotation.name.node).node.parent else null
+fn ts_value_print_type(n) = {
+  value annotation: ts_value_print_annotation(n)
+  value parameter: if annotation != null then ts_value_print_annotation_parameter(annotation) else null
+  value written: ts_value_print_written(n)
+  value if parameter != null && parameter.constraint != null && parameter.constraint.text == "any" then "unknown"
+    else written ?? ts_value_print_handle(n)
 }
 fn ts_value_symbol_key(n, key) = {
   value roots: global_declarations(n, "Symbol", "value")

@@ -1,7 +1,19 @@
 import .ts/values/inspection
 define {
 
-fn arithmetic_type_name(n) = ts_value_print_type(n)
+fn ts_value_print_literal_parts(parts) = parts != null && len(parts) > 0
+  && any(parts, arm => any(arm, part => !contains(part.traits, "parameter")))
+  && all(parts, arm => all(filter(arm, part => !contains(part.traits, "parameter")),
+    part => contains(part.traits, "literal") || part.identity_known && part.identity.kind == "value"))
+# Widening only changes literals: structure would collapse to `object`, so keep
+# the handle's shape unless every printed constituent is a literal.
+fn arithmetic_type_name(n) = {
+  value written: ts_value_print_written(n)
+  value parts: value_constituents(n)
+  value if written != null then written
+    else if ts_value_print_literal_parts(parts) then ts_value_print(value_widened(n) ?? parts)
+    else ts_value_print_handle(n)
+}
 fn arithmetic_has_type(arms, kinds) = any(arms, arm =>
   any(arm.parts, part => any(kinds, kind => contains(part.traits, kind))))
 fn arithmetic_known(arms) = arms != null && all(arms, arm => any(arm.parts, part =>
