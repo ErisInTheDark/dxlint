@@ -453,7 +453,24 @@ fn request_walk(request: &DiscoveryRequest) -> Option<(Vec<PathBuf>, u64)> {
     walker.overrides(overrides.build().ok()?);
     walker.filter_entry(move |entry| entry.path().strip_prefix(&root).is_ok_and(|rel| !dirs_excluded.matches(rel)));
     let mut found = Vec::new();
+    // Includes naming files outright (a program's library files, one
+    // request each) need no walk of their directory.
+    let literal_files = request.include.iter().map(|glob| {
+        if glob.is_empty() || glob.contains(['*', '?', '[', '{']) { return None }
+        let path = glob.split('/').fold(request.root.clone(), |path, part| path.join(part));
+        match std::fs::metadata(&path) {
+            Ok(metadata) if metadata.is_file() => Some(Some(path)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Some(None),
+            _ => None,
+        }
+    }).collect::<Option<Vec<_>>>();
     match std::fs::metadata(&request.root) {
+        Ok(metadata) if metadata.is_dir() && literal_files.is_some() => {
+            // As the walk would: no file below an excluded directory.
+            let under_excluded = |path: &Path| path.strip_prefix(&request.root).is_ok_and(|rel| rel.ancestors().skip(1)
+                .any(|dir| !dir.as_os_str().is_empty() && exclude.matches(dir)));
+            found.extend(literal_files.into_iter().flatten().flatten().filter(|path| wanted(path) && !under_excluded(path)));
+        }
         Ok(metadata) if metadata.is_dir() => {
             for entry in walker.build() {
                 let entry = entry.ok()?;

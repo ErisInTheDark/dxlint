@@ -201,10 +201,22 @@ impl<'a> LintWorld<'a> {
             _ => (FrameId::ROOT, None),
         };
         let key = AttributeKey { file, node, frame, scope, attr };
-        if let Some(kept) = semantic.attribute(&key) { return Some(kept) }
+        let values = semantic.values();
+        let free = semantic.frame_free_attribute(key);
+        if let Some(kept) = semantic.attribute(&key) {
+            // What its answer asked is asked again by whoever reads it.
+            if !free { values.note_value_read() }
+            return Some(kept);
+        }
+        // One that asked no value question answers alike in every frame.
+        if free && frame != FrameId::ROOT {
+            if let Some(kept) = semantic.attribute(&AttributeKey { frame: FrameId::ROOT, ..key }) { return Some(kept) }
+        }
+        let reads = values.value_reads();
         let mut value = None;
         if let Known::Yes(Some(complete)) = self.complete_attribute(|| { value = compute(); value }) {
             semantic.remember_attribute(key, complete);
+            if values.value_reads() == reads { semantic.remember_frame_free(key, complete) }
         }
         value
     }

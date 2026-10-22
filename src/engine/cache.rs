@@ -65,6 +65,8 @@ pub struct Cache {
     group_holds: Vec<OnceLock<bool>>,
     /// Saved groups as reads, for results taken from the cache.
     group_reads: Vec<OnceLock<Arc<Reads>>>,
+    /// Directory listings answering saved file probes ([`Cache::listed_file`]).
+    listings: std::sync::RwLock<crate::fx_hash::FxHashMap<PathBuf, Option<Arc<super::reads::Listing>>>>,
     fresh: Mutex<HashMap<String, Fresh>>,
     /// Something new to write.
     changed: AtomicBool,
@@ -85,6 +87,7 @@ impl Cache {
             dep_holds: saved.deps.iter().map(|_| OnceLock::new()).collect(),
             group_holds: saved.groups.iter().map(|_| OnceLock::new()).collect(),
             group_reads: saved.groups.iter().map(|_| OnceLock::new()).collect(),
+            listings: Default::default(),
             saved,
             fresh: Mutex::default(),
             changed: AtomicBool::new(false),
@@ -111,8 +114,25 @@ impl Cache {
     }
 
     fn holds(&self, linter: &Linter, refs: &Refs) -> bool {
-        refs.deps.iter().all(|&i| *self.dep_holds[i as usize].get_or_init(|| linter.holds(&self.saved.deps[i as usize])))
+        refs.deps.iter().all(|&i| *self.dep_holds[i as usize].get_or_init(|| match &self.saved.deps[i as usize] {
+            Dep::IsFile(path, found) => self.listed_file(path) == *found,
+            dep => linter.holds(dep),
+        }))
             && refs.groups.iter().all(|&i| *self.group_holds[i as usize].get_or_init(|| self.holds(linter, &self.saved.groups[i as usize])))
+    }
+
+    /// Whether `path` is a file, from its directory's listing (read once per
+    /// run): saved probes are mostly module resolution candidates, many per
+    /// directory, and one listing answers them all.
+    fn listed_file(&self, path: &Path) -> bool {
+        let Some(dir) = path.parent() else { return super::reads::is_file_unrecorded(path) };
+        if let Some(listing) = self.listings.read().expect("cache listings").get(dir) {
+            return listing.as_ref().map_or_else(|| super::reads::is_file_unrecorded(path), |listing| super::reads::is_file_listed(path, listing));
+        }
+        let listing = super::reads::list_unrecorded(dir).map(Arc::new);
+        let held = listing.as_ref().map_or_else(|| super::reads::is_file_unrecorded(path), |listing| super::reads::is_file_listed(path, listing));
+        self.listings.write().expect("cache listings").insert(dir.to_path_buf(), listing);
+        held
     }
 
     /// Saved refs as reads, each group built once.

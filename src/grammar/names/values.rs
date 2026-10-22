@@ -174,6 +174,9 @@ pub(crate) struct State {
     /// computed after such a read may only reflect the unfinished cycle, so
     /// it is not kept.
     cycle_reads: std::cell::Cell<u64>,
+    /// Value questions asked ([`Values::value_reads`]): an attribute that
+    /// asked none answers alike in every frame.
+    value_reads: std::cell::Cell<u64>,
     /// Entries of the `Known` memos being computed ([`Values::memoized`]),
     /// by memo and key hash, innermost last.
     pending: std::cell::RefCell<Vec<(usize, u64)>>,
@@ -244,6 +247,7 @@ fn share_values() -> bool {
 
 impl Values<'_> {
     pub fn values(&self, leaf: Leaf) -> NodeValue {
+        self.note_value_read();
         // File 0 is the linted file; others' values are work every file
         // that reads them repeats.
         let _foreign = match (self.world.profile(), leaf.target) {
@@ -272,6 +276,16 @@ impl Values<'_> {
     /// without any is the same for every linted file.
     pub(crate) fn root_reads(&self) -> u64 {
         self.semantic.values.root_reads.get()
+    }
+
+    /// Value questions asked so far (values, recipes, syntax followed
+    /// through frames): the answers that may differ by frame.
+    pub(crate) fn value_reads(&self) -> u64 {
+        self.semantic.values.value_reads.get()
+    }
+
+    pub(crate) fn note_value_read(&self) {
+        self.semantic.values.value_reads.set(self.semantic.values.value_reads.get() + 1);
     }
 
     pub fn unwrap_recipe(&self, leaf: Leaf) -> Known<Option<&Value>> {
@@ -574,10 +588,12 @@ impl Values<'_> {
     }
 
     pub fn evaluate(&self, at: Leaf, expression: &Value) -> NodeValue {
+        self.note_value_read();
         eval::evaluate(self, at, expression)
     }
 
     pub(crate) fn evaluate_optional(&self, at: Leaf, expression: &Value) -> Known<Option<NodeValue>> {
+        self.note_value_read();
         eval::evaluate_optional(self, at, expression)
     }
 
@@ -1083,6 +1099,8 @@ impl Values<'_> {
     }
 
     pub fn follow(&self, at: Leaf, path: &[u16]) -> Known<Vec<Leaf>> {
+        // Declarations and references reached are framed by where they are.
+        if path.iter().any(|&label| label == super::THROUGH || label == super::DECLARATION) { self.note_value_read() }
         // A modified value's syntax is its source's.
         let at = self.modified_source(at).unwrap_or(at);
         let Known::Yes(at) = self.semantic.leaf(at) else { return Known::Unknown };

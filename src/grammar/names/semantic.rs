@@ -28,6 +28,12 @@ pub struct State {
     /// depend on: complete answers only.
     attributes: super::memo::Memo<AttributeKey, crate::vm::Packed>,
     defects: RefCell<Vec<Defect>>,
+    /// [`Semantic::generic_scope`] by owner: syntax alone decides it, and
+    /// frames ask it for every leaf they reach.
+    generic_scopes: RefCell<crate::fx_hash::FxHashMap<NodeRef, Option<u32>>>,
+    /// Attributes (keyed at the root frame) whose answer asked no value
+    /// question: the same in every frame.
+    frame_free: RefCell<crate::fx_hash::FxHashSet<AttributeKey>>,
 }
 
 /// A semantic attribute on a node, read where a question's frame (and a
@@ -154,6 +160,14 @@ impl<'a> Semantic<'a> {
     /// the formals an instantiation of `owner` binds are visible. `None`
     /// when there is none (or the tree is not loaded).
     pub(crate) fn generic_scope(&self, owner: NodeRef) -> Option<u32> {
+        if let Some(&scope) = self.generic_scopes.borrow().get(&owner) { return scope }
+        let scope = self.find_generic_scope(owner);
+        // Unloaded trees aren't remembered: they may load later.
+        if self.world.tree(owner.file).is_some() { self.generic_scopes.borrow_mut().insert(owner, scope); }
+        scope
+    }
+
+    fn find_generic_scope(&self, owner: NodeRef) -> Option<u32> {
         let tree = self.world.tree(owner.file)?;
         let mut scope = None;
         let mut cursor = Some(owner.node);
@@ -239,6 +253,19 @@ impl<'a> Semantic<'a> {
 
     pub(crate) fn remember_attribute(&self, key: AttributeKey, value: crate::vm::V) {
         self.attributes.insert(self.epoch, key, crate::vm::Packed::new(value));
+    }
+
+    /// Whether the attribute at `key` (whatever its frame) was found to ask
+    /// no value question.
+    pub(crate) fn frame_free_attribute(&self, key: AttributeKey) -> bool {
+        self.frame_free.borrow().contains(&AttributeKey { frame: FrameId::ROOT, ..key })
+    }
+
+    /// Keeps an attribute that asked no value question for every frame.
+    pub(crate) fn remember_frame_free(&self, key: AttributeKey, value: crate::vm::V) {
+        let root = AttributeKey { frame: FrameId::ROOT, ..key };
+        self.frame_free.borrow_mut().insert(root);
+        if key.frame != FrameId::ROOT { self.attributes.insert(self.epoch, root, crate::vm::Packed::new(value)); }
     }
 
     pub fn defect(&self, item: u32, at: Leaf, message: impl Into<Box<str>>) {
