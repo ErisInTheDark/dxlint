@@ -88,54 +88,67 @@ fn layout_assignment_pattern(n) = {
   value root: last(roots)
   value root.parent is (ts_assignment, ts_for_in, ts_for_of) && root.parent.left.node == root
 }
-fn layout_trailing_comma(n, list) = {
+fn layout_dangle_mode(kind, style, policies) = { value policies; get kind; nonempty } ?? style
+fn layout_dangle_enabled(kind, edition) = (kind != "functions" || edition >= 2017) && (kind != "dynamicImports" || edition >= 2025)
+fn layout_dangle_wrong(site, mode) = mode != "ignore" && (if mode == "always" || mode == "always-multiline" && site.multiline then site.trailing != site.allowed else site.trailing && !(mode == "only-multiline" && site.multiline) && !site.tsx_single)
+fn layout_trailing_list(items, kind, style, policies, edition) = {
+  value mode: layout_dangle_mode(kind, style, policies)
+  value if layout_dangle_enabled(kind, edition) && mode != "ignore" && count(items) > 0
+    then {items: items, kind: kind, mode: mode} else null
+}
+fn layout_trailing_site(n, list, tsx) = {
   value item: last(list.items)
-  value if item is ts_hole then null else {
+  value if item is ts_hole then [] else {
     value after: token(item, "after")
     value trailing: after.text == ","
-    value comma: if trailing then first(overlapping(ts_comma, after.start, after.end)) else null
+    value comma: if trailing then after.node ?? first(overlapping(ts_comma, after.start, after.end)) else null
     value closing: if trailing then token(comma, "after") else after
-    value if closing.text != "}}" && closing.text != "]" && closing.text != ")" && closing.text != ">" then null else {
+    value if closing.text != "}}" && closing.text != "]" && closing.text != ")" && closing.text != ">" then [] else {
       value terminal_end: if trailing then after.end else token(item, "last").end
-      value allowed: item not ts_rest && !(item is ts_spread && layout_assignment_pattern(n))
-        && item.name not ts_rest
-      value {
-        kind: list.kind,
-        offset: if trailing then after.start else terminal_end,
-        trailing: trailing,
-        multiline: re_test(byte_slice(n.source, terminal_end, closing.end), /[\r\n\u{2028}\u{2029}]/),
-        allowed: allowed,
-        tsx_single: list.kind == "generics" && count(list.items) == 1 && ends_with(n.file, ".tsx")
+      value multiline: position(terminal_end).js_line != position(closing.start).js_line
+      value if !multiline && !trailing && list.mode != "always" then [] else {
+        value allowed: item not ts_rest && !(item is ts_spread && layout_assignment_pattern(n))
+          && item.name not ts_rest
+        value [{
+          kind: list.kind,
+          mode: list.mode,
+          offset: if trailing then after.start else terminal_end,
+          trailing: trailing,
+          multiline: multiline,
+          allowed: allowed,
+          tsx_single: list.kind == "generics" && count(list.items) == 1 && tsx
+        }]
       }
     }
   }
 }
-fn layout_trailing_commas(n) = {
-  value ordinary: when {
-    n is (ts_array, ts_array_pattern, ts_tuple_type) then n.element.nodes
-    n is ts_object then n.property.nodes
-    n is ts_object_pattern then { value n.property.nodes n.rest.nodes; sort_by (item) item.offset }
-    n is (ts_function, ts_method, ts_arrow, ts_function_type) then n.parameter.nodes
-    n is (ts_call, ts_new, ts_import_call) then n.argument.nodes
-    n is ts_import then { value n.specifier.nodes n.default_import.nodes n.namespace.nodes; sort_by (item) item.offset }
-    n is ts_export then n.specifier.nodes
-    n is ts_enum then n.member.nodes
-    else then []
-  }
-  value parameters: if n is (ts_function, ts_arrow, ts_class, ts_method, ts_interface, ts_type_alias,
-    ts_function_type, ts_method_signature, ts_call_signature, ts_infer) then n.type_parameter.nodes else []
-  value arguments: if n is (ts_class, ts_tagged_template, ts_call, ts_new, ts_instantiation,
-    ts_jsx_opening, ts_type_reference, ts_type_query, ts_import_type) then n.type_argument.nodes else []
+fn layout_trailing_ordinary(n, style, policies, edition) = when {
+  n is (ts_array, ts_array_pattern) then layout_trailing_list(n.element.nodes, "arrays", style, policies, edition)
+  n is ts_tuple_type then layout_trailing_list(n.element.nodes, "tuples", style, policies, edition)
+  n is ts_object then layout_trailing_list(n.property.nodes, "objects", style, policies, edition)
+  n is ts_object_pattern then layout_trailing_list({ value n.property.nodes n.rest.nodes; sort_by (item) item.offset }, "objects", style, policies, edition)
+  n is (ts_function, ts_method, ts_arrow, ts_function_type) then layout_trailing_list(n.parameter.nodes, "functions", style, policies, edition)
+  n is (ts_call, ts_new) then layout_trailing_list(n.argument.nodes, "functions", style, policies, edition)
+  n is ts_import_call then layout_trailing_list(n.argument.nodes, "dynamicImports", style, policies, edition)
+  n is ts_import then layout_trailing_list({ value n.specifier.nodes n.default_import.nodes n.namespace.nodes; sort_by (item) item.offset }, "imports", style, policies, edition)
+  n is ts_export then layout_trailing_list(n.specifier.nodes, "exports", style, policies, edition)
+  n is ts_enum then layout_trailing_list(n.member.nodes, "enums", style, policies, edition)
+  else then null
+}
+fn layout_dangle_lists(n, style, policies, edition, tsx) = {
   value lists: [
-    if count(ordinary) > 0 then {items: ordinary, kind: layout_list_kind(n, "")} else null,
-    if count(parameters) > 0 then {items: parameters, kind: "generics"} else null,
-    if count(arguments) > 0 then {items: arguments, kind: "type-arguments"} else null
+    layout_trailing_ordinary(n, style, policies, edition),
+    if n is (ts_function, ts_arrow, ts_class, ts_method, ts_interface, ts_type_alias, ts_function_type,
+      ts_method_signature, ts_call_signature, ts_infer) then layout_trailing_list(n.type_parameter.nodes, "generics", style, policies, edition) else null,
+    if n is (ts_class, ts_tagged_template, ts_call, ts_new, ts_instantiation, ts_jsx_opening, ts_type_reference,
+      ts_type_query, ts_import_type) then layout_trailing_list(n.type_argument.nodes, "type-arguments", style, policies, edition) else null
   ]
   value lists
   compact
-  map (list) layout_trailing_comma(n, list)
-  compact
+  flat_map (list) layout_trailing_site(n, list, tsx)
 }
+# Every list, independent of options: fixtures pin this view.
+fn layout_trailing_commas(n) = layout_dangle_lists(n, "always", {}, 2025, ends_with(n.file, ".tsx"))
 fn layout_terminal_arrow_block(n, end) = {
   value chain: walk([n], current => if current is ts_block then null
     else find(current.children.nodes, child => child.end_offset == end))

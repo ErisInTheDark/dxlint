@@ -48,7 +48,8 @@ in ts_call rule radix {
 
 in ts_identifier rule no-shadow-restricted-names {
   option reportGlobalThis boolean = true "include globalThis among restricted names"
-  when restricted_binding && (text != "globalThis" || reportGlobalThis)
+  when contains(["NaN", "Infinity", "undefined", "eval", "arguments", "globalThis"], identifier_name)
+    && restricted_binding && (text != "globalThis" || reportGlobalThis)
   warn "Shadowing of global property '{text}'."
 }
 

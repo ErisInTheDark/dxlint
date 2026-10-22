@@ -82,8 +82,19 @@ fn regexp_computed_input(n, flags) = {
     offset: n.offset, end_offset: n.end_offset, written: "computed", pattern_node: n
   }
 }
-in ts_call, ts_new let regexp_candidate ts_global_method_candidate(node, "RegExp")
-  || unparenthesised_node(callee.node) is (ts_non_null, ts_as, ts_satisfies, ts_type_assertion, ts_conditional, ts_logical)
+fn regexp_initialised_binding(n) = {
+  value declaration: n.declaration.node
+  value declarator: declaration.parent.node
+  value declaration != null && declarator is ts_declarator && declarator.init != null
+}
+# Only a file that spells the name can alias the global; binding lookups stay off every other call.
+in ts_program let regexp_mentioned contains(source, "RegExp")
+in ts_call, ts_new let regexp_candidate {
+  value callee: unparenthesised_node(node.callee.node)
+  value callee is ts_identifier && (callee.text == "RegExp" || ts_module_program(node).regexp_mentioned && regexp_initialised_binding(callee))
+    || callee is (ts_member, ts_index) && ts_global_method_name(callee) == "RegExp"
+    || callee is (ts_non_null, ts_as, ts_satisfies, ts_type_assertion, ts_conditional, ts_logical)
+}
 fn regexp_input(n) = if n is ts_regex then regexp_literal_input(n, null)
   else if n not (ts_call, ts_new) || !n.regexp_candidate || n.callee.global_value != "RegExp" then null else {
     value args: n.argument.nodes

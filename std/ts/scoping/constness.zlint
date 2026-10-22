@@ -6,14 +6,12 @@ in ts_node let scoping_const_writer
     || parent is (ts_array, ts_array_pattern, ts_object, ts_object_pattern, ts_property, ts_pattern_property, ts_rest, ts_spread, ts_parenthesized)
     then parent.scoping_const_writer
   else null
-fn scoping_const_base(n) = {
+fn scoping_const_base(n) = n.scoping_site_kind == "let" && n.declaration.node == n && {
   value declarator: n.scoping_binding_declarator
-  value variable: declarator.parent.node
   value scope: first(n.scoping_declaration_scopes)
-  value exported: ts_exported_names(n.scoping_program)
-  value n.scoping_site_kind == "let" && n.declaration.node == n
-    && scope != null && declarator != null && !(variable is ts_for.init)
-    && !(scoping_script_scope(scope) && contains(exported, n.text))
+  value variable: declarator.parent.node
+  value if scope == null || declarator == null || variable is ts_for.init then false
+    else !(scoping_script_scope(scope) && contains(ts_exported_names(n.scoping_program), n.text))
 }
 fn scoping_const_pattern_children(n) =
   if n is ts_assignment_pattern then n.left.node
