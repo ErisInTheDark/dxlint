@@ -1,7 +1,7 @@
 define {
 
 fn ts_value_has_trait(n, trait) = {
-  value arms: value_parts(n)
+  value arms: value_trait_parts(n, [trait])
   value if arms == null then null else any(arms, arm => any(arm.parts, part => contains(part.traits, trait)))
 }
 fn ts_value_has_void(n) = ts_value_has_trait(n, "void")
@@ -16,7 +16,7 @@ fn ts_value_trait(parts, trait) = parts != null && len(parts) > 0
 fn ts_value_category(parts) = if parts != null && any(parts, arm => any(arm, part => contains(part.traits, "error"))) then "error"
   else if ts_value_trait(parts, "any") then "any" else null
 fn ts_value_string_like(n) = {
-  value arms: value_parts(n)
+  value arms: value_trait_parts(n, ["string", "intersection", "parameter", "any", "unknown"])
   value arms != null && len(arms) > 0 && all(arms, arm =>
     any(arm.parts, part => contains(part.traits, "string"))
     && all(arm.parts, part => contains(part.traits, "intersection") || contains(part.traits, "parameter")

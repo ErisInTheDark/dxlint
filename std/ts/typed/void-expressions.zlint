@@ -21,7 +21,7 @@ fn void_expression_fixable(n) = {
   }
 }
 fn void_expression_annotation_void(n) = {
-  value arms: value_parts(n)
+  value arms: value_trait_parts(n, ["void", "parameter"])
   value arms != null && any(arms, arm => any(arm.parts, part => contains(part.traits, "void")
     && !contains(part.uncertain_traits, "void") && !contains(part.traits, "parameter")))
 }

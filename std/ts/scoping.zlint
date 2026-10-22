@@ -391,7 +391,7 @@ in ts_program, ts_function, ts_arrow, ts_method let scoping_consistent_returns
     then filter(scoping_own_returns, returned => returned.argument != null) else scoping_own_returns
 in ts_node let scoping_return_undefined
   is ts_identifier && text == "undefined" || scoping_void_expression == true
-  || re_test(file, /\.(ts|tsx|mts|cts)$/) && ts_value_trait(value_constituents(node), "undefined") && ts_value_has_void(node) == false
+  || re_test(file, /\.(ts|tsx|mts|cts)$/) && ts_value_trait(value_constituent_traits(node, ["undefined"]), "undefined") && ts_value_has_void(node) == false
 in ts_parenthesized let scoping_return_undefined expression.scoping_return_undefined
 fn scoping_return_specified(returned, unspecified) = returned.argument != null && !(unspecified && returned.argument.scoping_return_undefined == true)
 in ts_program, ts_function, ts_arrow, ts_method let scoping_return_name function_name.nonempty ?? "program"

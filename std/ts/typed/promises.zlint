@@ -36,7 +36,7 @@ in ts_spread rule no-misused-promises:spreads {
 
 fn promise_return_arms(signatures) = {
   value headers: flat_map(signatures ?? [], arm => arm)
-  value returns: map(headers, header => if header.result == null then null else value_constituents(header.result))
+  value returns: map(headers, header => if header.result == null then null else value_constituent_traits(header.result, ["intersection", "any", "unknown", "error", "thenable", "void"]))
   value if signatures == null || count(headers) == 0 || any(returns, arms => arms == null) then null
     else flat_map(returns, arms => arms)
 }

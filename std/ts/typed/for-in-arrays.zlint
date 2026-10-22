@@ -5,7 +5,7 @@ fn for_in_arraylike_value(handle) = {
   value any(index.alternatives, alternative => alternative.matched && any(alternative.sources, source =>
       source.kind == "indexer" && source.domain == "ordinal" || source.kind == "repeated" || source.kind == "ordinal"))
     && {
-      value length: value_constituents(value_lookup(handle, "length").member)
+      value length: value_constituent_traits(value_lookup(handle, "length").member, ["number"])
       value length != null && count(length) > 0
         && all(length, parts => any(parts, part => contains(part.traits, "number")))
     }
@@ -14,7 +14,7 @@ fn for_in_arraylike(arm) = any(arm.parts, part => contains(part.traits, "object"
   && (for_in_arraylike_value(arm.handle) || any(arm.parts, part => for_in_arraylike_value(part.handle)))
 
 in ts_for_in rule no-for-in-array {
-  when any(value_parts(right.node), arm => for_in_arraylike(arm))
+  when any(value_trait_parts(right.node, ["object", "structural"]), arm => for_in_arraylike(arm))
   report at { start: offset, end: opener.ts_open_paren.paired_token.end }
   warn "For-in loops over arrays skips holes, returns indices as strings, and may visit the prototype chain or other enumerable properties. Use a more robust iteration method such as for-of or array.forEach instead."
 }

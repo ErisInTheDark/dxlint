@@ -56,9 +56,9 @@ fn assignment_finding(site, mode, parts, receiver, this_any) = {
 }
 # `this` typed as any, with `noImplicitThis` off, gets its own message variant.
 fn assignment_this_any(source, n) = source != null && ts_compiler_option(n, "noImplicitThis") == false
-  && (source is ts_this && ts_value_category(value_constituents(source)) == "any"
+  && (source is ts_this && ts_value_category(value_constituent_traits(source, ["error", "any"])) == "any"
     || any(filter(descendants(ts_this) ?? [], item => item.offset >= source.offset && item.end_offset <= source.end_offset),
-      item => ts_value_category(value_constituents(item)) == "any"))
+      item => ts_value_category(value_constituent_traits(item, ["error", "any"])) == "any"))
 fn assignment_destructure_step(entry, source) = {
   value receiver: entry.receiver
   value sender: value_at(source, entry.path)

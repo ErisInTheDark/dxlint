@@ -13,7 +13,7 @@ fn strict_void_signatures_known(signatures) = count(signatures) > 0
 fn strict_void_source_allowed(signatures, allow_any) = strict_void_signatures_known(signatures)
   && all(signatures, signature => strict_void_signature_allowed(signature, allow_any))
 fn strict_void_handle_result(handle) = {
-  value parts: value_parts(handle)
+  value parts: value_trait_parts(handle, ["void", "undefined", "any", "null", "parameter"])
   value if parts == null then null else map(parts, arm => arm.parts)
 }
 fn strict_void_signature(header) = {
@@ -59,9 +59,9 @@ fn strict_void_reports(n, allow_any) = when {
   contains(n.modifier, "async") then [{site: function_head_site(n), mode: "async"}]
   n.body not ts_block then {
     value body: unparenthesised_node(n.body.node)
-    value eager: value_constituents(body)
+    value eager: value_constituent_traits(body, ["void", "undefined", "any", "null", "parameter"])
     value parts: if eager != null then eager else {
-      value arms: value_parts(body)
+      value arms: value_trait_parts(body, ["void", "undefined", "any", "null", "parameter"])
       value if arms == null then null else map(arms, arm => arm.parts)
     }
     value if strict_void_unsafe_parts(parts, allow_any) then [{site: body, mode: "return"}] else []
@@ -69,9 +69,9 @@ fn strict_void_reports(n, allow_any) = when {
   n.return_type != null && n.return_type.text != "void" then [{site: n.return_type.node, mode: "function"}]
   else then {
     value invalid: filter(n.scoping_own_returns, returned => {
-      value eager: value_constituents(returned.argument)
+      value eager: value_constituent_traits(returned.argument, ["void", "undefined", "any", "null", "parameter"])
       value parts: if eager != null then eager else {
-        value arms: value_parts(returned.argument)
+        value arms: value_trait_parts(returned.argument, ["void", "undefined", "any", "null", "parameter"])
         value if arms == null then null else map(arms, arm => arm.parts)
       }
       value returned.argument != null && strict_void_unsafe_parts(parts, allow_any)

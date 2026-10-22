@@ -295,7 +295,7 @@ in typed_simple_expression, ts_binary {
   let eval_callback ts_value_callable(node) || ts_value_builtin_type(node, ["Function"]) == true
 }
 fn eval_constant_string(n) = ts_runtime_string(n) != null && {
-  value arms: value_parts(n)
+  value arms: value_trait_parts(n, ["string", "enum"])
   value part: if count(arms) == 1 && count(first(arms).parts) == 1 then first(first(arms).parts) else null
   value part != null && contains(part.traits, "string") && !contains(part.traits, "enum")
 }
@@ -566,7 +566,7 @@ in ts_unary rule no-meaningless-void-operator {
   }
   when underlying not ts_assignment
   let call underlying is (ts_call, ts_new)
-  when if call then ts_value_trait(value_constituents(argument.node), "undefined")
+  when if call then ts_value_trait(value_constituent_traits(argument.node, ["undefined"]), "undefined")
     || checkNever && value_parts(argument.node) == [] else value_has_member(argument.node, "then", null) != true
   let operand_type if call then value_constituents(argument.node) else []
   when !call || operand_type != null

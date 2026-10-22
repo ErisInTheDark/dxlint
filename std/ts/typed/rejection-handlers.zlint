@@ -45,7 +45,7 @@ fn rejection_parameter_type(function, parameter) = {
   value when {
     declared != null then
       if parameter.name is ts_rest then value_at(declared, [0]) ?? rejection_rest_type(value_constituents(declared), function)
-        else value_constituents(declared)
+        else value_constituent_traits(declared, ["unknown"])
     parameter.name is ts_rest then rejection_rest_type(context, function)
     else then context
   }

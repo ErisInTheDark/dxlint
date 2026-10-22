@@ -31,13 +31,13 @@ fn condition_domains(parts) = {
       contains(part.traits, "null") || contains(part.traits, "undefined"))),
   }
 }
-fn condition_domain(n) = condition_domains(value_constituents(n))
+fn condition_domain(n) = condition_domains(value_constituent_traits(n, ["any", "unknown", "error", "falsy", "truthy", "null", "undefined", "parameter", "boolean", "number", "string", "bigint", "symbol", "object", "structural", "callable", "constructible"]))
 fn condition_known(d) = d.known == true
 fn condition_never(d) = !d.truthy && !d.falsy
 fn condition_returns(n) = {
   value signatures: value_signatures(n)
   value if signatures == null then null else flat_map(signatures, headers =>
-    map(headers, header => condition_domains(value_constituents(header.result))))
+    map(headers, header => condition_domains(value_constituent_traits(header.result, ["any", "unknown", "error", "falsy", "truthy", "null", "undefined", "parameter", "boolean", "number", "string", "bigint", "symbol", "object", "structural", "callable", "constructible"]))))
 }
 fn condition_base(n) = when {
   n is (ts_member, ts_index) then n.object.node
@@ -142,7 +142,7 @@ fn condition_predicate_choice(n, choice, target_choice) = {
       value {
         argument_index: index,
         asserts: descriptor.asserts,
-        argument: condition_domains(value_constituents(actual)),
+        argument: condition_domains(value_constituent_traits(actual, ["any", "unknown", "error", "falsy", "truthy", "null", "undefined", "parameter", "boolean", "number", "string", "bigint", "symbol", "object", "structural", "callable", "constructible"])),
         target: if descriptor.has_target then condition_domains(parts) else null,
         to_target: if descriptor.has_target then value_accepts(target, actual, null, null) else null,
         from_target: if descriptor.has_target then value_accepts(actual, target, null, null) else null,
@@ -258,7 +258,7 @@ fn condition_compare(left, right, op) = when {
 }
 fn condition_comparable_nullish(literal, other, loose) = !contains(["null", "undefined"], literal.type)
   || !condition_known(condition_domain(other)) || ts_value_has_trait(other, literal.type) == true
-  || any(value_constituents(other) ?? [], arm =>
+  || any(value_constituent_traits(other, ["null", "undefined", "boolean", "number", "string", "bigint"]) ?? [], arm =>
     all(arm, part => contains(part.traits, literal.type) || contains(part.uncertain_traits, literal.type)))
   || literal.type == "undefined" && ts_value_has_void(other) == true
   || loose && condition_domain(other).nullish
@@ -273,7 +273,7 @@ in ts_case let condition_comparison { left: parent.discriminant.node, right: tes
 
 @macro condition_boolean_policy {
   when checked.node != null && (checked.subject not ts_logical || checked.subject.operator == "??")
-  let values value_constituents(checked.subject)
+  let values value_constituent_traits(checked.subject, ["any", "unknown", "error", "null", "undefined", "falsy", "boolean", "number", "bigint", "string", "truthy", "structural"])
   let never_value values != null && count(values) == 0
   let certainly_truthy condition_structural_truthy(values) || checked.subject always truthy
   let certainly_falsy if certainly_truthy then false else checked.subject always falsy

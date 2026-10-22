@@ -69,7 +69,7 @@ fn typed_default_pattern(n) = {
       value choices: map(state.handles, handle => typed_default_member(handle, child))
       value {known: all(choices, choice => choice != null), handles: flat_map(choices, choice => choice ?? [])}
     })
-  value results: if state.known then map(state.handles, handle => value_constituents(handle)) else null
+  value results: if state.known then map(state.handles, handle => value_constituent_traits(handle, ["any", "unknown", "undefined", "void", "parameter"])) else null
   value if results != null && all(results, parts => parts != null)
     then flat_map(results, parts => parts) else null
 }
@@ -80,7 +80,7 @@ fn typed_useless_default(n) = {
   value source: if initial == null || undefined then null
     else if n is ts_parameter then typed_default_context(n) else typed_default_pattern(n)
   value optional: n is ts_parameter && n.type != null
-    && typed_default_maybe_undefined(value_constituents(n.type.node))
+    && typed_default_maybe_undefined(value_constituent_traits(n.type.node, ["any", "unknown", "undefined", "void", "parameter"]))
   value kind: when {
     initial == null then null
     undefined then if optional then "optional" else "undefined"

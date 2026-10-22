@@ -99,7 +99,7 @@ in ts_declarator, ts_assignment rule prefer-destructuring {
 
 fn structure_dot_keyword(name) = contains(["abstract", "boolean", "break", "byte", "case", "catch", "char", "class", "const", "continue", "debugger", "default", "delete", "do", "double", "else", "enum", "export", "extends", "false", "final", "finally", "float", "for", "function", "goto", "if", "implements", "import", "in", "instanceof", "int", "interface", "long", "native", "new", "null", "package", "private", "protected", "public", "return", "short", "static", "super", "switch", "synchronized", "this", "throw", "throws", "transient", "true", "try", "typeof", "var", "void", "volatile", "while", "with"], name)
 fn structure_property_info(subject, key) = {
-  value arms: filter(value_parts(subject) ?? [], arm => !all(arm.parts, part =>
+  value arms: filter(value_trait_parts(subject, ["null", "undefined"]) ?? [], arm => !all(arm.parts, part =>
     contains(part.traits, "null") || contains(part.traits, "undefined")))
   value lookups: map(arms, arm => value_lookup(arm.handle, key))
   value declared: count(lookups) > 0 && all(lookups, lookup => lookup != null
