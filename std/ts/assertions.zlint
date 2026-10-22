@@ -209,7 +209,73 @@ fn assertion_subject(n, ignored) = {
   last
 }
 fn assertion_parts_contain_any(parts) = any(parts ?? [], arm => any(arm.parts, part => contains(part.traits, "any")))
+fn assertion_handles_contain_any(handles, depth) = handles != null && depth > 0
+  && any(handles, handle => assertion_parts_deep_contain_any(value_parts(handle), depth))
+fn assertion_parts_deep_contain_any(parts, depth) = parts != null && depth > 0 && any(parts, arm => any(arm.parts, part =>
+  contains(part.traits, "any")
+    || part.carrier_known && part.carrier != null && assertion_handles_contain_any(part.carrier.arguments, depth - 1)
+    || part.product_known && part.product != null && assertion_handles_contain_any(part.product.elements, depth - 1)))
+fn assertion_contains_any(value) = assertion_parts_deep_contain_any(value_parts(value), 4)
+# Literal operands only keep a literal type through a const/readonly declaration.
+fn assertion_literal_expression(n) = n.expression.node is (ts_number, ts_string, ts_boolean, ts_bigint, ts_null, ts_regex, ts_array, ts_template, ts_arrow, ts_function, ts_class)
+fn assertion_empty_object_expression(n) = n.expression.node is ts_object && count(n.expression.node.property.nodes) == 0
+fn assertion_conceptual_literal(n) = assertion_literal_expression(n) || assertion_empty_object_expression(n)
+# A named annotation must name the same declaration with the same type arguments.
+fn assertion_named_annotation(n) = n.type.node is (ts_type_reference, ts_array_type, ts_tuple_type)
+fn assertion_parameter_value(value) = any(value_parts(value) ?? [], arm => any(arm.parts, part => contains(part.traits, "parameter")))
+fn assertion_written_annotation(subject) = {
+  value declaration: if subject is ts_identifier then subject.declaration else null
+  value owner: if declaration != null then declaration.parent else null
+  value if owner != null && owner.type != null then owner.type.text else null
+}
+fn assertion_named_unchanged(n, subject) = {
+  value written: assertion_written_annotation(subject)
+  value printed: ts_value_print_handle(subject)
+  value if !assertion_named_annotation(n) then true
+    else if assertion_parameter_value(subject) then true
+    else if written != null then written == n.type.text
+    else !contains(["object", "unknown"], printed) && printed == ts_value_print_handle(n.type.node)
+}
+# The receiver's own typing (union, satisfies, another assertion) gives no contextual type.
+fn assertion_property_receiver(n) = {
+  value property: n.parent.node
+  value object: if property is ts_property then property.parent.node else null
+  value parent: if object is ts_object then object.parent.node else null
+  value expected: if object is ts_object then value_expected_handle(object) else null
+  value if parent is (ts_as, ts_type_assertion, ts_satisfies) then true
+    else if parent is ts_call && parent.parent.node is ts_satisfies then true
+    else if object is ts_object && expected == null then true
+    else if property is ts_property && assertion_union_narrowing(n) then true
+    else false
+}
+# Selecting one arm of a union receiver keeps meaning; widening a whole union does not.
+fn assertion_union_narrowing(n) = {
+  value subject: unparenthesised_node(assertion_subject(n, []))
+  value arms: value_alternatives(subject)
+  value expected: value_expected_handle(n)
+  value receiver_any: expected != null && ts_value_trait(value_parts(expected) ?? [], "any")
+  value narrows: value_accepts(subject, n.type.node, "value", "value") == true
+    && value_accepts(n.type.node, subject, "value", "value") == false
+  value arms != null && count(arms) > 1 && receiver_any != true && narrows
+}
+# Overloads with differing parameter lists give the argument no single receiver type.
+fn assertion_overloaded_argument(n) = {
+  value parent: n.parent.node
+  value arguments: if parent is (ts_call, ts_new) then parent.argument.nodes else null
+  value if arguments != null && any(arguments, argument => argument.node == n) then {
+    value signatures: call_parameters(parent)
+    value headers: flat_map(signatures ?? [], arm => arm)
+    value counts: map(headers, header => count(header.parameters))
+    value count(headers) > 1 && !all(counts, size => size == first(counts))
+  } else false
+}
+# Inside a generic call only a literal operand (or a property's declared type) is a receiver context.
+fn assertion_generic_skip(n) = assertion_generic_context(n)
+  && !assertion_literal_expression(n) && n.parent.node not ts_property
+# A literal asserted to an enum keeps a nominal member type instead of the literal's own.
+fn assertion_enum_literal(n) = n.expression.node is (ts_number, ts_string, ts_boolean) && ts_value_has_enum(n) == true
 fn assertion_context_identity(n) = if n.expression.node is ts_object
+  && count(n.expression.node.property.nodes) > 0
   && !assertion_parts_contain_any(value_parts(n.type.node))
   && !assertion_parts_contain_any(value_parts(n.expression.node))
   && ts_value_trait(value_constituents(n.type.node), "unknown") != true
@@ -222,10 +288,22 @@ fn assertion_error_identity(n) = {
       && assertion_parts_contain_any(value_parts(n.expression.node))
     else false
 }
+# `NonNullable<X>` is `X` itself once `X` has no nullish arm.
+fn assertion_non_nullable_identity(n, subject) = {
+  value annotation: n.type.node
+  value arguments: if annotation is ts_type_reference && annotation.name.text == "NonNullable"
+    then annotation.type_argument.nodes else null
+  value arguments != null && count(arguments) == 1 && !assertion_nullish_parts(value_parts(subject))
+    && assertion_same_value(subject, first(arguments)) == true
+}
 fn assertion_same_shape(source, target) = if !assertion_parts_contain_any(value_parts(source))
   && !assertion_parts_contain_any(value_parts(target))
+  && !assertion_nullish_parts(value_parts(source)) && !assertion_nullish_parts(value_parts(target))
   && value_accepts(target, source, "value", "value") == true
   && value_accepts(source, target, "value", "value") == true then true else false
+# `undefined`, `null` and `void` are mutually assignable without being the same type.
+fn assertion_nullish_parts(parts) = any(parts ?? [], arm => any(arm.parts, part =>
+  contains(part.traits, "null") || contains(part.traits, "undefined") || contains(part.traits, "void")))
 fn assertion_generic_callee(call) = {
   value callee: unparenthesised_node(call.callee.node)
   value binding: if callee is ts_identifier then name_binding(callee) else null
@@ -253,6 +331,10 @@ fn assertion_context_skipped(n) = {
     else if n.expression.node is ts_template && count(n.expression.node.expression.nodes) > 0 then true
     else if n.expression.node is ts_array then true
     else if n.type.node is ts_union && (n.expression.node is ts_null || n.expression.node is ts_identifier && n.expression.node.text == "undefined") then true
+    else if assertion_enum_literal(n) then true
+    else if assertion_generic_skip(n) then true
+    else if assertion_property_receiver(n) then true
+    else if assertion_overloaded_argument(n) then true
     else if parent is (ts_as, ts_type_assertion, ts_spread, ts_satisfies) then true
     else if parent is ts_assignment && parent.operator != "=" && parent.right.offset == n.offset then true
     else if parent is ts_assignment && parent.right.offset == n.offset && parent.parent not ts_expression_statement then true
@@ -265,7 +347,7 @@ fn assertion_check(n, ignored, check_const) = {
   value operand: value_parts(subject)
   value annotation: if literal_const then value_parts(n) else value_parts(n.type.node)
   value contextual: !literal_const && assertion_outer(n).parent not (ts_as, ts_type_assertion)
-    && !assertion_parts_contain_any(value_parts(n.expression.node))
+    && !assertion_contains_any(n.expression.node)
     && (value_accepts(n, subject, "expected", "value") == true
       || value_accepts(n, n.expression.node, "expected", "widened") == true
       || n.parent.node is ts_property && value_accepts(n.expression.node, n.expression.node, "expected", "value") == true)
@@ -279,9 +361,16 @@ fn assertion_check(n, ignored, check_const) = {
   value same: if literal_const then assertion_same_handles(operand, annotation) == true
     else if assertion_context_identity(n) == true then true
     else if assertion_error_identity(n) == true then true
+    else if assertion_non_nullable_identity(n, subject) == true then true
+    else if assertion_parts_known(operand) && assertion_parts_known(annotation)
+      && (assertion_same_scalar_type(subject, n.type.node) || assertion_same_optional_type(subject, n.type.node)) then n.expression.node is ts_template || !assertion_conceptual_literal(n) || assertion_literal_preserved(n)
     else assertion_parts_known(operand) && assertion_parts_known(annotation)
-      && (assertion_same_value(subject, n.type.node) || assertion_same_scalar_type(subject, n.type.node)
-        || assertion_same_optional_type(subject, n.type.node) || assertion_same_shape(subject, n.type.node))
+      && !assertion_conceptual_literal(n)
+      && !assertion_parts_deep_contain_any(operand, 4) && !assertion_parts_deep_contain_any(annotation, 4)
+      && (assertion_same_value(subject, n.type.node)
+        || (subject not (ts_object, ts_array) || assertion_context_identity(n) == true)
+          && assertion_named_unchanged(n, subject)
+          && assertion_same_shape(subject, n.type.node))
   value generic: assertion_generic_call(subject)
   value literal_preserved: !any(annotation ?? [], arm => any(arm.parts, part =>
     part.identity_known && part.identity.kind == "value")) || assertion_literal_preserved(n)
