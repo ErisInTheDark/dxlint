@@ -58,6 +58,16 @@ fn promise_void_context(n) = {
       && all(headers, header => header.result_known) && promise_returns_void(target)
   }
 }
+# ESLint unions every call signature and drops an argument index when any
+# signature's parameter at that index accepts a thenable-returning function.
+fn promise_void_overload_accepts(n) = if n.parent.node not (ts_call, ts_new) then false else {
+  value call: n.parent.node
+  value signatures: if call is ts_new then value_constructors(call.callee.node) else value_signatures(call.callee.node)
+  value headers: flat_map(signatures ?? [], arm => arm)
+  value index: index_of(call.argument.nodes, n)
+  value chosen: map(headers, header => first(slice(header.parameters ?? [], index, index + 1)))
+  value found: any(chosen, item => item != null && promise_returns_thenable(promise_return_arms(value_signatures(item))))
+}
 fn promise_dispose_void_context(n) = {
   value key: {global: "Symbol", class: "value", path: ["dispose"]}
   # A disposal contract is only asked of `using` bindings and of targets whose
@@ -116,6 +126,7 @@ fn promise_async_policy(n, names) = {
 in ts_call.argument, ts_new.argument, ts_template.expression rule no-misused-promises:void-arguments {
   when parent not ts_call || node.index != 0 || !parent.promise_finally_callback
   when promise_void_context(node)
+  when !promise_void_overload_accepts(node)
   report at unparenthesised_node(node)
   warn "Promise returned in function argument where a void return was expected."
 }
