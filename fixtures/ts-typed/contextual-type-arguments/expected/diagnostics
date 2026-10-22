@@ -3,3 +3,4 @@ input.ts:21:6-21:18 no-unnecessary-type-arguments#1
 input.ts:5:6-5:13 no-unnecessary-type-arguments#1
 input.ts:7:6-7:11 no-unnecessary-type-arguments#1
 input.ts:8:6-8:13 no-unnecessary-type-arguments#1
+input.ts:10:7-10:13 no-unnecessary-type-arguments#1

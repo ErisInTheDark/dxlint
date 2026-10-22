@@ -6,7 +6,7 @@ define {
 fn type_argument_target(n) = unparenthesised_node(if n is ts_class then n.extends.node
   else if n is (ts_type_reference, ts_jsx_opening) then n.name.node
   else if n is ts_tagged_template then n.tag.node else n.callee.node)
-fn type_argument_declaration(n) = {
+fn type_argument_local(n) = {
   value target: type_argument_target(n)
   value binding: if target is ts_identifier then name_binding(target) else null
   value owners: map(binding.declarations ?? [], declaration => declaration.parent.node)
@@ -29,63 +29,232 @@ fn type_argument_declaration(n) = {
       then unparenthesised_node(owner.init.node)
     else null
 }
+# Names from another module stand for a declaration site: follow imports and
+# re-exports rather than only the local binding.
+fn type_argument_defined(target, classes) = if count(classes) == 0 then []
+  else { value found: name_definitions(target, first(classes))
+         value if count(found) > 0 then found else type_argument_defined(target, slice(classes, 1)) }
+# An export wrapper holds the declaration; anything else (an import specifier
+# whose module is unknown) is not one.
+fn type_argument_declared(n, site, depth) = if site == null || depth > 3 then null
+  else if contains(["ts_class", "ts_interface", "ts_type_alias", "ts_function", "ts_arrow", "ts_declarator", "ts_method", "ts_namespace"], site.kind) then site
+  else { value declaration: first(site_field(n, site, "declaration") ?? [])
+         value type_argument_declared(n, declaration, depth + 1) }
+# A member of a resolved object: class members, or a namespace body's own
+# declarations (its `body` field lists them).
+fn type_argument_member_sites(n, site) = if site == null then []
+  else if site.kind == "ts_namespace"
+    then flat_map(site_field(n, site, "body") ?? [], block => site_field(n, block, "body") ?? [])
+    else site_field(n, site, "member") ?? []
+fn type_argument_member(n) = {
+  value callee: unparenthesised_node(type_argument_target(n))
+  value object: if callee is ts_member then unparenthesised_node(callee.object.node) else null
+  value key: if callee is ts_member then callee.static_name else null
+  value found: if object is ts_identifier && key != null then name_definitions(object, "value") else []
+  value sites: filter(map(found, item => type_argument_declared(n, site_parent(n, item), 0)), item => item != null)
+  value members: filter(flat_map(sites, site => type_argument_member_sites(n, site)), member => member.name == key)
+  value parameterized: filter(members, member => count(site_field(n, member, "type_parameter") ?? []) > 0)
+  value if count(parameterized) > 0 then first(parameterized)
+    else if count(members) == 1 then first(members)
+    else null
+}
+fn type_argument_named(n) = {
+  value target: type_argument_target(n)
+  value classes: if n is ts_type_reference then ["type", "value"] else ["value"]
+  value found: if target is ts_identifier then type_argument_defined(target, classes) else []
+  value sites: filter(map(found, site => type_argument_declared(n, site_parent(n, site), 0)), site => site != null)
+  # A type reference reads the type side; a class heritage reads the value side.
+  value ordered: if n is ts_type_reference then
+      concat(concat(filter(sites, site => site.kind == "ts_interface"), filter(sites, site => site.kind == "ts_type_alias")), filter(sites, site => site.kind == "ts_class"))
+    else sites
+  value parameterized: filter(ordered, site => count(site_field(n, site, "type_parameter") ?? []) > 0)
+  value if count(parameterized) > 0 then first(parameterized)
+    else if count(sites) == 1 then first(sites)
+    else null
+}
+# The declaration a call or type reference finally stands for: the selected
+# signature for calls, otherwise the named declaration, otherwise a local one.
+fn type_argument_signature(n) = if n is (ts_call, ts_new) then {
+  value binding: call_binding(n)
+  value if binding != null && count(binding.choices) == 1 && first(binding.choices).site != null
+    then first(binding.choices) else null
+} else null
+fn type_argument_site(n, signature) = {
+  value named: type_argument_named(n)
+  value member: type_argument_member(n)
+  value local: {
+    value declaration: type_argument_local(n)
+    value if declaration != null then node_site(declaration) else null
+  }
+  value if signature != null then signature.site
+    else if local != null then local
+    else if named != null then named
+    else member
+}
+fn type_argument_formals(n, site) = {
+  value formals: if site != null then site_field(n, site, "type_parameter") else null
+  value named: if formals != null && count(formals) > 0 then null else type_argument_named(n)
+  value if formals != null && count(formals) > 0 then formals
+    else if named != null then site_field(n, named, "type_parameter")
+    else formals
+}
 fn type_argument_known(parts) = parts != null && all(parts, arm => all(arm, part =>
   part.carrier_known && !any(["any", "unknown", "error", "parameter"],
     trait => contains(part.traits, trait) || contains(part.uncertain_traits, trait))
   && all(part.carrier.arguments ?? [], argument => type_argument_known(argument))))
-fn type_argument_carried(parts) = parts != null && count(parts) > 0
-  && all(parts, arm => count(arm) > 0 && all(arm, part => part.carrier_known && part.carrier != null))
-fn type_argument_available(argument, parts) = if argument is ts_type_reference then {
-  value written: count(argument.type_argument.nodes)
-  value resolved: map(parts ?? [], arm => map(arm, part => count(part.carrier.arguments ?? [])))
-  value written == 0 || count(resolved) == 0
-    || all(resolved, arm => count(arm) > 0 && all(arm, count => count == written))
-} else true
-fn type_argument_same(source, other, widened) = {
-  value argument: value_union(source, [])
-  value a: value_constituents(argument)
-  value b: if widened then value_widened(other) else value_constituents(other)
-  value type_argument_known(a) && type_argument_known(b) && (
-    !widened && (value_same(argument, other) == true
-      || a == b && type_argument_carried(a) && type_argument_available(source, a))
-    || assertion_scalar_identity_known(a) && assertion_scalar_identity_known(b) && a == b)
+fn type_argument_parts(parts) = flat_map(parts ?? [], arm => arm)
+fn type_argument_special_part(part) =
+  contains(part.traits, "any")
+  || contains(part.traits, "structural") && !contains(part.traits, "object")
+    && !contains(part.traits, "callable") && !contains(part.traits, "parameter")
+fn type_argument_special(parts) =
+  parts != null && any(type_argument_parts(parts), part => type_argument_special_part(part))
+fn type_argument_numeric_part(part) =
+  contains(part.traits, "number") && !contains(part.traits, "string")
+fn type_argument_exact_numeric_part(part) =
+  type_argument_numeric_part(part) && (!part.identity_known || part.identity == null)
+fn type_argument_numeric(parts) = parts != null && count(parts) > 0
+  && all(parts, arm => count(arm) > 0 && all(arm, part => type_argument_exact_numeric_part(part)))
+fn type_argument_widened_numeric(parts) = parts != null && count(parts) > 0
+  && all(parts, arm => count(arm) > 0 && all(arm, part => type_argument_numeric_part(part)))
+fn type_argument_enum_carriers(parts) = flat_map(parts ?? [],
+  arm => map(filter(arm, part => contains(part.traits, "enum")), part => part.carrier))
+# TypeScript assigns `number` to numeric enums (and unions of them); distinct
+# numeric enums stay distinct.
+fn type_argument_numeric_carriers_same(a, b) = {
+  value ca: type_argument_enum_carriers(a)
+  value cb: type_argument_enum_carriers(b)
+  value count(ca) == 0 || count(cb) == 0
+    || count(ca) == count(cb) && all(ca, carrier => contains(cb, carrier))
 }
-fn type_argument_default(n, declaration) = {
-  value sources: if declaration != null then [node_site(declaration)]
-    else value_sources(if n is ts_type_reference then n else type_argument_target(n)).sites
-  value site: if count(sources) == 1 then first(sources) else null
-  value formal: get(site_field(n, site, "type_parameter"), count(n.type_argument.nodes) - 1)
-  value defaults: site_field(n, formal, "default")
-  value if count(defaults) == 1 then declaration_value(n, first(defaults)) else null
+fn type_argument_numeric_same(a, b) = type_argument_numeric(a) && type_argument_numeric(b)
+  && type_argument_numeric_carriers_same(a, b)
+fn type_argument_numeric_widened_same(a, b) =
+  type_argument_numeric(a) && type_argument_widened_numeric(b)
+  && type_argument_numeric_carriers_same(a, b)
+fn type_argument_product(parts) = if parts != null && count(parts) == 1 && count(first(parts)) == 1
+  then first(first(parts)).product else null
+fn type_argument_element_count(parts) = {
+  value product: type_argument_product(parts)
+  value if product != null && product.elements != null then count(product.elements) else null
 }
-fn type_argument_inferred(n, declaration, formal) = {
+fn type_argument_element(handle, index) = {
+  value rows: value_children(handle, false, [index])
+  value if rows != null && count(rows) > 0 then first(rows).handle else null
+}
+fn type_argument_elements_same(a, b, count, index) =
+  if index >= count then true
+  else {
+    value left: type_argument_element(a, index)
+    value right: type_argument_element(b, index)
+    value left != null && right != null && type_argument_same_handles(left, right)
+      && type_argument_elements_same(a, b, count, index + 1)
+  }
+fn type_argument_equivalent(a, b, depth) = {
+  value ca: value_constituents(a)
+  value cb: value_constituents(b)
+  value elements_a: type_argument_element_count(ca)
+  value elements_b: type_argument_element_count(cb)
+  value if depth < 3 && elements_a != null && elements_a == elements_b && elements_a > 0
+    then type_argument_elements_same(a, b, elements_a, 0)
+    else type_argument_numeric_same(ca, cb)
+      || type_argument_known(ca) && type_argument_known(cb)
+        && value_accepts(a, b, "value", "value") == true
+        && value_accepts(b, a, "value", "value") == true
+}
+fn type_argument_same_handles(a, b) = {
+  value ca: value_constituents(a)
+  value cb: value_constituents(b)
+  value if ca == null || cb == null then false
+    else if type_argument_special(ca) || type_argument_special(cb) then ca == cb
+    else if value_same(a, b) == true then true
+    else type_argument_equivalent(a, b, 0)
+}
+fn type_argument_enum_type(parts) = if parts != null && count(parts) == 1 then {
+  value carriers: type_argument_enum_carriers(parts)
+  value if count(carriers) > 0 && all(carriers, carrier => carrier == first(carriers))
+    then first(carriers) else null
+} else null
+fn type_argument_enum_value(parts, carrier) = parts != null && carrier != null
+  && any(type_argument_parts(parts), part => contains(part.traits, "enum") && part.carrier == carrier)
+# Widening an enum member gives its enum type, so the argument repeats the type
+# argument even though the member itself is narrower.
+fn type_argument_same_widened(n, argument) = {
+  value ca: value_constituents(n)
+  value cb: value_widened(argument)
+  value raw: value_constituents(argument)
+  value if ca == null || cb == null then false
+    else if type_argument_special(ca) || type_argument_special(cb) then ca == cb
+    else if type_argument_numeric_widened_same(ca, cb) then true
+    else if type_argument_enum_value(raw, type_argument_enum_type(ca)) then true
+    else value_accepts(n, argument, "value", "widened") == true
+      && value_accepts(argument, n, "widened", "value") == true
+}
+fn type_argument_same(n, other, widened) = if widened then {
+  value source: value_union(n, [])
+  value raw: value_union(other, [])
+  value source != null && raw != null && type_argument_same_handles(source, raw)
+    || type_argument_same_widened(n, other)
+} else {
+  value source: value_union(n, [])
+  value source != null && other != null && type_argument_same_handles(source, other)
+}
+fn type_argument_default_site(n, site) = {
+  value formal: get(type_argument_formals(n, site), count(n.type_argument.nodes) - 1)
+  value defaults: if formal != null then site_field(n, formal, "default") else null
+  value if defaults != null && count(defaults) == 1 then first(defaults) else null
+}
+fn type_argument_default(n, site) = {
+  value default: type_argument_default_site(n, site)
+  value if default != null then declaration_value(n, default) else null
+}
+# An unresolved type reference (`F<number>` from a missing module) says
+# nothing about which arguments it carries; only its written ones can tell
+# it apart from a default written with another shape.
+fn type_argument_written_same(n, default_site) = if n is ts_type_reference && default_site != null
+  then count(n.type_argument.nodes) == count(site_field(n, default_site, "type_argument") ?? [])
+  else true
+fn type_argument_unresolved(n) = {
+  value parts: value_constituents(n)
+  value parts != null && !type_argument_known(parts)
+}
+fn type_argument_parameter_direct(n, parameter, formal) = {
+  value annotation: first(site_field(n, parameter, "type") ?? [])
+  value candidates: if annotation != null && annotation.kind == "ts_union"
+    then site_field(n, annotation, "type") ?? [] else [annotation]
+  value any(candidates, candidate => candidate != null && candidate.kind == "ts_type_reference"
+    && count(site_field(n, candidate, "type_argument") ?? []) == 0
+    && { value name: first(site_field(n, candidate, "name") ?? [])
+         value found: if name != null then site_text(n, name) else null
+         value found != null && found.text == formal.name })
+}
+fn type_argument_parameter_sites(n, site, signature) = if signature != null then
+    map(signature.parameters ?? [], parameter => parameter.site)
+  else if site == null then []
+  else if site.kind == "ts_class" then {
+    value constructor: find(site_field(n, site, "member") ?? [], member => member.name == "constructor")
+    value if constructor != null then site_field(n, constructor, "parameter") ?? [] else []
+  } else site_field(n, site, "parameter") ?? []
+fn type_argument_inferred(n, site, signature, formal) = {
   value owner: n.parent.node
-  value parameters: if declaration is ts_class then
-    find(declaration.member.nodes, member => member is ts_method && member.key.text == "constructor").parameter.nodes
-    else declaration.parameter.nodes
-  value nested: any(parameters, parameter => any(parameter.type.descendants(ts_type_reference),
-    reference => reference.name is ts_identifier
-      && name_binding(reference.name.node).node == formal.name.node))
-  value pairs: zip(parameters, owner.argument.nodes)
-  value pair: find(pairs, pair => {
-    value annotation: first(pair).type.node
-    value candidates: if annotation is ts_union then annotation.type.nodes else [annotation]
-    value any(candidates, candidate => candidate is ts_type_reference
-      && candidate.type_argument == null && candidate.name is ts_identifier
-      && name_binding(candidate.name.node).node == formal.name.node)
-  })
-  value if nested || owner not (ts_call, ts_new) || last(pair) == null || last(pair) is (ts_this, ts_spread)
-    then false else type_argument_same(n, last(pair), true)
+  value pairs: zip(type_argument_parameter_sites(n, site, signature), owner.argument.nodes)
+  value pair: find(pairs, pair => pair != null && first(pair) != null && last(pair) != null
+    && last(pair) not (ts_this, ts_spread)
+    && type_argument_parameter_direct(n, first(pair), formal))
+  value pair != null && type_argument_same(n, last(pair), true)
 }
 fn type_argument_redundancy(n) = {
   value owner: n.parent.node
   value arguments: owner.type_argument.nodes
-  value declaration: type_argument_declaration(owner)
-  value formal: get(declaration.type_parameter.nodes, count(arguments) - 1)
-  value default: type_argument_default(owner, declaration)
+  value signature: type_argument_signature(owner)
+  value site: type_argument_site(owner, signature)
+  value formal: get(type_argument_formals(owner, site), count(arguments) - 1)
+  value default: type_argument_default(owner, site)
+  value default_site: type_argument_default_site(owner, site)
   value if last(arguments) != n then null
-    else if default != null && type_argument_same(n, default, false) then "default"
-    else if formal != null && type_argument_inferred(n, declaration, formal) then "inferred"
+    else if default != null && type_argument_same(n, default, false)
+      && (!type_argument_unresolved(n) || type_argument_written_same(n, default_site)) then "default"
+    else if formal != null && type_argument_inferred(n, site, signature, formal) then "inferred"
     else null
 }
 fn reduce_type_argument_fresh(initializer, annotation) = {

@@ -2,6 +2,7 @@
 
 import .ts/arithmetic
 import .ts/deprecation
+import .ts/import-no-deprecated
 import .ts/methods
 import .ts/spreads
 import .ts/type-specifiers

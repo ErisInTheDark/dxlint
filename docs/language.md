@@ -949,6 +949,7 @@ is wrong, messages) is written in the rule. A fact taking arguments is called (`
 | `environment` | the file's raw lint environment settings in config order, `{settings: [{name, value}]}` (`ecmaVersion`, `sourceType`, `globals`, ...); languages fold and normalise them |
 | `name_scopes(node, role)` | the scope chain for `node` in `role` (`declaration`, `reference` or `lexical`), innermost first, as `{id, owner, classes}` rows; `id` is an opaque scope identity |
 | `name_scope_declarations(node, scope, key)` | the declarations of `key` in scope `scope` (an id from `name_scopes`), in source order |
+| `name_definitions(node, class)` | the declarations the name `node` finally stands for as `class` (a declaration class name), followed through imports and re-exports, as `{file, node}` sites (`[]` when it names nothing of that class); null when unknown |
 | `name_binding(node)` | the explicit binding `node` declares or uses, as `{node, key, scope, declarations, references}`: `node` is the canonical (first) declaration, `scope` a `name_scopes` row, lists in source order; null when unbound, not a binding, or implicit; unknown when incomplete or over budget |
 | `name_role_classes(node, role)` | the declaration classes `node` takes in `role`. For the `name_*` queries, a valid node simply lacking the role answers null (known absent); an invalid role/scope id, failed names or an exhausted budget is unknown |
 | `name_classes(node, key, source, classes)` | per declaration class, does `key` (looked up from `node`, or in module `source` when given) declare a name of that class: `true` / `false` / `null` when unknown, independently per class. `classes` null asks every class; a list asks (and returns) only those, so ask only what you need. Unknown class names give null |
@@ -1347,6 +1348,7 @@ and `final-newline`.
 | `.ts/assertions` | assertion syntax, type-aware assertion and non-null policy, imported by `.ts` and `.ts/style` |
 | `.ts/naming` | name-format policy (`naming-convention` variants), open context groups and shared `naming_failure` helper; imported by `.ts/scoping` |
 | `.ts/deprecation` | declaration documentation policy (`no-deprecated`), imported by `.ts`; diagnostic-only |
+| `.ts/import-no-deprecated` | `import/no-deprecated`: deprecated exports, their import specifiers, uses and namespace members, imported by `.ts/typed`; diagnostic-only |
 | `.ts/type-specifiers` | shared type/value origin matching helpers (`matches_type_specifier`, `type_is_allowed`) |
 | `.ts/methods` | type-aware method policy (`prefer-find`), imported by `.ts/typed`; filter result zero-index/bracket/at access, computed constant methods, sequences and both conditional branches; diagnostic-only |
 | `.ts/selectors` | open `restricted_syntax` group and prohibition rule (`no-restricted-syntax`), imported by `.ts` |

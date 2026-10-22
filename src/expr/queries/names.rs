@@ -24,7 +24,48 @@ pub(super) static FUNCTIONS: &[QueryFunction] = &[
     QueryFunction { name: "name_scope_declarations", arity: 3, call: declarations },
     QueryFunction { name: "name_role_classes", arity: 2, call: role_classes },
     QueryFunction { name: "name_binding", arity: 1, call: binding },
+    QueryFunction { name: "name_definitions", arity: 2, call: definitions },
 ];
+
+/// `name_definitions(name, class)`: the declarations a name of `class`
+/// finally stands for, through imports and re-exports, as `{file, node}`
+/// sites; `[]` when it names nothing of that class, null when unknown.
+fn definitions(semantic: &Semantic<'_>, at: Leaf, args: &[Value<'static>]) -> Known<Value<'static>> {
+    let Some(context) = Context::read(semantic, at) else { return Known::Unknown };
+    let Some(Value::Str(class)) = args.first() else { return Known::Unknown };
+    let class = semantic.tables.vocabulary.declaration_class(class);
+    if class == 0 { return Known::Unknown }
+    // A reference stands for its local declaration first; that one (an
+    // import specifier) may stand for another module's.
+    let names = context.names;
+    let declaration = if names.declared.contains_key(&context.node.node) { context.node.node }
+        else if let Some(&declaration) = names.declaration.get(&context.node.node) { declaration }
+        else { return Known::Yes(Value::Null) };
+    let declaration = names.merged.get(&declaration).copied().unwrap_or(declaration);
+    let node = NodeRef { file: context.node.file, node: declaration };
+    let declares = names.declared.get(&declaration).is_some_and(|&(_, _, classes, _)| classes & class != 0);
+    match semantic.modules().definition(node, class) {
+        // Nothing further: the declaration itself, when it declares `class`.
+        Known::Yes(targets) if declares && targets.as_ref().is_none_or(Vec::is_empty) => Known::Yes(Value::list(vec![Value::record(vec![
+            ("file".into(), Value::Num(f64::from(node.file))),
+            ("node".into(), Value::Num(f64::from(node.node))),
+        ])])),
+        Known::Yes(Some(targets)) => Known::Yes(Value::list(targets.into_iter().filter_map(|target| {
+            // A scope target (a namespace, an enum) stands for its owner.
+            let node = match target {
+                Target::Node(node) => node,
+                Target::Scope(scope) => NodeRef { file: scope.file, node: semantic.world.names(scope.file)?.scopes.get(scope.scope as usize)?.node },
+                _ => return None,
+            };
+            Some(Value::record(vec![
+                ("file".into(), Value::Num(f64::from(node.file))),
+                ("node".into(), Value::Num(f64::from(node.node))),
+            ]))
+        }).collect())),
+        Known::Yes(None) => Known::Yes(Value::list(Vec::new())),
+        Known::Unknown => Known::Unknown,
+    }
+}
 
 enum Role {
     Declaration,

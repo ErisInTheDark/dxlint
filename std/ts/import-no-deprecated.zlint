@@ -1,0 +1,66 @@
+# eslint-plugin-import's `import/no-deprecated`: deprecated exports, their
+# imports, and the names those imports bind.
+
+import .ts/deprecation
+
+define {
+
+fn import_remote_site(n, site) = {
+  value parent: site_parent(n, site)
+  value if parent == null then true else !contains(["ts_import", "ts_import_specifier"], parent.kind)
+}
+fn import_deprecation_doc(n, site) = {
+  value owners: walk([site], current => site_parent(n, current))
+  value first(filter(map(owners, owner => deprecation_leading_doc(site_text(n, owner).leading)),
+    doc => doc != null))
+}
+fn import_remote_sites(n, sites) = filter(sites ?? [], site => import_remote_site(n, site))
+fn import_deprecation_tag(n) = {
+  value values: import_remote_sites(n, name_definitions(n, "value"))
+  value types: if count(values) > 0 then [] else import_remote_sites(n, name_definitions(n, "type"))
+  value sites: if count(values) > 0 then values else types
+  value deprecation_first(map(reverse(sites), site => import_deprecation_doc(n, site)))
+}
+fn import_message(tag) = "Deprecated" (if tag.reason == "" then "." else ": " tag.reason)
+
+fn import_namespace_root(n) = last(walk([n], current =>
+  if current is (ts_member, ts_index) then current.object.node
+  else if current is (ts_parenthesized, ts_non_null) then current.expression.node else null))
+fn import_namespace(n) = {
+  value root: import_namespace_root(n)
+  value binding: if root != null && root is ts_identifier then name_binding(root) else null
+  value if binding == null then false else binding.node is ts_import.namespace
+}
+
+# Found once per import, not once per use of the name it binds.
+in ts_import_specifier let import_tag import_deprecation_tag(local.node ?? imported.node)
+in ts_import let import_default_tag if default_import == null then null else import_deprecation_tag(default_import.node)
+
+in ts_import_specifier rule import-no-deprecated:specifier {
+  when import_tag != null
+  warn import_message(import_tag)
+}
+
+in ts_import.default_import rule import-no-deprecated:default {
+  when parent.import_default_tag != null
+  warn import_message(parent.import_default_tag)
+}
+
+in ts_identifier rule import-no-deprecated:use {
+  when resolved == "import"
+  when containing(ts_jsx_opening) == null && containing(ts_jsx_closing) == null
+  let declaration scope_declaration
+  let tag if declaration.parent is ts_import_specifier then declaration.parent.import_tag
+    else if declaration is ts_import.default_import then declaration.parent.import_default_tag else null
+  when tag != null
+  warn import_message(tag)
+}
+
+in ts_member.property rule import-no-deprecated:namespace {
+  when import_namespace(parent.node)
+  let tag deprecation_reason(node)
+  when tag != null
+  warn import_message(tag)
+}
+
+}

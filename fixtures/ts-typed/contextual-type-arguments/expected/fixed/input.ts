@@ -7,7 +7,7 @@ declare const mixed: Mixed;
 take(mixed);
 take(true);
 declare function tuple<T extends readonly unknown[]>(value: T): T;
-tuple<[1, 2]>([1, 2]);
+tuple([1, 2]);
 declare function returnsTrue(): true;
 interface BooleanField { ready: boolean; }
 take<BooleanField>({ ready: returnsTrue() });

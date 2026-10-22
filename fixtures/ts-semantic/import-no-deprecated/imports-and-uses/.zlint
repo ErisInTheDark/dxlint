@@ -1,0 +1,4 @@
+import .ts
+import .ts/import-no-deprecated
+rule import-no-deprecated
+ignore "node_modules/typescript/lib/lib.fixture.d.ts"
