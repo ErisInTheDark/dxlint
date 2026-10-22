@@ -1,0 +1,6 @@
+a.ts:11:1-11:11 ts-oracle#0 value [string, ...number[]]
+a.ts:15:1-15:18 ts-oracle#0 value (value: string) => void
+a.ts:3:1-3:7 ts-oracle#0 value Named
+a.ts:5:1-5:4 ts-oracle#0 value (v: number) => void
+a.ts:7:1-7:9 ts-oracle#0 value <T>(v: T) => T
+a.ts:9:1-9:15 ts-oracle#0 value [string, (number | undefined)?]

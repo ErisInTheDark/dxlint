@@ -1,0 +1,1 @@
+{"compilerOptions":{"strict":true,"target":"esnext","lib":["fixture"],"types":[],"exactOptionalPropertyTypes":true},"files":["a.ts"]}

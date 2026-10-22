@@ -1,0 +1,12 @@
+a.ts:10:1-10:11 ts-oracle#0 value number
+a.ts:12:1-12:7 ts-oracle#0 value Box<number>[]
+a.ts:14:1-14:11 ts-oracle#0 value Box<Box<string>>
+a.ts:17:1-17:4 ts-oracle#0 value string
+a.ts:19:1-19:4 ts-oracle#0 value never
+a.ts:22:1-22:6 ts-oracle#0 value Pair<number, number>
+a.ts:25:1-25:5 ts-oracle#0 value "value"
+a.ts:29:1-29:15 ts-oracle#0 value number
+a.ts:2:3-2:9 ts-oracle#0 value T
+a.ts:5:1-5:13 ts-oracle#0 value 1
+a.ts:6:1-6:15 ts-oracle#0 value "s"
+a.ts:9:1-9:5 ts-oracle#0 value Box<number>
