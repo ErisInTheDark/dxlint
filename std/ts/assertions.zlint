@@ -220,8 +220,6 @@ fn assertion_contains_any(value) = assertion_parts_deep_contain_any(value_parts(
 fn assertion_literal_expression(n) = n.expression.node is (ts_number, ts_string, ts_boolean, ts_bigint, ts_null, ts_regex, ts_array, ts_template, ts_arrow, ts_function, ts_class)
 fn assertion_empty_object_expression(n) = n.expression.node is ts_object && count(n.expression.node.property.nodes) == 0
 fn assertion_conceptual_literal(n) = assertion_literal_expression(n) || assertion_empty_object_expression(n)
-# A named annotation must name the same declaration with the same type arguments.
-fn assertion_named_annotation(n) = n.type.node is (ts_type_reference, ts_array_type, ts_tuple_type)
 fn assertion_parameter_value(value) = any(value_parts(value) ?? [], arm => any(arm.parts, part => contains(part.traits, "parameter")))
 fn assertion_written_annotation(subject) = {
   value declaration: if subject is ts_identifier then subject.declaration else null
@@ -231,8 +229,7 @@ fn assertion_written_annotation(subject) = {
 fn assertion_named_unchanged(n, subject) = {
   value written: assertion_written_annotation(subject)
   value printed: ts_value_print_handle(subject)
-  value if !assertion_named_annotation(n) then true
-    else if assertion_parameter_value(subject) then true
+  value if assertion_parameter_value(subject) then true
     else if written != null then written == n.type.text
     else !contains(["object", "unknown"], printed) && printed == ts_value_print_handle(n.type.node)
 }
