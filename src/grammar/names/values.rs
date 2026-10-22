@@ -193,6 +193,9 @@ pub(crate) struct State {
     member_closed: Memo<Leaf, Known<bool>>,
     bound_arguments: Memo<Leaf, Known<Option<NodeValue>>>,
     carriers: Memo<Leaf, Known<Option<Carrier>>>,
+    /// Globals named without arguments whose frames don't depend on where
+    /// they are named (`Symbol` in every `Symbol.dispose` key), by importer.
+    instances: Memo<(u32, Box<str>, u64), NodeValue>,
 }
 
 impl State {
@@ -216,6 +219,7 @@ impl State {
             + self.member_keys.finish(epoch, failed, cut, Settled::settled) + self.key_paths.finish(epoch, failed, cut, |_| true)
             + self.member_closed.finish(epoch, failed, cut, Settled::settled) + self.bound_arguments.finish(epoch, failed, cut, Settled::settled)
             + self.carriers.finish(epoch, failed, cut, Settled::settled)
+            + self.instances.finish(epoch, failed, cut, Settled::settled)
     }
 }
 
@@ -803,6 +807,8 @@ impl Values<'_> {
     fn instance(&self, at: Leaf, name: &str, classes: u64, arguments: &[Value]) -> NodeValue {
         let Some(_nested) = self.question.budget.nest() else { return NodeValue::Unknown };
         let Some(importer) = self.importer(at) else { return NodeValue::Unknown };
+        let kept = arguments.is_empty().then(|| (importer, Box::<str>::from(name), classes));
+        if let Some(value) = kept.as_ref().and_then(|key| self.semantic.values.instances.get(key)) { return value }
         let Known::Yes(targets) = self.semantic.modules().global(importer, name, classes) else {
             return NodeValue::Unknown;
         };
@@ -815,6 +821,7 @@ impl Values<'_> {
             args.push(self.evaluate(at, argument));
         }
         let mut values = Vec::new();
+        let mut site_free = true;
         for target in targets {
             if !self.question.budget.step() { return NodeValue::Unknown }
             let Target::Node(node) = target else { return NodeValue::Unknown };
@@ -828,12 +835,17 @@ impl Values<'_> {
                 if self.semantic.generic_scope(owner) == Some(owner.node) {
                     return self.question.bind_definition(super::question::FrameId::ROOT, owner, None, Some(args.clone()), classes);
                 }
+                site_free = false;
                 let through = match at.target { Target::Node(_) => Some(at), _ => None };
                 self.question.bind_definition(at.frame, owner, through, Some(args.clone()), classes)
             });
             values.push(self.values(Leaf { target: Target::Node(owner), frame }));
         }
-        eval::combine(self, values, true)
+        let value = eval::combine(self, values, true);
+        if let (Some(key), true) = (kept, site_free && value != NodeValue::Unknown) {
+            self.semantic.values.instances.insert(self.semantic.epoch, key, value.clone());
+        }
+        value
     }
 
     fn definitions(&self, leaf: Leaf, through: Leaf) -> Known<Vec<Leaf>> {

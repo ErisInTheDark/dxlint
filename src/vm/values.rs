@@ -438,6 +438,23 @@ impl View<'_> {
         }
     }
 
+    /// A hash values [`Self::equal`] calls equal share: lists by position,
+    /// records by key whatever their field order.
+    pub fn fingerprint(&self, value: V, tree: &crate::grammar::Tree, source: &str) -> u64 {
+        use std::hash::BuildHasher;
+        match value {
+            V::List(handle) => (0..self.len(handle)).fold(self.len(handle) as u64 ^ 0x1157, |print, at| {
+                print.rotate_left(7).wrapping_mul(0x100_0000_01B3) ^ self.fingerprint(self.item(handle, at), tree, source)
+            }),
+            V::Record(shape, handle) => self.config.shape_keys(shape).iter().enumerate().fold(self.len(handle) as u64 ^ 0x2EC, |print, (at, key)| {
+                let key = crate::fx_hash::FxBuild::default().hash_one(&**key);
+                print.wrapping_add(key ^ self.fingerprint(self.item(handle, at), tree, source).rotate_left(29))
+            }),
+            V::Text(handle) => super::text_fingerprint(self.pooled(handle, source)),
+            scalar => scalar.fingerprint(tree, source),
+        }
+    }
+
     pub fn value<'s>(&self, value: V, tree: &crate::grammar::Tree, source: &'s str) -> Value<'s> {
         match value {
             V::List(handle) => Value::list((0..self.len(handle)).map(|at| self.value(self.item(handle, at), tree, source)).collect()),

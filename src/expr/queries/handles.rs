@@ -8,13 +8,14 @@ use crate::grammar::names::question::{Handle, Known, NodeValue};
 use crate::grammar::names::semantic::Semantic;
 use crate::grammar::names::values::Key;
 
-use super::values::{lookup_in, member_key, member_parameters_in, project, project_path, project_with, source_value};
+use super::values::{lookup_in, member_key, member_parameters_in, project, project_path, project_traits, project_with, source_value, trait_ids};
 use super::QueryFunction;
 
 const FIELD: &str = "value_handle";
 
 pub(super) static FUNCTIONS: &[QueryFunction] = &[
     QueryFunction { name: "value_parts", arity: 1, call: |semantic, at, args| parts(semantic, semantic.values().values(at), args) },
+    QueryFunction { name: "value_trait_parts", arity: 2, call: |semantic, at, args| trait_parts(semantic, semantic.values().values(at), args) },
     QueryFunction { name: "value_alternatives", arity: 1, call: |semantic, at, args| alternatives(semantic, semantic.values().values(at), args) },
     QueryFunction { name: "node_site", arity: 1, call: |semantic, at, _| match semantic.leaf(at) {
         Known::Yes(crate::grammar::names::question::Leaf { target: crate::grammar::names::question::Target::Node(node), .. }) => Known::Yes(Value::record(vec![
@@ -77,6 +78,11 @@ static HANDLES: &[HandleFunction] = &[
     HandleFunction { name: "value_constructors", call: constructors },
     HandleFunction { name: "value_bases", call: bases },
     HandleFunction { name: "value_constituents", call: |semantic, value, _| project(semantic, value) },
+    HandleFunction { name: "value_trait_parts", call: trait_parts },
+    HandleFunction { name: "value_constituent_traits", call: |semantic, value, args| match trait_ids(semantic, args.first()) {
+        Some(wanted) => project_traits(semantic, value, &wanted),
+        None => Known::Unknown,
+    } },
     HandleFunction { name: "value_at", call: project_path },
     HandleFunction { name: "value_lookup", call: |semantic, value, args| match args.first().and_then(member_key) {
         Some(key) => lookup_in(semantic, value, &key),
@@ -191,6 +197,24 @@ fn parts(semantic: &Semantic<'_>, value: NodeValue, _: &[Value<'static>]) -> Kno
         let arm = NodeValue::rows(vec![row.clone()]);
         let projected = project_with(semantic, arm.clone(), &mut |semantic, argument| Known::Yes(handle(semantic, argument)));
         let Known::Yes(Value::List(projected)) = projected else { return Known::Unknown };
+        let Some(Value::List(constituents)) = projected.first() else { return Known::Unknown };
+        let parts = constituents.iter().zip(&row).map(|(part, &leaf)| with_handle(part, handle(semantic, NodeValue::leaf(leaf))))
+            .collect::<Option<Vec<_>>>();
+        let Some(parts) = parts else { return Known::Unknown };
+        arms.push(Value::record(vec![("handle".into(), handle(semantic, arm)), ("parts".into(), Value::list(parts))]));
+    }
+    Known::Yes(Value::list(arms))
+}
+
+/// [`parts`] projected to the traits asked for ([`project_traits`]).
+fn trait_parts(semantic: &Semantic<'_>, value: NodeValue, args: &[Value<'static>]) -> Known<Value<'static>> {
+    let Some(wanted) = trait_ids(semantic, args.first()) else { return Known::Unknown };
+    let NodeValue::Alternatives(rows) = value else { return Known::Unknown };
+    let mut arms = Vec::with_capacity(rows.len());
+    for row in rows {
+        if row.is_empty() || !semantic.question.budget.step() { return Known::Unknown }
+        let arm = NodeValue::rows(vec![row.clone()]);
+        let Known::Yes(Value::List(projected)) = project_traits(semantic, arm.clone(), &wanted) else { return Known::Unknown };
         let Some(Value::List(constituents)) = projected.first() else { return Known::Unknown };
         let parts = constituents.iter().zip(&row).map(|(part, &leaf)| with_handle(part, handle(semantic, NodeValue::leaf(leaf))))
             .collect::<Option<Vec<_>>>();

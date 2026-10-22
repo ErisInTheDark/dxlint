@@ -160,6 +160,16 @@ impl Values<'_> {
         self.tables.products.get(product.shape.0 as usize)?.as_ref()
     }
 
+    /// The value a product inherits its members from (`readonly T[]`'s
+    /// `ReadonlyArray<T>`); `None` for a non-product or without one.
+    pub fn product_base(&self, at: Leaf) -> Known<Option<NodeValue>> {
+        match self.product_info(at) {
+            Known::Yes(Some(product)) => self.product_inherited(at, &product),
+            Known::Yes(None) => Known::Yes(None),
+            Known::Unknown => Known::Unknown,
+        }
+    }
+
     pub(super) fn product_inherited(&self, at: Leaf, product: &Product) -> Known<Option<NodeValue>> {
         let Some(shape) = self.product_shape(product) else { return Known::Unknown };
         let recipe = if product.readonly { shape.readonly_inherits.as_ref().or(shape.inherits.as_ref()) } else { shape.inherits.as_ref() };

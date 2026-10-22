@@ -8,6 +8,7 @@ use super::QueryFunction;
 
 pub(super) static FUNCTIONS: &[QueryFunction] = &[
     QueryFunction { name: "value_constituents", arity: 1, call: constituents },
+    QueryFunction { name: "value_constituent_traits", arity: 2, call: constituent_traits },
     QueryFunction { name: "call_signatures", arity: 1, call: signatures },
     QueryFunction { name: "expected_call_signatures", arity: 1, call: expected_signatures },
     QueryFunction { name: "call_parameters", arity: 1, call: parameters },
@@ -32,6 +33,57 @@ pub(super) static FUNCTIONS: &[QueryFunction] = &[
 
 fn constituents(semantic: &Semantic<'_>, at: Leaf, _: &[Value<'static>]) -> Known<Value<'static>> {
     project(semantic, semantic.values().values(at))
+}
+
+/// The trait ids named by a list of trait names; `None` when the argument
+/// isn't one or names a trait the vocabulary lacks.
+pub(super) fn trait_ids(semantic: &Semantic<'_>, names: Option<&Value<'static>>) -> Option<Vec<(u16, Value<'static>)>> {
+    let Some(Value::List(names)) = names else { return None };
+    let traits = &semantic.tables.vocabulary.traits;
+    names.iter().map(|name| {
+        let Value::Str(_) = name else { return None };
+        let name = name.text();
+        let id = traits.iter().position(|known| **known == *name)?;
+        Some((u16::try_from(id).ok()?, Value::from(traits[id].clone())))
+    }).collect()
+}
+
+/// [`project`] reduced to the traits asked for: per alternative, per leaf,
+/// `{ traits, uncertain_traits }` over `wanted` only. Callers reading one or
+/// two traits skip the whole vocabulary and the identity, carrier and
+/// product records.
+pub(super) fn project_traits(semantic: &Semantic<'_>, value: NodeValue, wanted: &[(u16, Value<'static>)]) -> Known<Value<'static>> {
+    let Some(_nested) = semantic.question.budget.nest() else { return Known::Unknown };
+    let values = semantic.values();
+    let NodeValue::Alternatives(alternatives) = value else { return Known::Unknown };
+    let mut arms = Vec::with_capacity(alternatives.len());
+    for alternative in alternatives {
+        let mut parts = Vec::with_capacity(alternative.len());
+        for leaf in alternative {
+            if !semantic.question.budget.step() { return Known::Unknown }
+            let mut traits = Vec::new();
+            let mut uncertain = Vec::new();
+            for (id, name) in wanted {
+                match values.fits(leaf, *id) {
+                    Known::Yes(true) => traits.push(name.clone()),
+                    Known::Yes(false) => {}
+                    Known::Unknown => uncertain.push(name.clone()),
+                }
+                if semantic.question.budget.exhausted() { return Known::Unknown }
+            }
+            parts.push(Value::record(vec![
+                ("traits".into(), Value::list(traits)),
+                ("uncertain_traits".into(), Value::list(uncertain)),
+            ]));
+        }
+        arms.push(Value::list(parts));
+    }
+    Known::Yes(Value::list(arms))
+}
+
+fn constituent_traits(semantic: &Semantic<'_>, at: Leaf, args: &[Value<'static>]) -> Known<Value<'static>> {
+    let Some(wanted) = trait_ids(semantic, args.first()) else { return Known::Unknown };
+    project_traits(semantic, semantic.values().values(at), &wanted)
 }
 
 pub(super) fn project(semantic: &Semantic<'_>, value: NodeValue) -> Known<Value<'static>> {

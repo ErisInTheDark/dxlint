@@ -366,6 +366,17 @@ impl<'a, 'world> Run<'a, 'world> {
             if !self.positions.is_empty() && self.related_arguments(*expected, *actual) { return Known::Yes(true) }
         }
         if !self.positions.is_empty() && expected.len() > 1 && self.related_merged(expected, actual) { return Known::Yes(true) }
+        // An array or tuple type expected where an instance of the generic it
+        // stands for is given (`readonly T[]` and `ReadonlyArray<X>`): the
+        // product's inherited instance infers from the given one's type
+        // arguments, as one reference to another.
+        if let ([product], true) = (expected, !self.positions.is_empty() && actual.len() > 1) {
+            if let Known::Yes(Some(NodeValue::Alternatives(rows))) = values.product_base(*product) {
+                if let [row] = &rows[..] {
+                    if row.len() > 1 && self.related_merged(row, actual) { return Known::Yes(true) }
+                }
+            }
+        }
         // Merged declarations make one row of several leaves: pair them up.
         if self.positions.is_empty() && !expected.is_empty() && expected.len() == actual.len()
             && expected.iter().zip(actual).all(|(expected, actual)| self.same_instantiation(*expected, *actual)) {

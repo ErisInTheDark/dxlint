@@ -32,6 +32,22 @@ pub enum V {
     Record(u16, values::Handle),
 }
 
+/// [`V::fingerprint`] of null and of empty text.
+const EMPTY_FINGERPRINT: u64 = 0xE;
+
+fn number_fingerprint(number: f64) -> u64 {
+    // `0.0 == -0.0`: one fingerprint for both.
+    let bits = if number == 0.0 { 0 } else { number.to_bits() };
+    bits.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ 0x4E
+}
+
+pub(crate) fn text_fingerprint(text: &str) -> u64 {
+    use std::hash::BuildHasher;
+    if let Ok(number) = text.trim().parse::<f64>() { return number_fingerprint(number) }
+    if text.is_empty() { return EMPTY_FINGERPRINT }
+    crate::fx_hash::FxBuild::default().hash_one(text)
+}
+
 /// Text constants from configs, interned for the process: configs repeat
 /// the same few strings, so the pool stays small across reloads.
 type Pool = (crate::fx_hash::FxHashMap<&'static str, u32>, Vec<&'static str>);
@@ -114,6 +130,21 @@ impl V {
             V::Num(n) => Some(n),
             V::List(_) | V::Record(..) | V::Text(_) => None,
             text => text.text(tree, source)?.trim().parse().ok(),
+        }
+    }
+
+    /// A hash that values [`Self::loose_eq`] calls equal share (unequal ones
+    /// may collide): text reads as the number it parses as, empty text as
+    /// null, so `1`, `"1"` and `" 1.0 "` agree.
+    pub(crate) fn fingerprint(self, tree: &Tree, source: &str) -> u64 {
+        match self {
+            V::Null => EMPTY_FINGERPRINT,
+            V::Num(number) => number_fingerprint(number),
+            V::List(_) | V::Record(..) | V::Text(_) => unreachable!("file values need their arena"),
+            other => match other.text(tree, source) {
+                Some(text) => text_fingerprint(text),
+                None => match other { V::Bool(value) => 0xB001 + u64::from(value), _ => 0x0DD },
+            },
         }
     }
 
@@ -1128,6 +1159,15 @@ impl<'h, H: Host> Runtime<'h, H> {
             (a, b) => a.loose_eq(b, self.tree(), self.source()),
         }
     }
+    /// A hash values [`Self::equal`] calls equal share.
+    fn fingerprint(&self, value: V) -> u64 {
+        match value {
+            V::List(_) | V::Record(..) | V::Text(_) => {
+                with_view(self.host, &self.scratch.borrow(), |view| view.fingerprint(value, self.tree(), self.source()))
+            }
+            scalar => scalar.fingerprint(self.tree(), self.source()),
+        }
+    }
     fn num(&self, value: V) -> Option<f64> {
         let result = match value {
             V::Text(_) => self.with_text(value, |text| text.trim().parse().ok()),
@@ -1346,10 +1386,11 @@ fn walk_seq<H: Host>(h: &Runtime<'_, H>, node: u32, s: &Seq, f: &mut Vec<V>, eac
             }
         }
         Seq::Unique(of) => {
-            let mut seen: Vec<V> = Vec::new();
+            let mut seen: crate::fx_hash::FxHashMap<u64, Vec<V>> = crate::fx_hash::FxHashMap::default();
             return walk_seq(h, node, of, f, &mut |v, f| {
-                if seen.iter().any(|&s| h.equal(s, v)) { return Some(true); }
-                seen.push(v);
+                let bucket = seen.entry(h.fingerprint(v)).or_default();
+                if bucket.iter().any(|&s| h.equal(s, v)) { return Some(true); }
+                bucket.push(v);
                 each(v, f)
             });
         }
@@ -1397,13 +1438,17 @@ fn walk_seq<H: Host>(h: &Runtime<'_, H>, node: u32, s: &Seq, f: &mut Vec<V>, eac
             let mut queue = std::collections::VecDeque::new();
             walk_seq(h, node, roots, f, &mut |v, _| { queue.push_back(v); Some(true) })?;
             let mut seen_nodes = crate::fx_hash::FxHashSet::default();
-            let mut seen_values: Vec<V> = Vec::new();
+            // Values by fingerprint: a walk of record states (an enum's 841
+            // members) compares each only with the few sharing its print.
+            let mut seen_values: crate::fx_hash::FxHashMap<u64, Vec<V>> = crate::fx_hash::FxHashMap::default();
             while let Some(v) = queue.pop_front() {
                 let fresh = match v {
                     V::Null => false,
                     V::Node(id) => seen_nodes.insert(id),
-                    _ if seen_values.iter().any(|&s| h.equal(s, v)) => false,
-                    _ => { seen_values.push(v); true }
+                    _ => {
+                        let bucket = seen_values.entry(h.fingerprint(v)).or_default();
+                        if bucket.iter().any(|&s| h.equal(s, v)) { false } else { bucket.push(v); true }
+                    }
                 };
                 if !fresh {
                     continue;
