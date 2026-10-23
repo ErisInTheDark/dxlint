@@ -24,6 +24,9 @@ mod windows {
     const CONTEXT_FLAGS: u32 = 0x0010_0000 | 0x1 | 0x2 | 0x8;
     const OFFSET_FLAGS: usize = 0x30;
     const OFFSET_RSP: usize = 0x98;
+    const OFFSET_RBP: usize = 0xA0;
+    /// rbp's number in unwind info.
+    const RBP: u8 = 5;
     const OFFSET_RIP: usize = 0xF8;
     /// SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS.
     const SYMBOL_OPTIONS: u32 = 0x2 | 0x4;
@@ -61,6 +64,24 @@ mod windows {
         fn RtlVirtualUnwind(kind: u32, base: u64, pc: u64, entry: *mut c_void, context: *mut Context,
             handler: *mut *mut c_void, frame: *mut u64, pointers: *mut c_void) -> *mut c_void;
     }
+
+    #[link(name = "ntdll")]
+    extern "system" {
+        fn NtQueryInformationThread(thread: Handle, class: u32, info: *mut c_void, length: u32, returned: *mut u32) -> i32;
+    }
+    /// THREAD_BASIC_INFORMATION; its TEB starts with the stack bounds.
+    const THREAD_BASIC_INFORMATION: u32 = 0;
+    #[repr(C)]
+    struct ThreadBasicInformation {
+        exit_status: i32,
+        teb: *mut c_void,
+        client: [usize; 2],
+        affinity: usize,
+        priority: i32,
+        base_priority: i32,
+    }
+    const TEB_STACK_BASE: usize = 0x8;
+    const TEB_STACK_LIMIT: usize = 0x10;
 
     #[link(name = "winmm")]
     extern "system" {
@@ -131,6 +152,25 @@ mod windows {
         }
     }
 
+    /// `thread`'s stack as (limit, base): addresses in `limit..base`.
+    fn stack_bounds(thread: Handle, process: Handle) -> Option<(u64, u64)> {
+        // SAFETY: sized out-buffers; the TEB is read with ReadProcessMemory,
+        // which fails instead of faulting.
+        unsafe {
+            let mut info: ThreadBasicInformation = std::mem::zeroed();
+            if NtQueryInformationThread(thread, THREAD_BASIC_INFORMATION, (&mut info as *mut ThreadBasicInformation).cast(),
+                std::mem::size_of::<ThreadBasicInformation>() as u32, std::ptr::null_mut()) < 0 || info.teb.is_null() { return None }
+            let read = |offset: usize| {
+                let mut value = 0u64;
+                let mut got = 0usize;
+                (ReadProcessMemory(process, info.teb.cast::<u8>().add(offset).cast(), (&mut value as *mut u64).cast(), 8, &mut got) != 0 && got == 8)
+                    .then_some(value)
+            };
+            let (base, limit) = (read(TEB_STACK_BASE)?, read(TEB_STACK_LIMIT)?);
+            (limit < base).then_some((limit, base))
+        }
+    }
+
     /// One thread's call stack (instruction pointers, innermost first), read
     /// while it is suspended by unwinding its context with the image's
     /// unwind tables. Allocates nothing: a suspended thread may hold a lock
@@ -142,13 +182,20 @@ mod windows {
             if SuspendThread(thread) == u32::MAX { return false }
             context.0[OFFSET_FLAGS..OFFSET_FLAGS + 4].copy_from_slice(&CONTEXT_FLAGS.to_le_bytes());
             let ok = GetThreadContext(thread, context) != 0;
-            if ok {
+            let process = GetCurrentProcess();
+            // Unwinding reads the thread's stack directly through its saved
+            // registers: a thread stopped mid-prologue, mid-exit or with a
+            // scratch frame register would fault there (near-null reads
+            // crashed runs), so every step's stack and frame registers must
+            // lie in the thread's own stack, else the walk stops.
+            let bounds = stack_bounds(thread, process);
+            if let (true, Some((limit, base))) = (ok, bounds) {
                 into.fill(0);
                 let word = |context: &Context, offset: usize| u64::from_le_bytes(context.0[offset..offset + 8].try_into().unwrap_or_default());
-                let process = GetCurrentProcess();
+                let inside = |address: u64| (limit..base).contains(&address);
                 for slot in into.iter_mut() {
                     let pc = word(context, OFFSET_RIP);
-                    if pc == 0 { break }
+                    if pc == 0 || !inside(word(context, OFFSET_RSP)) { break }
                     *slot = pc;
                     let mut base = 0u64;
                     let entry = RtlLookupFunctionEntry(pc, &mut base, std::ptr::null_mut());
@@ -161,6 +208,13 @@ mod windows {
                         context.0[OFFSET_RIP..OFFSET_RIP + 8].copy_from_slice(&ret.to_le_bytes());
                         context.0[OFFSET_RSP..OFFSET_RSP + 8].copy_from_slice(&(rsp + 8).to_le_bytes());
                     } else {
+                        // A function with a frame register (rbp: x64 code
+                        // uses no other here) restores through it. Its
+                        // UNWIND_INFO's 4th byte names it (low nibble).
+                        // (An odd UnwindData names another function entry.)
+                        let data = *entry.cast::<u32>().add(2);
+                        let frame_register = if data & 1 == 0 { *((base + u64::from(data) + 3) as *const u8) & 0xF } else { RBP };
+                        if frame_register == RBP && !inside(word(context, OFFSET_RBP)) { break }
                         let mut handler = std::ptr::null_mut();
                         let mut frame = 0u64;
                         RtlVirtualUnwind(0, base, pc, entry, context, &mut handler, &mut frame, std::ptr::null_mut());
