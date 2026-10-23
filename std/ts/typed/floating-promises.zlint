@@ -107,6 +107,7 @@ in ts_expression_statement.expression, ts_arrow.body rule no-floating-promises {
   option allowForKnownSafePromises string[] = [] "Promise type names whose rejection is handled elsewhere"
   option allowForKnownSafeCalls string[] = [] "Function names whose returned promise is handled elsewhere"
   when floating_promise_subject_checked(node, ignoreIIFE)
+  when node not ts_assignment
   let failure floating_promise_failure(node, checkThenables, ignoreVoid, allowForKnownSafePromises, allowForKnownSafeCalls)
   when contains(["promise", "useless"], failure)
   report at if parent.node is ts_expression_statement then parent.node else node
@@ -136,6 +137,7 @@ in ts_expression_statement.expression, ts_arrow.body rule no-floating-promises:a
   option allowForKnownSafePromises string[] = [] "Promise type names whose rejection is handled elsewhere"
   option allowForKnownSafeCalls string[] = [] "Function names whose returned promise is handled elsewhere"
   when floating_promise_subject_checked(node, ignoreIIFE)
+  when node not ts_assignment
   when floating_promise_failure(node, checkThenables, ignoreVoid, allowForKnownSafePromises, allowForKnownSafeCalls) == "array"
   report at if parent.node is ts_expression_statement then parent.node else node
   warn if ignoreVoid then "An array of Promises may be unintentional. Consider handling the promises' fulfillment or rejection with Promise.all or similar, or explicitly marking the expression as ignored with the `void` operator."
