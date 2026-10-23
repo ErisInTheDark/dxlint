@@ -947,7 +947,10 @@ impl<'a> Files<'a> {
         if let Some(cached) = self.0.program.catalogs.borrow().get(&key) { return Known::Yes(cached.get()) }
         let cached = super::reads::Cached::compute(|| {
             let Known::Yes((program, outside)) = self.program_identity(selected) else { return Known::Unknown };
-            let key = super::program::CatalogKey { settings: selected as *const Settings as usize, program, outside, classes };
+            // The program's catalog is shared by every linted file, inside
+            // its inputs or not: a file outside adds its own declarations on
+            // top, instead of a whole catalog of its own.
+            let key = super::program::CatalogKey { settings: selected as *const Settings as usize, program, classes };
             let current_hash = super::reads::hash_bytes(self.0.ctx.source.as_bytes());
             let load = || self.0.linter.programs.catalog(key.clone(), self.0.ctx.profile, |dep| {
                 if let super::reads::Dep::Text(path, hash) = dep {
@@ -956,60 +959,74 @@ impl<'a> Files<'a> {
                 self.0.linter.holds(dep)
             }, || match self.0.complete_attribute(|| {
                 let Known::Yes(paths) = self.input_paths(selected) else { return Known::Unknown };
-                // Only files with a node that opens a module scope of these
-                // classes contribute, so the others never resolve their names:
-                // per kind, the conditions of its opening items.
-                let opens: Vec<Vec<Option<u32>>> = self.0.ctx.grammar.names.kinds.iter().map(|kind| kind.modules.items.iter()
-                    .filter(|item| matches!(item.action, Action::Scope { classes: opened, .. } if opened & classes != 0))
-                    .map(|item| item.when).collect()).collect();
-                let opening = |file: u32, tree: &Tree| tree.order.iter().any(|&node| {
-                    let at = Leaf { target: Target::Node(NodeRef { file, node }), frame: FrameId::ROOT };
-                    opens.get(tree.node(node).matcher as usize).is_some_and(|whens| whens.iter().any(|when| match when {
-                        None => true,
-                        Some(when) => World::condition(&self, at, *when, semantic) != Known::Yes(false),
-                    }))
-                });
-                let mut declarations = Vec::new();
-                let mut texts = crate::fx_hash::FxHashMap::default();
-                // Files whose text cannot declare an ambient scope are read
-                // (and recorded) but never parsed.
-                let mut candidates = Vec::new();
-                for path in paths.iter().chain(key.outside.iter()) {
-                    let Some(text) = self.source_text(path) else { return Known::Unknown };
-                    texts.insert(super::reads::dep_path(path), super::reads::hash_bytes(text.as_bytes()));
-                    if selected.globals.may_declare_ambient(&text) { candidates.push(path.clone()) }
-                }
-                self.prefetch_inputs(selected, &candidates);
-                for path in &candidates {
-                    let Some(file) = self.0.file(path) else { return Known::Unknown };
-                    let Some(tree) = World::tree(&self, file) else { return Known::Unknown };
-                    if !opening(file, tree) { continue }
-                    let Some(names) = World::names(&self, file) else { return Known::Unknown };
-                    let shared_path = super::reads::dep_path(path);
-                    for (scope, info) in names.scopes.iter().enumerate() {
-                        if classes & info.classes == 0 { continue }
-                        let Known::Yes(items) = self.named_scope(ScopeRef { file, scope: scope as u32 }, classes, semantic) else { return Known::Unknown };
-                        declarations.extend(items.into_iter().map(|item| super::program::Declaration {
-                            path: shared_path.clone(), scope: item.scope.scope, node: info.node,
-                            name: item.name, source: item.source, classes: item.classes,
-                        }));
-                    }
-                }
+                let Known::Yes((declarations, texts)) = self.catalog_declarations(selected, classes, &paths, semantic) else { return Known::Unknown };
                 Known::Yes(super::program::Catalog::new(declarations, texts))
             }) {
                 Known::Yes(answer) => answer,
                 Known::Unknown => Known::Unknown,
             });
-            match self.0.snapshot {
-                Some(snapshot) => snapshot.catalog(self.0.revision(), key.clone(), self.0.path, current_hash, load),
+            let Known::Yes(base) = (match self.0.snapshot {
+                // The linted file's own text is checked only where the
+                // catalog lists it: as an input.
+                Some(snapshot) => snapshot.catalog(self.0.revision(), key.clone(), outside.is_none().then_some((self.0.path, current_hash)), load),
                 None => load(),
-            }
+            }) else { return Known::Unknown };
+            let Some(outside) = outside else { return Known::Yes(base) };
+            let Known::Yes(Known::Yes((declarations, texts))) = self.0.complete_attribute(|| self.catalog_declarations(selected, classes, std::slice::from_ref(&outside), semantic))
+                else { return Known::Unknown };
+            Known::Yes(Arc::new(super::program::Catalog::over(base, declarations, texts)))
         });
         let answer = cached.get();
         if let Known::Yes(catalog) = &answer {
             self.0.program.catalogs.borrow_mut().insert(key, super::reads::Cached { value: catalog.clone(), reads: cached.reads });
         }
         answer
+    }
+
+    /// The ambient declarations of these classes in `paths`, with each
+    /// path's text hash.
+    fn catalog_declarations(self, selected: &Settings, classes: u64, paths: &[PathBuf], semantic: &Semantic<'_>)
+        -> Known<(Vec<super::program::Declaration>, crate::fx_hash::FxHashMap<super::reads::DepPath, u64>)> {
+        // Only files with a node that opens a module scope of these
+        // classes contribute, so the others never resolve their names:
+        // per kind, the conditions of its opening items.
+        let opens: Vec<Vec<Option<u32>>> = self.0.ctx.grammar.names.kinds.iter().map(|kind| kind.modules.items.iter()
+            .filter(|item| matches!(item.action, Action::Scope { classes: opened, .. } if opened & classes != 0))
+            .map(|item| item.when).collect()).collect();
+        let opening = |file: u32, tree: &Tree| tree.order.iter().any(|&node| {
+            let at = Leaf { target: Target::Node(NodeRef { file, node }), frame: FrameId::ROOT };
+            opens.get(tree.node(node).matcher as usize).is_some_and(|whens| whens.iter().any(|when| match when {
+                None => true,
+                Some(when) => World::condition(&self, at, *when, semantic) != Known::Yes(false),
+            }))
+        });
+        let mut declarations = Vec::new();
+        let mut texts = crate::fx_hash::FxHashMap::default();
+        // Files whose text cannot declare an ambient scope are read
+        // (and recorded) but never parsed.
+        let mut candidates = Vec::new();
+        for path in paths {
+            let Some(text) = self.source_text(path) else { return Known::Unknown };
+            texts.insert(super::reads::dep_path(path), super::reads::hash_bytes(text.as_bytes()));
+            if selected.globals.may_declare_ambient(&text) { candidates.push(path.clone()) }
+        }
+        self.prefetch_inputs(selected, &candidates);
+        for path in &candidates {
+            let Some(file) = self.0.file(path) else { return Known::Unknown };
+            let Some(tree) = World::tree(&self, file) else { return Known::Unknown };
+            if !opening(file, tree) { continue }
+            let Some(names) = World::names(&self, file) else { return Known::Unknown };
+            let shared_path = super::reads::dep_path(path);
+            for (scope, info) in names.scopes.iter().enumerate() {
+                if classes & info.classes == 0 { continue }
+                let Known::Yes(items) = self.named_scope(ScopeRef { file, scope: scope as u32 }, classes, semantic) else { return Known::Unknown };
+                declarations.extend(items.into_iter().map(|item| super::program::Declaration {
+                    path: shared_path.clone(), scope: item.scope.scope, node: info.node,
+                    name: item.name, source: item.source, classes: item.classes,
+                }));
+            }
+        }
+        Known::Yes((declarations, texts))
     }
 
     fn declaration_scope(self, declaration: &super::program::Declaration) -> Known<ScopeRef> {

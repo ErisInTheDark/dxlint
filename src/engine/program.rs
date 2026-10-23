@@ -21,7 +21,6 @@ pub(super) struct CatalogKey {
     pub settings: usize,
     /// The program's identity: a hash of its input paths.
     pub program: u64,
-    pub outside: Option<PathBuf>,
     pub classes: u64,
 }
 
@@ -36,7 +35,11 @@ pub(super) struct Declaration {
     pub source: Option<String>,
 }
 
+/// A program's ambient declarations. A linted file outside the program's
+/// inputs sees the program's shared catalog as its `base` plus its own
+/// declarations after it, as if listed last.
 pub(super) struct Catalog {
+    base: Option<Arc<Catalog>>,
     declarations: Vec<Declaration>,
     names: FxHashMap<String, Vec<usize>>,
     wildcards: Vec<usize>,
@@ -57,31 +60,45 @@ impl Catalog {
                 wildcards.push(index);
             }
         }
-        Self { declarations, names, wildcards, sources, texts }
+        Self { base: None, declarations, names, wildcards, sources, texts }
+    }
+
+    /// `base` with `declarations` (of files outside its program) after its own.
+    pub fn over(base: Arc<Catalog>, declarations: Vec<Declaration>, texts: FxHashMap<reads::DepPath, u64>) -> Self {
+        Self { base: Some(base), ..Self::new(declarations, texts) }
     }
 
     fn includes_text(&self, path: &std::path::Path, hash: u64) -> bool {
-        self.texts.get(path).is_some_and(|&stored| stored == hash)
+        self.texts.get(path).map_or_else(|| self.base.as_ref().is_some_and(|base| base.includes_text(path, hash)), |&stored| stored == hash)
     }
 
-    pub fn named<'a>(&'a self, name: &str, classes: u64) -> impl Iterator<Item = &'a Declaration> {
+    /// The catalogs in declaration order: the base's first.
+    fn layers(&self) -> impl Iterator<Item = &Catalog> {
+        self.base.as_deref().into_iter().chain(std::iter::once(self))
+    }
+
+    fn own_named<'a>(&'a self, name: &str) -> impl Iterator<Item = &'a Declaration> + use<'a> {
         self.names.get(name).into_iter().flatten().map(|&index| &self.declarations[index])
+    }
+
+    pub fn named<'a, 'n>(&'a self, name: &'n str, classes: u64) -> impl Iterator<Item = &'a Declaration> + use<'a, 'n> {
+        self.layers().flat_map(move |layer| layer.own_named(name))
             .filter(move |declaration| declaration.classes & classes != 0)
     }
 
-    pub fn ambient(&self, name: &str, classes: u64) -> Option<&Declaration> {
+    pub fn ambient<'a>(&'a self, name: &str, classes: u64) -> Option<&'a Declaration> {
         self.named(name, classes).find(|declaration| declaration.source.is_none()).or_else(|| {
-            self.wildcards.iter().map(|&index| &self.declarations[index])
+            self.layers().flat_map(|layer| layer.wildcards.iter().map(|&index| &layer.declarations[index]))
                 .find(|declaration| declaration.classes & classes != 0 && crate::path_globs::wildcard(&declaration.name, name))
         })
     }
 
-    pub fn candidates(&self, name: Option<&str>, classes: u64) -> impl Iterator<Item = &Declaration> {
-        let named = name.and_then(|name| self.names.get(name));
+    pub fn candidates<'a>(&'a self, name: Option<&'a str>, classes: u64) -> impl Iterator<Item = &'a Declaration> {
+        let named = name.into_iter().flat_map(move |name| self.layers().flat_map(move |layer| layer.own_named(name)));
         let augment = name.is_none();
-        let augmented = self.sources.iter().filter(move |_| augment);
-        named.into_iter().flatten().chain(augmented).map(|&index| &self.declarations[index])
-            .filter(move |declaration| declaration.classes & classes != 0)
+        let augmented = self.layers().filter(move |_| augment)
+            .flat_map(|layer| layer.sources.iter().map(|&index| &layer.declarations[index]));
+        named.chain(augmented).filter(move |declaration| declaration.classes & classes != 0)
     }
 }
 
@@ -555,8 +572,10 @@ impl Snapshot {
         self.paths.get((revision, context), None, |_| true, build)
     }
 
-    pub fn catalog(&self, revision: u64, key: CatalogKey, path: &std::path::Path, hash: u64, build: impl FnOnce() -> Known<Arc<Catalog>>) -> Known<Arc<Catalog>> {
-        self.catalogs.get((revision, key), None, |answer| answer.value.includes_text(path, hash), build)
+    /// `linted`: the linted file's path and text hash when the catalog lists
+    /// it (an input), so a catalog built from another text of it is redone.
+    pub fn catalog(&self, revision: u64, key: CatalogKey, linted: Option<(&std::path::Path, u64)>, build: impl FnOnce() -> Known<Arc<Catalog>>) -> Known<Arc<Catalog>> {
+        self.catalogs.get((revision, key), None, |answer| linted.is_none_or(|(path, hash)| answer.value.includes_text(path, hash)), build)
     }
 }
 
@@ -585,6 +604,27 @@ mod tests {
         assert_eq!(catalog.ambient("lib-other", 2).map(|declaration| declaration.scope), None);
         assert_eq!(catalog.candidates(Some("lib-one"), 1).map(|declaration| declaration.scope).collect::<Vec<_>>(), [3, 4]);
         assert_eq!(catalog.candidates(None, 1).map(|declaration| declaration.scope).collect::<Vec<_>>(), [3]);
+    }
+
+    #[test]
+    fn a_catalog_over_a_base_answers_like_one_listing_both() {
+        let declaration = |scope, name: &str, classes, source: Option<&str>| Declaration {
+            path: reads::dep_path(Path::new("/catalog/layers")), scope, node: scope, classes,
+            name: name.into(), source: source.map(str::to_owned),
+        };
+        let base = || vec![declaration(1, "lib-*", 1, None), declaration(2, "lib-one", 1, Some("./a")), declaration(3, "other", 3, None)];
+        let own = || vec![declaration(4, "lib-one", 1, None), declaration(5, "lib-one", 1, Some("./b")), declaration(6, "own-*", 2, None)];
+        let flat = Catalog::new(base().into_iter().chain(own()).collect(), Default::default());
+        let layered = Catalog::over(Arc::new(Catalog::new(base(), Default::default())), own(), Default::default());
+        let scopes = |declarations: Vec<&Declaration>| declarations.into_iter().map(|declaration| declaration.scope).collect::<Vec<_>>();
+        for classes in [1, 2, 3] {
+            for name in ["lib-one", "lib-two", "other", "own-x"] {
+                assert_eq!(layered.ambient(name, classes).map(|declaration| declaration.scope), flat.ambient(name, classes).map(|declaration| declaration.scope));
+                assert_eq!(scopes(layered.named(name, classes).collect()), scopes(flat.named(name, classes).collect()));
+                assert_eq!(scopes(layered.candidates(Some(name), classes).collect()), scopes(flat.candidates(Some(name), classes).collect()));
+            }
+            assert_eq!(scopes(layered.candidates(None, classes).collect()), scopes(flat.candidates(None, classes).collect()));
+        }
     }
 
     #[test]
@@ -622,10 +662,10 @@ mod tests {
         reads::set_buffer(library, "one");
         let programs = Programs::default();
         let profile = Profile::new(0, 0);
-        let key = CatalogKey { settings: 0, program: 0, outside: None, classes: 1 };
+        let key = CatalogKey { settings: 0, program: 0, classes: 1 };
         let snapshot = Snapshot::default();
         let hash = reads::hash_bytes(b"main");
-        let load = |snapshot: &Snapshot, revision| snapshot.catalog(revision, key.clone(), main, hash, || {
+        let load = |snapshot: &Snapshot, revision| snapshot.catalog(revision, key.clone(), Some((main, hash)), || {
             programs.catalog(key.clone(), Some(&profile), |dep| dep.holds(|_| reads::MISSING), || {
                 let text = reads::read(library).unwrap();
                 let mut texts = FxHashMap::default();
