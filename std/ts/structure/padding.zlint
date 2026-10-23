@@ -8,6 +8,9 @@ fn padding_prepare_selectors(selectors) = {
   value choices: if type_of(selectors) == "list" then selectors else [selectors]
   value if contains(choices, "*") then { wildcard: true } else {
     wildcard: false, names: choices,
+    special: any(choices, selector => type_of(selector) != "str" || contains([
+      "block-like", "multiline-block-like", "singleline-block-like", "require", "cjs-import", "iife", "cjs-export", "exports",
+    ], selector)),
     block_like: contains(choices, "block-like"),
     multiline_block_like: contains(choices, "multiline-block-like"),
     singleline_block_like: contains(choices, "singleline-block-like"),
@@ -31,7 +34,7 @@ fn padding_side_matches(item, selectors) = {
   value if selectors.wildcard then true else if len(selectors.names) == 0 then false else {
     value categories: item.structure_padding_categories
     value any(categories.structure_padding_names, name => contains(selectors.names, name))
-      || selectors.block_like && categories.structure_padding_block_like
+      || selectors.special && (selectors.block_like && categories.structure_padding_block_like
       || selectors.multiline_block_like && categories.structure_padding_multiline && categories.structure_padding_block_like
       || selectors.singleline_block_like && !categories.structure_padding_multiline && categories.structure_padding_block_like
       || selectors.require && categories.structure_padding_require
@@ -39,7 +42,7 @@ fn padding_side_matches(item, selectors) = {
       || selectors.iife && categories.structure_padding_iife
       || selectors.cjs_export && categories.structure_padding_cjs_export
       || selectors.exports && categories.structure_padding_exports_tag
-      || any(selectors.records, selector => padding_record_selector_matches(categories, selector))
+      || any(selectors.records, selector => padding_record_selector_matches(categories, selector)))
   }
 }
 

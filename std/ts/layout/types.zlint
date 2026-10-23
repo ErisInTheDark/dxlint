@@ -37,6 +37,9 @@ in ts_property_signature, ts_method_signature, ts_call_signature, ts_index_signa
 }
 
 schema annotation_gap_options { before?: boolean; after?: boolean }
+group layout_annotation_owner ts_declarator, ts_parameter, ts_class_property, ts_property_signature,
+  ts_index_signature, ts_tuple_member, ts_mapped_type, ts_function, ts_arrow, ts_method,
+  ts_method_signature, ts_call_signature, ts_function_type
 in ts_declarator, ts_parameter, ts_class_property, ts_property_signature, ts_index_signature, ts_tuple_member, ts_mapped_type let layout_annotation_start type.offset
 in ts_function, ts_arrow, ts_method, ts_method_signature, ts_call_signature, ts_function_type let layout_annotation_start return_type.offset
 in ts_declarator let layout_annotation_category "variable"
@@ -51,7 +54,6 @@ in ts_colon let layout_annotation_optional token(node, "before").text == "?"
   option overrides { colon?: annotation_gap_options; variable?: annotation_gap_options | "ignore"; property?: annotation_gap_options | "ignore"; parameter?: annotation_gap_options | "ignore"; returnType?: annotation_gap_options | "ignore"; questionMark?: annotation_gap_options | "ignore" } = {} "annotation context policies"
 }
 @macro layout_annotation_policy {
-  when parent.layout_annotation_start != null && offset < parent.layout_annotation_start
   let annotation_category parent.layout_annotation_category
   let annotation_policy if annotation_category == "variable" then overrides.variable else if annotation_category == "property" then overrides.property else if annotation_category == "parameter" then overrides.parameter else if annotation_category == "returnType" then overrides.returnType else overrides.colon
   when annotation_policy != "ignore"
@@ -62,8 +64,13 @@ in ts_colon let layout_annotation_optional token(node, "before").text == "?"
   let annotation_before if annotation_optional then overrides.questionMark.before.nonempty ?? annotation_colon_before else annotation_policy.before.nonempty ?? annotation_colon_before
   let annotation_after annotation_policy.after.nonempty ?? annotation_colon_after
 }
+@macro layout_annotation_context {
+  when parent is layout_annotation_owner
+  when parent.layout_annotation_start != null && offset < parent.layout_annotation_start
+}
 in ts_colon rule type-annotation-spacing:before {
   @layout_annotation_options
+  @layout_annotation_context
   when len(overrides) > 0 || layout_annotation_optional || before || token(node, "before").end != offset
   @layout_annotation_policy
   let annotation_gap if annotation_optional then ts_token_space(source, parent.optional.node, true) else space_before
@@ -74,6 +81,7 @@ in ts_colon rule type-annotation-spacing:before {
 }
 in ts_colon rule type-annotation-spacing:after {
   @layout_annotation_options
+  @layout_annotation_context
   let annotation_edge token(node, "after")
   let annotation_gap_text if annotation_edge == null then null else byte_slice(source, end_offset, annotation_edge.start)
   when len(overrides) > 0 || (if annotation_gap_text == "" then false else if annotation_gap_text == " " then true else space_after.spaced) != after
@@ -83,6 +91,7 @@ in ts_colon rule type-annotation-spacing:after {
   fix at { start: end_offset, end: if annotation_after then end_offset else space_after.end } if annotation_after || !space_after.comments as if annotation_after then " " else ""
 }
 in ts_colon rule type-annotation-spacing:between {
+  @layout_annotation_context
   when layout_annotation_optional
   @layout_annotation_options
   when (if token(node, "before").end == offset then false else space_before.spaced) != (overrides.questionMark.after.nonempty ?? false)
