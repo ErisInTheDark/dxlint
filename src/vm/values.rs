@@ -164,7 +164,8 @@ impl Arena {
 pub struct Config {
     pub(crate) lowering_errors: Vec<String>,
     shapes: Vec<Box<[Key]>>,
-    shape_ids: crate::fx_hash::FxHashMap<Vec<String>, u16>,
+    /// Shape ids by [`shape_hash`] of their keys (collisions share a list).
+    shape_ids: crate::fx_hash::FxHashMap<u64, Vec<u16>>,
     pub(super) constants: Arena,
     fact_shapes: crate::fx_hash::FxHashMap<usize, FactShape>,
     /// Lowered `fn` bodies by index (`None` while being lowered).
@@ -182,7 +183,20 @@ const RUNTIME_SHAPE: u16 = 0x8000;
 #[derive(Default, Debug)]
 struct RuntimeShapes {
     keys: Vec<std::sync::Arc<[Key]>>,
-    ids: crate::fx_hash::FxHashMap<Vec<String>, u16>,
+    ids: crate::fx_hash::FxHashMap<u64, Vec<u16>>,
+}
+
+/// A hash of a shape's key names, in order: records are looked up by it
+/// without building owned names.
+fn shape_hash<'k>(keys: impl Iterator<Item = &'k str>) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = crate::fx_hash::FxHasher::default();
+    for key in keys { key.hash(&mut hasher) }
+    hasher.finish()
+}
+
+fn same_keys<'k>(stored: &[Key], mut keys: impl ExactSizeIterator<Item = &'k str>) -> bool {
+    stored.len() == keys.len() && stored.iter().all(|key| keys.next() == Some(&**key))
 }
 
 /// A shape's keys, from the config or the runtime registry.
@@ -334,27 +348,34 @@ impl Config {
     /// The id of a record's shape, registering it at run time when the
     /// config never named it.
     fn record_shape(&self, entries: &[(Key, Value)]) -> Result<u16, PackError> {
-        let names: Vec<String> = entries.iter().map(|(key, _)| key.to_string()).collect();
-        if let Some(&id) = self.shape_ids.get(&names) { return Ok(id); }
-        if let Some(&id) = self.runtime_shapes.read().expect("shape registry").ids.get(&names) { return Ok(id); }
+        let names = || entries.iter().map(|(key, _)| &**key);
+        let hash = shape_hash(names());
+        let config = self.shape_ids.get(&hash).into_iter().flatten()
+            .find(|&&id| same_keys(&self.shapes[id as usize], names()));
+        if let Some(&id) = config { return Ok(id); }
+        let runtime = |shapes: &RuntimeShapes| shapes.ids.get(&hash).into_iter().flatten()
+            .find(|&&id| same_keys(&shapes.keys[(id - RUNTIME_SHAPE) as usize], names())).copied();
+        if let Some(id) = runtime(&self.runtime_shapes.read().expect("shape registry")) { return Ok(id); }
         let mut shapes = self.runtime_shapes.write().expect("shape registry");
-        if let Some(&id) = shapes.ids.get(&names) { return Ok(id); }
+        if let Some(id) = runtime(&shapes) { return Ok(id); }
         let id = runtime_shape_id(shapes.keys.len())?;
         shapes.keys.push(entries.iter().map(|(key, _)| key.clone()).collect());
-        shapes.ids.insert(names, id);
+        shapes.ids.entry(hash).or_default().push(id);
         Ok(id)
     }
 
     pub(super) fn shape(&mut self, keys: impl Iterator<Item = Key>) -> Option<u16> {
         let keys: Box<[Key]> = keys.collect();
-        let names: Vec<String> = keys.iter().map(ToString::to_string).collect();
-        if let Some(&id) = self.shape_ids.get(&names) { return Some(id); }
+        let hash = shape_hash(keys.iter().map(|key| &**key));
+        let known = self.shape_ids.get(&hash).into_iter().flatten()
+            .find(|&&id| same_keys(&self.shapes[id as usize], keys.iter().map(|key| &**key)));
+        if let Some(&id) = known { return Some(id); }
         let Some(id) = u16::try_from(self.shapes.len()).ok().filter(|&id| id < RUNTIME_SHAPE) else {
             self.lowering_errors.push(PackError::ConfigShapes.to_string());
             return None;
         };
         self.shapes.push(keys);
-        self.shape_ids.insert(names, id);
+        self.shape_ids.entry(hash).or_default().push(id);
         Some(id)
     }
 
