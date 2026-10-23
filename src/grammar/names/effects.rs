@@ -194,6 +194,9 @@ pub struct Execution {
     reachable_avoiding: RefCell<FxHashMap<Box<[StepId]>, std::sync::Arc<[u64]>>>,
     /// Reaching writes per candidate set ([`Self::reaching`]).
     reaching: RefCell<FxHashMap<Box<[StepId]>, std::rc::Rc<[u64]>>>,
+    /// By barriers, then marks: `None` once asked, then the steps reached
+    /// after a mark ([`Self::marked_before_steps`]).
+    marked_reach: RefCell<FxHashMap<Box<[StepId]>, FxHashMap<Box<[StepId]>, Option<std::rc::Rc<[u64]>>>>>,
     /// Each step's predecessors, built on first use; `None` when an edge
     /// leaves the graph.
     predecessors: OnceCell<Option<Adjacency>>,
@@ -424,7 +427,7 @@ impl Execution {
         let edges = Adjacency::successors(&edges);
         Execution { entry, steps, edges, sites, fields, writes, binding_writes, binding_reads, write_leaves,
             reachable: OnceCell::new(), guards: OnceCell::new(), reachable_avoiding: RefCell::default(), reaching: RefCell::default(),
-            predecessors: OnceCell::new(), dominators: OnceCell::new(), completion: None, frame: super::question::FrameId::ROOT }
+            marked_reach: RefCell::default(), predecessors: OnceCell::new(), dominators: OnceCell::new(), completion: None, frame: super::question::FrameId::ROOT }
     }
 
     pub(crate) fn built_in(mut self, frame: super::question::FrameId) -> Self {
@@ -908,6 +911,58 @@ impl Execution {
         Known::Yes(false)
     }
 
+    /// [`Self::marked_before`] with the marks as sorted steps. The first ask
+    /// for given barriers and marks walks back from its uses; a second one
+    /// walks forward from the starts once and keeps every step reached after
+    /// a mark, so each further read a guard covers is a lookup.
+    pub fn marked_before_steps(&self, starts: &[StepId], barriers: &[StepId], uses: &[StepId], marked: &[StepId], budget: &Budget) -> Known<bool> {
+        let is_marked = |step: StepId| marked.binary_search(&step).is_ok();
+        let known = self.marked_reach.borrow().get(barriers).and_then(|by_marks| by_marks.get(marked).cloned());
+        let bits = match known {
+            None => {
+                self.marked_reach.borrow_mut().entry(barriers.into()).or_default().insert(marked.into(), None);
+                return self.marked_before(starts, barriers, uses, is_marked, budget);
+            }
+            Some(Some(bits)) => bits,
+            Some(None) => {
+                let Some(bits) = self.marked_reach_bits(starts, barriers, is_marked, budget) else { return Known::Unknown };
+                self.marked_reach.borrow_mut().entry(barriers.into()).or_default().insert(marked.into(), Some(bits.clone()));
+                bits
+            }
+        };
+        if uses.iter().any(|&step| step as usize >= self.steps.len()) { return Known::Unknown }
+        Known::Yes(uses.iter().any(|&step| bits[step as usize / 64] & (1 << (step % 64)) != 0))
+    }
+
+    /// The steps some path from one of `starts` reaches, without crossing a
+    /// barrier, after passing a `marked` step (a start counts when marked
+    /// itself), as a bitset; `None` when cut short or an edge leaves the graph.
+    fn marked_reach_bits(&self, starts: &[StepId], barriers: &[StepId], marked: impl Fn(StepId) -> bool, budget: &Budget) -> Option<std::rc::Rc<[u64]>> {
+        let len = self.steps.len();
+        if starts.iter().chain(barriers).any(|&step| step as usize >= len) { return None }
+        let mut barrier = vec![false; len];
+        for &step in barriers { barrier[step as usize] = true }
+        let mut bits = vec![0u64; len.div_ceil(64)];
+        let mut seen = vec![[false; 2]; len];
+        let mut pending: Vec<(StepId, bool)> = Vec::new();
+        for &start in starts {
+            let passed = marked(start);
+            if passed { bits[start as usize / 64] |= 1 << (start % 64) }
+            if std::mem::replace(&mut seen[start as usize][usize::from(passed)], true) { continue }
+            pending.extend(self.edges.get(start)?.iter().map(|&next| (next, passed)));
+        }
+        while let Some((step, passed)) = pending.pop() {
+            if !budget.step() { return None }
+            if step as usize >= len { return None }
+            if barrier[step as usize] { continue }
+            let passed = passed || marked(step);
+            if std::mem::replace(&mut seen[step as usize][usize::from(passed)], true) { continue }
+            if passed { bits[step as usize / 64] |= 1 << (step % 64) }
+            pending.extend(self.edges.get(step)?.iter().map(|&next| (next, passed)));
+        }
+        Some(bits.into())
+    }
+
     pub fn reaches_through(&self, from: StepId, to: StepId, barriers: &[StepId], event: impl Fn(&Event) -> bool, budget: &Budget) -> Known<bool> {
         self.reaches_any_through(from, &[to], barriers, event, budget)
     }
@@ -1025,6 +1080,35 @@ mod tests {
                         Known::Unknown => panic!("small walk finishes"),
                     };
                     assert_eq!(graph.guarded(&[step], &[guard], &Budget::default()), Known::Yes(walked), "guard {guard} step {step} in {edges:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn kept_marked_reach_agrees_with_walks_back_from_each_use() {
+        let graphs: [&[&[StepId]]; 4] = [
+            &[&[1, 2], &[3], &[3], &[4], &[]],
+            &[&[1], &[2, 4], &[3], &[1], &[5], &[]],
+            &[&[1, 2], &[3], &[3, 4], &[5], &[5], &[], &[6]],
+            &[&[1], &[2, 3], &[1], &[4], &[1, 5], &[]],
+        ];
+        let barrier_sets: [&[StepId]; 3] = [&[1], &[1, 2], &[0, 3]];
+        let mark_sets: [&[StepId]; 3] = [&[], &[2], &[1, 4]];
+        for edges in graphs {
+            let graph = graph(edges);
+            let len = edges.len() as StepId;
+            for barriers in barrier_sets {
+                let starts: Vec<StepId> = barriers.iter().copied().filter(|&step| step < len).collect();
+                for marks in mark_sets {
+                    // Ask every use twice: the first ask walks back, later ones read the kept steps.
+                    for _ in 0..2 {
+                        for step in 0..len {
+                            let walked = graph.marked_before(&starts, &starts, &[step], |at| marks.contains(&at), &Budget::default());
+                            let kept = graph.marked_before_steps(&starts, &starts, &[step], marks, &Budget::default());
+                            assert_eq!(kept, walked, "use {step} barriers {starts:?} marks {marks:?} in {edges:?}");
+                        }
+                    }
                 }
             }
         }

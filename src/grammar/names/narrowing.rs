@@ -213,8 +213,15 @@ impl Narrowing<'_> {
     fn tested_roots(&self, file: u32) -> Option<std::rc::Rc<TestedRoots>> {
         let memo = &self.semantic.narrowing_places.tested;
         if let Some(roots) = memo.get(&file) { return roots }
-        let roots = self.collect_tested_roots(file).map(std::rc::Rc::new);
-        if self.semantic.question.budget.exhausted() { return None }
+        // A once-per-file scan on its own allowance: on the asking read's
+        // budget a cut would redo it for every later read in the file.
+        const STEPS_PER_NODE: u32 = 4;
+        let nodes = self.semantic.world.tree(file).map_or(0, |tree| tree.nodes.len());
+        let allowance = u32::try_from(nodes).unwrap_or(u32::MAX).saturating_mul(STEPS_PER_NODE)
+            .max(super::question::Budget::DEFAULT);
+        let budget = &self.semantic.question.budget;
+        let roots = budget.detached(allowance, || self.collect_tested_roots(file).map(std::rc::Rc::new))?;
+        if budget.exhausted() { return None }
         memo.insert(self.semantic.epoch, file, roots.clone());
         roots
     }
@@ -594,8 +601,7 @@ impl Region<'_> {
         // The candidates are exactly the steps whose write replaces the
         // tested place (sorted). The walk runs on an allowance for the
         // graph's size, not the asking read's.
-        let writes = |step: StepId| candidates.binary_search(&step).is_ok();
-        let written = budget.detached(self.execution.walk_allowance(), || self.execution.marked_before(&starts, self.entries, self.uses, writes, budget));
+        let written = budget.detached(self.execution.walk_allowance(), || self.execution.marked_before_steps(&starts, self.entries, self.uses, &candidates, budget));
         let Some(Known::Yes(written)) = written else { return Known::Unknown };
         Known::Yes(!written)
     }
