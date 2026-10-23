@@ -41,7 +41,8 @@ fn definitions(semantic: &Semantic<'_>, at: Leaf, args: &[Value<'static>]) -> Kn
     let declaration = if names.declared.contains_key(&context.node.node) { context.node.node }
         else if let Some(&declaration) = names.declaration.get(&context.node.node) { declaration }
         else { return Known::Yes(Value::Null) };
-    let declaration = names.merged.get(&declaration).copied().unwrap_or(declaration);
+    // Of merged declarations (`interface X` + `namespace X`), the one of `class`.
+    let declaration = names.declaration_in(names.merged.get(&declaration).copied().unwrap_or(declaration), class);
     let node = NodeRef { file: context.node.file, node: declaration };
     let declares = names.declared.get(&declaration).is_some_and(|&(_, _, classes, _)| classes & class != 0);
     match semantic.modules().definition(node, class) {

@@ -325,6 +325,8 @@ pub struct Resolved {
     /// Later declarations of a merged name (`var a; var a;`, `class X` +
     /// `interface X`) -> the first, which owns the binding.
     pub merged: FxHashMap<u32, u32>,
+    /// The first of merged declarations -> the later ones, in order.
+    merged_later: FxHashMap<u32, Vec<u32>>,
     /// Declaring name (the first of merged ones) -> using names, in order.
     pub references: FxHashMap<u32, Vec<u32>>,
     /// Node an effect targets (and every `targets` node on the way) ->
@@ -1080,6 +1082,7 @@ impl Names {
                 if let Some(first) = hoisted.next() {
                     for later in hoisted.filter(|d| d.name != first.name) {
                         out.merged.insert(later.name, first.name);
+                        out.merged_later.entry(first.name).or_default().push(later.name);
                     }
                 }
             }
@@ -1209,12 +1212,15 @@ fn visible(decls: &[Declared], start: u32, want: u64) -> Option<u32> {
 }
 
 impl Resolved {
+    /// The declaration of `classes` that `node` (a use or a declaration)
+    /// stands for: among merged declarations (`interface X` + `namespace
+    /// X`), the first that declares one of them, else the first.
     pub fn declaration_in(&self, node: u32, classes: u64) -> u32 {
-        if self.declared.get(&node).is_some_and(|&(_, _, declared, _)| declared & classes != 0) {
-            node
-        } else {
-            self.declaration.get(&node).copied().unwrap_or(node)
-        }
+        let declares = |name: u32| self.declared.get(&name).is_some_and(|&(_, _, declared, _)| declared & classes != 0);
+        if declares(node) { return node }
+        let first = self.declaration.get(&node).copied().unwrap_or(node);
+        if declares(first) { return first }
+        self.merged_later.get(&first).and_then(|later| later.iter().copied().find(|&name| declares(name))).unwrap_or(first)
     }
 
     fn failure(&mut self, node: u32, message: Box<str>) {
