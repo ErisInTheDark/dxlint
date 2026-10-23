@@ -15,7 +15,7 @@ in ts_node let promise_boolean_left
     || parent is ts_conditional && not ts_conditional.test)
     && parent.promise_boolean_left == true
 
-in ts_node rule no-misused-promises:conditionals {
+in ts_parenthesized.expression, ts_logical.left, ts_logical.right, ts_conditional.test, ts_conditional.consequent, ts_conditional.alternate, ts_if.test, ts_while.test, ts_do_while.test, ts_for.test, ts_unary.argument rule no-misused-promises:conditionals {
   option flagUnions "none" | "strict" | "all" = "none" "Which mixed promise unions to flag"
   when not (ts_parenthesized, ts_logical, ts_conditional, ts_null, ts_boolean, ts_number, ts_bigint, ts_string)
   when !(is ts_unary && node.operator == "!")
