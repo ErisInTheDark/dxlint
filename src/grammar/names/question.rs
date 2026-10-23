@@ -72,9 +72,12 @@ impl Drop for Nested<'_> {
 }
 
 impl Budget {
-    /// The work one question may do. Generous for real code; it exists to
-    /// stop cycles and pathological types, not to tune results.
+    /// The floor of the allowances once-per-file and once-per-graph work
+    /// runs on (detached from the asking question).
     pub const DEFAULT: u32 = 100_000;
+    /// The work one root question may do by default: a question past it is
+    /// waste, and speed ranks before parity.
+    pub const QUESTION: u32 = 10_000;
     /// How deeply engines may call into each other in one question.
     pub const DEPTH: u32 = 256;
 
@@ -152,7 +155,7 @@ impl Budget {
         (!ran_out).then_some(result)
     }
 
-    /// The work each root question gets in this process: [`Budget::DEFAULT`]
+    /// The work each root question gets in this process: [`Budget::QUESTION`]
     /// unless `--semantic-budget` set it (a diagnostic ruler: questions
     /// doing more than it give up and show in the profile).
     pub fn per_question() -> u32 {
@@ -175,7 +178,7 @@ impl Budget {
     }
 }
 
-static PER_QUESTION: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(Budget::DEFAULT);
+static PER_QUESTION: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(Budget::QUESTION);
 
 impl Default for Budget {
     fn default() -> Budget {

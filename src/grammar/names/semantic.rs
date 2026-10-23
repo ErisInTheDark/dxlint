@@ -524,15 +524,16 @@ mod tests {
             cut: Cell::new(0), revision: Cell::new(0), profile: Some(&profile),
         };
         let session = Session::default();
-        let half = Budget::DEFAULT / 2;
-        for (units, known) in [(half, true), (half + 1, false), (Budget::DEFAULT, false), (3, true)] {
+        let budget = Budget::per_question();
+        let half = budget / 2;
+        for (units, known) in [(half, true), (half + 1, false), (budget, false), (3, true)] {
             session.run(&world, &linter.grammar.names, |semantic| {
                 for _ in 0..units { assert!(semantic.question.budget.step()); }
                 if known { Known::Yes(()) } else { Known::Unknown }
             });
         }
-        assert_eq!(profile.semantic_budget_steps_total.load(Ordering::Relaxed), u64::from(half * 2 + 1 + Budget::DEFAULT + 3));
-        assert_eq!(profile.semantic_budget_steps_max.load(Ordering::Relaxed), u64::from(Budget::DEFAULT));
+        assert_eq!(profile.semantic_budget_steps_total.load(Ordering::Relaxed), u64::from(half * 2 + 1 + budget + 3));
+        assert_eq!(profile.semantic_budget_steps_max.load(Ordering::Relaxed), u64::from(budget));
         assert_eq!(profile.semantic_budget_steps_over_half.load(Ordering::Relaxed), 2);
         assert_eq!(profile.semantic_budget_limits.load(Ordering::Relaxed), 1);
         assert_eq!(profile.semantic_state_discards.load(Ordering::Relaxed), 1);
