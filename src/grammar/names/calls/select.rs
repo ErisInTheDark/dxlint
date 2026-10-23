@@ -319,10 +319,12 @@ fn agreement(group: &[Known<Candidate>], values: &Values<'_>) -> Known<NodeValue
         if let Some(previous) = &agreed {
             if previous == &result { continue }
             // Instances of the same generics whose arguments aren't all known
-            // can't be shown to agree: don't compare their whole member
-            // structure both ways (`Set<?>` from two `Set` constructor
-            // overloads spent a question's budget doing that).
-            if instances_with_unknown_arguments(previous, &result, values) { return Known::Unknown }
+            // agree on the declarations, which is all they can tell: keep the
+            // first instead of comparing their whole member structure both
+            // ways (`Set<?>` from two `Set` constructor overloads spent a
+            // question's budget doing that; `Promise.resolve(x)` of an
+            // unknown `x` is still a `Promise`).
+            if instances_with_unknown_arguments(previous, &result, values) { continue }
             if values.calls().accepts(previous, &result) != Known::Yes(true)
                 || values.calls().accepts(&result, previous) != Known::Yes(true) {
                 return Known::Unknown;

@@ -848,7 +848,7 @@ impl Values<'_> {
                 // argument, reads nothing from where it was named: every site
                 // instantiating `Awaited<Promise<X>>` shares one frame (and
                 // its answers).
-                if self.semantic.generic_scope(owner) == Some(owner.node) {
+                if self.semantic.generic_scope(owner) == Some(owner.node) && self.semantic.declares_formals(owner) {
                     return self.question.bind_definition(super::question::FrameId::ROOT, owner, None, Some(args.clone()), classes);
                 }
                 site_free = false;
@@ -1001,7 +1001,7 @@ impl Values<'_> {
     /// when no type parameters are around it: nothing it holds depends on
     /// where it was reached from. `None` for owners that may instantiate.
     pub(super) fn shared_frame(&self, owner: NodeRef, classes: u64) -> Option<super::question::FrameId> {
-        (self.world.tree(owner.file).is_some() && self.semantic.generic_scope(owner).is_none())
+        (self.world.tree(owner.file).is_some() && (self.semantic.generic_scope(owner).is_none() || self.semantic.shares_one_frame(owner)))
             .then(|| self.question.bind_definition(super::question::FrameId::ROOT, owner, None, None, classes))
     }
 

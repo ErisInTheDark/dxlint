@@ -31,6 +31,8 @@ pub struct State {
     /// [`Semantic::generic_scope`] by owner: syntax alone decides it, and
     /// frames ask it for every leaf they reach.
     generic_scopes: RefCell<crate::fx_hash::FxHashMap<NodeRef, Option<u32>>>,
+    /// [`Semantic::shares_one_frame`] by owner.
+    single_frames: RefCell<crate::fx_hash::FxHashMap<NodeRef, bool>>,
     /// Attributes (keyed at the root frame) whose answer asked no value
     /// question: the same in every frame.
     frame_free: RefCell<crate::fx_hash::FxHashSet<AttributeKey>>,
@@ -179,6 +181,39 @@ impl<'a> Semantic<'a> {
             cursor = tree.parent(id);
         }
         scope
+    }
+
+    /// Whether `node` declares formals in its syntax: its kind's generics
+    /// paths find some (paths through attributes or value steps can't be
+    /// told from syntax: they may).
+    pub(crate) fn declares_formals(&self, node: NodeRef) -> bool {
+        let Some(tree) = self.world.tree(node.file) else { return true };
+        let Some(kind) = tree.nodes.get(node.node as usize).and_then(|data| self.tables.kinds.get(data.matcher as usize)) else { return false };
+        kind.generics.iter().any(|(path, _)| {
+            path.iter().any(|&label| label >= super::ATTR_STEP && label != super::PARENT && label != super::IT)
+                || tree.semantic_follow_with(node.node, path, &mut || true).is_none_or(|nodes| !nodes.is_empty())
+        })
+    }
+
+    /// Whether every reference to `owner` reads one value: a plain binding
+    /// (neither it nor its parent can be instantiated, unlike callables,
+    /// parameters and members, whose values frames or context decide) with
+    /// no ancestor declaring formals in syntax (a local of a non-generic
+    /// function or class).
+    pub(crate) fn shares_one_frame(&self, owner: NodeRef) -> bool {
+        if let Some(&shared) = self.single_frames.borrow().get(&owner) { return shared }
+        let Some(tree) = self.world.tree(owner.file) else { return false };
+        let instantiable = |id: u32| tree.nodes.get(id as usize)
+            .and_then(|data| self.tables.kinds.get(data.matcher as usize))
+            .is_none_or(|kind| !kind.generics.is_empty());
+        let mut shared = !instantiable(owner.node) && tree.parent(owner.node).is_none_or(|parent| !instantiable(parent));
+        let mut cursor = Some(owner.node);
+        while let (true, Some(id)) = (shared, cursor) {
+            if self.declares_formals(NodeRef { node: id, ..owner }) { shared = false }
+            cursor = tree.parent(id);
+        }
+        self.single_frames.borrow_mut().insert(owner, shared);
+        shared
     }
 
     pub fn parent(&self, at: Leaf) -> Known<Option<Leaf>> {
