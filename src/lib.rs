@@ -15,6 +15,7 @@ pub mod engine;
 pub mod expr;
 pub mod fx_hash;
 pub mod grammar;
+pub mod levers;
 pub mod line_index;
 pub mod lsp;
 pub mod native;
