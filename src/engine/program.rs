@@ -354,13 +354,21 @@ pub(super) enum StableQuestion {
 /// global name).
 pub(super) type Survey = Arc<[(PathBuf, Option<Arc<str>>, bool)]>;
 
-/// Per surveyed input, the byte trigrams its text holds, hashed into a
-/// fixed bit set (2 KiB per input): a name can only occur in a text holding
-/// every trigram of it, so only those texts are searched.
-pub(super) struct Sketches(Vec<Option<Box<[u64; SKETCH_WORDS]>>>);
+/// The byte trigrams each surveyed input's text holds, hashed into a fixed
+/// set of bits (2 KiB per input): a name can only occur in a text holding
+/// every trigram of it, so only those texts are searched. Kept per bit (the
+/// inputs holding it), so a name's candidates are a few rows ANDed together
+/// instead of a test of every input.
+pub(super) struct Sketches {
+    /// Words per row: one bit per input.
+    width: usize,
+    /// Row `bit` is `rows[bit * width..][..width]`.
+    rows: Box<[u64]>,
+    /// The inputs with a readable text.
+    readable: Box<[u64]>,
+}
 
-const SKETCH_WORDS: usize = 256;
-const SKETCH_BITS: usize = SKETCH_WORDS * 64;
+const SKETCH_BITS: usize = 256 * 64;
 
 pub(super) type Words = Arc<Sketches>;
 
@@ -375,11 +383,16 @@ impl Sketches {
     /// `name`, as a substring search of every text would.
     pub(super) fn mark(&self, name: &str, survey: &Survey, holding: &mut [bool]) {
         let finder = memchr::memmem::Finder::new(name.as_bytes());
-        let bits: Vec<usize> = name.as_bytes().windows(3).map(trigram_bit).collect();
-        for ((sketch, (_, text, _)), holds) in self.0.iter().zip(survey.iter()).zip(holding.iter_mut()) {
-            let (Some(sketch), Some(text)) = (sketch, text) else { continue };
-            if bits.iter().all(|&bit| sketch[bit / 64] & 1 << (bit % 64) != 0) && finder.find(text.as_bytes()).is_some() {
-                *holds = true;
+        let mut candidates = self.readable.to_vec();
+        for bit in name.as_bytes().windows(3).map(trigram_bit) {
+            for (word, row) in candidates.iter_mut().zip(&self.rows[bit * self.width..][..self.width]) { *word &= row }
+        }
+        for (index, mut word) in candidates.into_iter().enumerate() {
+            while word != 0 {
+                let input = index * 64 + word.trailing_zeros() as usize;
+                word &= word - 1;
+                let (Some((_, Some(text), _)), Some(holds)) = (survey.get(input), holding.get_mut(input)) else { continue };
+                if finder.find(text.as_bytes()).is_some() { *holds = true }
             }
         }
     }
@@ -387,14 +400,16 @@ impl Sketches {
 
 /// The trigram sketches of `survey`'s texts.
 pub(super) fn sketch_texts(survey: &Survey) -> Words {
-    Arc::new(Sketches(survey.iter().map(|(_, text, _)| text.as_ref().map(|text| {
-        let mut sketch = Box::new([0u64; SKETCH_WORDS]);
-        for gram in text.as_bytes().windows(3) {
-            let bit = trigram_bit(gram);
-            sketch[bit / 64] |= 1 << (bit % 64);
-        }
-        sketch
-    })).collect()))
+    let width = survey.len().div_ceil(64);
+    let mut rows = vec![0u64; SKETCH_BITS * width].into_boxed_slice();
+    let mut readable = vec![0u64; width].into_boxed_slice();
+    for (input, (_, text, _)) in survey.iter().enumerate() {
+        let Some(text) = text else { continue };
+        let (word, mask) = (input / 64, 1u64 << (input % 64));
+        readable[word] |= mask;
+        for gram in text.as_bytes().windows(3) { rows[trigram_bit(gram) * width + word] |= mask }
+    }
+    Arc::new(Sketches { width, rows, readable })
 }
 
 /// Module scope (path, scope) -> the scopes that augment it.
@@ -604,6 +619,24 @@ mod tests {
         assert_eq!(catalog.ambient("lib-other", 2).map(|declaration| declaration.scope), None);
         assert_eq!(catalog.candidates(Some("lib-one"), 1).map(|declaration| declaration.scope).collect::<Vec<_>>(), [3, 4]);
         assert_eq!(catalog.candidates(None, 1).map(|declaration| declaration.scope).collect::<Vec<_>>(), [3]);
+    }
+
+    #[test]
+    fn sketches_mark_exactly_the_texts_a_substring_search_finds() {
+        let texts = ["declare var Promise: PromiseConstructor;", "", "Map Set WeakMap", "no names here", "promise", "PromiseLike<T>"];
+        let mut entries: Vec<(PathBuf, Option<Arc<str>>, bool)> = texts.iter().enumerate()
+            .map(|(index, text)| (PathBuf::from(format!("/sketch/{index}")), Some(Arc::from(*text)), false)).collect();
+        entries.push((PathBuf::from("/sketch/unreadable"), None, false));
+        // Past one word of inputs, so rows span several words.
+        entries.extend((0..70).map(|index| (PathBuf::from(format!("/sketch/fill{index}")), Some(Arc::from(format!("filler {index} Set"))), false)));
+        let survey: Survey = entries.into();
+        let sketches = sketch_texts(&survey);
+        for name in ["Promise", "Map", "Set", "Pr", "x", "WeakMap", "absent", "filler 69"] {
+            let mut holding = vec![false; survey.len()];
+            sketches.mark(name, &survey, &mut holding);
+            let expected: Vec<bool> = survey.iter().map(|(_, text, _)| text.as_deref().is_some_and(|text| text.contains(name))).collect();
+            assert_eq!(holding, expected, "{name}");
+        }
     }
 
     #[test]
