@@ -163,10 +163,10 @@ impl Narrowing<'_> {
         let filter = owners(subject).zip(owners(written));
         let _site = self.semantic.world.profile().map(|_| crate::engine::StepSite::enter("narrowing.guards"));
         for guard in guards.iter() {
-            if !self.semantic.question.budget.step() { return NodeValue::Unknown }
             if let Some((by_subject, by_written)) = filter {
                 if guard.node.file == node.file && !by_subject.contains(&guard.node.node) && !by_written.contains(&guard.node.node) { continue }
             }
+            if !self.semantic.question.budget.step() { return NodeValue::Unknown }
             let entries = execution.field_entries(guard.node, &guard.path);
             if execution.guarded(&uses, entries, &self.semantic.question.budget) == Known::Yes(true) {
                 let Some((_, proof, _)) = self.kind(guard.node).and_then(|kind| kind.propagates.get(guard.item)) else { continue };
@@ -353,17 +353,23 @@ impl Narrowing<'_> {
         let memo = &self.semantic.narrowing_places.writes;
         if let Some(index) = memo.get(&entry) { return Some(index) }
         let budget = &self.semantic.question.budget;
-        let mut index = WriteIndex::default();
-        for &id in execution.write_leaves() {
-            if !budget.step() { return None }
-            let Some(event) = execution.step(id).and_then(|step| step.event()) else { continue };
-            let Some(target) = event.target else { index.open.push(id); continue };
-            let at = Leaf { target: Target::Node(target.value), frame: entry.frame };
-            match self.find_place(at, false, false) {
-                Known::Yes((shape, _)) => index.by_root.entry(shape.root).or_default().push((id, shape.path.len())),
-                Known::Unknown => index.open.push(id),
+        // Once per execution, kept for every later read in it: on the
+        // graph's allowance, not the first asking read's budget.
+        let index = budget.detached(execution.walk_allowance(), || {
+            let mut index = WriteIndex::default();
+            for &id in execution.write_leaves() {
+                if !budget.step() { return None }
+                let Some(event) = execution.step(id).and_then(|step| step.event()) else { continue };
+                let Some(target) = event.target else { index.open.push(id); continue };
+                let at = Leaf { target: Target::Node(target.value), frame: entry.frame };
+                match self.find_place(at, false, false) {
+                    Known::Yes((shape, _)) => index.by_root.entry(shape.root).or_default().push((id, shape.path.len())),
+                    Known::Unknown => index.open.push(id),
+                }
             }
-        }
+            Some(index)
+        });
+        let Some(Some(index)) = index else { return None };
         if budget.exhausted() { return None }
         let index = std::rc::Rc::new(index);
         memo.insert(self.semantic.epoch, entry, index.clone());

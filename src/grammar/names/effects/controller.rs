@@ -228,17 +228,26 @@ impl Effects<'_> {
         let Target::Node(file) = at.target else { return Known::Unknown };
         if let Some(written) = self.semantic.effects.written_bindings.borrow().get(&file.file) { return Known::Yes(written.clone()) }
         let Known::Yes(writes) = self.file_writes(at, nodes) else { return Known::Unknown };
-        let mut written = WrittenBindings::default();
-        for (index, &write) in writes.iter().enumerate() {
-            if !self.semantic.question.budget.step() { return Known::Unknown }
-            let FileWrite::Target(target) = write else { written.unknown = Some(index); break };
-            match declaration(Leaf { target: Target::Node(target), ..at }) {
-                // A declaration's own write doesn't replace it.
-                Known::Yes(Some(binding)) => if binding != target { written.first.entry(binding).or_insert(index); },
-                Known::Yes(None) => {}
-                Known::Unknown => { written.unknown = Some(index); break }
+        // Once per file, kept for every later question: on an allowance for
+        // the file's writes, not the first asking read's budget.
+        let budget = &self.semantic.question.budget;
+        let allowance = u32::try_from(writes.len()).unwrap_or(u32::MAX).saturating_mul(Self::FILE_WALK_STEPS_PER_NODE)
+            .max(super::super::question::Budget::per_question());
+        let written = budget.detached(allowance, || {
+            let mut written = WrittenBindings::default();
+            for (index, &write) in writes.iter().enumerate() {
+                if !budget.step() { return None }
+                let FileWrite::Target(target) = write else { written.unknown = Some(index); break };
+                match declaration(Leaf { target: Target::Node(target), ..at }) {
+                    // A declaration's own write doesn't replace it.
+                    Known::Yes(Some(binding)) => if binding != target { written.first.entry(binding).or_insert(index); },
+                    Known::Yes(None) => {}
+                    Known::Unknown => { written.unknown = Some(index); break }
+                }
             }
-        }
+            Some(written)
+        });
+        let Some(Some(written)) = written else { return Known::Unknown };
         let written = Rc::new(written);
         self.semantic.effects.written_bindings.borrow_mut().insert(file.file, written.clone());
         Known::Yes(written)
