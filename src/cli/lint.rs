@@ -140,7 +140,7 @@ fn lint_file(linter: &Linter, run: &LintRun<'_>, cache: Option<&Cache>, path: &P
     let rel = linter.relative(path).to_string_lossy().replace('\\', "/");
     // With `--fix`, a cached result only saves work when there is nothing
     // to fix.
-    if let Some((diags, _)) = cache.and_then(|c| c.lookup(linter, &rel, &text)) {
+    if let Some(diags) = cache.and_then(|c| c.lookup(linter, &rel, &text)) {
         if !fix || diags.iter().all(|d| d.fix.is_none()) {
             return Msg::File(FileResult { path: path.to_path_buf(), text, diags, fixed: 0 });
         }
@@ -166,6 +166,7 @@ fn lint_file(linter: &Linter, run: &LintRun<'_>, cache: Option<&Cache>, path: &P
 }
 
 pub(super) fn run(output: &mut Output<'_>, args: LintArgs, config: &ConfigArg, sources: Option<&Sources>) -> u8 {
+    crate::config::build_one_config();
     let mut stdout = std::io::BufWriter::with_capacity(1 << 16, &mut *output.stdout);
     let mut buffered = Output { cwd: output.cwd, stdout: &mut stdout, stderr: &mut *output.stderr };
     let code = lint(&mut buffered, args, config, sources);

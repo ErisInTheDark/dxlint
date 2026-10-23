@@ -1,6 +1,7 @@
 //! Compiles a parsed configuration into a [`Linter`].
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use super::symbols::Symbols;
@@ -724,15 +725,19 @@ fn attributes(
     let mut native_layers: Vec<Option<bool>> = vec![None; g.matchers.len()];
     // Identifies each compiled body: definitions sharing one were compiled once.
     let mut next_body = 0u32;
+    let functions: HashMap<&str, &crate::config::ast::FnDef> = config.functions.iter().map(|f| (f.name.text.as_str(), f)).collect();
     for def in &config.attrs {
         if crate::expr::is_builtin(&def.name.text) {
             errors.push(ConfigError::new(def.name.span, format!("`{}` is a built-in variable and cannot name an attribute", def.name.text)));
             continue;
         }
         let id = usize::from(names.get(&def.name.text).expect("collected"));
-        // An expression compiles the same on every layer with the same fields:
-        // compile it once per field set a group target expands to.
-        let mut shared: Vec<(Vec<(String, u16)>, CExpr, u32, Vec<(crate::config::source::Span, crate::expr::Resolved)>, Vec<u32>)> = Vec::new();
+        // Compiling consults a layer's fields only as "has a field named
+        // N" (a hit is the same global label everywhere), so the body
+        // compiles alike on every layer agreeing on the labels the body (or a
+        // function it calls) names: compile once per such agreement.
+        let mentioned = mentioned_labels(g, &def.expr, &functions);
+        let mut shared: Vec<(Vec<u16>, CExpr, u32, Vec<(crate::config::source::Span, crate::expr::Resolved)>, Vec<u32>)> = Vec::new();
         for target in &def.targets {
             let Some((resolved, _)) = resolve_target(&AstTarget::Matcher(target.clone()), g, None, errors) else { continue };
             // Through a group: a default its members' own definitions refine.
@@ -766,7 +771,8 @@ fn attributes(
                     group_defined[id].push(m);
                 }
                 let fields = target_fields(g, t);
-                let (compiled, attribute_uses, reads) = match shared.iter().find(|(known, ..)| *known == fields) {
+                let agreement: Vec<u16> = fields.iter().map(|&(_, label)| label).filter(|label| mentioned.contains(label)).collect();
+                let (compiled, attribute_uses, reads) = match shared.iter().find(|(known, ..)| *known == agreement) {
                     Some((_, e, body, attribute_uses, reads)) => (Some((e.clone(), *body)), attribute_uses.clone(), reads.clone()),
                     None => {
                         let layer_reads = RefCell::default();
@@ -779,7 +785,7 @@ fn attributes(
                         let attribute_uses = uses.borrow()[uses_before..].to_vec();
                         let reads = layer_reads.into_inner();
                         if let Some((e, body)) = compiled.as_ref().filter(|_| errors.len() == errors_before) {
-                            shared.push((fields, e.clone(), *body, attribute_uses.clone(), reads.clone()));
+                            shared.push((agreement, e.clone(), *body, attribute_uses.clone(), reads.clone()));
                         }
                         (compiled, attribute_uses, reads)
                     }
@@ -803,6 +809,28 @@ fn attributes(
         attr.defs.sort_by_key(|(m, ..)| std::cmp::Reverse(broader(*m)));
     }
     (attrs, dependencies)
+}
+
+/// Labels named anywhere in `expr` or the functions it calls (an
+/// over-estimate: only ever splits compiles more finely).
+fn mentioned_labels(g: &Grammar, expr: &crate::config::ast::Expr, functions: &HashMap<&str, &crate::config::ast::FnDef>) -> Vec<u16> {
+    let mut names = std::collections::HashSet::new();
+    super::prune::expr_names(expr, &mut names);
+    let mut pending: Vec<String> = names.iter().cloned().collect();
+    let mut visited = std::collections::HashSet::new();
+    while let Some(name) = pending.pop() {
+        let Some(function) = functions.get(name.as_str()) else { continue };
+        if !visited.insert(name) { continue }
+        let mut inner = std::collections::HashSet::new();
+        super::prune::expr_names(&function.body, &mut inner);
+        for found in inner {
+            if names.insert(found.clone()) { pending.push(found) }
+        }
+    }
+    let mut labels: Vec<u16> = names.iter().filter_map(|name| g.labels.get(name)).collect();
+    labels.sort_unstable();
+    labels.dedup();
+    labels
 }
 
 fn unique(mut ids: Vec<u32>) -> Vec<u32> {

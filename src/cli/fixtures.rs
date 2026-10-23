@@ -63,7 +63,7 @@ fn collect(linter: &Linter, files: &[PathBuf], cache: Option<&Cache>, warm: bool
         let relative = file.strip_prefix(&linter.root).map_err(|e| e.to_string())?;
         let name = relative.to_string_lossy().replace('\\', "/");
         let diagnostics = if warm {
-            cache.and_then(|cache| cache.lookup(linter, &name, &text)).ok_or_else(|| format!("cache missed {name}"))?.0
+            cache.and_then(|cache| cache.lookup(linter, &name, &text)).ok_or_else(|| format!("cache missed {name}"))?
         } else if let Some(cache) = cache {
             let (diagnostics, reads) = linter.lint_tracked(file, &text);
             cache.store(&name, &text, &diagnostics, reads.into());

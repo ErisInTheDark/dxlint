@@ -139,7 +139,8 @@ fn publish_disk(linter: &Linter, cache: Option<&Cache>, shared: &Shared, out: &O
     }
     let text = std::fs::read_to_string(path).ok()?;
     let rel = linter.relative(path).to_string_lossy().replace('\\', "/");
-    let diags = match cache.and_then(|c| c.lookup(linter, &rel, &text)) {
+    let hit = cache.and_then(|c| c.lookup(linter, &rel, &text).zip(c.saved_reads(&rel)));
+    let diags = match hit {
         Some((diags, reads)) => {
             shared.reads.lock().expect("lock").insert(path.to_path_buf(), Arc::new(reads));
             diags

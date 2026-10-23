@@ -111,6 +111,16 @@ struct LibraryParse {
 thread_local! {
     /// By import key and the stream position before it.
     static LIBRARY_PARSES: std::cell::RefCell<std::collections::HashMap<(String, (u64, bool)), Rc<LibraryParse>>> = Default::default();
+    /// Whether library parses are kept for later configurations: on unless
+    /// this thread builds one configuration only ([`build_one_config`]),
+    /// where the kept copy of the whole library's syntax only costs memory.
+    static KEEP_LIBRARY_PARSES: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
+/// Declares that this thread builds a single configuration (a lint run):
+/// library imports parse in place instead of keeping a copy for reuse.
+pub fn build_one_config() {
+    KEEP_LIBRARY_PARSES.with(|keep| keep.set(false));
 }
 
 impl<'a> Parser<'a> {
@@ -1425,6 +1435,10 @@ impl<'a> Parser<'a> {
                 let id = self.push_source(key, None, text.to_string());
                 while self.ts.more_above(depth) {
                     self.item(None);
+                }
+                if !KEEP_LIBRARY_PARSES.with(std::cell::Cell::get) {
+                    self.config.uses.push(Use::Import(span, id));
+                    return;
                 }
                 let parsed = Rc::new(LibraryParse {
                     config: self.config.clone(),

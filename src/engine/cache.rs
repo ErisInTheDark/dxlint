@@ -67,6 +67,9 @@ pub struct Cache {
     group_reads: Vec<OnceLock<Arc<Reads>>>,
     /// Directory listings answering saved file probes ([`Cache::listed_file`]).
     listings: std::sync::RwLock<crate::fx_hash::FxHashMap<PathBuf, Option<Arc<super::reads::Listing>>>>,
+    /// Content hashes of the files this run looked up: other files' saved
+    /// text reads of them check against these instead of reading again.
+    texts: std::sync::RwLock<crate::fx_hash::FxHashMap<PathBuf, u64>>,
     fresh: Mutex<HashMap<String, Fresh>>,
     /// Something new to write.
     changed: AtomicBool,
@@ -88,6 +91,7 @@ impl Cache {
             group_holds: saved.groups.iter().map(|_| OnceLock::new()).collect(),
             group_reads: saved.groups.iter().map(|_| OnceLock::new()).collect(),
             listings: Default::default(),
+            texts: Default::default(),
             saved,
             fresh: Mutex::default(),
             changed: AtomicBool::new(false),
@@ -101,21 +105,35 @@ impl Cache {
     }
 
     /// The saved result for `rel` (a path relative to the config, `/`
-    /// separated), if `text` and everything its lint read are unchanged,
-    /// with what that lint read.
-    pub fn lookup(&self, linter: &Linter, rel: &str, text: &str) -> Option<(Vec<Diagnostic>, Reads)> {
+    /// separated), if `text` and everything its lint read are unchanged.
+    pub fn lookup(&self, linter: &Linter, rel: &str, text: &str) -> Option<Vec<Diagnostic>> {
         let entry = self.saved.entries.get(rel)?;
-        if entry.content != hash_bytes(text.as_bytes()) || !self.holds(linter, &entry.refs) {
+        let content = hash_bytes(text.as_bytes());
+        self.texts.write().expect("cache texts").insert(self.root.join(rel), content);
+        if entry.content != content || !self.holds(linter, &entry.refs) {
             return None;
         }
         self.hits.fetch_add(1, Ordering::Relaxed);
         self.fresh.lock().expect("cache lock").insert(rel.to_string(), Fresh::Kept);
-        Some((entry.diags.clone(), self.reads(&entry.refs)))
+        Some(entry.diags.clone())
+    }
+
+    /// What the saved lint of `rel` read (for callers that track reads on a
+    /// hit, like the language server; a lint run doesn't need them).
+    pub fn saved_reads(&self, rel: &str) -> Option<Reads> {
+        Some(self.reads(&self.saved.entries.get(rel)?.refs))
     }
 
     fn holds(&self, linter: &Linter, refs: &Refs) -> bool {
         refs.deps.iter().all(|&i| *self.dep_holds[i as usize].get_or_init(|| match &self.saved.deps[i as usize] {
             Dep::IsFile(path, found) => self.listed_file(path) == *found,
+            // A text read that found nothing still finds nothing while no
+            // file is there: its directory's listing answers that.
+            Dep::Text(path, super::reads::MISSING) => !self.listed_file(path),
+            dep @ Dep::Text(path, hash) => {
+                let seen = self.texts.read().expect("cache texts").get(&**path).copied();
+                seen.map_or_else(|| linter.holds(dep), |seen| seen == *hash)
+            }
             dep => linter.holds(dep),
         }))
             && refs.groups.iter().all(|&i| *self.group_holds[i as usize].get_or_init(|| self.holds(linter, &self.saved.groups[i as usize])))

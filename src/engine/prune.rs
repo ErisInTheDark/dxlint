@@ -28,7 +28,7 @@ pub fn prune_for_lint(config: &mut Config, errors: &mut Vec<crate::config::error
 /// Every name an expression mentions: path segments, function arguments,
 /// `is` names, pattern references and string literals. An over-estimate,
 /// which only ever keeps more.
-fn expr_names(e: &Expr, out: &mut HashSet<String>) {
+pub(super) fn expr_names(e: &Expr, out: &mut HashSet<String>) {
     match &e.kind {
         ExprKind::Str(s) => {
             out.insert(s.clone());
