@@ -10,11 +10,11 @@ use std::sync::OnceLock;
 #[derive(Clone, Copy)]
 #[repr(u8)]
 pub enum Lever {
-    /// Reads keep their declared value: no flow narrowing (parity ledger).
+    /// `skip narrowing` for every config (conformance runs build their own).
     NoNarrowing,
     /// Generic signatures infer nothing: their instantiation is unknown.
     NoInference,
-    /// Conditional types are unknown.
+    /// `skip selection` for every config (conformance runs build their own).
     NoConditional,
     /// Reads whose declared value has one alternative skip narrowing
     /// (parity ledger: guards on a lone `unknown`/class value are lost).

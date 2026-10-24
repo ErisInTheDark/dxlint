@@ -300,6 +300,10 @@ pub struct Names {
     pub key_domains: Vec<(crate::config::ast::values::KeyDomain, u64)>,
     /// `keys truthiness`: the trait bits a truthy and a falsy key literal fit.
     pub key_truthiness: Option<(u64, u64)>,
+    /// `skip narrowing`: reads keep their declared value.
+    pub skip_narrowing: bool,
+    /// `skip selection`: conditional selections (`select`) are unknown.
+    pub skip_selection: bool,
     pub products: Vec<Option<values::products::Shape>>,
     /// `apparent <trait> inherits <value>`: the trait's bit and the value
     /// whose members values with it read through.
@@ -433,7 +437,7 @@ impl Names {
     /// opened is an error, like an unknown matcher.
     pub fn build(config: &Config, g: &Grammar, errors: &mut Vec<ConfigError>) -> Names {
         let mut names = Names { kinds: vec![KindNames::default(); g.matchers.len()], ..Names::default() };
-        if config.names.is_empty() && config.exclusive.is_empty() && config.implications.is_empty() && config.top.is_empty() && config.dynamic.is_empty() && config.key_domains.is_empty() && config.key_truthiness.is_none() && config.products.is_empty() && config.apparent.is_empty() {
+        if config.names.is_empty() && config.exclusive.is_empty() && config.implications.is_empty() && config.top.is_empty() && config.dynamic.is_empty() && config.key_domains.is_empty() && config.key_truthiness.is_none() && config.skips.is_empty() && config.products.is_empty() && config.apparent.is_empty() {
             return names;
         }
         let mut vocab = Vocabulary::default();
@@ -803,6 +807,8 @@ impl Names {
         names.key_domains = config.key_domains.iter().map(|(domain, traits)| {
             (*domain, values::algebra_traits(traits, &vocab, &names, errors))
         }).collect();
+        names.skip_narrowing = config.skips.iter().any(|skip| skip.text == "narrowing");
+        names.skip_selection = config.skips.iter().any(|skip| skip.text == "selection");
         names.key_truthiness = config.key_truthiness.as_ref().map(|(truthy, falsy)| (
             values::algebra_traits(std::slice::from_ref(truthy), &vocab, &names, errors),
             values::algebra_traits(std::slice::from_ref(falsy), &vocab, &names, errors),

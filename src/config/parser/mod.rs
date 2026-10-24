@@ -350,6 +350,7 @@ impl<'a> Parser<'a> {
             (Tk::Ident, "exclusive") => self.exclusive_item(ctx),
             (Tk::Ident, "trait") => self.implication_item(ctx),
             (Tk::Ident, "top" | "dynamic") => self.algebra_item(ctx),
+            (Tk::Ident, "skip") => self.skip_item(ctx),
             (Tk::Ident, "keys") => self.key_domains_item(ctx),
             (Tk::Ident, "product") => self.product_shape_item(ctx),
             (Tk::Ident, "apparent") => self.apparent_item(ctx),

@@ -306,6 +306,23 @@ impl Parser<'_> {
             self.config.dynamic.extend(traits);
         }
     }
+
+    pub(super) fn skip_item(&mut self, context: Option<&Context>) {
+        let keyword = self.bump().expect("peeked");
+        let skips = self.name_list("semantic work to skip (`narrowing`, `selection`)");
+        self.end_of_item();
+        if context.is_some() || !self.conditions.is_empty() {
+            self.errors.push(ConfigError::new(keyword.span, "`skip` belongs at top level"));
+            return;
+        }
+        for skip in skips {
+            if matches!(&*skip.text, "narrowing" | "selection") {
+                self.config.skips.push(skip);
+            } else {
+                self.errors.push(ConfigError::new(skip.span, format!("unknown semantic work `{}`", skip.text)).note("`skip narrowing` or `skip selection`"));
+            }
+        }
+    }
 }
 
 #[cfg(test)]

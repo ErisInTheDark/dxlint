@@ -52,6 +52,7 @@ in rs_function.name rule fn-snake-case warn "function names are snake_case" fix 
 | `native ts` | TypeScript/JavaScript syntax as `ts_*` layers, see [Native layers](#native-layers-typescript) |
 | `override <definition>`, `drop ...` | replace or remove what an import defined, see [Changing imported definitions](#changing-imported-definitions-override-drop) |
 | `ignore "glob" "glob"` | never lint matching files |
+| `skip narrowing, selection` | trade type precision for speed: reads keep their declared value (`narrowing`), conditional types are unknown (`selection`), see [docs/design/type-layers.md](design/type-layers.md) |
 | `import .ts`, `import rules:recommended`, `import some/path` | a built-in language, a built-in ruleset, or another `.zlint` file, see [Imports](#imports-and-macros) |
 | `@macro name tokens`, `@macro name(args) { lines }` | define a macro; call it with `@name` |
 

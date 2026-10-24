@@ -44,6 +44,9 @@ pub struct Config {
     pub implications: Vec<(Name, Vec<Name>)>,
     pub top: Vec<Name>,
     pub dynamic: Vec<Name>,
+    /// `skip narrowing, selection`: semantic work a config turns off (reads
+    /// keep their declared value; conditional selections are unknown).
+    pub skips: Vec<Name>,
     pub key_domains: Vec<(values::KeyDomain, Vec<Name>)>,
     /// `keys truthiness <truthy> <falsy>`: the traits a key literal fits by
     /// its identity's truthiness.
