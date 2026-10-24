@@ -1,35 +1,42 @@
 # dxlint for VS Code
 
-Runs `dxlint lsp` and shows its results as you type:
+Runs [dxlint](https://github.com/ErisInTheDark/dxlint) as a language server, for two jobs.
 
-- diagnostics for open files on every edit
-- a background scan of the whole workspace, streamed file by file with progress, reusing `.dxcache` results
+**Linting your code**, as you type:
+
+- diagnostics for open files on every edit, from the unsaved buffer
+- the rest of the workspace linted in the background, streamed file by file, reusing `.dxcache`
 - an edit re-lints the other files it affects (an importer of a changed export), open or not
-- quick fixes for fixable problems, plus "Fix all dxlint problems in this file"
-- formatting (`Format Document`) applies every fix
-- `.dx` syntax highlighting, and config errors shown live in the `.dx` files, with links to related places ("first defined here", "still used here")
-- in `.dx` files: completion of built-in languages and rulesets after `import `, of every defined rule after `rule `, and of a rule's options after `set ` in its block; hover on any name (rules with their final severity and option values, layers with their fields and rules, attributes, macros, groups, builtins, facts, functions, keywords), go to definition (std modules open read-only), find all references, completion and an outline
+- quick fixes, "Fix all dxlint problems", and Format Document applying every fix
 - every diagnostic's rule code links to where the rule is defined
-- with `dxlint.inspectHover`, hovering in a linted file shows the layers at the cursor and their facts: handy when writing rules
 
-## Setup
+**Writing `.dx` configs and rules**:
 
-1. Build dxlint: `cargo build --release` at the repo root. The extension finds the binary by:
-   - `dxlint.path`, if set
-   - the newest `target/release/dxlint` or `target/debug/dxlint` in the (trusted) workspace, so working on dxlint itself just works.
-     It runs a copy, so `cargo build` never hits a locked exe, and it restarts automatically when you rebuild
-   - `dxlint` on your `PATH` (eg `cargo install --path .`)
-2. In this folder: `npm install`
-3. Open the folder in VS Code and press F5, or package it with `npx @vscode/vsce package` and install the `.vsix`
+- syntax highlighting
+- config errors live in the `.dx` file, with links to related places ("first defined here")
+- hover on any name: rules with their final severity and options, layers with their fields, attributes, macros, functions, keywords
+- go to definition (into the built-in library, read-only), find all references, outline
+- completion: languages and rulesets after `import`, rules after `rule`, a rule's options after `set`
+- with `dxlint.inspectHover`, hovering in a linted file shows the layers at the cursor and their facts
 
-The extension activates in workspaces that contain a `.dx` config.
+The extension activates in workspaces that contain a `.dx` file.
+
+## Which dxlint it runs
+
+The project's own dxlint: the `@inthedark/dxlint` package, found the way Node finds it (the workspace's `node_modules` or one above it, pnpm links included). Install it with `npm install --save-dev @inthedark/dxlint` (or your package manager's equivalent). In dxlint's own checkout it runs `package/bin` instead. `dxlint.path` overrides both.
+
+The binary runs from a copy, with the rule library from its package, so an upgrade or rebuild never hits a locked file; the server restarts when the package's binary changes. The workspace must be trusted.
 
 ## Settings
 
 | setting | default | |
-|---|---|---|
+| --- | --- | --- |
 | `dxlint.path` | empty (auto) | path to the binary; relative paths resolve against the first workspace folder |
 | `dxlint.scanWorkspace` | `true` | lint the whole workspace in the background, not just open files |
 | `dxlint.inspectHover` | `false` | hover in linted files shows dxlint's layers and facts at the cursor |
 
-To use dxlint as the formatter for a language, set `"editor.defaultFormatter": "dxlint.dxlint"` for it.
+To use dxlint as a formatter, set `"editor.defaultFormatter": "ErisInTheDark.dxlint"` for that language.
+
+## Building
+
+`npm install`, then `npm run package` builds `dxlint.vsix`; `npm test` runs the extension's tests.

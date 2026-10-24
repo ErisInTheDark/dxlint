@@ -1,24 +1,25 @@
 // Thin client: all linting happens in `dxlint lsp`.
 const fs = require("fs");
 const path = require("path");
-const crypto = require("crypto");
 const vscode = require("vscode");
 const { LanguageClient } = require("vscode-languageclient/node");
 
-const BINARY = process.platform === "win32" ? "dxlint.exe" : "dxlint";
-// Cargo may write a fresh build more than once; restart once it settles.
+const EXE = process.platform === "win32" ? ".exe" : "";
+const PLATFORM_BINARY = `dxlint-${process.platform}-${process.arch}${EXE}`;
+const PACKAGE = path.join("node_modules", "@inthedark", "dxlint");
+// An install or build may write the binary more than once; restart once it settles.
 const REBUILD_SETTLE_MS = 500;
-// Builds are polled rather than watched: `files.watcherExclude` often
-// excludes `target`, and polling works before the file exists.
+// Binaries are polled rather than watched: `files.watcherExclude` often
+// excludes `node_modules`, and polling works before a file exists.
 const BUILD_POLL_MS = 1000;
 
 let client;
-// Where workspace builds are copied to before running (per workspace).
+// Where binaries are copied to before running (per workspace).
 let copiesDir;
-// Identity of the workspace build the server runs, if it runs one.
+// Identity of the package binary the server runs.
 let runningBuild;
 let rebuildTimer;
-// Build paths currently polled by `watchBuilds`.
+// Binary paths currently polled by `watchBuilds`.
 let watchedBuilds = [];
 
 function workspaceRoots() {
@@ -27,8 +28,27 @@ function workspaceRoots() {
     .map((folder) => folder.uri.fsPath);
 }
 
-function buildCandidates() {
-  return workspaceRoots().flatMap((root) => ["release", "debug"].map((profile) => path.join(root, "target", profile, BINARY)));
+// Where node finds the `@inthedark/dxlint` package from a folder: its
+// node_modules, or one above it (workspace roots); pnpm links it there too.
+// Checked by hand each time: node's own resolver caches, so an upgrade would
+// keep the old path until VS Code restarts.
+function packageDirs(root) {
+  const dirs = [];
+  for (let dir = root; ; dir = path.dirname(dir)) {
+    dirs.push(path.join(dir, PACKAGE));
+    if (path.dirname(dir) === dir) {
+      return dirs;
+    }
+  }
+}
+
+// The dxlint package's binary for this platform: the project's dependency,
+// else (in dxlint's own checkout) the package being built.
+function candidates() {
+  return workspaceRoots().flatMap((root) => [
+    ...packageDirs(root).map((dir) => path.join(dir, "bin", PLATFORM_BINARY)),
+    path.join(root, "package", "bin", PLATFORM_BINARY),
+  ]);
 }
 
 function unwatchBuilds() {
@@ -40,7 +60,7 @@ function unwatchBuilds() {
 
 function watchBuilds() {
   unwatchBuilds();
-  watchedBuilds = buildCandidates();
+  watchedBuilds = candidates();
   for (const file of watchedBuilds) {
     fs.watchFile(file, { interval: BUILD_POLL_MS }, (curr, prev) => {
       if (curr.mtimeMs !== prev.mtimeMs || curr.size !== prev.size) {
@@ -50,36 +70,45 @@ function watchBuilds() {
   }
 }
 
-// Most recently built `target/{release,debug}/dxlint` in the workspace, so
-// working on dxlint itself uses the fresh build. Trusted workspaces only:
-// this executes a workspace binary.
-function workspaceBuild() {
-  if (!vscode.workspace.isTrusted) {
+function statBinary(file) {
+  try {
+    const stat = fs.statSync(file);
+    return stat.isFile() ? { path: file, mtimeMs: stat.mtimeMs, size: stat.size, key: `${file}|${stat.mtimeMs}|${stat.size}` } : undefined;
+  } catch {
     return undefined;
   }
-  let newest;
-  for (const candidate of buildCandidates()) {
-    let stat;
-    try {
-      stat = fs.statSync(candidate);
-    } catch {
-      continue;
-    }
-    if (stat.isFile() && (!newest || stat.mtimeMs > newest.mtimeMs)) {
-      newest = { path: candidate, mtimeMs: stat.mtimeMs, size: stat.size, key: `${candidate}|${stat.mtimeMs}|${stat.size}` };
-    }
-  }
-  return newest;
 }
 
-// Runs a copy of the build, so cargo can always replace the original (a
-// running exe is locked on Windows). Copies are named by build identity, and
-// older ones are removed while no server runs from them.
+// The first package binary that exists. Trusted workspaces only: this
+// executes a binary from the workspace.
+function workspaceBinary() {
+  return vscode.workspace.isTrusted ? candidates().map(statBinary).find(Boolean) : undefined;
+}
+
+// The library (std/, rules/) a binary runs with: the nearest directory above
+// it holding both, as the binary itself would find from where it lies.
+function libraryOf(binary) {
+  let dir = path.dirname(fs.realpathSync(binary));
+  for (;;) {
+    if (["std", "rules"].every((name) => fs.existsSync(path.join(dir, name)))) {
+      return dir;
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) {
+      throw new Error(`no std/ and rules/ above ${binary}`);
+    }
+    dir = parent;
+  }
+}
+
+// Runs a copy, so npm or a rebuild can always replace the original (a running
+// exe is locked on Windows). Copies are named by build identity, and older
+// ones are removed while no server runs from them.
 function copyOfBuild(build) {
   if (!copiesDir) {
     return build.path;
   }
-  const name = `dxlint-${Math.trunc(build.mtimeMs)}-${build.size}${path.extname(BINARY)}`;
+  const name = `dxlint-${Math.trunc(build.mtimeMs)}-${build.size}${EXE}`;
   const copy = path.join(copiesDir, name);
   fs.mkdirSync(copiesDir, { recursive: true });
   for (const old of fs.readdirSync(copiesDir)) {
@@ -99,55 +128,46 @@ function copyOfBuild(build) {
   return copy;
 }
 
-function libraryOfBuild(build) {
-  const sidecar = JSON.parse(fs.readFileSync(`${build.path}.library.json`, "utf8"));
-  const hash = crypto.createHash("sha256").update(fs.readFileSync(build.path)).digest("hex");
-  if (sidecar.binarySha256 !== hash || typeof sidecar.library !== "string") {
-    throw new Error("workspace build library does not match the executable");
-  }
-  const library = path.resolve(path.dirname(build.path), sidecar.library);
-  if (!["std", "rules"].every(dir => fs.existsSync(path.join(library, dir)))) {
-    throw new Error("workspace build library is missing");
-  }
-  return library;
-}
-
 // `dxlint.path` if set (relative paths resolve against the first workspace
-// folder), else a workspace build, else `dxlint` from PATH.
+// folder; a bare name is looked up on PATH), else the package's binary.
 function resolveServer(configured) {
   if (configured) {
-    const isBareName = !/[\\/]/.test(configured);
     const [root] = workspaceRoots();
-    if (isBareName || path.isAbsolute(configured) || !root) {
-      return { command: configured };
+    if (!/[\\/]/.test(configured)) {
+      // On Windows a PATH command is often an npm `.cmd` shim, which only a shell runs.
+      return { command: configured, shell: process.platform === "win32" };
     }
-    return { command: path.resolve(root, configured) };
+    return { command: path.isAbsolute(configured) || !root ? configured : path.resolve(root, configured) };
   }
-  const build = workspaceBuild();
-  return build ? { library: libraryOfBuild(build), command: copyOfBuild(build), build } : { command: "dxlint" };
+  const build = workspaceBinary();
+  if (!build) {
+    throw new Error("this project has no @inthedark/dxlint");
+  }
+  return { library: libraryOf(build.path), command: copyOfBuild(build), build };
 }
 
-// A workspace build changed: restart once it settles, if it is now a
-// different build than the one running.
+// The package binary changed (installed, updated, rebuilt): restart once it
+// settles, if it is now a different binary than the one running.
 function onBuildChanged() {
   clearTimeout(rebuildTimer);
   rebuildTimer = setTimeout(() => {
     if (vscode.workspace.getConfiguration("dxlint").get("path")) {
       return;
     }
-    const build = workspaceBuild();
+    const build = workspaceBinary();
     if (build && build.key !== runningBuild) {
       restart();
     }
   }, REBUILD_SETTLE_MS);
 }
 
-function createClient(command, library) {
+function createClient({ command, library, shell }) {
   const config = vscode.workspace.getConfiguration("dxlint");
   // No `transport`: TransportKind.stdio appends `--stdio`, which `dxlint lsp`
   // rejects. Plain executables talk over stdio anyway.
   const serverOptions = { command, args: ["lsp"], options: {
     env: { ...process.env, ...(library ? { DXLINT_LIBRARY: library } : {}) },
+    ...(shell ? { shell: true } : {}),
   } };
   const clientOptions = {
     // The server decides which files it owns (via `lang` in .dx), so
@@ -202,7 +222,7 @@ async function start() {
   try {
     const server = resolveServer(configured);
     command = server.command;
-    client = createClient(command, server.library);
+    client = createClient(server);
     await client.start();
     runningBuild = server.build && server.build.key;
     sendFocus();
@@ -212,7 +232,7 @@ async function start() {
     vscode.window
       .showErrorMessage(
         `dxlint: couldn't start \`${command}\` (${error.message || error}). ` +
-          "Put dxlint on PATH, build it in this workspace, or set dxlint.path.",
+          "Install it in the project (npm install --save-dev @inthedark/dxlint) or set dxlint.path.",
         openSettings,
       )
       .then((choice) => {
@@ -242,7 +262,7 @@ async function activate(context) {
         await restart();
       }
     }),
-    // Workspace builds are only used once the workspace is trusted.
+    // The package binary is only used once the workspace is trusted.
     vscode.workspace.onDidGrantWorkspaceTrust(restart),
     vscode.window.onDidChangeActiveTextEditor(sendFocus),
     vscode.window.onDidChangeVisibleTextEditors(sendFocus),

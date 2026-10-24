@@ -1,29 +1,60 @@
 {
   "name": "dxlint",
   "displayName": "dxlint",
-  "description": "Extremely fast linting with rules written in .dx",
+  "description": "dxlint diagnostics, fixes and formatting as you type, plus language support for .dx rule files",
   "version": "0.1.0",
-  "publisher": "dxlint",
+  "publisher": "ErisInTheDark",
   "license": "MIT",
-  "engines": { "vscode": "^1.85.0" },
-  "categories": ["Linters", "Formatters", "Programming Languages"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ErisInTheDark/dxlint.git",
+    "directory": "editors/vscode"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Linters",
+    "Formatters",
+    "Programming Languages"
+  ],
+  "keywords": [
+    "lint",
+    "eslint",
+    "typescript",
+    "dx"
+  ],
   "main": "./extension.js",
-  "activationEvents": ["workspaceContains:**/.dx", "onLanguage:dxlint"],
+  "activationEvents": [
+    "workspaceContains:**/.dx",
+    "onLanguage:dx"
+  ],
+  "scripts": {
+    "test": "node --test extension.test.js",
+    "package": "vsce package --out dxlint.vsix"
+  },
   "contributes": {
     "languages": [
       {
-        "id": "dxlint",
-        "aliases": ["dxlint", "dxlint"],
-        "extensions": [".dx"],
-        "filenames": [".dx"],
+        "id": "dx",
+        "aliases": [
+          "dx",
+          "dxlint config"
+        ],
+        "extensions": [
+          ".dx"
+        ],
+        "filenames": [
+          ".dx"
+        ],
         "configuration": "./language-configuration.json"
       }
     ],
     "grammars": [
       {
-        "language": "dxlint",
+        "language": "dx",
         "scopeName": "source.dx",
-        "path": "./syntaxes/dxlint.tmLanguage.json"
+        "path": "./syntaxes/dx.tmLanguage.json"
       }
     ],
     "configuration": {
@@ -32,7 +63,7 @@
         "dxlint.path": {
           "type": "string",
           "default": "",
-          "description": "Path to the dxlint binary. Relative paths resolve against the first workspace folder. Empty: use the newest target/{release,debug}/dxlint build in the workspace, else dxlint from PATH."
+          "description": "Path to the dxlint binary, or a command on PATH. Relative paths resolve against the first workspace folder. Empty: the project's @inthedark/dxlint package."
         },
         "dxlint.scanWorkspace": {
           "type": "boolean",
@@ -47,10 +78,16 @@
       }
     },
     "commands": [
-      { "command": "dxlint.restart", "title": "dxlint: Restart language server" }
+      {
+        "command": "dxlint.restart",
+        "title": "dxlint: Restart language server"
+      }
     ]
   },
   "dependencies": {
     "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@vscode/vsce": "^4.0.0"
   }
 }

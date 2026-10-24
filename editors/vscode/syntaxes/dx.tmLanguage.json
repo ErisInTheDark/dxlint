@@ -1,6 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
-  "name": "dxlint",
+  "name": "dx",
   "scopeName": "source.dx",
   "patterns": [
     { "include": "#comment" },
@@ -15,44 +15,60 @@
     "definitions": {
       "patterns": [
         {
-          "match": "\\b(match)\\s+([A-Za-z_]\\w*)",
-          "captures": { "1": { "name": "keyword.other.dx" }, "2": { "name": "entity.name.function.dx" } }
+          "match": "(@macro)\\s+([A-Za-z_][\\w-]*)",
+          "captures": { "1": { "name": "keyword.control.directive.dx" }, "2": { "name": "entity.name.function.macro.dx" } }
         },
         {
-          "match": "\\b(rule)\\s+([A-Za-z_][\\w:-]*)",
-          "captures": { "1": { "name": "keyword.other.dx" }, "2": { "name": "entity.name.type.dx" } }
+          "match": "(@each)\\b",
+          "captures": { "1": { "name": "keyword.control.directive.dx" } }
+        },
+        {
+          "match": "@[A-Za-z_][\\w-]*",
+          "name": "entity.name.function.macro.dx"
+        },
+        {
+          "match": "\\b(fn)\\s+([A-Za-z_]\\w*)",
+          "captures": { "1": { "name": "storage.type.function.dx" }, "2": { "name": "entity.name.function.dx" } }
+        },
+        {
+          "match": "\\b(match)\\s+([A-Za-z_]\\w*)",
+          "captures": { "1": { "name": "keyword.other.dx" }, "2": { "name": "entity.name.type.layer.dx" } }
+        },
+        {
+          "match": "\\b(rule)\\s+([A-Za-z_*][\\w:*-]*)",
+          "captures": { "1": { "name": "keyword.other.dx" }, "2": { "name": "entity.name.tag.rule.dx" } }
         },
         {
           "match": "\\b(group)\\s+([A-Za-z_]\\w*)",
-          "captures": { "1": { "name": "keyword.other.dx" }, "2": { "name": "entity.name.namespace.dx" } }
+          "captures": { "1": { "name": "keyword.other.dx" }, "2": { "name": "entity.name.type.group.dx" } }
         },
         {
           "match": "\\b(lang)\\s+([A-Za-z_]\\w*)",
           "captures": { "1": { "name": "keyword.other.dx" }, "2": { "name": "entity.name.namespace.dx" } }
         },
         {
-          "match": "\\b(macro)\\s+([A-Za-z_]\\w*)",
-          "captures": { "1": { "name": "keyword.other.dx" }, "2": { "name": "entity.name.function.macro.dx" } }
-        },
-        {
           "match": "^\\s*(import)\\s+([^\\s#\"']+)",
-          "captures": { "1": { "name": "keyword.other.dx" }, "2": { "name": "string.unquoted.path.dx" } }
+          "captures": { "1": { "name": "keyword.control.import.dx" }, "2": { "name": "string.unquoted.path.dx" } }
         },
         {
           "match": "\\b(set)\\s+([A-Za-z_]\\w*)",
-          "captures": { "1": { "name": "keyword.other.dx" }, "2": { "name": "variable.parameter.dx" } }
+          "captures": { "1": { "name": "keyword.other.dx" }, "2": { "name": "variable.parameter.option.dx" } }
         },
         {
           "match": "\\b(let)\\s+([A-Za-z_]\\w*)",
           "captures": { "1": { "name": "keyword.other.dx" }, "2": { "name": "variable.other.property.dx" } }
         },
         {
-          "match": "\\b(option)\\s+([A-Za-z_]\\w*)",
-          "captures": { "1": { "name": "keyword.other.dx" }, "2": { "name": "variable.parameter.dx" } }
+          "match": "\\b(?:(default)\\s+)?(option)\\s+([A-Za-z_]\\w*)",
+          "captures": { "1": { "name": "storage.modifier.dx" }, "2": { "name": "keyword.other.dx" }, "3": { "name": "variable.parameter.option.dx" } }
         },
         {
           "match": "\\b(schema)\\s+([A-Za-z_]\\w*)",
           "captures": { "1": { "name": "keyword.other.dx" }, "2": { "name": "entity.name.type.dx" } }
+        },
+        {
+          "match": "^\\s*(skip|keys|trait|exclusive|top|product|apparent|module_resolution|parser)\\b",
+          "captures": { "1": { "name": "keyword.other.declaration.dx" } }
         }
       ]
     },
@@ -63,25 +79,26 @@
         { "include": "#string" },
         { "include": "#sstring" },
         { "include": "#regex" },
+        { "match": "\\b(drop|override|define)\\b", "name": "storage.modifier.dx" },
         {
-          "match": "\\b(import|macro|lang|group|match|in|layer|rule|indent|like|set|ignore|option|schema|when|fix|files|report|let|native|forward|from)\\b",
+          "match": "\\b(import|lang|language|group|match|in|layer|rule|indent|dedent|by|like|set|ignore|option|schema|when|fix|as|files|report|let|native|forward|from|fn)\\b",
           "name": "keyword.other.dx"
         },
-        { "match": "\\b(string|number|int|boolean|any|regex)\\b(?=\\s*(?:[|=\\[(;,}\"]|$))", "name": "support.type.primitive.dx" },
-        { "match": "\\b(drop|override|define)\\b", "name": "keyword.other.modifier.dx" },
+        { "match": "\\b(until|or|is|not)\\b", "name": "keyword.operator.word.dx" },
+        { "match": "\\b(if|then|else)\\b", "name": "keyword.control.dx" },
+        { "match": "\\b(enum)(?=\\()", "name": "support.type.dx" },
+        { "match": "\\b(string|number|int|boolean|any|regex|js_regex)\\b(?=\\s*(?:[|=\\[(;,}\"]|$))", "name": "support.type.primitive.dx" },
         { "match": "\\b([A-Za-z_]\\w*)\\s*(=>)", "captures": { "1": { "name": "variable.parameter.dx" }, "2": { "name": "storage.type.function.arrow.dx" } } },
-        { "match": "\\b([A-Za-z_]\\w*)(:)(?=\\s)", "captures": { "1": { "name": "variable.other.property.key.dx" }, "2": { "name": "punctuation.separator.key-value.dx" } } },
-        { "match": "\\b(until|or|is)\\b", "name": "keyword.operator.word.dx" },
-        { "match": "\\b(if|then|else|as)\\b", "name": "keyword.control.dx" },
-        { "match": "\\b(children|previous|next)\\b(?=\\.|\\s|\\)|$)", "name": "variable.language.dx" },
+        { "match": "\\b([A-Za-z_]\\w*)(\\??:)(?=\\s)", "captures": { "1": { "name": "variable.other.property.key.dx" }, "2": { "name": "punctuation.separator.key-value.dx" } } },
+        { "match": "\\b(node|children|previous|next)\\b", "name": "variable.language.dx" },
         { "match": "\\b(true|false|null)\\b", "name": "constant.language.dx" },
         { "match": "\\b(off|hint|info|warn|error)\\b", "name": "support.constant.severity.dx" },
-        { "match": "\\.(?:[A-Za-z_]\\w*|\\*)", "name": "entity.name.namespace.dx" },
-        { "match": "\\b([A-Za-z_]\\w*)(:)(?!\\s)", "captures": { "1": { "name": "variable.parameter.label.dx" }, "2": { "name": "punctuation.separator.label.dx" } } },
-        { "match": "(:)([A-Za-z_]\\w*)", "captures": { "1": { "name": "punctuation.separator.label.dx" }, "2": { "name": "variable.parameter.label.dx" } } },
+        { "match": "(?<![\\w)\\]\"'])\\.(?:[A-Za-z_][\\w/-]*|\\*)", "name": "entity.name.namespace.dx" },
+        { "match": "(?<=[\\w)\\]])(\\??\\.)([A-Za-z_]\\w*)", "captures": { "1": { "name": "punctuation.accessor.dx" }, "2": { "name": "variable.other.property.dx" } } },
+        { "match": "\\b([A-Za-z_]\\w*)(:)(?![\\s:])", "captures": { "1": { "name": "variable.parameter.label.dx" }, "2": { "name": "punctuation.separator.label.dx" } } },
         { "match": "\\b([A-Za-z_]\\w*)(?=\\()", "name": "support.function.dx" },
         { "match": "\\b\\d+(?:\\.\\d+)?\\b", "name": "constant.numeric.dx" },
-        { "match": "==|!=|<=|>=|&&|\\|\\||[<>!~+\\-%*]", "name": "keyword.operator.dx" }
+        { "match": "\\?\\?|==|!=|<=|>=|&&|\\|\\||\\.\\.|[<>!~+\\-%*]", "name": "keyword.operator.dx" }
       ]
     },
     "block-string": {
@@ -133,7 +150,7 @@
           "name": "constant.other.character-class.set.regexp.dx",
           "patterns": [{ "match": "\\\\.", "name": "constant.character.escape.regexp.dx" }]
         },
-        { "match": "\\(\\?(?::|<[A-Za-z_]\\w*>|i\\))", "name": "punctuation.definition.group.regexp.dx" },
+        { "match": "\\(\\?(?::|=|!|<=|<!|<[A-Za-z_]\\w*>|i\\))", "name": "punctuation.definition.group.regexp.dx" },
         { "match": "[*+?]\\??|\\{\\d+(?:,\\d*)?\\}\\??", "name": "keyword.operator.quantifier.regexp.dx" },
         { "match": "[\\^$|()]", "name": "keyword.control.regexp.dx" }
       ]

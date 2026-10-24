@@ -2,17 +2,16 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
-const crypto = require("node:crypto");
 const test = require("node:test");
 
-async function activate({ sidecar = true, configured, mismatched = false, missingLibrary = false } = {}) {
-  const root = path.resolve("workspace"), binary = path.join(root, "target", "release", "dxlint.exe");
-  const bytes = Buffer.from("binary"), library = path.join(root, "target", "release", "libraries", "snapshot");
-  const files = new Map([[binary, bytes]]);
-  if (sidecar) files.set(`${binary}.library.json`, Buffer.from(JSON.stringify({
-    binarySha256: mismatched ? "different" : crypto.createHash("sha256").update(bytes).digest("hex"),
-    library: path.relative(path.dirname(binary), library),
-  })));
+const root = path.resolve("workspace");
+const packageBinary = path.join(root, "package", "bin", "dxlint-win32-x64.exe");
+const installed = path.join(root, "node_modules", "@inthedark", "dxlint");
+const installedBinary = path.join(installed, "bin", "dxlint-win32-x64.exe");
+
+// Activates the extension against a fake file system: `files` maps binary
+// paths to mtimes, `dirs` lists existing directories.
+async function activate({ files = {}, dirs = [], configured } = {}) {
   const errors = [], servers = [];
   const noop = () => ({ dispose() {} });
   const vscode = {
@@ -33,43 +32,69 @@ async function activate({ sidecar = true, configured, mismatched = false, missin
     async start() {}
     isRunning() { return false; }
   }
+  const copies = new Set();
   const io = {
     statSync(file) {
-      if (!files.has(file)) throw new Error("missing");
-      return { isFile: () => true, mtimeMs: 1, size: files.get(file).length };
+      if (!(file in files)) throw new Error("missing");
+      return { isFile: () => true, mtimeMs: files[file], size: 1 };
     },
-    readFileSync: file => { if (!files.has(file)) throw new Error("missing"); return files.get(file); },
-    existsSync: file => files.has(file) || !missingLibrary && [library, path.join(library, "std"), path.join(library, "rules")].includes(file),
-    mkdirSync() {}, readdirSync: () => [], watchFile() {}, unwatchFile() {},
-    copyFileSync: (from, to) => files.set(to, files.get(from)),
-    renameSync: (from, to) => { files.set(to, files.get(from)); files.delete(from); },
+    realpathSync: file => file,
+    existsSync: file => file in files || copies.has(file) || dirs.includes(file),
+    mkdirSync() {}, readdirSync: () => [], watchFile() {}, unwatchFile() {}, rmSync() {},
+    copyFileSync: (_from, to) => copies.add(to),
+    renameSync: (from, to) => { copies.delete(from); copies.add(to); },
   };
-  const context = { module: { exports: {} }, process: { platform: "win32", env: { DXLINT_LIBRARY: "unrelated-live-library" } },
+  const context = { module: { exports: {} }, process: { platform: "win32", arch: "x64", env: { DXLINT_LIBRARY: "inherited-library" } },
     setTimeout, clearTimeout, require: name => ({
-      fs: io, path, crypto, "node:crypto": crypto, vscode,
-      "vscode-languageclient/node": { LanguageClient },
+      fs: io, path, vscode, "vscode-languageclient/node": { LanguageClient },
     })[name] };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, "extension.js"), "utf8"), context);
   await context.module.exports.activate({ storageUri: { fsPath: path.resolve("extension-storage") }, subscriptions: [] });
-  return { servers, errors, binary, library };
+  return { servers, errors };
 }
 
-test("copied workspace executable keeps its matching library, not inherited live rules", async () => {
-  const result = await activate();
-  assert.equal(result.errors.length, 0);
-  assert.notEqual(result.servers[0].command, result.binary);
-  assert.equal(result.servers[0].options.env.DXLINT_LIBRARY, result.library);
+const library = dir => [path.join(dir, "std"), path.join(dir, "rules")];
+
+test("a project runs its dev dependency from a copy, with the package's library", async () => {
+  const { servers, errors } = await activate({ files: { [installedBinary]: 1 }, dirs: library(installed) });
+  assert.deepEqual(errors, []);
+  assert.notEqual(servers[0].command, installedBinary);
+  assert.equal(servers[0].options.env.DXLINT_LIBRARY, installed);
 });
-test("missing or mismatched workspace library cannot launch an unpinned editor server", async () => {
-  for (const options of [{ sidecar: false }, { mismatched: true }, { missingLibrary: true }]) {
-    const result = await activate(options);
-    assert.equal(result.servers.length, 0);
-    assert.equal(result.errors.length, 1);
-  }
+
+test("a package installed in a folder above the workspace (a monorepo root) is found", async () => {
+  const above = path.join(path.dirname(root), "node_modules", "@inthedark", "dxlint");
+  const { servers, errors } = await activate({ files: { [path.join(above, "bin", "dxlint-win32-x64.exe")]: 1 }, dirs: library(above) });
+  assert.deepEqual(errors, []);
+  assert.equal(servers[0].options.env.DXLINT_LIBRARY, above);
 });
-test("configured custom executable keeps its user-provided library", async () => {
-  const result = await activate({ configured: "custom-dxlint" });
-  assert.equal(result.errors.length, 0);
-  assert.equal(result.servers[0].command, "custom-dxlint");
-  assert.equal(result.servers[0].options.env.DXLINT_LIBRARY, "unrelated-live-library");
+
+test("dxlint's own checkout runs its package with the checkout's library", async () => {
+  const { servers, errors } = await activate({ files: { [packageBinary]: 1 }, dirs: library(root) });
+  assert.deepEqual(errors, []);
+  assert.equal(servers[0].options.env.DXLINT_LIBRARY, root);
+});
+
+test("without the package nothing starts, and the error says how to install it", async () => {
+  const { servers, errors } = await activate();
+  assert.equal(servers.length, 0);
+  assert.match(errors[0], /npm install --save-dev @inthedark\/dxlint/);
+});
+
+test("a package binary with no library above it does not start", async () => {
+  const { servers, errors } = await activate({ files: { [installedBinary]: 1 } });
+  assert.equal(servers.length, 0);
+  assert.equal(errors.length, 1);
+});
+
+test("a configured path wins and keeps the inherited library", async () => {
+  const { servers } = await activate({ files: { [installedBinary]: 1 }, dirs: library(installed), configured: "C:/tools/dxlint.exe" });
+  assert.equal(servers[0].command, "C:/tools/dxlint.exe");
+  assert.equal(servers[0].options.env.DXLINT_LIBRARY, "inherited-library");
+});
+
+test("a configured bare name runs from PATH through a shell", async () => {
+  const { servers } = await activate({ configured: "dxlint" });
+  assert.equal(servers[0].command, "dxlint");
+  assert.equal(servers[0].options.shell, true);
 });
