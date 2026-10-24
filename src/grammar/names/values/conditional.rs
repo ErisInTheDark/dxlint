@@ -73,18 +73,28 @@ impl Values<'_> {
         let Known::Yes(classes) = self.question.owner_classes(at.frame, owner) else {
             return NodeValue::Unknown;
         };
+        // A check that is the distributed formal itself reads back the arm
+        // its overlay binds: no need to resolve the formal again per arm.
+        let check_is_formal = matches!(&selection.check, super::Value::Path(check) if check == path);
         let mut branches = Vec::with_capacity(arms.len());
         for arm in arms {
             if !self.question.budget.step() { return NodeValue::Unknown }
+            let arm = NodeValue::rows(vec![arm]);
+            let known = check_is_formal.then(|| arm.clone());
             let mut arguments = vec![None; count];
-            arguments[position] = Some(NodeValue::rows(vec![arm]));
+            arguments[position] = Some(arm);
             let frame = self.question.bind_overlay(at.frame, owner, arguments, classes);
-            branches.push(self.select_arm(Leaf { frame, ..at }, selection));
+            branches.push(self.select_arm_with(Leaf { frame, ..at }, selection, known));
         }
         self.combine(branches, false)
     }
 
     fn select_arm(&self, at: Leaf, selection: &Selection) -> NodeValue {
+        self.select_arm_with(at, selection, None)
+    }
+
+    /// `actual`: the checked value when already known (a distributed arm).
+    fn select_arm_with(&self, at: Leaf, selection: &Selection, actual: Option<NodeValue>) -> NodeValue {
         let Target::Node(owner) = at.target else { return NodeValue::Unknown };
         let Known::Yes(slots) = self.generic_parameters(at) else { return NodeValue::Unknown };
         let Known::Yes(classes) = self.question.owner_classes(at.frame, owner) else {
@@ -93,7 +103,7 @@ impl Values<'_> {
         let capture = if slots.is_empty() { at } else {
             Leaf { frame: self.question.bind_slots(at.frame, owner, None, vec![None; slots.len()], classes), ..at }
         };
-        let actual = self.evaluate(capture, &selection.check);
+        let actual = actual.unwrap_or_else(|| self.evaluate(capture, &selection.check));
         if actual == NodeValue::Unknown { return NodeValue::Unknown }
         let slots: Vec<_> = slots.into_iter().map(|slot| Leaf { frame: capture.frame, ..slot }).collect();
         let Known::Yes(matched) = self.semantic.calls().match_value(capture, &selection.pattern, &actual, &slots) else {

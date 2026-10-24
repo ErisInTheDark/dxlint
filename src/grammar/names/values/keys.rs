@@ -22,24 +22,40 @@ impl Key {
 }
 
 impl Values<'_> {
-    /// A key literal fits its domain's traits and no other domain's; other
-    /// traits stay undecided (a key leaf has no syntax to declare them).
+    /// A key fits exactly its domain's traits, as a node fits what it
+    /// declares, and a literal key the truthiness trait of its identity
+    /// (`keys truthiness`). Only an exclusive group naming none of those (a
+    /// domain key's truthiness) stays undecided.
     pub(super) fn key_trait(&self, id: KeyId, trait_id: u16) -> Known<bool> {
         let Some(key) = self.question.key(id) else { return Known::Unknown };
         if trait_id >= 64 { return Known::Unknown }
-        let (mut own, mut domains) = (0u64, 0u64);
-        for &(domain, traits) in &self.tables.key_domains {
-            domains |= traits;
-            if domain == key.domain() { own |= traits }
+        let mut own = self.tables.key_domains.iter().filter(|(domain, _)| *domain == key.domain())
+            .fold(0u64, |own, (_, traits)| own | traits);
+        if let Some((truthy, falsy)) = self.tables.key_truthiness {
+            own |= match &key {
+                Key::Text(text) => if text.is_empty() { falsy } else { truthy },
+                Key::Ordinal(index) => if *index == 0 { falsy } else { truthy },
+                Key::Symbol(_) => truthy,
+                Key::Domain(_) => 0,
+            };
         }
         let bit = 1u64 << trait_id;
-        if own & bit != 0 { Known::Yes(true) } else if domains & bit != 0 { Known::Yes(false) } else { Known::Unknown }
+        if own & bit != 0 { return Known::Yes(true) }
+        let undecided = self.tables.exclusive.iter().any(|&group| group & bit != 0 && group & own == 0);
+        if undecided { Known::Unknown } else { Known::Yes(false) }
     }
 
     fn key_domain(&self, leaf: Leaf) -> Known<Option<KeyDomain>> {
         let mut answer = None;
         let mut unknown = false;
+        // Only a trait one domain alone names tells domains apart.
+        let (mut seen, mut shared) = (0u64, 0u64);
+        for &(_, traits) in &self.tables.key_domains {
+            shared |= seen & traits;
+            seen |= traits;
+        }
         for &(domain, traits) in &self.tables.key_domains {
+            let traits = traits & !shared;
             for id in 0..64 {
                 if traits & (1 << id) == 0 { continue }
                 match self.fits(leaf, id) {
@@ -59,6 +75,11 @@ impl Values<'_> {
     /// one domain widen to that domain.
     pub fn value_key(&self, value: &NodeValue) -> Known<Key> {
         let Known::Yes(keys) = self.value_keys(value) else { return Known::Unknown };
+        Self::widened_key(keys)
+    }
+
+    /// One key for several: literals of one domain widen to that domain.
+    pub(super) fn widened_key(keys: Vec<Key>) -> Known<Key> {
         let mut answer: Option<Key> = None;
         for key in keys {
             answer = match answer {
@@ -68,6 +89,21 @@ impl Values<'_> {
             };
         }
         answer.map_or(Known::Unknown, Known::Yes)
+    }
+
+    /// The keys a member read's key expression stands for, evaluated once:
+    /// constants and attribute or position keys give their one key
+    /// ([`Self::key`]); any other expression each literal its value holds.
+    pub(super) fn key_alternatives(&self, at: Leaf, expression: &super::Value) -> Known<Vec<Key>> {
+        let single = match expression {
+            super::Value::Text(_) | super::Value::Ordinal(_) => true,
+            super::Value::Path(path) => path.last().is_some_and(|&last| last == super::super::POSITION
+                || super::super::attribute_step(last).is_some()),
+            _ => false,
+        };
+        if single { return self.key(at, expression).map(|key| vec![key]) }
+        let Known::Yes(at) = self.semantic.leaf(at) else { return Known::Unknown };
+        self.value_keys(&self.evaluate(at, expression))
     }
 
     /// The distinct keys a key expression's alternatives evaluate to, in

@@ -5,15 +5,26 @@ impl Values<'_> {
     pub fn expand(&self, value: &NodeValue) -> NodeValue {
         let Some(_nested) = self.question.budget.nest() else { return NodeValue::Unknown };
         let NodeValue::Alternatives(rows) = value else { return NodeValue::Unknown };
+        // Fully normal rows whose leaves each expand to themselves are
+        // already their own expansion: normalizing them again proves nothing.
+        let normal = rows.normal() == Normal::Full;
+        let mut unchanged = normal;
         let mut alternatives = Vec::with_capacity(rows.len());
-        for row in rows {
+        for row in rows.iter() {
             let mut parts = Vec::with_capacity(row.len());
             for &leaf in row {
                 if !self.question.budget.step() { return NodeValue::Unknown }
                 parts.push(self.values(leaf));
             }
-            alternatives.push(super::eval::combine(self, parts, true));
+            let same = normal && parts.iter().zip(row).all(|(part, &leaf)| *part == NodeValue::leaf(leaf));
+            unchanged &= same;
+            alternatives.push(if same {
+                NodeValue::Alternatives(Rows::normalized(vec![row.clone()], Normal::Full))
+            } else {
+                super::eval::combine(self, parts, true)
+            });
         }
+        if unchanged { return value.clone() }
         super::eval::combine(self, alternatives, false)
     }
 

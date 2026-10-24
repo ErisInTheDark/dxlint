@@ -45,6 +45,9 @@ pub struct Config {
     pub top: Vec<Name>,
     pub dynamic: Vec<Name>,
     pub key_domains: Vec<(values::KeyDomain, Vec<Name>)>,
+    /// `keys truthiness <truthy> <falsy>`: the traits a key literal fits by
+    /// its identity's truthiness.
+    pub key_truthiness: Option<(Name, Name)>,
     pub products: Vec<values::ProductShape>,
     pub apparent: Vec<values::Apparent>,
     /// `module_resolution name { ... }`: how module specifiers find files.

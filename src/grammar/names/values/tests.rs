@@ -778,7 +778,7 @@ fn product_index_domains_join_slots_and_known_prefixes_ignore_unreadable_rest() 
     let mut tables = tables();
     tables.products.push(Some(Shape {
         traits: 0, description: crate::expr::Value::Null,
-        inherits: Some(Value::Path(vec![999])), readonly_inherits: None, optional: None,
+        inherits: Some(Value::Path(vec![999])), readonly_inherits: None, optional: None, count: None,
     }));
     let question = QueryContext::default();
     let frame = question.bind(FrameId::ROOT, NodeRef::here(0), Some(leaf(1)), None);
@@ -813,7 +813,7 @@ fn product_optional_elements_keep_whole_values_and_nested_rest_order() {
     let mut tables = tables();
     tables.products.push(Some(Shape {
         traits: 0, description: crate::expr::Value::Null,
-        inherits: None, readonly_inherits: None, optional: Some(Value::Traits(8)),
+        inherits: None, readonly_inherits: None, optional: Some(Value::Traits(8)), count: None,
     }));
     let question = QueryContext::default();
     let frame = question.bind(FrameId::ROOT, NodeRef::here(0), Some(leaf(1)), None);
@@ -857,7 +857,7 @@ fn product_producer_flags_distinguish_missing_from_unreadable_values() {
         let mut tables = tables();
         tables.products.push(Some(Shape {
             traits: 0, description: Expression::Null,
-            inherits: None, readonly_inherits: None, optional: None,
+            inherits: None, readonly_inherits: None, optional: None, count: None,
         }));
         let question = QueryContext::default();
         let frame = question.bind(FrameId::ROOT, NodeRef::here(0), Some(leaf(1)), None);
@@ -896,7 +896,7 @@ fn variadic_product_inventory_keeps_rest_and_suffix_values_as_alternatives() {
     });
     tables.products.push(Some(Shape {
         traits: 0, description: crate::expr::Value::Null,
-        inherits: None, readonly_inherits: None, optional: None,
+        inherits: None, readonly_inherits: None, optional: None, count: None,
     }));
     let question = QueryContext::default();
     let semantic = Semantic::new(&world, &tables, &question);
@@ -927,7 +927,7 @@ fn product_flags_check_every_selected_source_before_proving_absence() {
     let mut tables = tables();
     tables.products.push(Some(Shape {
         traits: 0, description: crate::expr::Value::Null,
-        inherits: None, readonly_inherits: None, optional: None,
+        inherits: None, readonly_inherits: None, optional: None, count: None,
     }));
     let question = QueryContext::default();
     let semantic = Semantic::new(&world, &tables, &question);

@@ -1,0 +1,8 @@
+import .ts
+
+in ts_expression_statement.expression rule then-member {
+  when starts_with(text, "probe")
+  let named value_has_member(node, "then", null)
+  info if named == null then "unknown" else str(named)
+}
+rule then-member

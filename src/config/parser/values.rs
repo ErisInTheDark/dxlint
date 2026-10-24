@@ -48,6 +48,10 @@ impl Parser<'_> {
             self.unwrap_value()
         } else { None };
         let optional = if self.word("optional") { self.unwrap_value() } else { None };
+        let count = if self.word("count") {
+            let Some((key, _)) = self.string("the element count member name") else { return };
+            Some(key)
+        } else { None };
         self.end_of_item();
         if context.is_some() || !self.conditions.is_empty() {
             self.errors.push(ConfigError::new(keyword.span, "product shapes belong at top level"));
@@ -59,7 +63,7 @@ impl Parser<'_> {
             return;
         }
         self.config.products.push(crate::config::ast::values::ProductShape {
-            name, items, traits, description, inherits, readonly_inherits, optional,
+            name, items, traits, description, inherits, readonly_inherits, optional, count,
         });
     }
 
@@ -103,6 +107,17 @@ impl Parser<'_> {
     pub(super) fn key_domains_item(&mut self, context: Option<&Context>) {
         let keyword = self.bump().expect("peeked");
         let Some(domain) = self.ident("a key domain") else { return };
+        if domain.text == "truthiness" {
+            let Some(truthy) = self.ident("the trait truthy key literals fit") else { return };
+            let Some(falsy) = self.ident("the trait falsy key literals fit") else { return };
+            self.end_of_item();
+            if context.is_some() || !self.conditions.is_empty() {
+                self.errors.push(ConfigError::new(keyword.span, "key domains belong at top level"));
+                return;
+            }
+            self.config.key_truthiness = Some((truthy, falsy));
+            return;
+        }
         let Some(domain) = crate::config::ast::values::KeyDomain::parse(&domain.text) else {
             self.error_here("expected key domain `text`, `ordinal`, or `symbol`");
             return;

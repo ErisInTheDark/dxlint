@@ -337,16 +337,16 @@ impl<'a, 'world> Run<'a, 'world> {
                     self.answers.push(base);
                     return;
                 }
-                let value = match self.values.key(at, key) {
+                let value = match self.values.key_alternatives(at, key) {
                     // Several literal keys read one member each (`T["a" | "b"]`,
                     // `T[keyof T]`); only a wide key reads indexers.
-                    Known::Yes(widened @ super::Key::Domain(_)) => match self.values.value_keys(&self.values.evaluate(at, key)) {
-                        Known::Yes(keys) if keys.len() > 1 && keys.iter().all(|key| !matches!(key, super::Key::Domain(_))) => {
-                            combine(self.values, keys.iter().map(|key| self.values.member(&base.value, key)).collect::<Vec<_>>(), false)
-                        }
-                        _ => self.values.member(&base.value, &widened),
+                    Known::Yes(keys) if keys.len() > 1 && keys.iter().all(|key| !matches!(key, super::Key::Domain(_))) => {
+                        combine(self.values, keys.iter().map(|key| self.values.member(&base.value, key)).collect::<Vec<_>>(), false)
+                    }
+                    Known::Yes(keys) => match Values::widened_key(keys) {
+                        Known::Yes(key) => self.values.member(&base.value, &key),
+                        Known::Unknown => NodeValue::Unknown,
                     },
-                    Known::Yes(key) => self.values.member(&base.value, &key),
                     Known::Unknown => NodeValue::Unknown,
                 };
                 self.answers.push(Answer { exists: true, value });

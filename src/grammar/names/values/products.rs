@@ -15,6 +15,9 @@ pub struct Shape {
     pub inherits: Option<Value>,
     pub readonly_inherits: Option<Value>,
     pub optional: Option<Value>,
+    /// The member a product with fixed positions reads its element count
+    /// from: the count literal, a union of them past optional elements.
+    pub count: Option<Key>,
 }
 
 pub(in crate::grammar::names) fn lower_shape(
@@ -46,6 +49,7 @@ pub(in crate::grammar::names) fn lower_shape(
         inherits: lower(&shape.inherits)?,
         readonly_inherits: lower(&shape.readonly_inherits)?,
         optional: lower(&shape.optional)?,
+        count: shape.count.as_deref().map(|key| Key::Text(key.into())),
     })
 }
 
@@ -240,8 +244,32 @@ impl Values<'_> {
         Known::Yes(items)
     }
 
+    /// The member holding a fixed product's element count, when its shape
+    /// declares one (`count`): arrays and spread collections have none.
+    fn product_count(&self, product: &Product) -> Option<Member> {
+        let key = self.product_shape(product)?.count.clone()?;
+        if product.array { return None }
+        let leaf = |count: Key| Leaf { target: Target::Key(self.question.intern_key(count)), frame: super::super::question::FrameId::ROOT };
+        let value = if product.elements.iter().any(|element| element.repeated || element.values) {
+            NodeValue::leaf(leaf(Key::Domain(crate::config::ast::values::KeyDomain::Ordinal)))
+        } else {
+            let required = product.elements.iter().filter(|element| !element.optional).count();
+            NodeValue::rows((required..=product.elements.len())
+                .map(|count| vec![leaf(Key::Ordinal(u32::try_from(count).unwrap_or(u32::MAX)))]).collect())
+        };
+        Some(Member {
+            key,
+            sources: vec![MemberSource { site: product.source, value: Some(Value::Captured(Box::new(value))), origin: MemberOrigin::Named, edits: None }],
+            required: Known::Yes(true),
+        })
+    }
+
     pub(super) fn product_members(&self, at: Leaf, wanted: Option<&Key>) -> Known<Vec<Member>> {
         let Known::Yes(Some(product)) = self.product_info(at) else { return Known::Unknown };
+        let count = self.product_count(&product);
+        if let (Some(wanted), Some(count)) = (wanted, &count) {
+            if wanted == &count.key { return Known::Yes(vec![count.clone()]) }
+        }
         let mut members = Vec::new();
         let mut repeated = false;
         let mut selected = Vec::new();
@@ -311,6 +339,7 @@ impl Values<'_> {
                 required: Known::Yes(false),
             });
         }
+        if wanted.is_none() { members.extend(count) }
         let inherited = match self.product_inherited(at, &product) {
             Known::Yes(Some(value)) => value,
             Known::Yes(None) => return Known::Yes(members),

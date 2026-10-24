@@ -41,6 +41,9 @@ pub struct ProductShape {
     pub inherits: Option<Unwrap>,
     pub readonly_inherits: Option<Unwrap>,
     pub optional: Option<Unwrap>,
+    /// `count "<key>"`: the member a fixed product reads its element count
+    /// from (a tuple's `length`).
+    pub count: Option<String>,
 }
 
 /// `apparent <trait> inherits <value>`: the members values with the trait

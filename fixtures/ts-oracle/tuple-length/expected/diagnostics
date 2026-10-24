@@ -1,0 +1,5 @@
+a.ts:10:1-10:14 ts-oracle#0 value 0
+a.ts:11:1-11:5 ts-oracle#0 value [string]
+a.ts:12:1-12:6 ts-oracle#0 value []
+a.ts:8:1-8:13 ts-oracle#0 value 2
+a.ts:9:1-9:17 ts-oracle#0 value 1 | 2

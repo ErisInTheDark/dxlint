@@ -498,7 +498,7 @@ fn product_patterns_capture_recipe_holes_without_replacing_them_with_defaults() 
     });
     tables.products.push(Some(Shape {
         traits: 0, description: crate::expr::Value::Null,
-        inherits: None, readonly_inherits: None, optional: None,
+        inherits: None, readonly_inherits: None, optional: None, count: None,
     }));
     let question = QueryContext::default();
     let frame = question.bind(FrameId::ROOT, NodeRef::here(3), None, Some(vec![value(1)]));
@@ -535,7 +535,7 @@ fn rest_inference_keeps_order_optional_markers_and_source_frames() {
         tables.kinds[1].calls.optional.push(None);
         tables.products.push(Some(crate::grammar::names::values::products::Shape {
             traits: 0, description: crate::expr::Value::Null,
-            inherits: None, readonly_inherits: None, optional: None,
+            inherits: None, readonly_inherits: None, optional: None, count: None,
         }));
         let question = QueryContext::default();
         let frame = question.bind(FrameId::ROOT, NodeRef::here(3), None, Some(vec![value(1)]));
