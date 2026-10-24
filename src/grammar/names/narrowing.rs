@@ -73,6 +73,7 @@ impl State {
 
 impl Narrowing<'_> {
     pub fn refine(&self, at: Leaf, base: NodeValue) -> NodeValue {
+        if crate::levers::on(crate::levers::Lever::NoNarrowing) { return base }
         let _site = self.semantic.world.profile().map(|_| crate::engine::StepSite::enter("narrowing.refine"));
         let Known::Yes(at) = self.semantic.leaf(at) else { return NodeValue::Unknown };
         let refined = self.refine_graph(at, base);
@@ -80,6 +81,9 @@ impl Narrowing<'_> {
     }
 
     fn refine_graph(&self, at: Leaf, mut base: NodeValue) -> NodeValue {
+        if crate::levers::on(crate::levers::Lever::LoneSkip) && !matches!(&base, NodeValue::Alternatives(rows) if rows.len() > 1) {
+            return base;
+        }
         let Known::Yes((subject, written)) = self.find_place(at, true, true) else { return base };
         let effects = self.semantic.effects();
         let Known::Yes(entry) = effects.entry_for(at) else { return base };

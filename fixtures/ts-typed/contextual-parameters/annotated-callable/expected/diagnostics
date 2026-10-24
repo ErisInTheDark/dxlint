@@ -1,0 +1,6 @@
+input.ts:1:16-1:29 ts-oracle#0 number
+input.ts:2:31-2:36 ts-oracle#0 number
+input.ts:4:17-4:29 ts-oracle#0 string
+input.ts:4:43-4:47 ts-oracle#0 string
+input.ts:6:19-6:32 ts-oracle#0 number
+input.ts:6:45-6:58 ts-oracle#0 string

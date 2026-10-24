@@ -72,6 +72,8 @@ pub enum Unwrap {
     Excludes { traits: Vec<Name>, from: Option<Box<Unwrap>> },
     Includes { value: Box<Unwrap>, from: Option<Box<Unwrap>> },
     Has { key: Box<Unwrap>, from: Option<Box<Unwrap>> },
+    /// `keys of <value>`: the value's member keys, each a literal (`keyof`).
+    Keys { of: Box<Unwrap> },
     Ordinal(u32),
     /// An ordinary global declaration with ordered evaluated arguments.
     Instance { name: Name, class: Name, arguments: Vec<Unwrap> },

@@ -1,0 +1,7 @@
+a.ts:10:1-10:12 ts-oracle#0 value number
+a.ts:11:1-11:21 ts-oracle#0 value string | undefined
+a.ts:12:1-12:18 ts-oracle#0 value number
+a.ts:21:1-21:13 ts-oracle#0 value Implementer
+a.ts:22:1-22:17 ts-oracle#0 value number
+a.ts:8:1-8:8 ts-oracle#0 value Merged
+a.ts:9:1-9:15 ts-oracle#0 value string | undefined

@@ -185,7 +185,7 @@ fn query_key(semantic: &Semantic<'_>, at: Leaf, value: &Value<'static>) -> Known
         let file = match at.target {
             Target::Node(node) => node.file,
             Target::Scope(scope) => scope.file,
-            Target::Traits(_) | Target::Product(_) | Target::Modified(_) => return Known::Unknown,
+            Target::Traits(_) | Target::Product(_) | Target::Modified(_) | Target::Key(_) => return Known::Unknown,
         };
         return values.value_key(&values.values(Leaf { target: Target::Node(NodeRef { file, node: *node }), frame: at.frame }));
     }
@@ -477,7 +477,7 @@ fn globals(semantic: &Semantic<'_>, at: Leaf, args: &[Value<'static>]) -> Known<
     let file = match at.target {
         Target::Node(node) => node.file,
         Target::Scope(scope) => scope.file,
-        Target::Traits(_) | Target::Product(_) | Target::Modified(_) => return Known::Unknown,
+        Target::Traits(_) | Target::Product(_) | Target::Modified(_) | Target::Key(_) => return Known::Unknown,
     };
     let Known::Yes(targets) = semantic.modules().global(file, name, classes) else { return Known::Unknown };
     let mut declarations = Vec::new();
@@ -491,7 +491,7 @@ fn globals(semantic: &Semantic<'_>, at: Leaf, args: &[Value<'static>]) -> Known<
                 };
                 NodeRef { file: scope.file, node: info.node }
             }
-            Target::Traits(_) | Target::Product(_) | Target::Modified(_) => return Known::Unknown,
+            Target::Traits(_) | Target::Product(_) | Target::Modified(_) | Target::Key(_) => return Known::Unknown,
         };
         let Known::Yes(node) = semantic.values().declaration_owner(node) else { return Known::Unknown };
         let declaration = Value::record(vec![
@@ -512,7 +512,7 @@ fn declaration(semantic: &Semantic<'_>, at: Leaf, _: &[Value<'static>]) -> Known
             };
             NodeRef { file: scope.file, node: info.node }
         }
-        Target::Traits(_) | Target::Product(_) | Target::Modified(_) => return Known::Unknown,
+        Target::Traits(_) | Target::Product(_) | Target::Modified(_) | Target::Key(_) => return Known::Unknown,
     };
     let Known::Yes(node) = semantic.values().resolved_declaration(node) else { return Known::Unknown };
     Known::Yes(Value::record(vec![

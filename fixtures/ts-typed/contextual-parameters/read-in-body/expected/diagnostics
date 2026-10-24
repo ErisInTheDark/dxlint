@@ -1,0 +1,3 @@
+input.ts:2:31-2:49 ts-oracle#0 number
+input.ts:5:41-5:56 ts-oracle#0 number
+input.ts:8:35-8:47 ts-oracle#0 string

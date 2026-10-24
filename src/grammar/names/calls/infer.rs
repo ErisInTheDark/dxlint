@@ -34,6 +34,7 @@ pub(super) fn instantiate(header: Header, call: Leaf, mapping: &[(Leaf, Vec<Leaf
         let Some(owner) = node(header.site, values) else { return Known::Unknown };
         let Known::Yes(classes) = values.question.owner_classes(header.site.frame, owner) else { return Known::Unknown };
         let Known::Yes(formals) = formals(header.site, values) else { return Known::Unknown };
+        if !formals.is_empty() && crate::levers::on(crate::levers::Lever::NoInference) { return Known::Unknown }
         let mut contributions = Vec::new();
         for (position, formal) in formals.iter().enumerate() {
             let supplied = match explicit.get(position) {

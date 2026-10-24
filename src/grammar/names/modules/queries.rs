@@ -295,7 +295,14 @@ impl<'a> Queries<'a> {
         let revision = self.sync_revision();
         if let Some(answer) = self.semantic.modules.answers.borrow().get(&request) { return answer.clone() }
         self.semantic.modules.answers.borrow_mut().insert(request.clone(), Known::Unknown);
-        let mut answer = if self.spend().is_ok() { run().map_or(Known::Unknown, Known::Yes) } else { Known::Unknown };
+        // Module answers are kept for the whole file (and shared run-wide),
+        // so they run on an allowance of their own: charged to the question
+        // that first met them, they cut it short and every later one redid
+        // the work.
+        let mut answer = if self.spend().is_ok() {
+            self.semantic.question.budget.detached(super::super::question::Budget::DEFAULT, run)
+                .map_or(Known::Unknown, |found| found.map_or(Known::Unknown, Known::Yes))
+        } else { Known::Unknown };
         if self.semantic.world.revision() != revision {
             self.sync_revision();
             return Known::Unknown;

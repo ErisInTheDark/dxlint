@@ -1,0 +1,8 @@
+import .ts
+ignore "tsconfig.json"
+
+in ts_parameter rule ts-oracle {
+  warn (ts_value_print_handle(node) ?? "null")
+}
+
+rule ts-oracle

@@ -7,6 +7,8 @@ pub(super) enum MemberRequest<'a> {
     Listing,
     /// Every member, with indexers by their key domain (structural shape).
     Shape,
+    /// [`Self::Shape`] for `keys of`: runtime-only indexers are no keys.
+    Keys,
     Coverage,
     Key(&'a Key),
 }
@@ -15,7 +17,7 @@ impl<'a> MemberRequest<'a> {
     pub(super) fn key(self) -> Option<&'a Key> {
         match self {
             Self::Key(key) => Some(key),
-            Self::Listing | Self::Shape | Self::Coverage => None,
+            Self::Listing | Self::Shape | Self::Keys | Self::Coverage => None,
         }
     }
 
@@ -25,7 +27,7 @@ impl<'a> MemberRequest<'a> {
     fn indexer(self, domain: KeyDomain) -> Option<(Key, Known<bool>)> {
         match self {
             Self::Key(key) => Some((key.clone(), Known::Unknown)),
-            Self::Shape => Some((Key::Domain(domain), Known::Yes(false))),
+            Self::Shape | Self::Keys => Some((Key::Domain(domain), Known::Yes(false))),
             Self::Listing | Self::Coverage => None,
         }
     }
@@ -41,6 +43,7 @@ impl Values<'_> {
         let mut members = Vec::new();
         let classes = view.map_or(kind.member_defaults, |(_, classes)| classes);
         for recipe in &kind.indexed {
+            if recipe.runtime && matches!(request, MemberRequest::Keys) { continue }
             if matches!(recipe.mode, IndexedMode::Keyed(_) | IndexedMode::Keys { .. }) != named { continue }
             if recipe.views != 0 && recipe.views & classes == 0 { continue }
             let wanted_position = match &recipe.mode {

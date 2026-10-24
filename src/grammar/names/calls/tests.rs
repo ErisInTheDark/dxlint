@@ -206,7 +206,7 @@ fn structural_members_compare_values_and_required_presence() {
                 member_closed: vec![(1, None)],
                 indexed: vec![IndexedRecipe {
                     path: vec![40], mode: IndexedMode::Keyed(super::Value::Text("x".into())),
-                    views: 1, value: None, when: None,
+                    views: 1, value: None, when: None, runtime: false,
                 }],
                 ..KindNames::default()
             });
@@ -247,7 +247,7 @@ fn recursive_structures_relate_coinductively_but_still_fail_on_real_mismatches()
         for _ in 0..2 {
             let keyed = |key: &str, path| IndexedRecipe {
                 path: vec![path], mode: IndexedMode::Keyed(super::Value::Text(key.into())),
-                views: 1, value: None, when: None,
+                views: 1, value: None, when: None, runtime: false,
             };
             tables.kinds.push(KindNames {
                 member_defaults: 1,
@@ -792,7 +792,7 @@ fn matching_member_holes_keeps_failed_alternatives_out_of_chosen_bindings() {
         tables.kinds.push(KindNames {
             indexed: keys.into_iter().map(|(label, key)| IndexedRecipe {
                 path: vec![label], mode: IndexedMode::Keyed(super::Value::Text(key.into())),
-                views: 0, value: None, when: None,
+                views: 0, value: None, when: None, runtime: false,
             }).collect(),
             ..KindNames::default()
         });

@@ -60,6 +60,9 @@ pub struct Budget {
     /// (`u64::MAX` while it hasn't): answers memoised before it are
     /// complete.
     cut: Cell<u64>,
+    /// Steps actually spent, detached allowances included (an `exhaust`
+    /// spends none).
+    taken: Cell<u64>,
 }
 
 /// Holds one level of [`Budget::nest`]; leaving it returns the level.
@@ -82,7 +85,7 @@ impl Budget {
     pub const DEPTH: u32 = 256;
 
     pub fn new(units: u32) -> Budget {
-        Budget { left: Cell::new(units), depth: Cell::new(0), limited: Cell::new(false), traced: Cell::new(false), cut: Cell::new(u64::MAX) }
+        Budget { left: Cell::new(units), depth: Cell::new(0), limited: Cell::new(false), traced: Cell::new(false), cut: Cell::new(u64::MAX), taken: Cell::new(0) }
     }
 
     pub(crate) fn trace(&self, on: bool) {
@@ -110,9 +113,15 @@ impl Budget {
             0 => { self.limit(); false }
             n => {
                 self.left.set(n - 1);
+                self.taken.set(self.taken.get() + 1);
                 true
             }
         }
+    }
+
+    /// See [`Budget::taken`] (the field).
+    pub(crate) fn taken(&self) -> u64 {
+        self.taken.get()
     }
 
     /// Spends the rest of the budget: the question ends as one that ran out.
@@ -210,6 +219,10 @@ pub struct ProductId(pub u32);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ModifiedId(pub u32);
 
+/// A property key as a value of its own (`keyof`'s members): no syntax node.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct KeyId(pub u32);
+
 /// A value read as `source` with its members' requiredness and declaration
 /// flags changed (`unwraps modified`): mapped types keeping their source's
 /// keys. The members' own values stay the source's.
@@ -278,6 +291,7 @@ pub enum Target {
     Traits(u64),
     Product(ProductId),
     Modified(ModifiedId),
+    Key(KeyId),
 }
 
 /// A leaf of a value: a node that fits traits (or a namespace scope), seen
@@ -520,6 +534,7 @@ pub struct QueryContext {
     args: std::cell::RefCell<Interner<Args>>,
     products: std::cell::RefCell<Interner<Product>>,
     modified: std::cell::RefCell<Interner<Modified>>,
+    keys: std::cell::RefCell<Interner<super::values::Key>>,
     handles: std::cell::RefCell<Interner<NodeValue>>,
     /// This context's handle namespace, assigned with its first handle.
     owner: std::cell::Cell<u32>,
@@ -572,6 +587,13 @@ impl<T: Clone + Eq + std::hash::Hash> Interner<T> {
 }
 
 impl QueryContext {
+    /// A context for once-per-run work (program selection, inputs, roots):
+    /// on the detached floor, as a question's budget would leave it unknown
+    /// and every later question would redo it.
+    pub fn once() -> QueryContext {
+        QueryContext { budget: Budget::new(Budget::DEFAULT), ..QueryContext::default() }
+    }
+
     /// One handle per distinct value; callers canonicalise frames first.
     pub fn handle(&self, value: NodeValue) -> Handle {
         static OWNERS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
@@ -602,6 +624,14 @@ impl QueryContext {
 
     pub fn modified(&self, id: ModifiedId) -> Option<Modified> {
         self.modified.borrow().items.get(id.0 as usize).cloned()
+    }
+
+    pub(crate) fn intern_key(&self, key: super::values::Key) -> KeyId {
+        KeyId(self.keys.borrow_mut().intern(key))
+    }
+
+    pub fn key(&self, id: KeyId) -> Option<super::values::Key> {
+        self.keys.borrow().items.get(id.0 as usize).cloned()
     }
 
     /// The frame instantiating `owner` through `through` (syntax arguments

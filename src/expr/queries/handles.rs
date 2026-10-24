@@ -671,25 +671,9 @@ fn headers_of(semantic: &Semantic<'_>, value: NodeValue, kind: crate::grammar::n
     Known::Yes(Value::list(alternatives))
 }
 
-/// Whether the leaf declares no members of its own: nodeless trait values
-/// and node kinds with no member scope, index signature, base or member link
-/// (a function type). Apparent members (`Function`'s) are not its own, so
-/// this proves nothing absent for lookups.
+/// See [`crate::grammar::names::values::Values::own_member_free`].
 fn own_member_free(semantic: &Semantic<'_>, at: crate::grammar::names::question::Leaf) -> Known<bool> {
-    use crate::grammar::names::question::Target;
-    let Known::Yes(at) = semantic.leaf(at) else { return Known::Unknown };
-    match at.target {
-        // Nodeless: no declarations, so no own members, open or not (the
-        // intersection marker is open). Rules read openness from the
-        // part's `uncertain_traits`.
-        Target::Traits(_) => Known::Yes(true),
-        Target::Product(_) | Target::Scope(_) | Target::Modified(_) => Known::Yes(false),
-        Target::Node(node) => {
-            let Some(data) = semantic.world.tree(node.file).and_then(|tree| tree.nodes.get(node.node as usize)) else { return Known::Unknown };
-            let Some(kind) = semantic.tables.kinds.get(data.matcher as usize) else { return Known::Unknown };
-            Known::Yes(kind.member_defaults == 0 && kind.indexed.is_empty() && kind.member_bases.is_empty() && kind.member_links.is_empty())
-        }
-    }
+    semantic.values().own_member_free(at)
 }
 
 const MAX_FRAME_DEPTH: usize = 24;

@@ -118,6 +118,7 @@ impl Parser<'_> {
 
     pub(super) fn indexed_item(&mut self) -> Option<NameItem> {
         use crate::config::ast::values::{IndexedMode, KeyDomain};
+        let runtime = self.word("runtime");
         let domain = self.peek().and_then(|token| KeyDomain::parse(&token.text));
         let keyed = domain.is_none() && self.word("keyed");
         if domain.is_some() { self.bump(); }
@@ -137,7 +138,7 @@ impl Parser<'_> {
         };
         let value = if self.word("using") { Some(self.unwrap_value()?) } else { None };
         let views = if self.word("in") { self.name_list("a scope class") } else { Vec::new() };
-        Some(NameItem::Indexed { path, mode, value, views })
+        Some(NameItem::Indexed { path, mode, value, views, runtime })
     }
 
     pub(super) fn traits_value(&mut self) -> Option<Unwrap> {

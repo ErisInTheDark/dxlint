@@ -803,6 +803,7 @@ impl<'a> Parser<'a> {
             && !self.ts.peek_raw(1).is_some_and(|token| token.is_ident("for"))
             && !matches!(&*first.text, "from" | "excludes" | "includes" | "has" | "scope" | "instance" | "trait" | "select" | "product" | "modified" | "unknown")
             && !(first.is_ident("returned") && self.ts.peek_raw(1).is_some_and(|token| token.is_ident("default")))
+            && !(first.is_ident("keys") && self.ts.peek_raw(1).is_some_and(|token| token.is_ident("of")))
             && (possible || matches!(next, Some(Tk::Ident | Tk::Bang | Tk::Str | Tk::LParen))))
         .then(|| {
             self.ts.next_raw();
@@ -969,6 +970,14 @@ impl<'a> Parser<'a> {
             Tk::Ident if &*t.text == "trait" => {
                 self.ts.next_raw();
                 self.traits_value()
+            }
+            Tk::Ident if t.is_ident("keys") && self.ts.peek_raw(1).is_some_and(|token| token.is_ident("of")) => {
+                self.ts.next_raw();
+                if !self.word("of") {
+                    self.error_here("expected `keys of <value>`");
+                    return None;
+                }
+                Some(Unwrap::Keys { of: Box::new(self.unwrap_value()?) })
             }
             Tk::Ident if t.is_ident("returned") && self.ts.peek_raw(1).is_some_and(|token| token.is_ident("default")) => {
                 self.ts.next_raw();

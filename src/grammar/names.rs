@@ -685,7 +685,7 @@ impl Names {
                         names.add(g, m, |kind| kind.arguments.push((arguments.clone(), when)));
                     }
                 }
-                NameItem::Indexed { path: indexed, mode, value, views } => {
+                NameItem::Indexed { path: indexed, mode, value, views, runtime } => {
                     let Some(indexed_path) = path(errors, indexed) else { continue };
                     let mode = match mode {
                         crate::config::ast::values::IndexedMode::Slots { repeated, strings } => values::IndexedMode::Slots { repeated: *repeated, strings: *strings },
@@ -715,7 +715,7 @@ impl Names {
                     };
                     for (&m, &when) in targets.iter().zip(&when) {
                         names.add(g, m, |kind| kind.indexed.push(values::IndexedRecipe {
-                            path: indexed_path.clone(), mode: mode.clone(), views, value: value.clone(), when,
+                            path: indexed_path.clone(), mode: mode.clone(), views, value: value.clone(), when, runtime: *runtime,
                         }));
                     }
                 }

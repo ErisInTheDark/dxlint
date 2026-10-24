@@ -1,4 +1,5 @@
 use super::{Identity, Key, Known, Leaf, NodeValue, Values};
+use crate::grammar::names::question::KeyId;
 use crate::config::ast::values::KeyDomain;
 
 impl Key {
@@ -21,6 +22,20 @@ impl Key {
 }
 
 impl Values<'_> {
+    /// A key literal fits its domain's traits and no other domain's; other
+    /// traits stay undecided (a key leaf has no syntax to declare them).
+    pub(super) fn key_trait(&self, id: KeyId, trait_id: u16) -> Known<bool> {
+        let Some(key) = self.question.key(id) else { return Known::Unknown };
+        if trait_id >= 64 { return Known::Unknown }
+        let (mut own, mut domains) = (0u64, 0u64);
+        for &(domain, traits) in &self.tables.key_domains {
+            domains |= traits;
+            if domain == key.domain() { own |= traits }
+        }
+        let bit = 1u64 << trait_id;
+        if own & bit != 0 { Known::Yes(true) } else if domains & bit != 0 { Known::Yes(false) } else { Known::Unknown }
+    }
+
     fn key_domain(&self, leaf: Leaf) -> Known<Option<KeyDomain>> {
         let mut answer = None;
         let mut unknown = false;

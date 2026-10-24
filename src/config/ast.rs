@@ -187,7 +187,9 @@ pub enum NameItem {
     /// (what inferred and explicit instantiations bind by position).
     Generics(Vec<Name>),
     Arguments(Vec<Name>),
-    Indexed { path: Vec<Name>, mode: values::IndexedMode, value: Option<Unwrap>, views: Vec<Name> },
+    /// `runtime`: a member read at runtime that is no key of the type
+    /// (`keys of` skips it): a numeric enum's reverse map.
+    Indexed { path: Vec<Name>, mode: values::IndexedMode, value: Option<Unwrap>, views: Vec<Name>, runtime: bool },
     /// `unwraps <value>` or `unwraps [maybe] <effect> [<value>] [nearest
     /// <scope>]`: what the node stands for, or what evaluating it does
     /// (`maybe`: possibly, beside completing normally).

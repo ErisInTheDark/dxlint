@@ -129,7 +129,7 @@ fn value_names(value: &Unwrap, out: &mut HashSet<String>) {
             path_names(classes, out);
             value_names(from, out);
         }
-        Unwrap::Not(value) => value_names(value, out),
+        Unwrap::Not(value) | Unwrap::Keys { of: value } => value_names(value, out),
         Unwrap::Excludes { traits, from } => {
             path_names(traits, out);
             if let Some(from) = from { value_names(from, out); }

@@ -1,0 +1,5 @@
+input.ts:1:25-1:36 ts-oracle#0 string
+input.ts:2:35-2:45 ts-oracle#0 Item
+input.ts:3:48-3:52 ts-oracle#0 Item
+input.ts:5:31-5:50 ts-oracle#0 { id: number; }
+input.ts:5:72-5:75 ts-oracle#0 { id: number; }

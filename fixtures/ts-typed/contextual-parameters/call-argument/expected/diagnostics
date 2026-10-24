@@ -1,0 +1,13 @@
+input.ts:10:7-10:13 ts-oracle#0 Failure
+input.ts:1:29-1:87 ts-oracle#0 object
+input.ts:1:39-1:53 ts-oracle#0 number
+input.ts:1:55-1:78 ts-oracle#0 { x: number; }
+input.ts:2:13-2:19 ts-oracle#0 number
+input.ts:2:21-2:29 ts-oracle#0 { x: number; }
+input.ts:4:26-4:36 ts-oracle#0 T[]
+input.ts:4:38-4:60 ts-oracle#0 object
+input.ts:4:44-4:51 ts-oracle#0 T
+input.ts:5:14-5:18 ts-oracle#0 number
+input.ts:6:13-6:17 ts-oracle#0 string
+input.ts:9:24-9:58 ts-oracle#0 object
+input.ts:9:34-9:49 ts-oracle#0 Failure

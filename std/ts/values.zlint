@@ -136,6 +136,13 @@ fn ts_value_array_like(n) = {
     value shape.known && (shape.array || shape.tuple)
   }))
 }
+# A rest element's remaining values: a plain array gives the same array (a
+# tuple would give the tail, which no recipe can slice yet).
+fn ts_value_array_rest(n) = {
+  value arms: value_parts(n)
+  value arms != null && count(arms) > 0 && all(arms, arm =>
+    any(arm.parts, part => contains(part.traits, "array") && !contains(part.traits, "tuple")))
+}
 fn ts_value_string_array(n) = {
   value arms: value_parts(n)
   value ts_value_array_like(n) && all(arms, arm => {
@@ -345,12 +352,32 @@ in ts_identifier {
   let ts_value_undefined text == "undefined" && scope_declaration == null
     && contains(name_role_classes(node, "reference"), "value")
   let ts_value_unresolved_value !ts_value_undefined && ts_value_missing_name(node, "value")
+  # A name a destructuring pattern binds takes the value that pattern gives
+  # it, not the declarator's whole value.
+  let ts_value_pattern_name if declaration != null
+    && (declaration.parent is (ts_array_pattern, ts_pattern_property, ts_assignment_pattern)
+      || declaration.parent is ts_rest
+        && declaration.parent.parent is (ts_array_pattern, ts_object_pattern))
+    then declaration else null
+  let ts_value_pattern_slot if ts_value_pattern_name != null && ts_value_pattern_name.parent is ts_array_pattern
+    then index_of(ts_value_pattern_name.parent.element.nodes, ts_value_pattern_name) else 0
+  let ts_value_pattern_any ts_value_pattern_name != null && ts_value_pattern_name.parent is ts_array_pattern
+    && ts_value_has_trait(ts_value_pattern_name.parent.node, "any") == true
   when ts_value_undefined {
     fits undefined, nullable, falsy, nonthenable
     identity { type: "undefined" }
   }
   when ts_value_unresolved_value { fits any, error open }
-  when !ts_value_unresolved_value && !ts_value_undefined && !ts_value_implicit_arguments {
+  when ts_value_pattern_name != null {
+    when ts_value_pattern_any { unwraps ts_value_pattern_name.parent }
+    when ts_value_pattern_name.parent is ts_array_pattern && !ts_value_pattern_any {
+      unwraps ts_value_pattern_name.parent.[ts_value_pattern_slot]
+    }
+    when ts_value_pattern_name.parent is (ts_pattern_property, ts_assignment_pattern, ts_rest) {
+      unwraps ts_value_pattern_name.parent
+    }
+  }
+  when ts_value_pattern_name == null && !ts_value_unresolved_value && !ts_value_undefined && !ts_value_implicit_arguments {
     unwraps definition
     widens definition.widened
   }
@@ -370,6 +397,7 @@ in ts_for_of {
 in ts_declarator {
   let ts_value_iteration_arguments []
   let ts_value_iteration_binding name is ts_identifier && parent is ts_for_of.left && parent.parent.modifier == null
+  let ts_value_iteration_pattern name is (ts_array_pattern, ts_object_pattern) && parent is ts_for_of.left && parent.parent.modifier == null
   let ts_value_unique_symbol ts_value_unique_symbol_binding(node)
   let ts_value_evolving_array name is ts_identifier && type == null && init is ts_array && count(init.element.nodes) == 0
   when ts_value_evolving_array {
@@ -392,22 +420,85 @@ in ts_declarator {
   }
   when !ts_value_iteration_binding && !ts_value_unique_symbol && !ts_value_evolving_array && name is ts_identifier && parent.kind == "const" { unwraps type ?? init }
   when !ts_value_iteration_binding && !ts_value_evolving_array && name is ts_identifier && parent.kind != "const" { unwraps type ?? init.widened }
-  when !(name is ts_identifier) { unwraps unknown }
+  when ts_value_iteration_pattern {
+    when {
+      parent.parent.ts_value_iteration_string then { unwraps trait string }
+      else then {
+        calls parent.parent.["next"] with ts_value_iteration_arguments
+        unwraps result.["value"]
+      }
+    }
+  }
+  when !ts_value_iteration_pattern && name is (ts_array_pattern, ts_object_pattern) {
+    when parent.kind == "const" { unwraps type ?? init }
+    when parent.kind != "const" { unwraps type ?? init.widened }
+  }
+  when !(name is (ts_identifier, ts_array_pattern, ts_object_pattern)) { unwraps unknown }
 }
 in ts_parameter, ts_rest {
-  pack ts_tuple
-  when parent not ts_tuple_type {
+  let ts_value_pattern_rest node is ts_rest && parent is (ts_array_pattern, ts_object_pattern)
+  when !ts_value_pattern_rest { pack ts_tuple }
+  # An unannotated parameter of a function expression or object-literal
+  # method takes its function's contextual parameter (`expected`; class
+  # methods get none), else its default's widened value.
+  # Destructured parameters stay out for now: in chained calls their
+  # contextual type re-enters call selection after every budget cut.
+  let ts_value_contextual_parameter (parent is (ts_arrow, ts_function) || parent is ts_method && parent.parent is ts_object)
+    && (name is ts_identifier || name is ts_rest) && count(parent.type_parameter.nodes) == 0
+  when parent not ts_tuple_type && ts_value_contextual_parameter && !ts_value_pattern_rest {
+    when optional != null { unwraps (type ?? expected ?? unknown) | trait undefined, nullable, falsy, nonthenable }
+    when optional == null { unwraps type ?? expected ?? init.widened ?? unknown }
+  }
+  when parent not ts_tuple_type && !ts_value_contextual_parameter && !ts_value_pattern_rest {
     when optional != null { unwraps (type ?? unknown) | trait undefined, nullable, falsy, nonthenable }
-    when optional == null { unwraps type ?? unknown }
+    when optional == null { unwraps type ?? init.widened ?? unknown }
   }
 }
-in ts_rest { when parent is ts_tuple_type { unwraps type } }
+in ts_rest {
+  let ts_value_rest_array parent is ts_array_pattern && ts_value_array_rest(parent.node)
+  when parent is ts_tuple_type { unwraps type }
+  when parent is ts_array_pattern {
+    when ts_value_has_trait(parent.node, "any") == true { unwraps parent }
+    when ts_value_rest_array { unwraps modified parent readonly remove }
+    when !ts_value_rest_array && ts_value_has_trait(parent.node, "any") != true { unwraps unknown }
+  }
+  when parent is ts_object_pattern { unwraps unknown }
+}
 in ts_tuple_member, ts_rest { let ts_value_tuple_optional optional != null }
 in ts_rest, ts_spread { let ts_value_tuple_repeated true }
 in ts_node let ts_value_array_element node not ts_spread
-in ts_assignment_pattern { unwraps left ?? right }
-in ts_pattern_property, ts_object_pattern, ts_array_pattern, ts_import, ts_import_specifier,
-    ts_meta_property, ts_import_call {
+# Destructuring: a pattern stands for the value it destructures, a property or
+# element for the member it takes, so each bound name gets its own value.
+in ts_array_pattern, ts_object_pattern {
+  let ts_value_pattern_slot if parent is ts_array_pattern then index_of(parent.element.nodes, node) else 0
+  let ts_value_pattern_any parent is ts_array_pattern && ts_value_has_trait(parent.node, "any") == true
+  when parent is (ts_declarator, ts_parameter) { unwraps type ?? parent }
+  when ts_value_pattern_any { unwraps parent }
+  when parent is ts_array_pattern && !ts_value_pattern_any { unwraps parent.[ts_value_pattern_slot] }
+  when parent is (ts_pattern_property, ts_assignment_pattern, ts_rest) { unwraps parent }
+}
+in ts_pattern_property {
+  let ts_value_property_key ts_value_key(key.node)
+  let ts_value_property_optional value_member_optional(parent.node, ts_value_property_key) == true
+  when ts_value_has_trait(parent.node, "any") == true { unwraps parent }
+  when value is ts_assignment_pattern { unwraps value }
+  when !(value is ts_assignment_pattern) && ts_value_has_trait(parent.node, "any") != true {
+    when ts_value_property_optional { unwraps (parent.[ts_value_property_key]) | trait undefined, nullable, falsy, nonthenable }
+    when !ts_value_property_optional { unwraps parent.[ts_value_property_key] }
+  }
+}
+in ts_assignment_pattern {
+  let ts_value_assignment_slot if parent is ts_array_pattern then index_of(parent.element.nodes, node) else 0
+  let ts_value_assignment_key if parent is ts_pattern_property then ts_value_key(parent.key.node) else null
+  let ts_value_assignment_source if parent is ts_array_pattern then parent.node
+    else if parent is ts_pattern_property then parent.parent.node else null
+  let ts_value_assignment_any ts_value_assignment_source != null && ts_value_has_trait(ts_value_assignment_source, "any") == true
+  when ts_value_assignment_any { unwraps ts_value_assignment_source }
+  when parent is ts_array_pattern && !ts_value_assignment_any { unwraps (parent.[ts_value_assignment_slot]) \ undefined | right.widened }
+  when parent is ts_pattern_property && !ts_value_assignment_any { unwraps (parent.parent.[ts_value_assignment_key]) \ undefined | right.widened }
+  when parent not (ts_array_pattern, ts_pattern_property) { unwraps left ?? right }
+}
+in ts_import, ts_import_specifier, ts_meta_property, ts_import_call {
   unwraps unknown
 }
 in ts_import_equals { when value.node is ts_call { unwraps unknown } }
@@ -426,12 +517,14 @@ in ts_this {
     fits any open
     unwraps ts_value_this_explicit ?? ts_value_this_owner.expected.receiver ?? self
   }
+  # A class member's `this` is the class (TypeScript gives class members no
+  # contextual receiver); only an explicit `this` parameter changes it.
   when ts_value_this.container is ts_class {
     when ts_value_this.static {
-      unwraps ts_value_this_explicit ?? ts_value_this_owner.expected.receiver ?? (scope statics from ts_value_this_container)
+      unwraps ts_value_this_explicit ?? (scope statics from ts_value_this_container)
     }
     when !ts_value_this.static {
-      unwraps ts_value_this_explicit ?? ts_value_this_owner.expected.receiver ?? (scope members from ts_value_this_container)
+      unwraps ts_value_this_explicit ?? (scope members from ts_value_this_container)
     }
   }
   when ts_value_this.container is ts_object {
@@ -714,8 +807,6 @@ in ts_class {
   members statics
   fits constructible, object, truthy in statics
   fits structural, object, truthy in members
-  fits builtin_function in members when extends != null
-    && ts_value_trait(value_member(extends.node, "prototype"), "builtin_function")
   unwraps scope statics from it
   unwraps scope members from it for type
   member statics "prototype" unwraps scope members from it
@@ -727,6 +818,11 @@ in ts_class {
     members statics inherits extends
     members members inherits extends.["prototype"]
   }
+  # An interface of the same name merges into the instance (`implements`
+  # adds nothing).
+  let ts_value_merged_interfaces if name == null then [] else
+    map(filter(name_binding(name.node).declarations ?? [], item => item.parent is ts_interface), item => item.parent)
+  when count(ts_value_merged_interfaces) > 0 { members members inherits &...ts_value_merged_interfaces }
 }
 in ts_method, ts_class_property {
   flag static when ts_value_static(modifier.nodes)
@@ -897,12 +993,13 @@ in ts_conditional_type {
 }
 in ts_type_operator {
   when operator == "readonly" { unwraps type }
+  when operator == "keyof" { unwraps keys of type }
   when operator == "unique" && type.text == "symbol" {
     fits symbol, truthy
     widens trait symbol, truthy
     identity node
   }
-  when operator != "readonly" && !(operator == "unique" && type.text == "symbol") { unwraps unknown }
+  when operator != "readonly" && operator != "keyof" && !(operator == "unique" && type.text == "symbol") { unwraps unknown }
 }
 in ts_template_type {
   fits string

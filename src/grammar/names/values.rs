@@ -145,6 +145,8 @@ pub struct IndexedRecipe {
     pub views: u64,
     pub value: Option<Value>,
     pub when: Option<u32>,
+    /// A runtime member read that is no key of the type: `keys of` skips it.
+    pub runtime: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -186,6 +188,10 @@ pub(crate) struct State {
     /// Whether a cycle head is being computed again: heads inside it don't
     /// retry too, so the extra work stays one recomputation.
     retrying: std::cell::Cell<bool>,
+    /// Entries whose own computation spent half a question's budget and
+    /// still ran out: every later root would spend it again (and be cut
+    /// again), so they answer unknown at once for the rest of the file.
+    outgrown: std::cell::RefCell<crate::fx_hash::FxHashSet<(usize, u64)>>,
     widened: Memo<Leaf, NodeValue>,
     traits: Memo<(Leaf, u16), Known<bool>>,
     optional: Memo<Leaf, Known<bool>>,
@@ -357,12 +363,18 @@ impl Values<'_> {
             }
             return Known::Unknown;
         }
+        if state.outgrown.borrow().contains(&tag) { return Known::Unknown }
         let Some(_entered) = enter() else { return Known::Unknown };
         let _site = self.world.profile().map(|_| crate::engine::StepSite::enter(std::any::type_name::<(K, T)>()));
         memo.insert(self.semantic.epoch, key.clone(), Known::Unknown);
         state.pending.borrow_mut().push(tag);
         let started = state.cycle_reads.get();
+        let before = self.question.budget.taken();
         let mut answer = compute();
+        if matches!(answer, Known::Unknown) && self.question.budget.exhausted()
+            && (self.question.budget.taken() - before) * 2 >= u64::from(super::question::Budget::per_question()) {
+            state.outgrown.borrow_mut().insert(tag);
+        }
         if matches!(answer, Known::Unknown) && state.cycle_heads.borrow_mut().remove(&tag) && !state.retrying.get() {
             state.retrying.set(true);
             answer = compute();
@@ -429,6 +441,7 @@ impl Values<'_> {
         if trait_id >= 64 { return None }
         match leaf.target {
             Target::Traits(bits) => Some(Known::Yes(bits & (1 << trait_id) != 0)),
+            Target::Key(id) => Some(self.key_trait(id, trait_id)),
             Target::Node(node) => self.fixed_fits(node, None, trait_id),
             // A scope's fits are its owner's, filtered by the scope's classes.
             Target::Scope(scope) => {
@@ -459,6 +472,7 @@ impl Values<'_> {
     fn direct_trait(&self, leaf: Leaf, trait_id: u16) -> Known<bool> {
         match leaf.target {
             Target::Traits(bits) => Known::Yes(bits & (1 << trait_id) != 0),
+            Target::Key(id) => self.key_trait(id, trait_id),
             Target::Product(_) => self.product_fits(leaf, trait_id),
             Target::Modified(_) => match self.modified_source(leaf) {
                 Some(source) => self.fits(source, trait_id),
@@ -693,7 +707,7 @@ impl Values<'_> {
         for site in sites {
             if !self.question.budget.step() { return Known::Unknown }
             let node = match site.target {
-                Target::Traits(_) | Target::Product(_) | Target::Modified(_) => return Known::Unknown,
+                Target::Traits(_) | Target::Product(_) | Target::Modified(_) | Target::Key(_) => return Known::Unknown,
                 Target::Node(node) => node,
                 Target::Scope(scope) => {
                     let Some(info) = self.world.names(scope.file).and_then(|names| names.scopes.get(scope.scope as usize)) else {
@@ -799,7 +813,7 @@ impl Values<'_> {
     fn importer(&self, at: Leaf) -> Option<u32> {
         Some(match at.target {
             // Trait-only values belong to no file: globals as the linted file sees them.
-            Target::Traits(_) => 0,
+            Target::Traits(_) | Target::Key(_) => 0,
             Target::Node(node) => node.file,
             Target::Scope(scope) => scope.file,
             Target::Product(_) => {
@@ -882,7 +896,7 @@ impl Values<'_> {
                 for site in sites {
                     if !self.question.budget.step() { return Known::Unknown }
                     let (target, owner) = match site.target {
-                        Target::Traits(_) | Target::Product(_) | Target::Modified(_) => return Known::Unknown,
+                        Target::Traits(_) | Target::Product(_) | Target::Modified(_) | Target::Key(_) => return Known::Unknown,
                         Target::Node(node) => {
                             let Known::Yes(owner) = self.declaration_owner(node) else { return Known::Unknown };
                             (Target::Node(owner), owner)
@@ -960,7 +974,7 @@ impl Values<'_> {
         for target in targets {
             if !self.question.budget.step() { return Known::Unknown }
             let (target, owner) = match target {
-                Target::Traits(_) | Target::Product(_) | Target::Modified(_) => return Known::Unknown,
+                Target::Traits(_) | Target::Product(_) | Target::Modified(_) | Target::Key(_) => return Known::Unknown,
                 Target::Node(node) => {
                     let Known::Yes(owner) = self.declaration_owner(node) else { return Known::Unknown };
                     (Target::Node(owner), owner)
@@ -1116,7 +1130,7 @@ impl Values<'_> {
                     continue;
                 }
                 let node = match leaf.target {
-                    Target::Traits(_) | Target::Product(_) | Target::Modified(_) => return Known::Unknown,
+                    Target::Traits(_) | Target::Product(_) | Target::Modified(_) | Target::Key(_) => return Known::Unknown,
                     Target::Node(node) => node,
                     Target::Scope(scope) => {
                         let Some(names) = self.world.names(scope.file) else { return Known::Unknown };

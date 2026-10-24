@@ -1,5 +1,65 @@
 use super::{eval, Key, Known, Leaf, Member, MemberSource, NodeRef, NodeValue, Target, Values};
 use super::indexed::MemberRequest;
+use crate::config::ast::values::KeyDomain;
+use crate::grammar::names::question::FrameId;
+
+/// The keys `keys of` collects: literal keys and key domains (indexers).
+#[derive(Default)]
+struct KeySet {
+    literals: Vec<Key>,
+    domains: Vec<KeyDomain>,
+}
+
+impl KeySet {
+    /// Adds the members' keys; whether an indexer (a key domain) was among
+    /// them. A text indexer also takes ordinal keys (TypeScript: `keyof
+    /// {[k: string]: T}` is `string | number`).
+    fn add(&mut self, members: &[Member]) -> bool {
+        let mut indexed = false;
+        for member in members {
+            match &member.key {
+                Key::Domain(domain) => {
+                    indexed = true;
+                    let domains: &[KeyDomain] = if *domain == KeyDomain::Text { &[KeyDomain::Text, KeyDomain::Ordinal] } else { std::slice::from_ref(domain) };
+                    for domain in domains {
+                        if !self.domains.contains(domain) { self.domains.push(*domain) }
+                    }
+                }
+                key => if !self.literals.contains(key) { self.literals.push(key.clone()) },
+            }
+        }
+        indexed
+    }
+
+    fn accepts(&self, key: &Key) -> bool {
+        self.literals.contains(key) || self.domains.contains(&key.domain())
+            || key.ordinal().is_some() && self.domains.contains(&KeyDomain::Ordinal)
+    }
+
+    fn intersect(&self, other: &Self) -> Self {
+        let mut literals: Vec<Key> = self.literals.iter().filter(|key| other.accepts(key)).cloned().collect();
+        for key in &other.literals {
+            if !literals.contains(key) && self.accepts(key) { literals.push(key.clone()) }
+        }
+        KeySet { literals, domains: self.domains.iter().filter(|domain| other.domains.contains(domain)).copied().collect() }
+    }
+
+    /// One alternative per key: a domain absorbs its literals. `None` when
+    /// a domain has no traits to stand for it.
+    fn leaves(self, values: &Values<'_>) -> Option<Vec<Vec<Leaf>>> {
+        let mut rows = Vec::new();
+        for domain in &self.domains {
+            let bits = values.tables.key_domains.iter().filter(|(known, _)| known == domain).fold(0, |bits, (_, traits)| bits | traits);
+            if bits == 0 { return None }
+            rows.push(vec![Leaf { target: Target::Traits(bits), frame: FrameId::ROOT }]);
+        }
+        for key in self.literals {
+            if self.domains.contains(&key.domain()) || key.ordinal().is_some() && self.domains.contains(&KeyDomain::Ordinal) { continue }
+            rows.push(vec![Leaf { target: Target::Key(values.question.intern_key(key)), frame: FrameId::ROOT }]);
+        }
+        Some(rows)
+    }
+}
 
 impl Values<'_> {
     pub fn member_shape(&self, at: Leaf) -> Known<bool> {
@@ -11,7 +71,7 @@ impl Values<'_> {
                 _ => Known::Unknown,
             };
         }
-        if matches!(at.target, Target::Traits(_)) { return Known::Yes(false) }
+        if matches!(at.target, Target::Traits(_) | Target::Key(_)) { return Known::Yes(false) }
         if let Target::Scope(scope) = at.target {
             match self.semantic.modules().publication_names(scope) {
                 Known::Yes(Some(_)) => return Known::Yes(true),
@@ -39,6 +99,56 @@ impl Values<'_> {
             }
         }
         if unknown { Known::Unknown } else { Known::Yes(false) }
+    }
+
+    /// Whether the leaf declares no members of its own: nodeless trait or
+    /// key values and node kinds with no member scope, index signature, base
+    /// or member link (a function type). Apparent members (`Function`'s) are
+    /// not its own, so this proves nothing absent for lookups.
+    pub fn own_member_free(&self, at: Leaf) -> Known<bool> {
+        let Known::Yes(at) = self.semantic.leaf(at) else { return Known::Unknown };
+        match at.target {
+            Target::Traits(_) | Target::Key(_) => Known::Yes(true),
+            Target::Product(_) | Target::Scope(_) | Target::Modified(_) => Known::Yes(false),
+            Target::Node(node) => {
+                let Some(data) = self.world.tree(node.file).and_then(|tree| tree.nodes.get(node.node as usize)) else { return Known::Unknown };
+                let Some(kind) = self.tables.kinds.get(data.matcher as usize) else { return Known::Unknown };
+                Known::Yes(kind.member_defaults == 0 && kind.indexed.is_empty() && kind.member_bases.is_empty() && kind.member_links.is_empty())
+            }
+        }
+    }
+
+    /// `keys of value` (TypeScript's `keyof`): an alternative's leaves hold
+    /// at once, so its keys are their union; alternatives are a union, so
+    /// only keys every one has remain. Unknown wherever a leaf's keys can't
+    /// be listed (open, `any`), or the value is `never`.
+    pub fn keys(&self, value: &NodeValue) -> NodeValue {
+        let Some(_nested) = self.question.budget.nest() else { return NodeValue::Unknown };
+        let NodeValue::Alternatives(rows) = value else { return NodeValue::Unknown };
+        if rows.is_empty() { return NodeValue::Unknown }
+        let mut common: Option<KeySet> = None;
+        for row in rows {
+            let mut set = KeySet::default();
+            for &leaf in row {
+                if !self.question.budget.step() { return NodeValue::Unknown }
+                match self.dynamic(leaf) {
+                    Known::Yes(false) => {}
+                    _ => return NodeValue::Unknown,
+                }
+                if self.top(leaf) == Known::Yes(true) { continue }
+                let Known::Yes(at) = self.semantic.leaf(leaf) else { return NodeValue::Unknown };
+                let Known::Yes(members) = self.direct_members(at, MemberRequest::Keys) else { return NodeValue::Unknown };
+                let indexed = set.add(&members);
+                if indexed { continue }
+                match self.closed_leaf(at) {
+                    Known::Yes(true) => {}
+                    _ if members.is_empty() && self.own_member_free(at) == Known::Yes(true) => {}
+                    _ => return NodeValue::Unknown,
+                }
+            }
+            common = Some(match common { None => set, Some(seen) => seen.intersect(&set) });
+        }
+        common.and_then(|set| set.leaves(self)).map_or(NodeValue::Unknown, NodeValue::rows)
     }
 
     pub fn has_member(&self, value: &NodeValue, key: &Key) -> Known<bool> {
@@ -96,7 +206,7 @@ impl Values<'_> {
             Known::Yes(None) => {}
             Known::Unknown => return Known::Unknown,
         }
-        if matches!(at.target, Target::Traits(_)) { return Known::Yes(false) }
+        if matches!(at.target, Target::Traits(_) | Target::Key(_)) { return Known::Yes(false) }
         if let Target::Scope(scope) = at.target {
             match self.semantic.modules().publication_names(scope) {
                 Known::Yes(Some(_)) => return match self.leaf_members(at) {
@@ -283,7 +393,7 @@ impl Values<'_> {
             Known::Yes(None) => {}
             Known::Unknown => return Known::Unknown,
         }
-        if matches!(at.target, Target::Traits(_)) { return Known::Yes(Vec::new()) }
+        if matches!(at.target, Target::Traits(_) | Target::Key(_)) { return Known::Yes(Vec::new()) }
         let Known::Yes((node, view)) = self.member_context(at) else { return Known::Unknown };
         let Some(tree) = self.world.tree(node.file) else { return Known::Unknown };
         let Some(data) = tree.nodes.get(node.node as usize) else { return Known::Unknown };
@@ -312,6 +422,12 @@ impl Values<'_> {
         if self.tables.apparent.is_empty() { return Known::Yes(None) }
         let recipe = match at.target {
             Target::Traits(bits) => self.tables.apparent.iter().find(|(apparent, _)| bits & apparent != 0).map(|(_, recipe)| recipe),
+            // A key literal reads members like its domain's primitive.
+            Target::Key(id) => {
+                let Some(key) = self.question.key(id) else { return Known::Unknown };
+                let bits = self.tables.key_domains.iter().filter(|(domain, _)| *domain == key.domain()).fold(0, |bits, (_, traits)| bits | traits);
+                self.tables.apparent.iter().find(|(apparent, _)| bits & apparent != 0).map(|(_, recipe)| recipe)
+            }
             Target::Node(node) => {
                 let Some(tree) = self.world.tree(node.file) else { return Known::Unknown };
                 let Some(data) = tree.nodes.get(node.node as usize) else { return Known::Unknown };
@@ -348,7 +464,7 @@ impl Values<'_> {
 
     pub(super) fn member_context(&self, at: Leaf) -> Known<(NodeRef, Option<(u32, u64)>)> {
         match at.target {
-            Target::Traits(_) | Target::Product(_) | Target::Modified(_) => Known::Unknown,
+            Target::Traits(_) | Target::Product(_) | Target::Modified(_) | Target::Key(_) => Known::Unknown,
             Target::Node(node) => Known::Yes((node, None)),
             Target::Scope(scope) => {
                 let Some(info) = self.world.names(scope.file).and_then(|names| names.scopes.get(scope.scope as usize)) else {
@@ -379,7 +495,7 @@ impl Values<'_> {
                 Known::Unknown => Known::Unknown,
             },
         };
-        if matches!(at.target, Target::Traits(_)) {
+        if matches!(at.target, Target::Traits(_) | Target::Key(_)) {
             return inherited.as_ref().map_or(Known::Yes(Vec::new()), apparent_members);
         }
         // Apparent members (a callable's `Function`) are the lowest layer:
@@ -578,7 +694,7 @@ impl Values<'_> {
             for (target, classes) in targets {
                 if !self.question.budget.step() { return Known::Unknown }
                 let (target, owner) = match target {
-                    Target::Traits(_) | Target::Product(_) | Target::Modified(_) => return Known::Unknown,
+                    Target::Traits(_) | Target::Product(_) | Target::Modified(_) | Target::Key(_) => return Known::Unknown,
                     Target::Node(node) => {
                         let Known::Yes(owner) = self.declaration_owner(node) else { return Known::Unknown };
                         (Target::Node(owner), owner)

@@ -280,19 +280,44 @@ impl<'a> LintWorld<'a> {
         // could/always quantify over alternatives and answer Unknown themselves
         // unless a known alternative decides, so their known answers stand.
         let run = || self.semantic_query(file, node, Uncertainty::Explicit, |semantic, at| (query.call)(semantic, at, subject, mask));
+        let root = self.question().is_none();
+        let started = std::time::Instant::now();
         let answer = match self.ctx.profile {
             Some(profile) => profile.time_semantic_query(query.name, run),
             None => run(),
         };
+        // Slots 4/5: known answers (count, ns); 6/7: unknown answers.
+        if root { self.census(4, query.name, file, node, answer == Known::Unknown, started) }
         matches!(answer, Known::Yes(true))
+    }
+
+    /// [`crate::levers::Lever::Census`]: counts a root question's outcome
+    /// and time from `slot`, and prints a root that ended unknown.
+    fn census(&'a self, slot: usize, name: &str, file: u32, node: u32, unknown: bool, started: std::time::Instant) {
+        if !crate::levers::on(crate::levers::Lever::Census) { return }
+        let slot = if unknown { slot + 2 } else { slot };
+        let elapsed = started.elapsed().as_nanos() as u64;
+        crate::levers::count(slot);
+        crate::levers::add(slot + 1, elapsed);
+        if !unknown { return }
+        let files = Files(self);
+        let text = World::tree(&files, file).zip(World::text(&files, file))
+            .and_then(|(tree, text)| { let n = tree.node(node); text.get(n.start as usize..n.end as usize) })
+            .unwrap_or("").chars().take(90).collect::<String>().replace(['\n', '\r'], " ");
+        let path = World::path(&files, file).and_then(|path| path.file_name()).map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+        eprintln!("UNK\t{name}\t{}\t{path}\t{text}", elapsed / 1000);
     }
 
     pub fn query_function(&'a self, file: u32, node: u32, query: &crate::expr::queries::QueryFunction, args: &[Value<'static>]) -> Value<'static> {
         let run = || self.semantic_query(file, node, query.uncertainty(), |semantic, at| (query.call)(semantic, at, args));
+        let root = self.question().is_none();
+        let started = std::time::Instant::now();
         let answer = match self.ctx.profile {
             Some(profile) => profile.time_semantic_query(query.name, run),
             None => run(),
         };
+        // Slots 8/9: known answers (count, ns); 10/11: unknown answers.
+        if root { self.census(8, query.name, file, node, matches!(answer, Known::Unknown), started) }
         answer.known().unwrap_or(Value::Null)
     }
 
@@ -427,7 +452,7 @@ impl<'a> Files<'a> {
             }
         }
         let cached = super::reads::Cached::compute(|| {
-            let question = QueryContext::default();
+            let question = QueryContext::once();
             let semantic = Semantic::new(&self, &self.0.ctx.grammar.names, &question);
             let selected = (|| {
                 let Known::Yes(program) = Host::program(&self) else { return Known::Unknown };
@@ -454,10 +479,10 @@ impl<'a> Files<'a> {
         let key = selected as *const Settings;
         if let Some(cached) = self.0.program.inputs.borrow().get(&key) { return Known::Yes(cached.get()) }
         let cached = super::reads::Cached::compute(|| {
-            let Known::Yes(anchor) = program_anchor(selected, &self, &QueryContext::default()) else { return Known::Unknown };
+            let Known::Yes(anchor) = program_anchor(selected, &self, &QueryContext::once()) else { return Known::Unknown };
             let context = super::program::Context { anchor, settings: selected as *const Settings as usize };
             let load = || self.0.linter.programs.paths(context.clone(), |dep| self.0.linter.holds(dep), || {
-                let question = QueryContext::default();
+                let question = QueryContext::once();
                 let answer = program_inputs(selected, &self, &question);
                 if question.budget.limited() {
                     if let Some(profile) = self.0.ctx.profile {
@@ -504,7 +529,7 @@ impl<'a> Files<'a> {
         let key = (selected as *const Settings, if hinted { Box::from(name) } else { Box::from("") });
         if let Some(cached) = self.0.program.roots.borrow().get(&key) { return cached.get() }
         let cached = super::reads::Cached::compute(|| {
-            let question = QueryContext::default();
+            let question = QueryContext::once();
             let roots = (|| {
                 let Known::Yes(paths) = self.timed("modules.roots.inputs", || self.input_paths(selected)) else { return Known::Unknown };
                 let paths: Arc<[PathBuf]> = match self.timed("modules.roots.candidates", || match (self.0.snapshot, hinted) {
@@ -1166,7 +1191,11 @@ impl World for Files<'_> {
         self.0.program.modules.borrow_mut().entry(key).or_default().insert(specifier.into(), ModuleAnswer::Busy(revision));
         // Resolution depends only on the importer's directory (not its tree
         // or name), so imports are shared by directory, the linted file's too.
-        let resolve = || self.timed("modules.resolve.search", || self.0.asking(semantic, at, || Resolver { host: self, settings: selected }.resolve(ctx.file_id, specifier, &[], semantic.question)));
+        // Shared by the whole run, so on an allowance of its own: charged to
+        // whichever question met the import first, it cut that question short.
+        let resolve = || self.timed("modules.resolve.search", || semantic.question.budget.detached(crate::grammar::names::question::Budget::DEFAULT,
+            || self.0.asking(semantic, at, || Resolver { host: self, settings: selected }.resolve(ctx.file_id, specifier, &[], semantic.question)))
+            .unwrap_or(Known::Unknown));
         let answer = super::reads::Cached::compute(|| match World::path(self, ctx.file_id).and_then(Path::parent) {
             Some(directory) => {
                 let question = super::program::StableQuestion::Resolve { directory: super::reads::dep_path(directory), specifier: specifier.into() };

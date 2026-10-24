@@ -37,5 +37,6 @@ fn main() -> std::process::ExitCode {
     }).expect("main thread");
     let code = run.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic));
     drop(sampler);
+    zoomie_lint::levers::report();
     std::process::ExitCode::from(code)
 }

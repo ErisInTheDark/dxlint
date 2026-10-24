@@ -12,7 +12,7 @@ impl Values<'_> {
         let Some(_nested) = self.question.budget.nest() else { return Known::Unknown };
         if matches!(at.target, Target::Product(_)) { return self.product_carrier(at) }
         let node = match at.target {
-            Target::Traits(_) | Target::Product(_) | Target::Modified(_) => return Known::Yes(None),
+            Target::Traits(_) | Target::Product(_) | Target::Modified(_) | Target::Key(_) => return Known::Yes(None),
             Target::Node(node) => node,
             Target::Scope(scope) => {
                 let Some(info) = self.world.names(scope.file).and_then(|names| names.scopes.get(scope.scope as usize)) else {

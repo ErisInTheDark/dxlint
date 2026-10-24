@@ -231,7 +231,7 @@ fn arguments_preserve_slot_order_and_caller_frames() {
 fn finite_indices_and_opted_in_text_labels_keep_real_sites_and_optional_presence() {
     let (world, mut tables) = generic_world();
     tables.kinds[0].indexed.push(IndexedRecipe {
-        path: vec![7], mode: super::IndexedMode::Slots { repeated: false, strings: true }, views: 0, value: None, when: None,
+        path: vec![7], mode: super::IndexedMode::Slots { repeated: false, strings: true }, views: 0, value: None, when: None, runtime: false,
     });
     tables.kinds[1].calls.optional.push(None);
     let question = QueryContext::default();
@@ -318,12 +318,12 @@ fn named_keys_win_over_indexers_and_unbounded_keys_keep_the_source_frame() {
         (IndexedMode::Keyed(Value::Text("named".into())), Value::Traits(4)),
     ] {
         tables.kinds[0].indexed.push(IndexedRecipe {
-            path: vec![7], mode, views: 0, value: Some(value), when: None,
+            path: vec![7], mode, views: 0, value: Some(value), when: None, runtime: false,
         });
     }
     tables.kinds[2].indexed.push(IndexedRecipe {
         path: vec![super::super::IT], mode: IndexedMode::Domain(KeyDomain::Text),
-        views: 0, value: Some(Value::Traits(8)), when: None,
+        views: 0, value: Some(Value::Traits(8)), when: None, runtime: false,
     });
     let question = QueryContext::default();
     let frame = question.bind(FrameId::ROOT, NodeRef::here(0), None, None);
@@ -390,7 +390,7 @@ fn closed_indexer_domains_prove_disjoint_absence_without_listing_infinite_member
             let owner = usize::from(inherited);
             tables.kinds[owner].indexed.push(IndexedRecipe {
                 path: vec![super::super::IT], mode: IndexedMode::Domain(domain),
-                views: 1, value: Some(Value::Traits(8)), when: None,
+                views: 1, value: Some(Value::Traits(8)), when: None, runtime: false,
             });
             if inherited { tables.kinds[0].member_bases.push((1, Value::Path(vec![7]), None)); }
             let question = QueryContext::default();
@@ -420,7 +420,7 @@ fn closure_keeps_failed_indexer_conditions_and_unresolved_named_keys_unknown() {
         tables.kinds[0].member_defaults = 1;
         tables.kinds[0].member_closed.push((1, None));
         tables.kinds[0].indexed.push(IndexedRecipe {
-            path: vec![super::super::IT], mode, views: 1, value: None, when,
+            path: vec![super::super::IT], mode, views: 1, value: None, when, runtime: false,
         });
         let question = QueryContext::default();
         let semantic = Semantic::new(&world, &tables, &question);
@@ -461,7 +461,7 @@ fn repeated_indices_answer_individual_reads_without_inventing_a_finite_inventory
     let (mut world, mut tables) = generic_world();
     world.tree.edit(|nodes| nodes[0].children.truncate(1));
     tables.kinds[0].indexed.push(IndexedRecipe {
-        path: vec![7], mode: super::IndexedMode::Slots { repeated: true, strings: false }, views: 0, value: None, when: None,
+        path: vec![7], mode: super::IndexedMode::Slots { repeated: true, strings: false }, views: 0, value: None, when: None, runtime: false,
     });
     let question = QueryContext::default();
     let semantic = Semantic::new(&world, &tables, &question);
@@ -478,7 +478,7 @@ fn indexed_value_recipes_keep_source_frames_and_presence_metadata() {
     let (world, mut tables) = generic_world();
     tables.kinds[0].indexed.push(IndexedRecipe {
         path: vec![7], mode: super::IndexedMode::Slots { repeated: false, strings: false }, views: 0,
-        value: Some(Value::Path(vec![super::super::WIDENED])), when: None,
+        value: Some(Value::Path(vec![super::super::WIDENED])), when: None, runtime: false,
     });
     tables.kinds[1].widens.push((Value::Traits(4), None));
     tables.kinds[1].calls.optional.push(None);
@@ -892,7 +892,7 @@ fn variadic_product_inventory_keeps_rest_and_suffix_values_as_alternatives() {
     let mut tables = tables();
     tables.kinds[1].indexed.push(IndexedRecipe {
         path: Vec::new(), mode: IndexedMode::Domain(KeyDomain::Ordinal),
-        views: 0, value: Some(Value::Traits(2)), when: None,
+        views: 0, value: Some(Value::Traits(2)), when: None, runtime: false,
     });
     tables.products.push(Some(Shape {
         traits: 0, description: crate::expr::Value::Null,

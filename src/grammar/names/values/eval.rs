@@ -338,9 +338,22 @@ impl<'a, 'world> Run<'a, 'world> {
                     return;
                 }
                 let value = match self.values.key(at, key) {
+                    // Several literal keys read one member each (`T["a" | "b"]`,
+                    // `T[keyof T]`); only a wide key reads indexers.
+                    Known::Yes(widened @ super::Key::Domain(_)) => match self.values.value_keys(&self.values.evaluate(at, key)) {
+                        Known::Yes(keys) if keys.len() > 1 && keys.iter().all(|key| !matches!(key, super::Key::Domain(_))) => {
+                            combine(self.values, keys.iter().map(|key| self.values.member(&base.value, key)).collect::<Vec<_>>(), false)
+                        }
+                        _ => self.values.member(&base.value, &widened),
+                    },
                     Known::Yes(key) => self.values.member(&base.value, &key),
                     Known::Unknown => NodeValue::Unknown,
                 };
+                self.answers.push(Answer { exists: true, value });
+            }
+            Value::Keys { of } => {
+                let operand = Run { values: self.values, tasks: vec![Task::Expression(at, of)], answers: Vec::new() }.run_answer();
+                let value = if operand.exists { self.values.keys(&operand.value) } else { NodeValue::Unknown };
                 self.answers.push(Answer { exists: true, value });
             }
             Value::Instance { name, classes, arguments } => {

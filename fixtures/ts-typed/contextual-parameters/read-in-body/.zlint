@@ -1,0 +1,9 @@
+import .ts
+ignore "tsconfig.json"
+
+in ts_arrow rule ts-oracle {
+  when body not ts_block
+  warn (ts_value_print_handle(body.node) ?? "null")
+}
+
+rule ts-oracle

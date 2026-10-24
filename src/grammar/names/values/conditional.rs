@@ -57,6 +57,7 @@ impl Values<'_> {
     }
 
     pub(super) fn select(&self, at: Leaf, selection: &Selection) -> NodeValue {
+        if crate::levers::on(crate::levers::Lever::NoConditional) { return NodeValue::Unknown }
         let Some(_nested) = self.question.budget.nest() else { return NodeValue::Unknown };
         let Some(path) = &selection.distribute else {
             return self.select_arm(at, selection);

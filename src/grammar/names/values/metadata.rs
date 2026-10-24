@@ -55,6 +55,15 @@ impl Values<'_> {
 
     fn direct_identity(&self, at: Leaf) -> Known<Option<Identity>> {
         let Some(_nested) = self.question.budget.nest() else { return Known::Unknown };
+        if let Target::Key(id) = at.target {
+            return match self.question.key(id) {
+                Some(super::Key::Text(text)) => Known::Yes(Some(Identity::Value(crate::expr::Value::Str(String::from(text).into())))),
+                Some(super::Key::Ordinal(index)) => Known::Yes(Some(Identity::Value(crate::expr::Value::Num(f64::from(index))))),
+                Some(super::Key::Symbol(node)) => Known::Yes(Some(Identity::Declaration(node))),
+                Some(super::Key::Domain(_)) => Known::Yes(None),
+                None => Known::Unknown,
+            };
+        }
         let Target::Node(node) = at.target else { return Known::Yes(None) };
         let Some(tree) = self.world.tree(node.file) else { return Known::Unknown };
         let Some(data) = tree.nodes.get(node.node as usize) else { return Known::Unknown };

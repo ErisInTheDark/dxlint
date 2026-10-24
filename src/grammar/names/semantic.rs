@@ -494,12 +494,16 @@ mod tests {
                 semantic.values().fits(Leaf { frame, ..at }, trait_id)
             }), Known::Yes(false));
             assert_eq!(world.conditions.get(), before + 2, "a root cut short dropped an answer it completed before the cut");
+            // An answer that spent the whole budget is outgrown for the
+            // file: later roots answer unknown without spending it again.
+            // One cut by nesting depth spent nothing and is computed again.
+            let (answer, conditions) = if cut == 1 { (Known::Unknown, before + 2) } else { (Known::Yes(true), before + 3) };
             assert_eq!(session.run(&world, &linter.grammar.names, |semantic| {
                 let frame = semantic.question.bind(FrameId::ROOT, NodeRef::here(node), None,
                     Some(vec![super::super::question::NodeValue::never()]));
                 semantic.values().fits(Leaf { frame, ..at }, trait_id)
-            }), Known::Yes(true));
-            assert_eq!(world.conditions.get(), before + 3, "the answer cut short is computed again");
+            }), answer);
+            assert_eq!(world.conditions.get(), conditions, "only an answer that spent no budget is computed again");
         }
         let before = world.conditions.get();
         world.revision.set(1);
