@@ -142,7 +142,8 @@ in ts_call.argument rule no-misused-promises:predicates {
 }
 
 in ts_declarator.init, ts_parameter.init, ts_assignment.right rule no-misused-promises:void-variables {
-  when promise_void_context(node)
+  # An unannotated declarator gives its initializer no expected type.
+  when ((!(is ts_declarator.init) || parent.type != null) && promise_void_context(node))
     || promise_dispose_void_context(node)
   report at unparenthesised_node(node)
   warn "Promise-returning function provided to variable where a void return was expected."

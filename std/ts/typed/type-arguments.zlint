@@ -325,6 +325,8 @@ in ts_as, ts_type_assertion rule prefer-reduce-type-parameter {
   fix at edit.target if edit != null as edit.text
 }
 in ts_call.type_argument, ts_new.type_argument, ts_type_reference.type_argument, ts_class.type_argument, ts_jsx_opening.type_argument, ts_tagged_template.type_argument rule no-unnecessary-type-arguments {
+  # Only the last type argument can be redundant (TypeScript ESLint checks no other).
+  when last(parent.type_argument.nodes) == node
   let redundancy type_argument_redundancy(node)
   when redundancy != null
   warn if redundancy == "default" then "This is the default value for this type parameter, so it can be omitted." else "This value can be trivially inferred for this type parameter, so it can be omitted."
