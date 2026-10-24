@@ -1,0 +1,53 @@
+# require-array-sort-compare
+
+Requires a comparison function for array `sort` and `toSorted` calls. Without one, numbers are compared as strings, so `10` sorts before `2`.
+
+| | |
+| --- | --- |
+| Upstream | [`@typescript-eslint/require-array-sort-compare`](https://typescript-eslint.io/rules/require-array-sort-compare) |
+| Needs types | yes |
+| Fix | none |
+| Rulesets | none |
+| Parity | 32 / 37 corpus cases |
+
+## Enable
+
+```dx
+import .ts
+rule require-array-sort-compare
+```
+
+## Examples
+
+Incorrect:
+
+```ts
+[1, 2, 3, 10].sort();
+```
+
+Correct:
+
+```ts
+[1, 2, 3, 10].sort((a, b) => a - b);
+['one', 'two'].sort();
+```
+
+## Options
+
+| Option | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `ignoreStringArrays` | `boolean` | `true` | Allow sorting arrays whose elements are all strings without a comparison function. |
+
+```dx
+rule require-array-sort-compare {
+  set ignoreStringArrays false
+}
+```
+
+## Differences from upstream
+
+- Some array union or intersection receivers are not recognised, such as `number[] | string[]`.
+- Constrained string arrays can be reported despite `ignoreStringArrays`, for example `T extends string[]`.
+- Array narrowing through `Array.isArray` can be missed, such as a `string | string[]` receiver inside the guarded branch.
+
+Adapted from the [typescript-eslint](https://typescript-eslint.io/rules/require-array-sort-compare) documentation (MIT).

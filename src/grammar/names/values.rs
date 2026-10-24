@@ -1,5 +1,4 @@
-//! Values: `unwraps`, `fits`, `could` / `always`, `through` generics
-//! (docs/design/type-layers.md). Owner: Violet.
+//! Values: `unwraps`, `fits`, `could` / `always`, `through` generics.
 
 use super::memo::{Epoch, Memo};
 use super::question::{FrameId, Known, Leaf, NodeRef, NodeValue, ScopeRef, Target};

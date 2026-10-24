@@ -1,5 +1,4 @@
-//! What every type-layer question shares (docs/design/type-layers.md
-//! "Evaluation"): one work budget per question, so cycles and runaway
+//! What every type-layer question shares: one work budget per question, so cycles and runaway
 //! unwrapping end in `unknown` the same way everywhere, and node references
 //! that may point into other files.
 

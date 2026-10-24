@@ -1,5 +1,4 @@
-//! Calls and signatures: overloads, `expected`, call-site inference
-//! (docs/design/type-layers.md "Calls and signatures"). Owner: Juniper.
+//! Calls and signatures: overloads, `expected`, call-site inference.
 
 use crate::config::ast::calls::{ExpectedAt, Variance};
 

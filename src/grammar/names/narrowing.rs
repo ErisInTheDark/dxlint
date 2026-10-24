@@ -1,5 +1,4 @@
-//! Narrowing: `propagates`, `truthy`, `excludes` / `includes` / `has`
-//! (docs/design/type-layers.md "Narrowing"). Owner: Iris.
+//! Narrowing: `propagates`, `truthy`, `excludes` / `includes` / `has`.
 
 use super::effects::{Event, EventKind, Execution, Phase, Point, StepId};
 use super::question::{Known, Leaf, NodeRef, NodeValue, QueryContext, Target};

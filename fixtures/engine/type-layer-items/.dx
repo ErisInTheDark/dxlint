@@ -1,4 +1,4 @@
-# Every type-layer item form loads (docs/design/type-layers.md); the
+# Every type-layer item form loads; the
 # engine answers them later. No library names beside these.
 lang js "*.ts"
 native ts

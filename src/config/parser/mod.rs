@@ -33,7 +33,7 @@ const RESERVED: &[&str] = &[
     "warn", "error", "native", "let", "drop", "override", "amend", "forward", "is", "define", "schema", "each", "language",
 ];
 
-/// Items about names and effects (docs/design/type-layers.md); words only
+/// Items about names and effects; words only
 /// in item position on a layer.
 const NAME_ITEMS: &[&str] = &["scope", "declares", "resolves", "targets", "unwraps", "widens", "defines", "refers", "constrains", "defaults", "enumerates", "assigned", "fits", "carries", "arguments", "indexed", "members", "member", "runs", "labels", "exports", "globals", "uses", "merges",
     "signature", "signatures", "calls", "constructs", "discards", "identity", "optional", "flag", "variance", "generics", "overloads", "pack"];

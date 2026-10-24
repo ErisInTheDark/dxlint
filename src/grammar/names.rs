@@ -1,5 +1,5 @@
-//! Names a language declares with `scope`, `declares` and `resolves` items
-//! (docs/design/type-layers.md): which nodes open scopes, which declare
+//! Names a language declares with `scope`, `declares` and `resolves` items:
+//! which nodes open scopes, which declare
 //! names into which enclosing scope, and which use a name. [`Names`] holds
 //! those tables per matcher; [`Names::resolve`] answers them for one tree.
 //!

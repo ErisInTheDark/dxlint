@@ -1,6 +1,6 @@
 # dxlint
 
-Rust linter; rules in `.dx` (docs/language.md). Binary `dxlint`.
+Rust linter; rules in `.dx` (docs/advanced.md). Binary `dxlint`.
 
 ## Commands
 
@@ -22,13 +22,15 @@ Rust linter; rules in `.dx` (docs/language.md). Binary `dxlint`.
 - `src/native/ts/topics/<family>.rs`: native facts grouped by family (`FACTS` list, read via `Facts::with_file`; whole-file results via `NativeFile::cached`); legacy home of rule logic being moved to `std/ts/<family>.dx`
 - `std/`: built-in languages (`import .ts`); matchers, plus rule definitions in `define { }` (off until `rule name`), topic files under `std/<lang>/`
 - `rules/`: built-in rulesets (`import rules:x`): only `rule name` lines
+- `docs/`: user docs: basic.md, advanced.md (language), ts.md, rules/ (one page per rule; `npm run docs:rules` rebuilds rules/README.md)
+- `package/`: the npm package `@inthedark/dxlint` (launcher + committed binaries, `npm run build:binaries`); `.github/workflows/` publish it and the VS Code extension (`editors/vscode`, `npm run package:vsix`)
 - nothing is compiled in: `src/config/std_lib.rs` reads both from `DXLINT_LIBRARY=<dir>`, else the nearest ancestor of the executable holding `std/` and `rules/` (no rebuild for .dx edits; pinned binaries need `DXLINT_LIBRARY`)
 
 ## Invariants
 
-- Rule behaviour tests: scenario folders under `fixtures/`, each with `.dx`, input files, `expected/diagnostics` and changed text under `expected/fixed/`; see docs/fixtures.md. Runner writes ignored `actual/`; bless only intentional changes.
+- Rule behaviour tests: scenario folders under `fixtures/` (fixtures/AGENTS.md).
 
-- `.dx` defines languages and rules; Rust is the language-neutral engine that runs them. Syntax, names, types, calls, modules, effects and narrowing are declared in `std/<lang>/` (docs/design/type-layers.md); rule options, what is wrong, positions, messages and fixes live in rule `.dx` (shared logic as `fn`)
+- `.dx` defines languages and rules; Rust is the language-neutral engine that runs them. Syntax, names, types, calls, modules, effects and narrowing are declared in `std/<lang>/` (docs/ts.md); rule options, what is wrong, positions, messages and fixes live in rule `.dx` (shared logic as `fn`)
 - The engine knows no language and no rule: nothing in Rust is named after a rule, takes rule options or builds messages. The TS native front end is being migrated out: never add native TS semantics; native TS code only shrinks. Missing expressiveness: extend the engine/DSL generically
 - One owner per syntax. Regular or textual structure (lines, comments, escapes, whitespace runs, words) is a pattern layer
 - Engine/tree queries (`descendants`, `walk`, `paired_token`...) are language-neutral; they belong to the engine, not a front end

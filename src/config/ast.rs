@@ -158,7 +158,7 @@ pub struct AttrDef {
     pub library: bool,
 }
 
-/// A name item on the nodes of `targets` (docs/design/type-layers.md).
+/// A name item on the nodes of `targets`.
 #[derive(Clone, Debug)]
 pub struct NameDef {
     pub targets: Vec<Name>,

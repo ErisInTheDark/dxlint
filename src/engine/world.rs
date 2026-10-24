@@ -1,5 +1,4 @@
-//! The files behind type questions (docs/design/type-layers.md "World:
-//! files behind questions"): the one engine owner of trees, texts, names
+//! The files behind type questions: the one engine owner of trees, texts, names
 //! and VM runs that type-layer engines see through [`World`].
 //!
 //! File 0 is the linted file. Other files load on module lookup, with
