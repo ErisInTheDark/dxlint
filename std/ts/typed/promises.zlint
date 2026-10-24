@@ -23,6 +23,9 @@ in ts_parenthesized.expression, ts_logical.left, ts_logical.right, ts_conditiona
     || is (ts_if.test, ts_while.test, ts_do_while.test, ts_for.test)
     || is ts_unary.argument && node.parent.operator == "!"
   when promise_boolean_test || promise_boolean_left
+  # Comparisons and these unary operators make primitives: never thenable.
+  when !(is ts_binary && contains(["===", "!==", "==", "!=", "<", "<=", ">", ">=", "in", "instanceof"], node.operator))
+  when !(is ts_unary && contains(["typeof", "void", "delete", "+", "~"], node.operator))
   when node could thenable && (flagUnions == "all" || node always thenable || flagUnions == "strict" && ts_await_union_equivalent(node) == true)
   warn "Expected non-Promise value in a boolean conditional."
 }
