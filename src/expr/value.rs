@@ -185,7 +185,7 @@ impl<'s> Value<'s> {
         }
     }
 
-    /// The value as zlint source: `"a"`, `[1, { k: true }]`.
+    /// The value as dxlint source: `"a"`, `[1, { k: true }]`.
     pub fn literal(&self) -> String {
         match self {
             Value::Null => "null".into(),

@@ -107,7 +107,7 @@ pub struct Parser<'g, 't> {
     /// When grafting: skip a node's child layers when `enabled_overlays`
     /// wants none of them.
     pub masked_children: bool,
-    /// `zlint --profile` counters, when profiling.
+    /// `dxlint --profile` counters, when profiling.
     pub profile: Option<&'t crate::engine::Profile>,
     view: &'g View,
     text: &'t [u8],
@@ -760,7 +760,7 @@ impl<'g, 't> Parser<'g, 't> {
     }
 }
 
-/// What a candidate child matcher does at one position (`zlint tree --at`).
+/// What a candidate child matcher does at one position (`dxlint tree --at`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Probe {
     /// Its first-byte set rules the byte out.

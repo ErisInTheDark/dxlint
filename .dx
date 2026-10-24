@@ -1,7 +1,7 @@
-# zoomie-lint lints itself with this file.
+# dxlint lints itself with this file.
 
 import .rs
-import .zlint
+import .dx
 import .md
 import .toml
 
@@ -36,7 +36,7 @@ in rs_code match rs_unwrap /\.unwrap\(\)/ {
   }
 }
 
-# `.zlintcache` reuses a result while everything its lint read is unchanged,
+# `.dxcache` reuses a result while everything its lint read is unchanged,
 # so native code must read the filesystem through the one door that records it.
 in rs_code match rs_filesystem /\bstd::fs\b|\bfs::\w+|\.(?:is_file|is_dir|exists|metadata)\(\)|\bread_dir\b|\bWalkBuilder\b/ {
   rule native-reads-through-door error "native code reads the filesystem through `engine/reads.rs`, which records the read for the cache" {
@@ -62,12 +62,12 @@ in rs_line_comment, rs_block_comment match todo_note /\b(?:TODO|FIXME|XXX)\b/ {
   rule todo-comment info "{text} left in a comment"
 }
 
-# ---- zlint --------------------------------------------------------------
+# ---- dxlint --------------------------------------------------------------
 
-in zlint_code {
+in dx_code {
   # Globs (`rule rs-*`) are not names.
-  match zlint_rule /\brule[ \t]+/ name:/[\w-]+(?![\w*-])/
-  match zlint_matcher /\bmatch[ \t]+/ name:/\w+/
+  match dx_rule /\brule[ \t]+/ name:/[\w-]+(?![\w*-])/
+  match dx_matcher /\bmatch[ \t]+/ name:/\w+/
 }
-in zlint_rule.name rule rule-names warn "rule names are kebab-case" fix as kebab_case(text)
-in zlint_matcher.name rule matcher-names warn "matcher names are snake_case" fix as snake_case(text)
+in dx_rule.name rule rule-names warn "rule names are kebab-case" fix as kebab_case(text)
+in dx_matcher.name rule matcher-names warn "matcher names are snake_case" fix as snake_case(text)

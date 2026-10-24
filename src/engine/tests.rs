@@ -28,14 +28,14 @@ in .t, paren {
 /// modules' tests, as are `errors`, `lint` and `native_linter`.
 pub(crate) fn linter(rules: &str) -> Linter {
     let src = format!("{LANG}\n{rules}");
-    let built = build(config::load_text("test.zlint", &src, &Disk), PathBuf::from("/root"));
+    let built = build(config::load_text("test.dx", &src, &Disk), PathBuf::from("/root"));
     assert!(built.errors.is_empty(), "{:#?}", built.errors);
     built.linter.expect("no errors")
 }
 
 pub(crate) fn errors(rules: &str) -> Vec<String> {
     let src = format!("{LANG}\n{rules}");
-    build(config::load_text("test.zlint", &src, &Disk), PathBuf::from("/root"))
+    build(config::load_text("test.dx", &src, &Disk), PathBuf::from("/root"))
         .errors
         .into_iter()
         .map(|e| format!("{} {}", e.message, e.notes.join(" ")))
@@ -143,7 +143,7 @@ fn opener_indentation_is_corrected_in_one_fix_pass() {
 /// `rules` after `import .ts`; lint with `l.lint(Path::new("/root/file.ts"), text)`.
 pub(crate) fn native_linter(rules: &str) -> Linter {
     let src = format!("import .ts\n{rules}");
-    let built = build(config::load_text("test.zlint", &src, &Disk), PathBuf::from("/root"));
+    let built = build(config::load_text("test.dx", &src, &Disk), PathBuf::from("/root"));
     assert!(built.errors.is_empty(), "{:#?}", built.errors);
     built.linter.expect("no errors")
 }
@@ -200,7 +200,7 @@ pub(crate) fn with_native_file<T>(text: &str, f: impl FnOnce(&crate::native::ts:
 #[test]
 fn native_layers_cannot_be_redefined_as_patterns() {
     let src = "import .ts\nmatch ts_if /y/\nin ts_call let text 1\n";
-    let errors: Vec<String> = build(config::load_text("test.zlint", src, &Disk), PathBuf::from("/root"))
+    let errors: Vec<String> = build(config::load_text("test.dx", src, &Disk), PathBuf::from("/root"))
         .errors
         .into_iter()
         .map(|e| e.message)
@@ -223,7 +223,7 @@ fn broken_parts_leave_the_rest_linting() {
         rule half-written error
     "#
     );
-    let built = build(config::load_text("test.zlint", &src, &Disk), PathBuf::from("/root"));
+    let built = build(config::load_text("test.dx", &src, &Disk), PathBuf::from("/root"));
     // Settings for broken rules add no errors of their own, and a rule whose
     // fix did not parse does not run without it (reporting every node).
     assert_eq!(built.errors.len(), 4, "{:#?}", built.errors);
@@ -323,7 +323,7 @@ fn drop_removes_definitions_and_reports_what_still_uses_them() {
         drop match word
     "#
     );
-    let built = build(config::load_text("test.zlint", &src, &Disk), PathBuf::from("/root"));
+    let built = build(config::load_text("test.dx", &src, &Disk), PathBuf::from("/root"));
     let messages: Vec<&str> = built.errors.iter().map(|e| e.message.as_str()).collect();
     // The settings above the drops went with the rules; the one below and
     // nothing else is an error. The dropped matcher's own rules went first,
@@ -346,7 +346,7 @@ fn dropping_something_in_use_is_an_error_at_the_drop() {
         drop match word
     "#
     );
-    let built = build(config::load_text("test.zlint", &src, &Disk), PathBuf::from("/root"));
+    let built = build(config::load_text("test.dx", &src, &Disk), PathBuf::from("/root"));
     let uses: Vec<String> = built
         .errors
         .iter()
@@ -401,7 +401,7 @@ fn early_rule_settings_and_partial_rulesets_compile() {
     assert_eq!(lint(&l, "x")[0].severity, Severity::Error);
     // A built-in ruleset names rules of languages not imported.
     let src = format!("{LANG}\nimport rules:format\n");
-    let built = build(config::load_text("test.zlint", &src, &Disk), PathBuf::from("/root"));
+    let built = build(config::load_text("test.dx", &src, &Disk), PathBuf::from("/root"));
     assert!(built.errors.is_empty(), "{:#?}", built.errors);
 }
 
@@ -461,14 +461,14 @@ fn nested_fact_arguments_are_restored_after_the_call() {
 #[test]
 fn rule_lets_reject_direct_self_reference() {
     // A `let` naming itself directly is an error: it reads on other nodes.
-    let built = build(config::load_text("t.zlint", "import .ts\nin ts_identifier rule r { let x x + 1 }\n", &Disk), PathBuf::from("/root"));
+    let built = build(config::load_text("t.dx", "import .ts\nin ts_identifier rule r { let x x + 1 }\n", &Disk), PathBuf::from("/root"));
     assert_eq!(built.errors.iter().map(|e| e.message.as_str()).collect::<Vec<_>>(), ["`x` refers to itself"]);
 }
 
 #[test]
 fn load_time_iteration_rejects_node_values() {
     // `@each` reads options only.
-    let built = build(config::load_text("t.zlint", "import .ts\nin ts_identifier rule r { @each x in [text] }\n", &Disk), PathBuf::from("/root"));
+    let built = build(config::load_text("t.dx", "import .ts\nin ts_identifier rule r { @each x in [text] }\n", &Disk), PathBuf::from("/root"));
     assert_eq!(built.errors.iter().map(|e| e.message.as_str()).collect::<Vec<_>>(), ["`text` is not a constant"]);
 }
 
@@ -479,7 +479,7 @@ fn config_functions_see_no_node_and_take_no_builtin_names() {
         ("fn upper(x) = x\n", "`upper` is a built-in function or fact; pick another name"),
         ("fn g(x) = x\nin .t match w /a/ { rule r info \"{g(1, 2)}\" }\n", "`g` takes 1 argument(s), got 2"),
     ] {
-        let built = build(config::load_text("test.zlint", &format!("lang t \"*.t\"\n{src}"), &Disk), PathBuf::from("/root"));
+        let built = build(config::load_text("test.dx", &format!("lang t \"*.t\"\n{src}"), &Disk), PathBuf::from("/root"));
         let messages: Vec<&str> = built.errors.iter().map(|e| e.message.as_str()).collect();
         assert_eq!(messages, [wanted], "{src}");
     }
@@ -568,7 +568,7 @@ fn all_std_rules_and_rulesets_compile_without_inert_targets() {
         import .ts
         import .py
         import .c
-        import .zlint
+        import .dx
         import .md
         import .toml
         import .rs
@@ -586,11 +586,11 @@ fn all_std_rules_and_rulesets_compile_without_inert_targets() {
             None => error.message.clone(),
         }).collect::<Vec<_>>().join("\n")
     };
-    let built = build(config::load_text("test.zlint", src, &Disk), PathBuf::from("/root"));
+    let built = build(config::load_text("test.dx", src, &Disk), PathBuf::from("/root"));
     assert!(built.errors.is_empty(), "{}", located(&built));
     // Every built-in rule and ruleset compiles when turned on.
     let all = format!("{src}\nimport rules:correctness\nimport rules:suspicious\nimport rules:conventions\nimport rules:format\nimport rules:types\nimport rules:recommended\nrule *\n");
-    let built = build(config::load_text("test.zlint", &all, &Disk), PathBuf::from("/root"));
+    let built = build(config::load_text("test.dx", &all, &Disk), PathBuf::from("/root"));
     assert!(built.errors.is_empty(), "{}", located(&built));
     let l = built.linter.unwrap();
     for rule in &l.inert {

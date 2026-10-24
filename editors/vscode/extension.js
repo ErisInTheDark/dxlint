@@ -1,11 +1,11 @@
-// Thin client: all linting happens in `zlint lsp`.
+// Thin client: all linting happens in `dxlint lsp`.
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const vscode = require("vscode");
 const { LanguageClient } = require("vscode-languageclient/node");
 
-const BINARY = process.platform === "win32" ? "zlint.exe" : "zlint";
+const BINARY = process.platform === "win32" ? "dxlint.exe" : "dxlint";
 // Cargo may write a fresh build more than once; restart once it settles.
 const REBUILD_SETTLE_MS = 500;
 // Builds are polled rather than watched: `files.watcherExclude` often
@@ -50,8 +50,8 @@ function watchBuilds() {
   }
 }
 
-// Most recently built `target/{release,debug}/zlint` in the workspace, so
-// working on zlint itself uses the fresh build. Trusted workspaces only:
+// Most recently built `target/{release,debug}/dxlint` in the workspace, so
+// working on dxlint itself uses the fresh build. Trusted workspaces only:
 // this executes a workspace binary.
 function workspaceBuild() {
   if (!vscode.workspace.isTrusted) {
@@ -79,7 +79,7 @@ function copyOfBuild(build) {
   if (!copiesDir) {
     return build.path;
   }
-  const name = `zlint-${Math.trunc(build.mtimeMs)}-${build.size}${path.extname(BINARY)}`;
+  const name = `dxlint-${Math.trunc(build.mtimeMs)}-${build.size}${path.extname(BINARY)}`;
   const copy = path.join(copiesDir, name);
   fs.mkdirSync(copiesDir, { recursive: true });
   for (const old of fs.readdirSync(copiesDir)) {
@@ -112,8 +112,8 @@ function libraryOfBuild(build) {
   return library;
 }
 
-// `zlint.path` if set (relative paths resolve against the first workspace
-// folder), else a workspace build, else `zlint` from PATH.
+// `dxlint.path` if set (relative paths resolve against the first workspace
+// folder), else a workspace build, else `dxlint` from PATH.
 function resolveServer(configured) {
   if (configured) {
     const isBareName = !/[\\/]/.test(configured);
@@ -124,7 +124,7 @@ function resolveServer(configured) {
     return { command: path.resolve(root, configured) };
   }
   const build = workspaceBuild();
-  return build ? { library: libraryOfBuild(build), command: copyOfBuild(build), build } : { command: "zlint" };
+  return build ? { library: libraryOfBuild(build), command: copyOfBuild(build), build } : { command: "dxlint" };
 }
 
 // A workspace build changed: restart once it settles, if it is now a
@@ -132,7 +132,7 @@ function resolveServer(configured) {
 function onBuildChanged() {
   clearTimeout(rebuildTimer);
   rebuildTimer = setTimeout(() => {
-    if (vscode.workspace.getConfiguration("zlint").get("path")) {
+    if (vscode.workspace.getConfiguration("dxlint").get("path")) {
       return;
     }
     const build = workspaceBuild();
@@ -143,14 +143,14 @@ function onBuildChanged() {
 }
 
 function createClient(command, library) {
-  const config = vscode.workspace.getConfiguration("zlint");
-  // No `transport`: TransportKind.stdio appends `--stdio`, which `zlint lsp`
+  const config = vscode.workspace.getConfiguration("dxlint");
+  // No `transport`: TransportKind.stdio appends `--stdio`, which `dxlint lsp`
   // rejects. Plain executables talk over stdio anyway.
   const serverOptions = { command, args: ["lsp"], options: {
-    env: { ...process.env, ...(library ? { ZLINT_LIBRARY: library } : {}) },
+    env: { ...process.env, ...(library ? { DXLINT_LIBRARY: library } : {}) },
   } };
   const clientOptions = {
-    // The server decides which files it owns (via `lang` in .zlint), so
+    // The server decides which files it owns (via `lang` in .dx), so
     // every file document is offered to it.
     documentSelector: [{ scheme: "file" }],
     initializationOptions: {
@@ -162,7 +162,7 @@ function createClient(command, library) {
       fileEvents: vscode.workspace.createFileSystemWatcher("**/*"),
     },
   };
-  return new LanguageClient("zlint", "zoomie-lint", serverOptions, clientOptions);
+  return new LanguageClient("dxlint", "dxlint", serverOptions, clientOptions);
 }
 
 // Files the user is looking at (active first) and files open in tabs, so the
@@ -191,13 +191,13 @@ function focusParams() {
 function sendFocus() {
   if (client && client.isRunning()) {
     // A client stopping mid-send has nothing left to prioritize.
-    client.sendNotification("zlint/focus", focusParams()).catch(() => {});
+    client.sendNotification("dxlint/focus", focusParams()).catch(() => {});
   }
 }
 
 async function start() {
-  const configured = vscode.workspace.getConfiguration("zlint").get("path");
-  let command = configured || "zlint";
+  const configured = vscode.workspace.getConfiguration("dxlint").get("path");
+  let command = configured || "dxlint";
   runningBuild = undefined;
   try {
     const server = resolveServer(configured);
@@ -211,13 +211,13 @@ async function start() {
     const openSettings = "Open Settings";
     vscode.window
       .showErrorMessage(
-        `zoomie-lint: couldn't start \`${command}\` (${error.message || error}). ` +
-          "Put zlint on PATH, build it in this workspace, or set zlint.path.",
+        `dxlint: couldn't start \`${command}\` (${error.message || error}). ` +
+          "Put dxlint on PATH, build it in this workspace, or set dxlint.path.",
         openSettings,
       )
       .then((choice) => {
         if (choice === openSettings) {
-          vscode.commands.executeCommand("workbench.action.openSettings", "zlint.path");
+          vscode.commands.executeCommand("workbench.action.openSettings", "dxlint.path");
         }
       });
   }
@@ -236,9 +236,9 @@ async function activate(context) {
   context.subscriptions.push(
     { dispose: unwatchBuilds },
     vscode.workspace.onDidChangeWorkspaceFolders(watchBuilds),
-    vscode.commands.registerCommand("zlint.restart", restart),
+    vscode.commands.registerCommand("dxlint.restart", restart),
     vscode.workspace.onDidChangeConfiguration(async (e) => {
-      if (e.affectsConfiguration("zlint")) {
+      if (e.affectsConfiguration("dxlint")) {
         await restart();
       }
     }),

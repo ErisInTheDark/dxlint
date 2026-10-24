@@ -1,53 +1,53 @@
 {
-  "name": "zoomie-lint",
-  "displayName": "zoomie-lint",
-  "description": "Extremely fast linting with rules written in .zlint",
+  "name": "dxlint",
+  "displayName": "dxlint",
+  "description": "Extremely fast linting with rules written in .dx",
   "version": "0.1.0",
-  "publisher": "zoomie",
+  "publisher": "dxlint",
   "license": "MIT",
   "engines": { "vscode": "^1.85.0" },
   "categories": ["Linters", "Formatters", "Programming Languages"],
   "main": "./extension.js",
-  "activationEvents": ["workspaceContains:**/.zlint", "onLanguage:zlint"],
+  "activationEvents": ["workspaceContains:**/.dx", "onLanguage:dxlint"],
   "contributes": {
     "languages": [
       {
-        "id": "zlint",
-        "aliases": ["zlint", "zoomie-lint"],
-        "extensions": [".zlint"],
-        "filenames": [".zlint"],
+        "id": "dxlint",
+        "aliases": ["dxlint", "dxlint"],
+        "extensions": [".dx"],
+        "filenames": [".dx"],
         "configuration": "./language-configuration.json"
       }
     ],
     "grammars": [
       {
-        "language": "zlint",
-        "scopeName": "source.zlint",
-        "path": "./syntaxes/zlint.tmLanguage.json"
+        "language": "dxlint",
+        "scopeName": "source.dx",
+        "path": "./syntaxes/dxlint.tmLanguage.json"
       }
     ],
     "configuration": {
-      "title": "zoomie-lint",
+      "title": "dxlint",
       "properties": {
-        "zlint.path": {
+        "dxlint.path": {
           "type": "string",
           "default": "",
-          "description": "Path to the zlint binary. Relative paths resolve against the first workspace folder. Empty: use the newest target/{release,debug}/zlint build in the workspace, else zlint from PATH."
+          "description": "Path to the dxlint binary. Relative paths resolve against the first workspace folder. Empty: use the newest target/{release,debug}/dxlint build in the workspace, else dxlint from PATH."
         },
-        "zlint.scanWorkspace": {
+        "dxlint.scanWorkspace": {
           "type": "boolean",
           "default": true,
           "description": "Lint every file in the workspace in the background, streaming results as files finish. When off, only open files are linted."
         },
-        "zlint.inspectHover": {
+        "dxlint.inspectHover": {
           "type": "boolean",
           "default": false,
-          "description": "For writing rules: hovering in a linted file shows the zlint layers at the cursor, the field each sits in, and the native facts (type, resolved, ...) there."
+          "description": "For writing rules: hovering in a linted file shows the dxlint layers at the cursor, the field each sits in, and the native facts (type, resolved, ...) there."
         }
       }
     },
     "commands": [
-      { "command": "zlint.restart", "title": "zlint: Restart language server" }
+      { "command": "dxlint.restart", "title": "dxlint: Restart language server" }
     ]
   },
   "dependencies": {

@@ -1,3 +1,3 @@
-// zlint-ignore require-await
+// dxlint-ignore require-await
 async function
 task() { work(); }

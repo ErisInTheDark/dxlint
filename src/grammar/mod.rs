@@ -965,7 +965,7 @@ in attributes {
     }
 
     fn grammar(source: &str) -> Grammar {
-        let loaded = crate::config::load_text("guard.zlint", source, &Disk);
+        let loaded = crate::config::load_text("guard.dx", source, &Disk);
         assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
         let mut errors = Vec::new();
         let grammar = Grammar::build(&loaded.config, &mut errors);

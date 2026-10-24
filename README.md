@@ -1,10 +1,10 @@
-# zoomie-lint
+# dxlint
 
 An extremely fast linter and formatter whose rules are written in a small
-language, `.zlint`. Think tree-sitter queries, but you build the tree
+language, `.dx`. Think tree-sitter queries, but you build the tree
 yourself out of regexes, and only describe the parts you care about.
 
-```zlint
+```dxlint
 import .rs
 
 # A layer: function names, found anywhere in Rust code (never in strings
@@ -16,7 +16,7 @@ in rs_function.name rule fn-snake-case warn "`{text}` should be snake_case" fix 
 ```
 
 ```
-$ zlint
+$ dxlint
 warn: `doThing` should be snake_case [fn-snake-case] (fixable)
   --> src/lib.rs:1:4
   |
@@ -51,18 +51,18 @@ warn: `doThing` should be snake_case [fn-snake-case] (fixable)
 ## Getting started
 
 ```sh
-cargo build --release          # binary: target/release/zlint
+cargo build --release          # binary: target/release/dxlint
 ```
 
 The binary reads its built-in library (`std/`, `rules/`) from disk: the
 nearest directory holding both, from the binary's own directory up (so a
-checkout's build finds the checkout's), or `ZLINT_LIBRARY=<dir>`. Editing a
-`.zlint` file there needs no rebuild.
+checkout's build finds the checkout's), or `DXLINT_LIBRARY=<dir>`. Editing a
+`.dx` file there needs no rebuild.
 
-Put a `.zlint` at your project root. zlint finds the nearest one above the
+Put a `.dx` at your project root. dxlint finds the nearest one above the
 current directory, and paths in it are relative to its directory.
 
-```zlint
+```dxlint
 import .ts
 import rules:recommended
 
@@ -75,23 +75,23 @@ ignore "vendor" "src/generated/**"
 
 | command | |
 |---|---|
-| `zlint [paths]` | lint (default: the whole project, respecting `.gitignore`) |
-| `zlint --fix` | apply fixes in place |
-| `zlint --format jsonl` | one JSON diagnostic per line, streamed as files finish |
-| `zlint --stats` | timing and throughput (and how many files came from `.zlintcache`) |
-| `zlint --no-cache` | lint every file, ignoring `.zlintcache` |
-| `zlint check` | validate the config only |
-| `zlint rules` | list every defined rule (off ones too) with severities, options and messages |
-| `zlint rules --dependencies` | one JSON line per enabled rule: `{rule, file, depends}`, the config files (`std/...zlint` for the library) its checks read; rules asking type questions depend on every library file |
-| `zlint describe <name>` | explain any name in the config (rule, layer, group, attribute, macro, fact...) and where it is used |
-| `zlint tree <file>` | print the layer tree (handy while writing matchers) |
-| `zlint functions` | list expression functions and variables |
-| `zlint lsp` | language server on stdio |
+| `dxlint [paths]` | lint (default: the whole project, respecting `.gitignore`) |
+| `dxlint --fix` | apply fixes in place |
+| `dxlint --format jsonl` | one JSON diagnostic per line, streamed as files finish |
+| `dxlint --stats` | timing and throughput (and how many files came from `.dxcache`) |
+| `dxlint --no-cache` | lint every file, ignoring `.dxcache` |
+| `dxlint check` | validate the config only |
+| `dxlint rules` | list every defined rule (off ones too) with severities, options and messages |
+| `dxlint rules --dependencies` | one JSON line per enabled rule: `{rule, file, depends}`, the config files (`std/...dx` for the library) its checks read; rules asking type questions depend on every library file |
+| `dxlint describe <name>` | explain any name in the config (rule, layer, group, attribute, macro, fact...) and where it is used |
+| `dxlint tree <file>` | print the layer tree (handy while writing matchers) |
+| `dxlint functions` | list expression functions and variables |
+| `dxlint lsp` | language server on stdio |
 
 The exit code is 1 when there are errors, and 2 when the config is broken.
 `-c <config>` picks a config explicitly, before or after a subcommand.
 
-Results are cached in `.zlintcache` beside the config (add it to
+Results are cached in `.dxcache` beside the config (add it to
 `.gitignore`): a file is linted again only when its text, the rules, or
 something its lint read from another file (an imported declaration, module
 resolution, a tsconfig) changed.
@@ -101,7 +101,7 @@ resolution, a tsconfig) changed.
 The full reference is [docs/language.md](docs/language.md). The short
 version:
 
-```zlint
+```dxlint
 lang rust "*.rs" {                                  # .rust: the root layer of Rust files
   match parentheses                                 # lines in a block share its context
   match rs_string /"/ until /"/                     # a layer: `"`, skip, `"`
@@ -142,7 +142,7 @@ lookahead and lookbehind, and rule expressions have line context
 (`children.x`, `previous.x`, `next.x`), layer tests (`parent is [ts_block,
 ts_program]`), rule-local `let`s and `re_*` functions.
 
-For TypeScript and JavaScript, `import .ts` adds zlint's own parser:
+For TypeScript and JavaScript, `import .ts` adds dxlint's own parser:
 the real syntax tree as `ts_*` layers, scopes (`uses`, `value_uses`),
 cross-file facts (`declaration_doc`) and declared types (`type`,
 `type_members`) read from your tsconfig, `lib` and `@types` files, without
@@ -155,34 +155,34 @@ A config with mistakes still lints with every part that built: the errors
 are reported, and the run fails, but one typo never switches linting off.
 
 The built-in library ships languages (`.rs`, `.ts` for JS and TS, `.py`, `.c`,
-`.toml`, `.md`, `.zlint`) with their rules (ports of eslint, @stylistic and
+`.toml`, `.md`, `.dx`) with their rules (ports of eslint, @stylistic and
 typescript-eslint rules for JS/TS, topiary-style layout for Rust, and
 language-neutral hygiene), and rulesets (`rules:correctness`,
 `rules:suspicious`, `rules:conventions`, `rules:format`, `rules:types`,
 `rules:recommended`). See [examples/](examples) for complete configs, and
-[.zlint](.zlint) for the rules this repository lints itself with.
+[.dx](.dx) for the rules this repository lints itself with.
 
-Suppress with a comment anywhere: `zlint-ignore`, `zlint-ignore rule-name`,
-`zlint-ignore-start` ... `zlint-ignore-end`, or `zlint-ignore-file`.
+Suppress with a comment anywhere: `dxlint-ignore`, `dxlint-ignore rule-name`,
+`dxlint-ignore-start` ... `dxlint-ignore-end`, or `dxlint-ignore-file`.
 
 ## Editors
 
-`zlint lsp` speaks the Language Server Protocol:
+`dxlint lsp` speaks the Language Server Protocol:
 
 - open files are linted on every change, from the unsaved buffer
 - the rest of the workspace is scanned in the background, and each file's
   results are published the moment it finishes, with progress reporting
-- quick fixes per diagnostic, "fix all" as `source.fixAll.zlint`, and document
+- quick fixes per diagnostic, "fix all" as `source.fixAll.dx`, and document
   formatting that applies every fix
-- `.zlint` files reload live, and config errors appear in the `.zlint` file
+- `.dx` files reload live, and config errors appear in the `.dx` file
   they point at, with links to related places
-- in `.zlint` files: hover on any name, go to definition (into std too),
+- in `.dx` files: hover on any name, go to definition (into std too),
   find all references, completion and an outline; diagnostic codes link to
   their rule
 - an edit re-lints the other files it affects (an importer seeing a changed
-  export), open or not, and the scan reuses `.zlintcache`
+  export), open or not, and the scan reuses `.dxcache`
 
-A VS Code extension (client + `.zlint` syntax highlighting) is in
+A VS Code extension (client + `.dx` syntax highlighting) is in
 [editors/vscode](editors/vscode).
 
 ## Performance
@@ -223,7 +223,7 @@ Where the speed comes from:
 | `src/pattern` | pattern AST, regex parser, compiler, DFA bridge, prefilters |
 | `src/grammar` | layers per language, the parser that builds trees |
 | `src/expr` | rule expressions, values, functions |
-| `src/engine` | the linter: rules, configuring them, pruning unused library layers, fixes, suppressions, `.zlintcache`, the symbol index behind `describe` and hover |
+| `src/engine` | the linter: rules, configuring them, pruning unused library layers, fixes, suppressions, `.dxcache`, the symbol index behind `describe` and hover |
 | `src/native` | the TypeScript front end: parser, scopes, types, the project's files |
 | `src/cli`, `src/lsp` | the binary |
 | `std/` | built-in languages and their rule definitions (`import .ts`) |

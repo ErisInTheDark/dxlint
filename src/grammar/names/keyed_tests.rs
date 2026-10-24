@@ -14,7 +14,7 @@ fn keyed_operands_bind_targets_without_losing_the_declaring_items_fields() {
         }
     "#;
     let built = engine::build(
-        config::load_text("keyed.zlint", source, &Disk),
+        config::load_text("keyed.dx", source, &Disk),
         std::path::PathBuf::from("/root"),
     );
     assert!(built.errors.is_empty(), "{:#?}", built.errors);

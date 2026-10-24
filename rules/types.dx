@@ -1,4 +1,4 @@
-# rules:types: rules that read declared types (zlint's own type evaluator:
+# rules:types: rules that read declared types (dxlint's own type evaluator:
 # no TypeScript needed). Turns on every such rule of the imported languages,
 # at its defaults.
 

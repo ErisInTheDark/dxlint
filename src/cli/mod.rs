@@ -113,7 +113,7 @@ impl Output<'_> {
 }
 
 #[derive(Parser)]
-#[command(name = "zlint", version, about = "Extremely fast linting with rules written in .zlint", subcommand_precedence_over_arg = true)]
+#[command(name = "dxlint", version, about = "Extremely fast linting with rules written in .dx", subcommand_precedence_over_arg = true)]
 pub struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
@@ -125,7 +125,7 @@ pub struct Cli {
 
 #[derive(clap::Args, Clone)]
 pub struct ConfigArg {
-    /// Config file (default: the nearest `.zlint` above the current directory)
+    /// Config file (default: the nearest `.dx` above the current directory)
     #[arg(short, long, global = true)]
     pub config: Option<PathBuf>,
 }
@@ -155,7 +155,7 @@ pub struct LintArgs {
     /// Report which matchers and rules cost the most time (implies --no-cache)
     #[arg(long)]
     pub profile: bool,
-    /// Lint every file, without reading or writing `.zlintcache`
+    /// Lint every file, without reading or writing `.dxcache`
     #[arg(long)]
     pub no_cache: bool,
     /// Steps one type question may take before giving up (default 100000).
@@ -187,7 +187,7 @@ enum Command {
     /// List rules with their severity, options and messages
     Rules {
         /// Instead, one JSON line per enabled rule: its defining file and
-        /// every config file its compiled checks read (`std/...zlint` for
+        /// every config file its compiled checks read (`std/...dx` for
         /// library files)
         #[arg(long)]
         dependencies: bool,
@@ -204,7 +204,7 @@ enum Command {
         /// The name (`no-console`, `ts_call`, `callee`, `type_flags`, `group`)
         name: String,
     },
-    /// Print the layer tree zlint builds for a file (for writing matchers)
+    /// Print the layer tree dxlint builds for a file (for writing matchers)
     Tree {
         file: PathBuf,
         /// Show every node, including nested brackets and escapes
@@ -354,7 +354,7 @@ pub struct Project {
 }
 
 /// Loads and builds the linter, printing any config errors. Uses the
-/// explicit `--config`, else the nearest `.zlint` upward. Only a
+/// explicit `--config`, else the nearest `.dx` upward. Only a
 /// missing config is fatal: a broken one lints with what still works.
 fn load(output: &mut Output<'_>, arg: &ConfigArg) -> Result<Project, u8> {
     load_with(output, arg, false)

@@ -432,7 +432,7 @@ mod tests {
 
     #[test]
     fn javascript_regex_schemas_validate_unicode_patterns_without_changing_rust_regexes() {
-        let loaded = crate::config::load_text("pattern.zlint", "schema pattern js_regex", &crate::config::source::Disk);
+        let loaded = crate::config::load_text("pattern.dx", "schema pattern js_regex", &crate::config::source::Disk);
         assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
         let schema = &loaded.config.schemas[0].schema;
         let named = Schemas::new();

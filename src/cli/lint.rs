@@ -1,4 +1,4 @@
-//! `zlint [paths]`: walk, lint (and fix) in parallel, report.
+//! `dxlint [paths]`: walk, lint (and fix) in parallel, report.
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
@@ -95,10 +95,10 @@ fn display(path: &Path, cwd: &Path) -> String {
     path.strip_prefix(cwd).unwrap_or(path).to_string_lossy().replace('\\', "/")
 }
 
-/// `ZLINT_PROFILE_EVERY=<seconds>` with `--profile`: print the busiest
+/// `DXLINT_PROFILE_EVERY=<seconds>` with `--profile`: print the busiest
 /// semantic queries while the run is still going (for runs that hang).
 fn watch_every() -> Option<std::time::Duration> {
-    let seconds: u64 = std::env::var("ZLINT_PROFILE_EVERY").ok()?.parse().ok()?;
+    let seconds: u64 = std::env::var("DXLINT_PROFILE_EVERY").ok()?.parse().ok()?;
     (seconds > 0).then(|| std::time::Duration::from_secs(seconds))
 }
 

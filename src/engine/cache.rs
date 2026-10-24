@@ -1,11 +1,11 @@
-//! `.zlintcache`: lint results kept between runs, beside the config. A
+//! `.dxcache`: lint results kept between runs, beside the config. A
 //! file's result is reused when its text and everything its lint read
 //! (other files' summaries, module resolution probes, tsconfigs: see
 //! `engine::reads`) still match. Results are kept for clean files and
 //! for files with problems alike, so a warm run only lints what changed.
 //!
 //! The whole cache belongs to one rule state: the config's tokens (imports
-//! and macros expanded), the project root and the zlint executable. Any
+//! and macros expanded), the project root and the dxlint executable. Any
 //! change there starts afresh.
 //!
 //! Reads shared by many files (a tsconfig's globals, resolved member names)
@@ -22,7 +22,7 @@ use super::{Diagnostic, Edit, Fix, Linter};
 use crate::config::ast::Severity;
 use super::reads::{hash_bytes, Dep, Reads};
 
-pub const FILE_NAME: &str = ".zlintcache";
+pub const FILE_NAME: &str = ".dxcache";
 /// Bumped whenever the encoding changes.
 const MAGIC: &[u8; 4] = b"ZLC5";
 
@@ -78,7 +78,7 @@ pub struct Cache {
 
 impl Cache {
     /// The cache for `linter`'s rules: what was saved, if it was saved for
-    /// exactly these rules and this zlint, else an empty one.
+    /// exactly these rules and this dxlint, else an empty one.
     pub fn open(linter: &Linter) -> Cache {
         let path = linter.root.join(FILE_NAME);
         let key = key(linter.fingerprint);
@@ -226,7 +226,7 @@ impl Cache {
 /// The rule state the cache belongs to.
 fn key(fingerprint: u64) -> u64 {
     static EXE: OnceLock<u64> = OnceLock::new();
-    // A zlint that cannot read itself never reuses anything.
+    // A dxlint that cannot read itself never reuses anything.
     let exe = *EXE.get_or_init(|| {
         std::env::current_exe().and_then(std::fs::read).map_or_else(|_| std::process::id().into(), |bytes| hash_bytes(&bytes))
     });

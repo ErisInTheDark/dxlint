@@ -320,7 +320,7 @@ impl FileVm {
             let calls: usize = selected.iter().map(|(_, stats)| stats.calls).sum();
             let bytes: usize = selected.iter().map(|(_, stats)| stats.bytes).sum();
             let first_bytes: usize = selected.iter().map(|(_, stats)| stats.first_bytes).sum();
-            eprintln!("zlint vm fact packs: {file} kind={kind} calls={calls} distinct={} bytes={bytes} distinct_bytes={first_bytes}", selected.len());
+            eprintln!("dxlint vm fact packs: {file} kind={kind} calls={calls} distinct={} bytes={bytes} distinct_bytes={first_bytes}", selected.len());
         }
         let storage = self.storage.borrow();
         let nodes = storage.offsets.iter().filter(|&&offset| offset != NO_RECORD).count();
@@ -332,7 +332,7 @@ impl FileVm {
         let offset_bytes = storage.offsets.capacity() * std::mem::size_of::<u32>();
         let values_bytes = self.values.borrow().bytes();
         let texts_bytes = self.values.borrow().text_bytes();
-        eprintln!("zlint vm memory: {file} cells_bytes={cell_bytes} offsets_bytes={offset_bytes} directory_bytes={directory_bytes} pointer_bytes={pointer_bytes} values_bytes={values_bytes} texts_bytes={texts_bytes} slots={} unset={unset} gave_up={gave_up} record_nodes={nodes}", storage.cells.len);
+        eprintln!("dxlint vm memory: {file} cells_bytes={cell_bytes} offsets_bytes={offset_bytes} directory_bytes={directory_bytes} pointer_bytes={pointer_bytes} values_bytes={values_bytes} texts_bytes={texts_bytes} slots={} unset={unset} gave_up={gave_up} record_nodes={nodes}", storage.cells.len);
         for size in [4, 8, 16] {
             let mut directory = 0;
             let mut touched = 0;
@@ -355,7 +355,7 @@ impl FileVm {
             let payload_bytes = touched * size * std::mem::size_of::<u64>();
             let directory_bytes = directory * std::mem::size_of::<u32>();
             let projected_bytes = payload_bytes + directory_bytes + offset_bytes;
-            eprintln!("zlint vm blocks: {file} size={size} touched={touched} occupied={occupied} directory_entries={directory} payload_bytes={payload_bytes} directory_bytes={directory_bytes} projected_bytes={projected_bytes}");
+            eprintln!("dxlint vm blocks: {file} size={size} touched={touched} occupied={occupied} directory_entries={directory} payload_bytes={payload_bytes} directory_bytes={directory_bytes} projected_bytes={projected_bytes}");
         }
     }
 

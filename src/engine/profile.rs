@@ -1,4 +1,4 @@
-//! `zlint --profile`: where linting time goes, per matcher and rule.
+//! `dxlint --profile`: where linting time goes, per matcher and rule.
 //! Counters are atomics so parallel lint threads share one profile.
 
 use std::cell::{Cell, RefCell};
@@ -164,7 +164,7 @@ mod tests {
             in item rule probe info text { when node could marked && node always marked }
         "#;
         let built = crate::engine::build(
-            crate::config::load_text("profile.zlint", source, &crate::config::source::Disk),
+            crate::config::load_text("profile.dx", source, &crate::config::source::Disk),
             std::path::PathBuf::from("/root"),
         );
         assert!(built.errors.is_empty(), "{:?}", built.errors);
@@ -522,7 +522,7 @@ impl Profile {
     }
 
     /// One line on the busiest semantic queries so far (by self time), for
-    /// watching a run that never finishes (`ZLINT_PROFILE_EVERY`).
+    /// watching a run that never finishes (`DXLINT_PROFILE_EVERY`).
     /// `entered/finished` counts show what a stuck run keeps starting;
     /// `attribute` names a `let` by index.
     pub fn watch_line(&self, attribute: impl Fn(usize) -> String) -> String {
@@ -538,7 +538,7 @@ impl Profile {
         lets.sort_by_key(|row| std::cmp::Reverse(row.0));
         let lets: Vec<String> = lets.iter().take(6)
             .map(|&(entered, calls, index)| format!("{} {entered}/{calls}", attribute(index))).collect();
-        format!("zlint profile: queries {} | lets {}", queries.join(", "), lets.join(", "))
+        format!("dxlint profile: queries {} | lets {}", queries.join(", "), lets.join(", "))
     }
 
     const SLOWEST_FILES: usize = 10;

@@ -1,5 +1,5 @@
 # Example: a few JavaScript/TypeScript rules.
-# Try it: cd examples/js && zlint
+# Try it: cd examples/js && dxlint
 
 import .ts
 

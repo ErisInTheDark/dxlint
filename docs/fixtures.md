@@ -1,6 +1,6 @@
 # Rule fixtures
 
-Run `zlint fixtures` (all `fixtures/`) or `zlint fixtures <paths...>`. A scenario is a folder containing `.zlint`; it is its own on-disk project root. Inputs may include nested files and project dependencies. Config files, `expected/`, `actual/` and `.zlintcache` are not lint inputs.
+Run `dxlint fixtures` (all `fixtures/`) or `dxlint fixtures <paths...>`. A scenario is a folder containing `.dx`; it is its own on-disk project root. Inputs may include nested files and project dependencies. Config files, `expected/`, `actual/` and `.dxcache` are not lint inputs.
 
 `expected/diagnostics` contains sorted original-input reports:
 
@@ -10,9 +10,9 @@ input.ts:1:1-1:4 rule-name#0
 
 Lines/columns are 1-based, end positions exclusive, matching JSON output. Message indexes are 0-based source-order leaves: `if` branches, `??` alternatives and a pipeline's final value. Other expressions (including map results) have one leaf. Engine/evaluation failures use `#error`. Changing message wording does not change its identity.
 
-Messages written in the scenario's own `.zlint`, including library-rule overrides, also include rendered text after the identity; backslashes, CR and newlines escape as `\\`, `\r`, `\n`. Library default messages remain index-only. Without an explicit message, the rule name's source owns its fallback.
+Messages written in the scenario's own `.dx`, including library-rule overrides, also include rendered text after the identity; backslashes, CR and newlines escape as `\\`, `\r`, `\n`. Library default messages remain index-only. Without an explicit message, the rule name's source owns its fallback.
 
-`expected/fixed/<relpath>` contains complete fixpoint text only for changed inputs; absence means unchanged. Inputs are never rewritten. A `.zlintcache` marker additionally checks cold/warm diagnostics agree; the runner restores its original bytes.
+`expected/fixed/<relpath>` contains complete fixpoint text only for changed inputs; absence means unchanged. Inputs are never rewritten. A `.dxcache` marker additionally checks cold/warm diagnostics agree; the runner restores its original bytes.
 
 Every run replaces ignored `actual/diagnostics` and `actual/fixed/`, prints scenario differences, and exits 1 on failures. `--bless` copies actual results into `expected/`, removing stale fixed files. Review changes before committing. `cargo test` runs the same scenario runner.
 

@@ -3,7 +3,7 @@
 Status: design, not implemented.
 
 Goal: a language's names, types and control effects are declared in
-`.zlint`, next to the nodes they belong to, and answered by the engine at
+`.dx`, next to the nodes they belong to, and answered by the engine at
 native speed. The declarations are not a programming language: no mutable
 state, no loops, no user-written recursion budgets, no classes. The engine
 owns every algorithm (resolution, unwrapping, narrowing, propagation,
@@ -35,7 +35,7 @@ Field paths are field names joined by `.`. Special steps (a field of the same na
 
 `when <expr> { items }` makes any group of items conditional:
 
-```zlint
+```dxlint
 in ts_logical {
   when operator == "&&" { unwraps { left | right; truthy left & right } }
   when operator == "||" { unwraps { left | right; truthy left | right } }
@@ -53,7 +53,7 @@ node opens.
 
 ## Scopes and names
 
-```zlint
+```dxlint
 lang rust "*.rs" {
   scope module
   match rs_function /\bfn\s+/ name:identifier :rs_parameters body:braces {
@@ -138,7 +138,7 @@ struct, signature or literal type is the type; nothing is constructed.
 
 Precedence follows TS: `a | b & c` is `a | (b & c)`.
 
-```zlint
+```dxlint
 in ts_declarator { unwraps annotation ?? init }
 in ts_identifier { unwraps definition }
 in ts_member { unwraps from object at property }
@@ -164,7 +164,7 @@ and default values (`number`, a bare `return`) are language-declared
 
 ## Calls and signatures
 
-```zlint
+```dxlint
 in ts_function, ts_arrow, ts_method, ts_function_type, ts_call_signature, ts_method_signature {
   fits callable
   signature parameter returns return_type ?? returned
@@ -277,7 +277,7 @@ through never re-runs later tests.
 Rules ask questions about what a value could be. A trait is such a
 question; leaf nodes say how they fit:
 
-```zlint
+```dxlint
 in ts_null_keyword, ts_undefined_keyword { fits nullable }
 in ts_function_type, ts_function, ts_arrow { fits callable }
 match ts_interface ... { fits thenable when from it at "then" could callable }
@@ -291,7 +291,7 @@ Rules ask with two operators:
 Over `|`, `could` needs one side and `always` both; over `&`, either side
 decides both. Rules never see unwrapping.
 
-```zlint
+```dxlint
 in ts_expression_statement rule no-floating-promises {
   when expression could thenable
 }
@@ -309,7 +309,7 @@ Three declarations and one engine rule:
 1. **Where a test applies:** `in <field> propagates <test>` applies the
    test's `truthy` effects throughout that field's subtree: a static
    statement of where a test's exclusions go in the node's shape.
-   ```zlint
+   ```dxlint
    in ts_if { in consequent propagates test; in alternate propagates !test }
    in ts_logical {
      when operator == "&&" { in right propagates left }
@@ -323,7 +323,7 @@ Three declarations and one engine rule:
 2. **How tests compose:** a test's `truthy` effect unwraps into what must
    hold (`truthy left & right`, `!argument`). The engine pushes `!` inward.
 3. **What a single test proves:** under `truthy`, `excludes`:
-   ```zlint
+   ```dxlint
    in ts_binary {
      when operator == "!=" && right is ts_null { unwraps truthy excludes nullable from left }
    }
@@ -338,7 +338,7 @@ Three declarations and one engine rule:
 
 - Everything is a pure function of the tree, links and other files'
   declarations: lazily computed, memoised per (node, question), cached in
-  `.zlintcache` with recorded reads.
+  `.dxcache` with recorded reads.
 - Cycles and runaway unwrapping end in `unknown` under one engine-owned
   work budget per question; `could`/`always` on `unknown` are false. Rules
   and languages never write budgets.
@@ -356,7 +356,7 @@ One engine owner, `engine/world.rs`; type-layer engines see only the
   Loaded on demand when module resolution reaches them, never eagerly.
 - Units are shared by every lint of a run (project cache keyed by path,
   dropped by `Linter::invalidate` for changed paths). Each lint that uses
-  a unit records a read of its text (`engine/reads.rs`), so `.zlintcache`
+  a unit records a read of its text (`engine/reads.rs`), so `.dxcache`
   replays only while the text holds. Directory and package lookups go
   through registered `Discovery`s, never raw filesystem calls.
 - A unit's tree holds only the layers name tables and their conditions
@@ -366,7 +366,7 @@ One engine owner, `engine/world.rs`; type-layer engines see only the
 - Per lint, a file table numbers the units a question reached (`u32`,
   0 = self); `NodeRef`, `ScopeRef` index into it. Questions never hold
   units past the lint.
-- Module resolution: policy is zlint data (`module_resolution`, Daisy's
+- Module resolution: policy is dxlint data (`module_resolution`, Daisy's
   resolver); the engine implements the resolver's `Host` (path, text,
   is_file, root scope, ambient module) over units and reads. Program
   settings (config, path mappings, base, libraries, types, project roots,
@@ -454,7 +454,7 @@ speed is within noise of native. Slower is a problem to solve, not a verdict.
 
 ## Step 1 cutover (bind.rs goes)
 
-- `std/ts/names.zlint` (from the prototype) imported by `.ts`: scopes,
+- `std/ts/names.dx` (from the prototype) imported by `.ts`: scopes,
   declarations, resolutions, targets, write effects for TS. Approximations
   in the prototype become exact (named function/class expression scopes,
   ES5 block functions, catch scope, root function scope).

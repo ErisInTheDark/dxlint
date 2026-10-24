@@ -1,4 +1,4 @@
-//! Loaded configs. Each file is linted by its nearest `.zlint` config; a
+//! Loaded configs. Each file is linted by its nearest `.dx` config; a
 //! nested config fully replaces its parents for the files below it.
 
 use std::collections::{HashMap, HashSet};
@@ -20,7 +20,7 @@ struct Project {
     linter: Option<Arc<Linter>>,
     /// Every name of the config as last parsed (even when broken).
     symbols: Option<Arc<Symbols>>,
-    /// Every `.zlint` file the config reads, imports included.
+    /// Every `.dx` file the config reads, imports included.
     files: HashSet<PathBuf>,
     /// Config errors by the URI of the file they point at.
     errors: HashMap<String, Vec<Value>>,
@@ -104,7 +104,7 @@ impl Projects {
         path.file_name().is_some_and(|n| n == CONFIG_NAME) || self.by_dir.values().any(|p| p.files.contains(path))
     }
 
-    /// Configs that read `file`: itself if it is a `.zlint` config, plus every
+    /// Configs that read `file`: itself if it is a `.dx` config, plus every
     /// loaded config importing it.
     pub fn owners_of(&self, file: &Path) -> Vec<PathBuf> {
         let mut owners: Vec<PathBuf> =
@@ -115,7 +115,7 @@ impl Projects {
         owners
     }
 
-    /// The symbols of a config that reads `file` (a `.zlint` file, or one of
+    /// The symbols of a config that reads `file` (a `.dx` file, or one of
     /// the read-only std copies), and the file's id in it.
     pub fn config_file(&self, file: &Path) -> Option<(Arc<Symbols>, FileId)> {
         let std = super::config_docs::std_module(file);

@@ -23,18 +23,18 @@ pub fn long_name(name: &str) -> String {
 
 /// `rust` -> `rs`: how a module is written in an import.
 pub fn short_name(name: &str) -> &str {
-    let name = name.strip_suffix(".zlint").unwrap_or(name);
+    let name = name.strip_suffix(".dx").unwrap_or(name);
     ALIASES.iter().find(|(_, long)| *long == name).map_or(name, |(short, _)| short)
 }
 
-/// The library directory: `ZLINT_LIBRARY=<dir>`, else the nearest directory
+/// The library directory: `DXLINT_LIBRARY=<dir>`, else the nearest directory
 /// holding both `std/` and `rules/`, from the executable's own directory up
 /// (a checkout, or an installed package). `None` when there is none. Root,
 /// inventory and successfully read texts are cached for the process.
 pub fn root() -> Option<&'static Path> {
     static ROOT: OnceLock<Option<PathBuf>> = OnceLock::new();
     ROOT.get_or_init(|| {
-        if let Some(dir) = std::env::var_os("ZLINT_LIBRARY") {
+        if let Some(dir) = std::env::var_os("DXLINT_LIBRARY") {
             return Some(PathBuf::from(dir));
         }
         let exe = std::env::current_exe().ok()?;
@@ -52,7 +52,7 @@ fn from_disk(dir: &str, name: &str) -> Option<&'static str> {
     if let Some(&text) = texts.get(&key) {
         return Some(text);
     }
-    let text: &'static str = std::fs::read_to_string(root.join(format!("{key}.zlint"))).ok()?.leak();
+    let text: &'static str = std::fs::read_to_string(root.join(format!("{key}.dx"))).ok()?.leak();
     texts.insert(key, text);
     Some(text)
 }
@@ -66,7 +66,7 @@ fn disk_names(dir: &str) -> Vec<&'static str> {
             let name = format!("{prefix}{name}");
             if path.is_dir() {
                 scan(&path, &format!("{name}/"), names);
-            } else if let Some(name) = name.strip_suffix(".zlint").filter(|_| path.is_file()) {
+            } else if let Some(name) = name.strip_suffix(".dx").filter(|_| path.is_file()) {
                 names.push(name.to_owned().leak());
             }
         }
@@ -80,7 +80,7 @@ fn disk_names(dir: &str) -> Vec<&'static str> {
 }
 
 pub fn get(name: &str) -> Option<&'static str> {
-    from_disk("std", name.strip_suffix(".zlint").unwrap_or(name))
+    from_disk("std", name.strip_suffix(".dx").unwrap_or(name))
 }
 
 pub fn names() -> impl Iterator<Item = &'static str> {

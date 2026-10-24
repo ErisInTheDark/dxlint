@@ -1,6 +1,6 @@
-# .ts: JavaScript and TypeScript. zlint's native parser owns the syntax:
+# .ts: JavaScript and TypeScript. dxlint's native parser owns the syntax:
 # every node kind is a `ts_*` layer with ESTree-style fields (`ts_if.test`,
-# `ts_call.callee`, `ts_binary.operator`); `zlint tree file.ts` shows them.
+# `ts_call.callee`, `ts_binary.operator`); `dxlint tree file.ts` shows them.
 # Textual parts (comments, lines) are pattern layers in the same tree.
 #
 # Brings every JS/TS rule definition, all off: turn on what you want with

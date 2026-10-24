@@ -1,6 +1,6 @@
 /target
-.zlintcache
-!fixtures/**/.zlintcache
+.dxcache
+!fixtures/**/.dxcache
 fixtures/**/actual/
 /scratch
 /editors/vscode/node_modules

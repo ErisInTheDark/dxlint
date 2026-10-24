@@ -1,0 +1,31 @@
+# .dx: the structure of .dx files themselves (config files named
+# `.dx` included), so dxlint can lint its own rules.
+
+import .core
+
+lang dx "*.dx" ".dx" {
+  match parentheses
+  match brackets
+  match braces
+}
+
+group dx_code .dx, parentheses, brackets, braces
+
+in dx_code {
+  match dx_comment /#/ until /$/
+  # Longer than `""` at the same spot, so it wins.
+  match dx_block_string /"""/ until /"""/
+  match dx_string /"/ until /"/
+  match dx_single_string /'/ until /'/
+}
+in dx_string, dx_single_string, dx_block_string match dx_escape /\\(?:.|\n)/
+# `import some/path`: a bare path, not a regex.
+in dx_code match dx_import_path /(?<=\bimport[ \t]+)[^\s#"']+/
+
+# Regex literals: `/` never means division in dxlint.
+in dx_code match dx_regex /\// until /\/|$/ {
+  match dx_regex_escape /\\./
+  match dx_regex_class /\[/ until /\]/ {
+    match dx_regex_escape
+  }
+}

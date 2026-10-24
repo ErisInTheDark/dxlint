@@ -393,7 +393,7 @@ fn class(layout: Layout) -> Option<usize> {
 }
 
 /// Heap accounting by owner, on when the process starts with
-/// `ZLINT_HEAP_STATS` set (decided at the first allocation, so every block
+/// `DXLINT_HEAP_STATS` set (decided at the first allocation, so every block
 /// is accounted or none is): every block carries a 16-byte header naming
 /// the owner live at its allocation, so a free subtracts from that owner.
 pub mod heap {
@@ -439,9 +439,9 @@ pub mod heap {
     fn requested() -> bool {
         // SAFETY: NUL-terminated names; Windows writes nothing for size 0.
         #[cfg(windows)]
-        unsafe { GetEnvironmentVariableA(c"ZLINT_HEAP_STATS".as_ptr().cast(), std::ptr::null_mut(), 0) != 0 }
+        unsafe { GetEnvironmentVariableA(c"DXLINT_HEAP_STATS".as_ptr().cast(), std::ptr::null_mut(), 0) != 0 }
         #[cfg(not(windows))]
-        unsafe { !getenv(c"ZLINT_HEAP_STATS".as_ptr()).is_null() }
+        unsafe { !getenv(c"DXLINT_HEAP_STATS".as_ptr()).is_null() }
     }
 
     pub fn on() -> bool {

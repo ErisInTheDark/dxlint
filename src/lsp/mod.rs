@@ -1,6 +1,6 @@
 //! Language server. Open documents are linted on every change; the rest of
 //! the workspace is scanned in the background and streamed file by file.
-//! Each file uses its nearest `.zlint` config. `.zlint` edits reload configs
+//! Each file uses its nearest `.dx` config. `.dx` edits reload configs
 //! live, with errors shown in place.
 
 mod config_docs;
@@ -60,18 +60,18 @@ struct Server {
     scan_workspace: bool,
     progress: bool,
     /// Hover in source files shows the layers and facts at the cursor
-    /// (`zlint.inspectHover`).
+    /// (`dxlint.inspectHover`).
     inspect_hover: bool,
     warned_no_config: bool,
     /// Open documents whose diagnostics are out of date.
     dirty: HashSet<PathBuf>,
-    /// Find every config again (startup, a `.zlint` config created or deleted).
+    /// Find every config again (startup, a `.dx` config created or deleted).
     rediscover: bool,
     /// Configs to reload.
     stale: HashSet<PathBuf>,
-    /// Files in visible editors, most important first (`zlint/focus`).
+    /// Files in visible editors, most important first (`dxlint/focus`).
     visible: Vec<PathBuf>,
-    /// Files open in editor tabs (`zlint/focus`) that scans reach; they lint
+    /// Files open in editor tabs (`dxlint/focus`) that scans reach; they lint
     /// them first.
     tabs: Vec<PathBuf>,
     /// Gitignored tabs under a gitignored config. Scans never reach them, so
@@ -127,7 +127,7 @@ pub fn run<R: Read + Send + 'static, W: Write + Send + 'static>(input: R, output
                 Ok(Some(m)) => m,
                 Ok(None) => break 'serve if shutdown { 0 } else { 1 },
                 Err(e) => {
-                    writeln!(stderr, "zlint lsp: {e}").expect("write stderr");
+                    writeln!(stderr, "dxlint lsp: {e}").expect("write stderr");
                     break 'serve 1;
                 }
             };
@@ -183,7 +183,7 @@ impl Server {
                 "textDocument/didChange" => self.did_change(params),
                 "textDocument/didClose" => self.did_close(params),
                 "workspace/didChangeWatchedFiles" => self.watched_files(params),
-                "zlint/focus" => self.focus(params),
+                "dxlint/focus" => self.focus(params),
                 _ => {}
             },
         }
@@ -358,7 +358,7 @@ impl Server {
         json!({
             "capabilities": {
                 "textDocumentSync": { "openClose": true, "change": 2 },
-                "codeActionProvider": { "codeActionKinds": ["quickfix", "source.fixAll.zlint"] },
+                "codeActionProvider": { "codeActionKinds": ["quickfix", "source.fixAll.dx"] },
                 "documentFormattingProvider": true,
                 "hoverProvider": true,
                 "definitionProvider": true,
@@ -366,7 +366,7 @@ impl Server {
                 "documentSymbolProvider": true,
                 "completionProvider": { "triggerCharacters": [".", " ", "\"", "["] },
             },
-            "serverInfo": { "name": "zlint", "version": env!("CARGO_PKG_VERSION") },
+            "serverInfo": { "name": "dxlint", "version": env!("CARGO_PKG_VERSION") },
         })
     }
 
@@ -393,7 +393,7 @@ impl Server {
             rescan = self.projects.retain(&self.stale);
             if self.stale.is_empty() && !self.warned_no_config {
                 self.warned_no_config = true;
-                self.show(3, &format!("zlint: no {} found in the workspace; linting is off", config::CONFIG_NAME));
+                self.show(3, &format!("dxlint: no {} found in the workspace; linting is off", config::CONFIG_NAME));
             }
         }
         let configs = std::mem::take(&mut self.stale);
@@ -419,7 +419,7 @@ impl Server {
         rescan
     }
 
-    /// A `.zlint` file changed in the editor or on disk: reload what reads it.
+    /// A `.dx` file changed in the editor or on disk: reload what reads it.
     fn config_touched(&mut self, path: &Path) {
         self.stale.extend(self.projects.owners_of(path));
     }
@@ -578,7 +578,7 @@ impl Server {
         let mut actions = Vec::new();
         let mut fixable = 0;
         for d in params["context"]["diagnostics"].as_array().into_iter().flatten() {
-            if d["source"] != "zlint" {
+            if d["source"] != "dxlint" {
                 continue;
             }
             let Some(fix) = d["data"]["fix"].as_array() else { continue };
@@ -593,11 +593,11 @@ impl Server {
                 }));
             }
         }
-        if (fixable > 0 && wants("quickfix")) || (!only.is_empty() && wants("source.fixAll.zlint")) {
+        if (fixable > 0 && wants("quickfix")) || (!only.is_empty() && wants("source.fixAll.dx")) {
             if let Some(edit) = self.fix_all(&path) {
-                let kind = if wants("source.fixAll.zlint") && !only.is_empty() { "source.fixAll.zlint" } else { "quickfix" };
+                let kind = if wants("source.fixAll.dx") && !only.is_empty() { "source.fixAll.dx" } else { "quickfix" };
                 actions.push(json!({
-                    "title": "Fix all zlint problems in this file",
+                    "title": "Fix all dxlint problems in this file",
                     "kind": kind,
                     "edit": { "changes": { u: [edit] } },
                 }));
@@ -606,7 +606,7 @@ impl Server {
         Value::Array(actions)
     }
 
-    /// Runs `f` on the `.zlint` file of a request (null elsewhere).
+    /// Runs `f` on the `.dx` file of a request (null elsewhere).
     fn in_config(&self, params: &Value, f: impl FnOnce(&config_docs::ConfigFile) -> Value) -> Value {
         let Some((path, _)) = Self::doc_path(params) else { return Value::Null };
         match self.projects.config_file(&path) {
@@ -615,7 +615,7 @@ impl Server {
         }
     }
 
-    /// In `.zlint` files: what the name is. In source files, when enabled:
+    /// In `.dx` files: what the name is. In source files, when enabled:
     /// the layers and facts at the cursor.
     fn hover(&self, params: &Value) -> Value {
         let Some((path, _)) = Self::doc_path(params) else { return Value::Null };
@@ -637,7 +637,7 @@ impl Server {
         let lines = LineIndex::new(&text);
         let offset = lines.from_utf16(&text, pos["line"].as_u64().unwrap_or(0) as u32, pos["character"].as_u64().unwrap_or(0) as u32);
         match linter.inspect(&path, &text, offset) {
-            Some(md) => json!({ "contents": { "kind": "markdown", "value": format!("**zlint**\n\n{md}") } }),
+            Some(md) => json!({ "contents": { "kind": "markdown", "value": format!("**dxlint**\n\n{md}") } }),
             None => Value::Null,
         }
     }

@@ -248,7 +248,7 @@ pub enum TokenRead {
     Pair,
 }
 
-/// Expression forms that are not plain functions, for `zlint functions`.
+/// Expression forms that are not plain functions, for `dxlint functions`.
 pub const SPECIAL_FORMS: &[(&str, &str)] = &[
     ("dbg(value, label?)", "the value unchanged; prints `file:line:col layer label = value` to stderr for each node it is evaluated on"),
     ("position(offset)", "`{line, column, js_line, js_column}` of a byte offset in the file, 1-based: `line`/`column` like the builtins; `js_line` also counts U+2028/U+2029 as line breaks and `js_column` counts UTF-16 units, as JavaScript tools do; `js_line_start` is the byte offset that JS line starts at"),
@@ -1825,7 +1825,7 @@ impl<'a> Ctx<'a> {
     }
 
     /// Evaluates without a node: constants, options and functions only
-    /// (option values, descriptions shown by `zlint rules`).
+    /// (option values, descriptions shown by `dxlint rules`).
     pub fn eval_static(e: &CExpr, options: &[Value<'static>]) -> Result<Value<'static>, String> {
         static_eval::StaticEval::new(options, &[]).eval(e)
     }

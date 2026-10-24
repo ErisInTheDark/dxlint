@@ -1,5 +1,5 @@
 //! A CPU sampling profiler that needs no elevated rights: with
-//! `ZLINT_SAMPLE=<report path>` set, a thread suspends every other thread of
+//! `DXLINT_SAMPLE=<report path>` set, a thread suspends every other thread of
 //! the process about once a millisecond and unwinds its call stack; at exit
 //! the addresses are named through the executable's PDB (build with debug
 //! line tables for names) and the report lists functions by self and
@@ -309,9 +309,9 @@ mod windows {
             }
             for function in &seen { *inclusive.entry(function.clone()).or_default() += 1 }
         }
-        // Callers of each function named in ZLINT_SAMPLE_CALLERS (`;`
+        // Callers of each function named in DXLINT_SAMPLE_CALLERS (`;`
         // separated name parts, `>part` for its callees), by name.
-        let focus: Vec<String> = std::env::var("ZLINT_SAMPLE_CALLERS").map(|list| list.split(';').map(str::to_owned).collect()).unwrap_or_default();
+        let focus: Vec<String> = std::env::var("DXLINT_SAMPLE_CALLERS").map(|list| list.split(';').map(str::to_owned).collect()).unwrap_or_default();
         let mut callers: Vec<HashMap<std::rc::Rc<str>, usize>> = focus.iter().map(|_| HashMap::new()).collect();
         if !focus.is_empty() {
             for frames in samples {
@@ -359,10 +359,10 @@ mod windows {
 }
 
 /// A running sampler that reports when dropped; `None` unless
-/// `ZLINT_SAMPLE` names a report path.
+/// `DXLINT_SAMPLE` names a report path.
 #[cfg(windows)]
 pub fn start_from_env() -> Option<impl Drop> {
-    std::env::var_os("ZLINT_SAMPLE").map(|path| windows::start(path.into()))
+    std::env::var_os("DXLINT_SAMPLE").map(|path| windows::start(path.into()))
 }
 
 #[cfg(not(windows))]

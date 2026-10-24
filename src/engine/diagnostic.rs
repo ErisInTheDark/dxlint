@@ -37,7 +37,7 @@ pub struct Diagnostic {
 }
 
 /// Rule name for problems the engine itself reports.
-pub const ENGINE_RULE: &str = "zlint";
+pub const ENGINE_RULE: &str = "dxlint";
 
 impl Diagnostic {
     fn key(&self) -> (usize, usize, &str, &str, Option<usize>) {

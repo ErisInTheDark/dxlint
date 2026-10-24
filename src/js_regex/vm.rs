@@ -34,7 +34,7 @@ impl Program {
         for (index, (inner, positive)) in pattern.assertions.into_iter().enumerate() {
             let program = Self::compile(inner, flags)?;
             // Zero repetitions can erase a marker, but its body still needs syntax validation.
-            let Some(group) = nfa.group_info().to_index(PatternID::ZERO, &format!("zlint_assertion_{index}")) else { continue };
+            let Some(group) = nfa.group_info().to_index(PatternID::ZERO, &format!("dx_assertion_{index}")) else { continue };
             let slot = nfa.group_info().slot(PatternID::ZERO, group).ok_or("JavaScript assertion slot missing")?;
             assertions.push(Assertion { slot, program, positive });
         }

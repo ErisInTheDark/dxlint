@@ -28,7 +28,7 @@ fn entries(path: &Path) -> Result<Vec<fs::DirEntry>, String> {
 }
 
 fn scenarios(path: &Path, found: &mut BTreeSet<PathBuf>) -> Result<(), String> {
-    if path.join(".zlint").is_file() { found.insert(path.to_path_buf()); }
+    if path.join(".dx").is_file() { found.insert(path.to_path_buf()); }
     for entry in entries(path)? {
         if matches!(entry.file_name().to_str(), Some("actual" | "expected" | ".git")) { continue; }
         if entry.file_type().map_err(|e| e.to_string())?.is_dir() { scenarios(&entry.path(), found)?; }
@@ -51,7 +51,7 @@ fn reports(name: &str, text: &str, diagnostics: &[crate::engine::Diagnostic], lo
 
 fn collect(linter: &Linter, files: &[PathBuf], cache: Option<&Cache>, warm: bool) -> Result<Actual, String> {
     let local: BTreeSet<_> = linter.rules.iter().filter(|rule|
-        linter.sources.get(rule.message_file).path.as_deref() == Some(linter.root.join(".zlint").as_path()))
+        linter.sources.get(rule.message_file).path.as_deref() == Some(linter.root.join(".dx").as_path()))
         .map(|rule| rule.name.as_str()).collect();
     let mut actual = Actual::default();
     for file in files {
@@ -176,13 +176,13 @@ fn difference(expected: &str, actual: &str) -> String {
 }
 
 fn scenario(output: &mut Output<'_>, root: &Path, bless: bool) -> Result<Vec<String>, String> {
-    let project = load_from_with(output, &root.join(".zlint"), &Disk, true).map_err(|_| "configuration failed".to_string())?;
+    let project = load_from_with(output, &root.join(".dx"), &Disk, true).map_err(|_| "configuration failed".to_string())?;
     if !project.config_ok { return Err("configuration failed".into()); }
     let mut files = super::lint::walker(&[root.to_path_buf()], 1, &["actual", "expected"]).build()
         .map(|entry| entry.map_err(|e| e.to_string())).collect::<Result<Vec<_>, _>>()?.into_iter()
         .filter(|entry| entry.file_type().is_some_and(|kind| kind.is_file()))
         .map(|entry| entry.into_path())
-        .filter(|path| path.extension().is_none_or(|ext| ext != "zlint") && path.file_name().is_none_or(|name| name != FILE_NAME))
+        .filter(|path| path.extension().is_none_or(|ext| ext != "dx") && path.file_name().is_none_or(|name| name != FILE_NAME))
         .collect::<Vec<_>>();
     files.sort();
     let marker = root.join(FILE_NAME);
@@ -276,7 +276,7 @@ mod tests {
 
     impl Project {
         fn new(name: &str) -> Self {
-            let root = std::env::temp_dir().join(format!("zlint-fixtures-{name}-{}", std::process::id()));
+            let root = std::env::temp_dir().join(format!("dxlint-fixtures-{name}-{}", std::process::id()));
             fs::create_dir(&root).expect("fresh test project");
             Self(root)
         }
@@ -284,7 +284,7 @@ mod tests {
         fn scenario(&self, name: &str) -> PathBuf {
             let root = self.0.join(name);
             fs::create_dir_all(root.join("expected")).unwrap();
-            fs::write(root.join(".zlint"), "lang t \"*.t\"\n").unwrap();
+            fs::write(root.join(".dx"), "lang t \"*.t\"\n").unwrap();
             fs::write(root.join("input.t"), "sample").unwrap();
             fs::write(root.join("expected/diagnostics"), "").unwrap();
             root
@@ -298,7 +298,7 @@ mod tests {
     #[test]
     fn bless_and_replay_preserve_inputs_and_remove_stale_outputs() {
         let project = Project::new("bless");
-        fs::write(project.0.join(".zlint"), r#"
+        fs::write(project.0.join(".dx"), r#"
             lang t "*.t"
             in .t match word /[a-z]+/ {
                 rule probe {

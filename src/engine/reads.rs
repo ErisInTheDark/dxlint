@@ -585,7 +585,7 @@ mod tests {
 
     #[test]
     fn exact_requested_files_override_ignores_without_widening_membership() {
-        let dir = std::env::temp_dir().join(format!("zlint-requested-files-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("dxlint-requested-files-{}", std::process::id()));
         let library = dir.join("node_modules/typescript/lib");
         std::fs::create_dir_all(&library).unwrap();
         std::fs::write(dir.join(".ignore"), "node_modules/\n").unwrap();
@@ -622,7 +622,7 @@ mod tests {
 
     #[test]
     fn buffered_directories_merge_with_disk_and_invalidate_reads() {
-        let dir = std::env::temp_dir().join(format!("zlint-buffer-directories-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("dxlint-buffer-directories-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("disk.txt"), "").unwrap();
         let file = dir.join("virtual/nested/globals.d.ts");
@@ -653,7 +653,7 @@ mod tests {
 
     #[test]
     fn shared_reads_reach_their_users_as_groups() {
-        let dir = std::env::temp_dir().join(format!("zlint-reads-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("dxlint-reads-{}", std::process::id()));
         let file = dir.join("a.ts");
         let (_, shared) = track(|| is_file(&file));
         let shared = Arc::new(shared);
@@ -671,7 +671,7 @@ mod tests {
 
     #[test]
     fn buffers_read_instead_of_the_disk() {
-        let path = std::env::temp_dir().join(format!("zlint-buffer-{}.ts", std::process::id()));
+        let path = std::env::temp_dir().join(format!("dxlint-buffer-{}.ts", std::process::id()));
         assert!(!Dep::IsFile(dep_path(&path), true).holds(|_| 0));
         set_buffer(&path, "declare global {}");
         let (text, reads) = track(|| read(&path));

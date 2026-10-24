@@ -1397,7 +1397,7 @@ impl<'a> Parser<'a> {
                 }
                 None if std_lib::root().is_none() => self.errors.push(
                     ConfigError::new(span, format!("cannot import `{path}`: no built-in library found"))
-                        .note("zlint reads `std/` and `rules/` from beside its executable (or a directory above it), or from `ZLINT_LIBRARY`"),
+                        .note("dxlint reads `std/` and `rules/` from beside its executable (or a directory above it), or from `DXLINT_LIBRARY`"),
                 ),
                 None if namespace == "std" => self.errors.push(
                     ConfigError::new(span, format!("unknown built-in language `{path}`"))
@@ -1414,9 +1414,9 @@ impl<'a> Parser<'a> {
             return;
         };
         let mut full = base.join(&path);
-        // `.zlint` (a config file) is a whole name, not an extension.
+        // `.dx` (a config file) is a whole name, not an extension.
         if full.extension().is_none() && full.file_name().is_some_and(|n| n != super::CONFIG_NAME) {
-            full.set_extension("zlint");
+            full.set_extension("dx");
         }
         let full = normalize_path(&full);
         let key = full.to_string_lossy().into_owned();
@@ -2468,7 +2468,7 @@ pub(crate) fn parse_str(src: &str) -> (Config, Vec<ConfigError>, SourceMap) {
     let mut sources = SourceMap::default();
     let provider = super::source::Disk;
     let mut p = Parser::new(&mut sources, &provider);
-    p.parse_text("test.zlint", src);
+    p.parse_text("test.dx", src);
     let (config, errors) = (std::mem::take(&mut p.config), std::mem::take(&mut p.errors));
     (config, errors, sources)
 }

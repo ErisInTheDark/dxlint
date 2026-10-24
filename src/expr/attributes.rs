@@ -153,7 +153,7 @@ impl Attributes {
         let mut failures: Vec<_> = failures.into_iter().collect();
         failures.sort_by_key(|&(owner, count)| (std::cmp::Reverse(count), owner));
         for ((attr, index), count) in failures.into_iter().take(15) {
-            eprintln!("zlint vm gave up: {file} {count} {}#{index}", self.attrs[attr].name);
+            eprintln!("dxlint vm gave up: {file} {count} {}#{index}", self.attrs[attr].name);
         }
     }
 
@@ -560,7 +560,7 @@ impl vm::Host for Ctx<'_> {
         };
         let packed = self.memo.vm.fact_value(&value, &self.attrs.values, self.source, key, self.attrs.vm_stats);
         if packed.is_none() && self.attrs.vm_stats {
-            eprintln!("zlint vm fact: undeclared shape {} ({})", super::facts::FACTS[fact].name, value.type_name());
+            eprintln!("dxlint vm fact: undeclared shape {} ({})", super::facts::FACTS[fact].name, value.type_name());
         }
         packed
     }
@@ -650,7 +650,7 @@ mod tests {
     use crate::config::{self, source::Disk};
 
     fn grammar() -> Grammar {
-        let loaded = config::load_text("attrs.zlint", r#"
+        let loaded = config::load_text("attrs.dx", r#"
             lang t "*.t"
             match base "a"
             match member like base "b"

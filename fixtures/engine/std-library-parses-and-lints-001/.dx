@@ -3,7 +3,7 @@
         import .ts
         import .py
         import .c
-        import .zlint
+        import .dx
         import .md
         import .toml
         import .rs

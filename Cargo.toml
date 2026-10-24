@@ -1,13 +1,13 @@
 [package]
-name = "zoomie-lint"
+name = "dxlint"
 version = "0.1.0"
 edition = "2021"
 description = "Extremely fast, rule-language driven linter with structural (bracket/quote aware) pattern matching"
 license = "MIT"
-default-run = "zlint"
+default-run = "dxlint"
 
 [[bin]]
-name = "zlint"
+name = "dxlint"
 path = "src/main.rs"
 
 [dependencies]

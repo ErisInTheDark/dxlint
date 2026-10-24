@@ -1,4 +1,4 @@
-//! Language features inside `.zlint` files, read from the config's symbol
+//! Language features inside `.dx` files, read from the config's symbol
 //! index: hover, go to definition, references, completion and outline.
 
 use std::path::{Path, PathBuf};
@@ -12,7 +12,7 @@ use crate::config::source::{FileId, SourceFile, Span};
 use crate::config::std_lib;
 use crate::engine::symbols::{Kind, Symbol, Symbols};
 
-/// One `.zlint` file of a built config.
+/// One `.dx` file of a built config.
 pub struct ConfigFile<'a> {
     pub symbols: &'a Symbols,
     pub file: FileId,
@@ -276,7 +276,7 @@ pub fn source_path(f: &SourceFile) -> Option<PathBuf> {
 
 /// Where std modules are written so editors can open them.
 fn std_dir() -> PathBuf {
-    std::env::temp_dir().join(format!("zlint-std-{}", env!("CARGO_PKG_VERSION")))
+    std::env::temp_dir().join(format!("dxlint-std-{}", env!("CARGO_PKG_VERSION")))
 }
 
 /// A read-only file holding a built-in module's text (`std/ts/problems`,
@@ -285,7 +285,7 @@ fn std_copy(name: &str, text: &str) -> Option<PathBuf> {
     if !(name.starts_with("std/") || name.starts_with("rules/")) {
         return None;
     }
-    let path = std_dir().join(format!("{name}.zlint"));
+    let path = std_dir().join(format!("{name}.dx"));
     if std::fs::read_to_string(&path).ok().as_deref() != Some(text) {
         std::fs::create_dir_all(path.parent()?).ok()?;
         // A stale read-only copy has to be writable again first.
@@ -321,7 +321,7 @@ mod tests {
     #[test]
     fn linked_nodes_complete_and_hover_as_registered_queries() {
         let text = "import .ts\nin ts_call.callee rule field info text\nin ts_identifier rule query info declaration.offset\nin ts_program.binding_declarations rule names info text\nin ts_call let callee node\n";
-        let built = build(load_text("links.zlint", text, &Disk), PathBuf::from("/root"));
+        let built = build(load_text("links.dx", text, &Disk), PathBuf::from("/root"));
         assert!(built.errors.is_empty(), "{:?}", built.errors);
         let symbols = built.symbols.expect("symbols");
         let (file, _) = symbols.sources.files().find(|(_, source)| source.text.as_ref() == text).expect("source");
@@ -341,7 +341,7 @@ mod tests {
     #[test]
     fn language_settings_complete_and_link_to_their_declarations() {
         let text = "import .ts\nlanguage .js {\n  set sourceType \"commonjs\"\n  set globals { app: \"readonly\" }\n}\n";
-        let built = build(load_text("environment.zlint", text, &Disk), PathBuf::from("/root"));
+        let built = build(load_text("environment.dx", text, &Disk), PathBuf::from("/root"));
         assert!(built.errors.is_empty(), "{:?}", built.errors);
         let symbols = built.symbols.expect("symbols");
         let (file, _) = symbols.sources.files().find(|(_, source)| source.text.as_ref() == text).expect("source");

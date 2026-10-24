@@ -515,8 +515,8 @@ mod startup_tests {
 
     #[test]
     fn all_std_rules_compile_at_runtime() {
-        let source = "import .rs\nimport .ts\nimport .py\nimport .c\nimport .zlint\nimport .md\nimport .toml\nrule *\n";
-        let built = build_for_lint(config::load_text("test.zlint", source, &Disk), PathBuf::from("/root"));
+        let source = "import .rs\nimport .ts\nimport .py\nimport .c\nimport .dx\nimport .md\nimport .toml\nrule *\n";
+        let built = build_for_lint(config::load_text("test.dx", source, &Disk), PathBuf::from("/root"));
         assert!(built.errors.is_empty(), "{:#?}", built.errors);
     }
 
@@ -529,14 +529,14 @@ mod startup_tests {
                 "in .t match item /x/\ngroup items item\ndrop group items item\n",
             ] {
                 let source = format!("lang t \"*.t\"\ndefine {{\ngroup items\nin items rule item-rule warn 'item'\n}}\n{adapters}rule *\n");
-                let built = compile(config::load_text("test.zlint", &source, &Disk), PathBuf::from("/root"));
+                let built = compile(config::load_text("test.dx", &source, &Disk), PathBuf::from("/root"));
                 assert!(built.errors.is_empty(), "{:#?}", built.errors);
             }
             let source = "lang t \"*.t\"\ngroup items\nin items rule item-rule warn 'item'\n";
-            let built = compile(config::load_text("test.zlint", source, &Disk), PathBuf::from("/root"));
+            let built = compile(config::load_text("test.dx", source, &Disk), PathBuf::from("/root"));
             assert!(!built.errors.is_empty());
             let source = "lang t \"*.t\"\ndefine {\ngroup items\nin items rule item-rule warn 'item' { option max int = 1 }\n}\nrule item-rule { set max 'bad' }\n";
-            let built = compile(config::load_text("test.zlint", source, &Disk), PathBuf::from("/root"));
+            let built = compile(config::load_text("test.dx", source, &Disk), PathBuf::from("/root"));
             assert!(!built.errors.is_empty());
         }
     }
@@ -558,8 +558,8 @@ define {
 rule active warn "{read(node)}" fix as lower(text) { when accepted(node) }
 "#;
         let root = PathBuf::from("/root");
-        let runtime = build_for_lint(config::load_text("test.zlint", source, &Disk), root.clone());
-        let tooling = build(config::load_text("test.zlint", source, &Disk), root);
+        let runtime = build_for_lint(config::load_text("test.dx", source, &Disk), root.clone());
+        let tooling = build(config::load_text("test.dx", source, &Disk), root);
         assert!(runtime.errors.is_empty(), "{:#?}", runtime.errors);
         assert!(tooling.errors.is_empty(), "{:#?}", tooling.errors);
         let runtime = runtime.linter.unwrap();
@@ -1239,7 +1239,7 @@ mod demand_tests {
 
     fn native(rules: &str) -> Linter {
         let source = format!("lang js \"*.ts\"\nnative ts\ngroup opener ts_open_paren, ts_open_bracket, ts_open_brace, ts_open_angle\n{rules}");
-        let built = build(crate::config::load_text("test.zlint", &source, &Disk), PathBuf::from("/root"));
+        let built = build(crate::config::load_text("test.dx", &source, &Disk), PathBuf::from("/root"));
         assert!(built.errors.is_empty(), "{:#?}", built.errors);
         built.linter.expect("valid config")
     }
@@ -1270,7 +1270,7 @@ mod demand_tests {
             ("ts_program", "", "name", "[1]", false),
         ] {
             let source = format!("lang js \"*.ts\"\nnative ts\n{prefix}in {target} rule probe {{\neach {item} in {list}\nwarn \"{{{item}}}\"\n}}");
-            let built = build(crate::config::load_text("each.zlint", &source, &Disk), PathBuf::from("/root"));
+            let built = build(crate::config::load_text("each.dx", &source, &Disk), PathBuf::from("/root"));
             let item_start = source.find("each ").unwrap() + 5;
             let collision = built.errors.len() == 1 && built.errors[0].span.is_some_and(|span|
                 span.start as usize == item_start && span.end as usize == item_start + item.len());
@@ -1280,7 +1280,7 @@ mod demand_tests {
         }
         for setup in ["let item 1", "option item number = 1 \"item\""] {
             let source = format!("lang js \"*.ts\"\nnative ts\nin ts_program rule probe {{\n{setup}\neach item in [1]\nwarn \"{{item}}\"\n}}");
-            let built = build(crate::config::load_text("each.zlint", &source, &Disk), PathBuf::from("/root"));
+            let built = build(crate::config::load_text("each.dx", &source, &Disk), PathBuf::from("/root"));
             let item_start = source.find("each ").unwrap() + 5;
             if built.errors.len() != 1 || !built.errors[0].span.is_some_and(|span|
                 span.start as usize == item_start && span.end as usize == item_start + 4) {
@@ -1304,7 +1304,7 @@ mod demand_tests {
             }
         "#;
         for runtime in [false, true] {
-            let loaded = crate::config::load_text("selected.zlint", config, &Disk);
+            let loaded = crate::config::load_text("selected.dx", config, &Disk);
             let built = if runtime { build_for_lint(loaded, PathBuf::from("/root")) }
                 else { build(loaded, PathBuf::from("/root")) };
             assert!(built.errors.is_empty(), "{:?}", built.errors);
@@ -1320,7 +1320,7 @@ mod demand_tests {
     fn attribute_targets_report_failures_but_allow_absent_nodes() {
         for (expression, failed) in [("null", false), ("[]", false), ("7", true), ("selected", true)] {
             let config = format!("lang plain \"*.t\"\nin .plain match item /a/\nin item let selected {expression}\nin item.selected rule selected info text\n");
-            let built = build(crate::config::load_text("selected.zlint", &config, &Disk), PathBuf::from("/root"));
+            let built = build(crate::config::load_text("selected.dx", &config, &Disk), PathBuf::from("/root"));
             assert!(built.errors.is_empty(), "{:?}", built.errors);
             let diagnostics = built.linter.expect("attribute targets").lint(Path::new("/root/file.t"), "a");
             if failed {
@@ -1334,7 +1334,7 @@ mod demand_tests {
 
     #[test]
     fn linked_targets_keep_selected_context_and_run_once_per_node() {
-        let built = build(crate::config::load_text("targets.zlint", r#"
+        let built = build(crate::config::load_text("targets.dx", r#"
             import .ts
             in ts_identifier let checked text == "value" || text == "later"
             in ts_declarator.name, ts_identifier.declaration, ts_identifier.declarations rule linked info checked {
@@ -1371,7 +1371,7 @@ mod demand_tests {
         assert_eq!(diagnostics.len(), 1);
         assert_eq!(&source[diagnostics[0].start..diagnostics[0].end], "call");
 
-        let built = build(crate::config::load_text("field.zlint",
+        let built = build(crate::config::load_text("field.dx",
             "lang plain \"*.t\"\nin .plain match holder /@/ declaration:/[a-z]+/\nin holder let declaration node\nin holder.declaration rule field info text", &Disk), PathBuf::from("/root"));
         assert!(built.errors.is_empty(), "{:?}", built.errors);
         let diagnostics = built.linter.expect("field config").lint(Path::new("/root/file.t"), "@value");
@@ -1399,14 +1399,14 @@ mod demand_tests {
             ("rule probe set sometimes", "must be enum(always, never, always-multiline)"),
             ("rule probe set always set never", "already sets its default option"),
         ] {
-            let built = build(crate::config::load_text("test.zlint", &format!("lang js \"*.ts\"\nnative ts\n{rule}{config}\n"), &Disk), PathBuf::from("/root"));
+            let built = build(crate::config::load_text("test.dx", &format!("lang js \"*.ts\"\nnative ts\n{rule}{config}\n"), &Disk), PathBuf::from("/root"));
             assert!(built.errors.iter().any(|e| e.message.contains(problem)), "{config}: {:#?}", built.errors);
         }
         let without = "define {\nin ts_call rule plain warn \"x\" { option mode enum(a, b) = a }\n}\nrule plain set b\n";
-        let built = build(crate::config::load_text("test.zlint", &format!("lang js \"*.ts\"\nnative ts\n{without}"), &Disk), PathBuf::from("/root"));
+        let built = build(crate::config::load_text("test.dx", &format!("lang js \"*.ts\"\nnative ts\n{without}"), &Disk), PathBuf::from("/root"));
         assert!(built.errors.iter().any(|e| e.message.contains("has no default option")), "{:#?}", built.errors);
         let severity_word = "define {\nin ts_call rule bad warn \"x\" { default option mode enum(off, on) = on }\n}\n";
-        let built = build(crate::config::load_text("test.zlint", &format!("lang js \"*.ts\"\nnative ts\n{severity_word}"), &Disk), PathBuf::from("/root"));
+        let built = build(crate::config::load_text("test.dx", &format!("lang js \"*.ts\"\nnative ts\n{severity_word}"), &Disk), PathBuf::from("/root"));
         assert!(built.errors.iter().any(|e| e.message.contains("cannot take `off`")), "{:#?}", built.errors);
     }
 
@@ -1423,7 +1423,7 @@ mod demand_tests {
     #[test]
     fn overrides_reject_missing_attribute_definitions() {
         let source = "lang js \"*.ts\"\nnative ts\nin ts_call let demo 1\noverride in ts_binary let missing 2\n";
-        let built = build(crate::config::load_text("test.zlint", source, &Disk), PathBuf::from("/root"));
+        let built = build(crate::config::load_text("test.dx", source, &Disk), PathBuf::from("/root"));
         assert!(built.errors.iter().any(|e| e.message.contains("no attribute `missing`")), "{:#?}", built.errors);
     }
 }

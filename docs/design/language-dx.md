@@ -35,7 +35,7 @@ Logic is macros; there is no `fn` keyword. To the author a macro behaves exactly
 
 ## `when` blocks (value, kind-subject and name/type item arm forms implemented; boolean subject and rule-body forms pending)
 
-````zlint
+````dxlint
 when {
   x then ...          # first true arm wins, no fall-through
   y then { ... }
@@ -61,7 +61,7 @@ when n is {           # subject form for kind dispatch
 
 ## `each` blocks (implemented; old block-less form still accepted)
 
-````zlint
+````dxlint
 in ts_assignment rule no-self-assign {
   when operator is ("=", "&&=", "||=", "??=")     # per node
   each self in problem_self_assignments(left, right) {

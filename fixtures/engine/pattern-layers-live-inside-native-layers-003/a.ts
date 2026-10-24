@@ -1,2 +1,2 @@
-// zlint-ignore t
+// dxlint-ignore t
 // TODO

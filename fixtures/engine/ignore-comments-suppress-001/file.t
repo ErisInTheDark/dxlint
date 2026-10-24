@@ -1,4 +1,4 @@
-// zlint-ignore
+// dxlint-ignore
 X
-X // zlint-ignore other
-X // zlint-ignore no-x
+X // dxlint-ignore other
+X // dxlint-ignore no-x

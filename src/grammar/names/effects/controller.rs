@@ -382,16 +382,16 @@ impl Effects<'_> {
         self.graph(entry, false)
     }
 
-    /// `ZLINT_GRAPH_PER_FRAME=1`: every frame builds its own graph (A/B ruler).
+    /// `DXLINT_GRAPH_PER_FRAME=1`: every frame builds its own graph (A/B ruler).
     fn per_frame() -> bool {
         static PER_FRAME: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        *PER_FRAME.get_or_init(|| std::env::var_os("ZLINT_GRAPH_PER_FRAME").is_some())
+        *PER_FRAME.get_or_init(|| std::env::var_os("DXLINT_GRAPH_PER_FRAME").is_some())
     }
 
-    /// `ZLINT_GRAPH_READS=1`: narrowing builds full graphs (A/B ruler).
+    /// `DXLINT_GRAPH_READS=1`: narrowing builds full graphs (A/B ruler).
     fn force_reads() -> bool {
         static FORCE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        *FORCE.get_or_init(|| std::env::var_os("ZLINT_GRAPH_READS").is_some())
+        *FORCE.get_or_init(|| std::env::var_os("DXLINT_GRAPH_READS").is_some())
     }
 
     fn graph(&self, entry: Leaf, reads: bool) -> Known<Rc<Execution>> {

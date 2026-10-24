@@ -2,7 +2,7 @@
 //! file's diagnostics to the client as soon as it is done, with progress.
 //! Tabs the user has open go first, then the rest breadth-first. A newer scan
 //! (config change) cancels older ones via the generation. Scans reuse and
-//! update each config's `.zlintcache`.
+//! update each config's `.dxcache`.
 //!
 //! Every lint's reads are kept, so an edit re-lints just the files it
 //! affects ([`relint`]).
@@ -254,7 +254,7 @@ struct Scan {
     problems: AtomicUsize,
     /// Known once the walk is done.
     total: AtomicUsize,
-    /// Each config's `.zlintcache`, by config directory.
+    /// Each config's `.dxcache`, by config directory.
     caches: HashMap<PathBuf, Cache>,
 }
 
@@ -267,7 +267,7 @@ impl Scan {
             out,
             progress,
             generation,
-            token: format!("zlint-scan-{generation}"),
+            token: format!("dxlint-scan-{generation}"),
             done: Mutex::default(),
             touched: Mutex::default(),
             files: AtomicUsize::new(0),
@@ -285,7 +285,7 @@ impl Scan {
         let (token, generation) = (&self.token, self.generation);
         if self.progress {
             self.out.request(&format!("progress-{generation}"), "window/workDoneProgress/create", json!({ "token": token }));
-            let value = json!({ "kind": "begin", "title": "zlint", "message": "scanning workspace", "cancellable": false, "percentage": 0 });
+            let value = json!({ "kind": "begin", "title": "dxlint", "message": "scanning workspace", "cancellable": false, "percentage": 0 });
             self.out.notify("$/progress", json!({ "token": token, "value": value }));
         }
         // With no configs there is nothing to lint; the stale sweep below

@@ -346,7 +346,7 @@ impl Linter {
     pub(crate) fn shape_records(&mut self) {
         let fields = self.record_fields();
         if self.attrs.vm_stats {
-            eprintln!("zlint vm: {fields} record fields");
+            eprintln!("dxlint vm: {fields} record fields");
         }
     }
 

@@ -1,4 +1,4 @@
-//! `zlint rules`, `zlint tree`, `zlint functions`.
+//! `dxlint rules`, `dxlint tree`, `dxlint functions`.
 
 use std::path::Path;
 use anstyle::{AnsiColor, Style};
@@ -17,7 +17,7 @@ const BOLD: Style = Style::new().bold();
 const DIM: Style = Style::new().dimmed();
 const CYAN: Style = Style::new().fg_color(Some(anstyle::Color::Ansi(AnsiColor::Cyan)));
 
-/// `zlint rules`: every rule the config defines, the ones that are off
+/// `dxlint rules`: every rule the config defines, the ones that are off
 /// included (with the severity `rule name` turns them on at).
 pub fn rules(output: &mut Output<'_>, linter: &Linter) -> u8 {
     enum Row<'a> {
@@ -52,7 +52,7 @@ pub fn rules(output: &mut Output<'_>, linter: &Linter) -> u8 {
     0
 }
 
-/// `zlint rules --dependencies`: per enabled rule, one JSON line with the
+/// `dxlint rules --dependencies`: per enabled rule, one JSON line with the
 /// file defining it and every config file its compiled checks read: the
 /// attributes, functions and layers they reach, and for rules asking type
 /// questions every library file (their declarations answer them).
@@ -62,7 +62,7 @@ pub fn rule_dependencies(output: &mut Output<'_>, linter: &Linter, symbols: &Sym
     let file_name = |file: crate::config::source::FileId| {
         let source = linter.sources.get(file);
         let library = source.name.starts_with("std/") || source.name.starts_with("rules/");
-        if library { return format!("{}.zlint", source.name) }
+        if library { return format!("{}.dx", source.name) }
         // Config files as paths relative to the config's root, `/`-separated.
         let path = source.path.as_deref().unwrap_or(std::path::Path::new(&source.name));
         let relative = path.strip_prefix(&linter.root).unwrap_or(path);
@@ -134,7 +134,7 @@ pub fn rule_dependencies(output: &mut Output<'_>, linter: &Linter, symbols: &Sym
     0
 }
 
-/// `zlint describe name`: everything of that name, as hover shows it, and
+/// `dxlint describe name`: everything of that name, as hover shows it, and
 /// where each is used.
 pub fn describe(output: &mut Output<'_>, symbols: &Symbols, name: &str) -> u8 {
     let found = symbols.named(name);
@@ -146,7 +146,7 @@ pub fn describe(output: &mut Output<'_>, symbols: &Symbols, name: &str) -> u8 {
         }
         return 1;
     }
-    // Paths relative to where zlint runs.
+    // Paths relative to where dxlint runs.
     let cwd = output.cwd;
     let prefix = format!("{}{}", cwd.display(), std::path::MAIN_SEPARATOR);
     let local = |s: String| s.replace(&prefix, "");
@@ -204,7 +204,7 @@ fn snippet(text: &str, start: usize, end: usize) -> String {
     s
 }
 
-/// `zlint tree --at LINE:COL`: the layers covering a position, then what
+/// `dxlint tree --at LINE:COL`: the layers covering a position, then what
 /// every child matcher of the innermost one does there, so a span that went
 /// to the wrong layer (or to none) can be traced to the matcher that took
 /// it or the prefilter that skipped it.

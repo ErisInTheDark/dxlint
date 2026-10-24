@@ -1,7 +1,7 @@
-//! zoomie-lint: an extremely fast linter whose rules are written in the
-//! `.zlint` language.
+//! dxlint: an extremely fast linter whose rules are written in the
+//! `.dx` language.
 //!
-//! - [`config`] reads `.zlint` files (macros, imports, parsing)
+//! - [`config`] reads `.dx` files (macros, imports, parsing)
 //! - [`pattern`] is the regex subset matchers are written in
 //! - [`grammar`] turns matchers into layers and parses files into trees
 //! - [`expr`] evaluates formatter expressions

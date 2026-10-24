@@ -1,6 +1,6 @@
 {
-  "name": "zoomie-lint",
+  "name": "dxlint",
   "private": true,
-  "description": "npm-linkable launcher for the locally built zlint binary",
-  "bin": { "zlint": "bin/zlint.cmd" }
+  "description": "npm-linkable launcher for the locally built dxlint binary",
+  "bin": { "dxlint": "bin/dxlint.cmd" }
 }

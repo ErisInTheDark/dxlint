@@ -1,4 +1,4 @@
-//! `zlint eval <target> <expr> files...`: what an expression evaluates to on
+//! `dxlint eval <target> <expr> files...`: what an expression evaluates to on
 //! every node of a layer, with everything the project config defines.
 //!
 //! The question is asked as a rule in a virtual config file next to the real
@@ -15,7 +15,7 @@ use crate::config::source::{normalize_path, Disk, SourceProvider};
 use crate::config;
 use crate::line_index::LineIndex;
 
-const RULE: &str = "zlint-eval";
+const RULE: &str = "dxlint-eval";
 const DIM: Style = Style::new().dimmed();
 const BOLD: Style = Style::new().bold();
 
@@ -48,9 +48,9 @@ pub fn run(output: &mut Output<'_>, arg: &ConfigArg, target: &str, expr: &str, f
         },
     };
     let dir = real.parent().map(Path::to_path_buf).unwrap_or_default();
-    let stem = real.file_stem().and_then(|s| s.to_str()).unwrap_or("zoomie");
+    let stem = real.file_stem().and_then(|s| s.to_str()).unwrap_or("dxlint");
     let question = WithQuestion {
-        path: dir.join("(zlint eval).zlint"),
+        path: dir.join("(dxlint eval).dx"),
         // `null` shows as `null` rather than as an empty message.
         text: format!("import \"./{stem}\"\nin {target} rule {RULE} info {{ value ({expr}); then (result) if result == null then \"null\" else str(result) }}\n"),
     };

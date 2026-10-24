@@ -38,7 +38,7 @@ pub(super) fn pattern(source: &str, flags: &str, allow_assertions: bool) -> Resu
                         return Err("quantified JavaScript regex assertions are invalid in Unicode mode".into());
                     }
                     if result.assertions.len() >= 64 { return Err("JavaScript regex exceeds 64 assertions".into()); }
-                    out.push_str(&format!("(?P<zlint_assertion_{}>)", result.assertions.len()));
+                    out.push_str(&format!("(?P<dx_assertion_{}>)", result.assertions.len()));
                     result.assertions.push((pattern(&body, flags, false)?, positive));
                 } else if tail.starts_with("?:") {
                     chars.next();

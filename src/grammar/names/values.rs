@@ -244,11 +244,11 @@ impl<'a> std::ops::Deref for Values<'a> {
     }
 }
 
-/// `ZLINT_LOCAL_VALUES=1`: every world evaluates other files' values itself
+/// `DXLINT_LOCAL_VALUES=1`: every world evaluates other files' values itself
 /// (A/B ruler).
 fn share_values() -> bool {
     static LOCAL: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    !*LOCAL.get_or_init(|| std::env::var_os("ZLINT_LOCAL_VALUES").is_some())
+    !*LOCAL.get_or_init(|| std::env::var_os("DXLINT_LOCAL_VALUES").is_some())
 }
 
 impl Values<'_> {

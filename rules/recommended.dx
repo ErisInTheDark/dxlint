@@ -1,5 +1,5 @@
 # rules:recommended: the rules eslint and typescript-eslint recommend
-# without type information, as far as zlint has them.
+# without type information, as far as dxlint has them.
 
 rule constructor-super
 rule for-direction

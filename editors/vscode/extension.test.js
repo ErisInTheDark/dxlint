@@ -6,7 +6,7 @@ const crypto = require("node:crypto");
 const test = require("node:test");
 
 async function activate({ sidecar = true, configured, mismatched = false, missingLibrary = false } = {}) {
-  const root = path.resolve("workspace"), binary = path.join(root, "target", "release", "zlint.exe");
+  const root = path.resolve("workspace"), binary = path.join(root, "target", "release", "dxlint.exe");
   const bytes = Buffer.from("binary"), library = path.join(root, "target", "release", "libraries", "snapshot");
   const files = new Map([[binary, bytes]]);
   if (sidecar) files.set(`${binary}.library.json`, Buffer.from(JSON.stringify({
@@ -44,7 +44,7 @@ async function activate({ sidecar = true, configured, mismatched = false, missin
     copyFileSync: (from, to) => files.set(to, files.get(from)),
     renameSync: (from, to) => { files.set(to, files.get(from)); files.delete(from); },
   };
-  const context = { module: { exports: {} }, process: { platform: "win32", env: { ZLINT_LIBRARY: "unrelated-live-library" } },
+  const context = { module: { exports: {} }, process: { platform: "win32", env: { DXLINT_LIBRARY: "unrelated-live-library" } },
     setTimeout, clearTimeout, require: name => ({
       fs: io, path, crypto, "node:crypto": crypto, vscode,
       "vscode-languageclient/node": { LanguageClient },
@@ -58,7 +58,7 @@ test("copied workspace executable keeps its matching library, not inherited live
   const result = await activate();
   assert.equal(result.errors.length, 0);
   assert.notEqual(result.servers[0].command, result.binary);
-  assert.equal(result.servers[0].options.env.ZLINT_LIBRARY, result.library);
+  assert.equal(result.servers[0].options.env.DXLINT_LIBRARY, result.library);
 });
 test("missing or mismatched workspace library cannot launch an unpinned editor server", async () => {
   for (const options of [{ sidecar: false }, { mismatched: true }, { missingLibrary: true }]) {
@@ -68,8 +68,8 @@ test("missing or mismatched workspace library cannot launch an unpinned editor s
   }
 });
 test("configured custom executable keeps its user-provided library", async () => {
-  const result = await activate({ configured: "custom-zlint" });
+  const result = await activate({ configured: "custom-dxlint" });
   assert.equal(result.errors.length, 0);
-  assert.equal(result.servers[0].command, "custom-zlint");
-  assert.equal(result.servers[0].options.env.ZLINT_LIBRARY, "unrelated-live-library");
+  assert.equal(result.servers[0].command, "custom-dxlint");
+  assert.equal(result.servers[0].options.env.DXLINT_LIBRARY, "unrelated-live-library");
 });

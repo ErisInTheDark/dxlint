@@ -1,0 +1,142 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "dxlint",
+  "scopeName": "source.dx",
+  "patterns": [
+    { "include": "#comment" },
+    { "include": "#definitions" },
+    { "include": "#expression" }
+  ],
+  "repository": {
+    "comment": {
+      "match": "#.*$",
+      "name": "comment.line.number-sign.dx"
+    },
+    "definitions": {
+      "patterns": [
+        {
+          "match": "\\b(match)\\s+([A-Za-z_]\\w*)",
+          "captures": { "1": { "name": "keyword.other.dx" }, "2": { "name": "entity.name.function.dx" } }
+        },
+        {
+          "match": "\\b(rule)\\s+([A-Za-z_][\\w:-]*)",
+          "captures": { "1": { "name": "keyword.other.dx" }, "2": { "name": "entity.name.type.dx" } }
+        },
+        {
+          "match": "\\b(group)\\s+([A-Za-z_]\\w*)",
+          "captures": { "1": { "name": "keyword.other.dx" }, "2": { "name": "entity.name.namespace.dx" } }
+        },
+        {
+          "match": "\\b(lang)\\s+([A-Za-z_]\\w*)",
+          "captures": { "1": { "name": "keyword.other.dx" }, "2": { "name": "entity.name.namespace.dx" } }
+        },
+        {
+          "match": "\\b(macro)\\s+([A-Za-z_]\\w*)",
+          "captures": { "1": { "name": "keyword.other.dx" }, "2": { "name": "entity.name.function.macro.dx" } }
+        },
+        {
+          "match": "^\\s*(import)\\s+([^\\s#\"']+)",
+          "captures": { "1": { "name": "keyword.other.dx" }, "2": { "name": "string.unquoted.path.dx" } }
+        },
+        {
+          "match": "\\b(set)\\s+([A-Za-z_]\\w*)",
+          "captures": { "1": { "name": "keyword.other.dx" }, "2": { "name": "variable.parameter.dx" } }
+        },
+        {
+          "match": "\\b(let)\\s+([A-Za-z_]\\w*)",
+          "captures": { "1": { "name": "keyword.other.dx" }, "2": { "name": "variable.other.property.dx" } }
+        },
+        {
+          "match": "\\b(option)\\s+([A-Za-z_]\\w*)",
+          "captures": { "1": { "name": "keyword.other.dx" }, "2": { "name": "variable.parameter.dx" } }
+        },
+        {
+          "match": "\\b(schema)\\s+([A-Za-z_]\\w*)",
+          "captures": { "1": { "name": "keyword.other.dx" }, "2": { "name": "entity.name.type.dx" } }
+        }
+      ]
+    },
+    "expression": {
+      "patterns": [
+        { "include": "#comment" },
+        { "include": "#block-string" },
+        { "include": "#string" },
+        { "include": "#sstring" },
+        { "include": "#regex" },
+        {
+          "match": "\\b(import|macro|lang|group|match|in|layer|rule|indent|like|set|ignore|option|schema|when|fix|files|report|let|native|forward|from)\\b",
+          "name": "keyword.other.dx"
+        },
+        { "match": "\\b(string|number|int|boolean|any|regex)\\b(?=\\s*(?:[|=\\[(;,}\"]|$))", "name": "support.type.primitive.dx" },
+        { "match": "\\b(drop|override|define)\\b", "name": "keyword.other.modifier.dx" },
+        { "match": "\\b([A-Za-z_]\\w*)\\s*(=>)", "captures": { "1": { "name": "variable.parameter.dx" }, "2": { "name": "storage.type.function.arrow.dx" } } },
+        { "match": "\\b([A-Za-z_]\\w*)(:)(?=\\s)", "captures": { "1": { "name": "variable.other.property.key.dx" }, "2": { "name": "punctuation.separator.key-value.dx" } } },
+        { "match": "\\b(until|or|is)\\b", "name": "keyword.operator.word.dx" },
+        { "match": "\\b(if|then|else|as)\\b", "name": "keyword.control.dx" },
+        { "match": "\\b(children|previous|next)\\b(?=\\.|\\s|\\)|$)", "name": "variable.language.dx" },
+        { "match": "\\b(true|false|null)\\b", "name": "constant.language.dx" },
+        { "match": "\\b(off|hint|info|warn|error)\\b", "name": "support.constant.severity.dx" },
+        { "match": "\\.(?:[A-Za-z_]\\w*|\\*)", "name": "entity.name.namespace.dx" },
+        { "match": "\\b([A-Za-z_]\\w*)(:)(?!\\s)", "captures": { "1": { "name": "variable.parameter.label.dx" }, "2": { "name": "punctuation.separator.label.dx" } } },
+        { "match": "(:)([A-Za-z_]\\w*)", "captures": { "1": { "name": "punctuation.separator.label.dx" }, "2": { "name": "variable.parameter.label.dx" } } },
+        { "match": "\\b([A-Za-z_]\\w*)(?=\\()", "name": "support.function.dx" },
+        { "match": "\\b\\d+(?:\\.\\d+)?\\b", "name": "constant.numeric.dx" },
+        { "match": "==|!=|<=|>=|&&|\\|\\||[<>!~+\\-%*]", "name": "keyword.operator.dx" }
+      ]
+    },
+    "block-string": {
+      "begin": "\"\"\"",
+      "end": "\"\"\"",
+      "name": "string.quoted.triple.dx",
+      "patterns": [
+        { "match": "\\\\(?:u\\{[0-9a-fA-F]+\\}|.|$)", "name": "constant.character.escape.dx" },
+        { "match": "\\{\\{|\\}\\}", "name": "constant.character.escape.dx" },
+        { "include": "#hole" }
+      ]
+    },
+    "string": {
+      "begin": "\"",
+      "end": "\"",
+      "name": "string.quoted.double.dx",
+      "patterns": [
+        { "match": "\\\\(?:u\\{[0-9a-fA-F]+\\}|.)", "name": "constant.character.escape.dx" },
+        { "match": "\\{\\{|\\}\\}", "name": "constant.character.escape.dx" },
+        { "include": "#hole" }
+      ]
+    },
+    "sstring": {
+      "begin": "'",
+      "end": "'",
+      "name": "string.quoted.single.dx",
+      "patterns": [
+        { "match": "\\\\(?:u\\{[0-9a-fA-F]+\\}|.)", "name": "constant.character.escape.dx" },
+        { "include": "#hole" }
+      ]
+    },
+    "hole": {
+      "begin": "\\{",
+      "end": "\\}",
+      "beginCaptures": { "0": { "name": "punctuation.section.interpolation.begin.dx" } },
+      "endCaptures": { "0": { "name": "punctuation.section.interpolation.end.dx" } },
+      "contentName": "meta.embedded.expression.dx",
+      "patterns": [{ "include": "#expression" }]
+    },
+    "regex": {
+      "begin": "/",
+      "end": "/|$",
+      "name": "string.regexp.dx",
+      "patterns": [
+        { "match": "\\\\.", "name": "constant.character.escape.regexp.dx" },
+        {
+          "begin": "\\[",
+          "end": "\\]",
+          "name": "constant.other.character-class.set.regexp.dx",
+          "patterns": [{ "match": "\\\\.", "name": "constant.character.escape.regexp.dx" }]
+        },
+        { "match": "\\(\\?(?::|<[A-Za-z_]\\w*>|i\\))", "name": "punctuation.definition.group.regexp.dx" },
+        { "match": "[*+?]\\??|\\{\\d+(?:,\\d*)?\\}\\??", "name": "keyword.operator.quantifier.regexp.dx" },
+        { "match": "[\\^$|()]", "name": "keyword.control.regexp.dx" }
+      ]
+    }
+  }
+}

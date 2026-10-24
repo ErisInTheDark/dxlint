@@ -1,4 +1,4 @@
-//! The `.zlint` front end: lexing, macro expansion, imports and parsing into
+//! The `.dx` front end: lexing, macro expansion, imports and parsing into
 //! a [`Config`](ast::Config). Compiling that into a runnable linter lives in
 //! [`crate::engine`].
 
@@ -14,13 +14,13 @@ mod stream;
 
 use std::path::{Path, PathBuf};
 
-/// The project config file name zlint looks for.
-pub const CONFIG_NAME: &str = ".zlint";
+/// The project config file name dxlint looks for.
+pub const CONFIG_NAME: &str = ".dx";
 
 /// What the config file used to be called.
-pub const OLD_CONFIG_NAME: &str = "zoomie.zlint";
+pub const OLD_CONFIG_NAME: &str = ".zlint";
 
-/// The nearest `.zlint` in `start` or any parent directory. A nearer config
+/// The nearest `.dx` in `start` or any parent directory. A nearer config
 /// under its old name stops the search: it needs renaming ([`find_old`]),
 /// and a config further up is not the project's.
 pub fn find(start: &Path) -> Option<PathBuf> {
@@ -46,7 +46,7 @@ fn nearest(start: &Path) -> Option<PathBuf> {
     None
 }
 
-/// "no .zlint found", with a hint when an old `zoomie.zlint` sits around.
+/// "no .dx found", with a hint when an old `.zlint` sits around.
 pub fn not_found_message(start: &Path) -> String {
     match find_old(start) {
         Some(old) => format!("no {CONFIG_NAME} found, but {} is there: config files are named `{CONFIG_NAME}` now, rename it", old.display()),

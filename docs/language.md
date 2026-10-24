@@ -1,12 +1,12 @@
-# The `.zlint` language
+# The `.dx` language
 
-A `.zlint` file describes **layers** (what the text is made of) and **rules**
-(what the text should look like). zlint parses every file into a tree of
+A `.dx` file describes **layers** (what the text is made of) and **rules**
+(what the text should look like). dxlint parses every file into a tree of
 layers using only fast regex-style matching, then runs rules on the nodes
-they check. A project's config is a file named `.zlint`; zlint uses the
+they check. A project's config is a file named `.dx`; dxlint uses the
 nearest one above the files it lints.
 
-```zlint
+```dxlint
 import .rs                       # Rust's layers, and its built-in rules (all off)
 
 rule rs-indent                   # turn a built-in rule on
@@ -53,7 +53,7 @@ in rs_function.name rule fn-snake-case warn "function names are snake_case" fix 
 | `override <definition>`, `drop ...` | replace or remove what an import defined, see [Changing imported definitions](#changing-imported-definitions-override-drop) |
 | `ignore "glob" "glob"` | never lint matching files |
 | `skip narrowing, selection` | trade type precision for speed: reads keep their declared value (`narrowing`), conditional types are unknown (`selection`), see [docs/design/type-layers.md](design/type-layers.md) |
-| `import .ts`, `import rules:recommended`, `import some/path` | a built-in language, a built-in ruleset, or another `.zlint` file, see [Imports](#imports-and-macros) |
+| `import .ts`, `import rules:recommended`, `import some/path` | a built-in language, a built-in ruleset, or another `.dx` file, see [Imports](#imports-and-macros) |
 | `@macro name tokens`, `@macro name(args) { lines }` | define a macro; call it with `@name` |
 
 `#` starts a comment, and `#` lines right above a definition are its
@@ -88,7 +88,7 @@ In a context, `match` defines or attaches children and `rule` checks the
 context's layers themselves. Blocks nest, so a layer, its children and its
 rules can live together:
 
-```zlint
+```dxlint
 lang rust "*.rs" {
   match braces /\{/ until /\}/ {
     match braces                                 # braces nest
@@ -129,7 +129,7 @@ only the parts you care about. A language root does this over the whole file.
 of the pattern can match, and while skipping, the layer's children eat whole
 chunks:
 
-```zlint
+```dxlint
 match parentheses /\(/ until /\)/
 in parentheses match parentheses             # nested parentheses are eaten whole
 in .rust, parentheses match rs_string /"/ until /"/
@@ -155,7 +155,7 @@ the specialisation), for `is` tests and for ancestor lookups (`braces`
 in an expression finds the closest one). Use it to tell kinds of one shape
 apart without re-describing them:
 
-```zlint
+```dxlint
 match js_object like braces /(?<=[=(,]\s*)\{/ until /\}/
 in js_code match js_object {
   rule object-spacing warn "..." fix as ...      # plain braces are untouched
@@ -168,7 +168,7 @@ anywhere (another file, an importer), and they are resolved after everything
 is loaded. So anything aimed at a group, even written earlier, reaches layers
 added later. That makes groups the extension point of a library:
 
-```zlint
+```dxlint
 # .ts (built in)
 group js_code .js, parentheses, brackets, braces
 in js_code match js_string /"/ until /"/        # strings inside every code layer
@@ -194,7 +194,7 @@ searched across `A`'s text without taking it from `A`'s children, and sits
 in `L`'s tree, whose root is the file. Use named layers for what cuts across
 syntax, like lines:
 
-```zlint
+```dxlint
 in .* layer text match trailing_whitespace /[ \t]+$/
 in .rust layer lines match line /^.*$/
 ```
@@ -223,7 +223,7 @@ with `indent` lines; other rules never see it.
 
 An overridable attribute makes reset a config extension point:
 
-```zlint
+```dxlint
 in ts_node let indent_reset false
 in ts_line rule indentation {
   indent reset indent_reset
@@ -247,7 +247,7 @@ one level, not two. Rules read the result through `indented`,
 `indent_anchor_line` (see [Expressions](#expressions)) and decide the unit
 and any language-specific continuation lines:
 
-```zlint
+```dxlint
 in rs_code layer lines match line /^[ \t]*\S/   # each code line, first char included
 
 in line rule indent {
@@ -270,7 +270,7 @@ line inside it, and its block's lines are checked against where it will be.
 
 **Fields.** Labelled pieces of a match become fields:
 
-```zlint
+```dxlint
 in .rust match call name:identifier arguments:parentheses   # call.name, call.arguments
 in .rust match call2 identifier :parentheses                # `:parentheses` is short for `parentheses:parentheses`
 ```
@@ -323,12 +323,12 @@ in time proportional to the text no matter how it is written.
 
 Lookarounds may hold any regex of this subset (lookbehinds can be unbounded,
 `(?<=\bclass\b[^{;]*)\{`), but cannot nest or hold fields. Leading
-lookbehinds and lookaheads also speed matching up: they tell zlint which
+lookbehinds and lookaheads also speed matching up: they tell dxlint which
 positions can start a match. Backreferences are not supported.
 
 ## Rules
 
-```zlint
+```dxlint
 in todo_note rule todo-comment info "{text} left in a comment"
 in rs_function.name rule fn-snake-case warn "function names are snake_case" fix as snake_case(text)
 
@@ -360,7 +360,7 @@ field yields `null`.
 through a node-valued attribute (one node, a list, or null) or a registered
 native link:
 
-```zlint
+```dxlint
 in ts_program.binding_declarations rule declarations info "{text}"
 in ts_identifier.declaration rule bindings info "{text}"
 ```
@@ -381,7 +381,7 @@ not referencing identifiers.
 `error`) comes first and the message follows it, on the rule's line or as a
 body line (`warn "..."`). The message can use everything an expression can
 (`"{text} left in a comment"`), or be a macro. Without one the rule is a
-`warn` and its message is its name. `zlint rules` shows messages with option
+`warn` and its message is its name. `dxlint rules` shows messages with option
 values filled in and other holes left as written.
 
 **Names.** A rule name may be `family:variant` (`semi:never`,
@@ -399,7 +399,7 @@ equal, nothing happens. Fixes can be anything: reorder, rename, delete
 
 `fix at span as expr` rewrites explicit UTF-8 bytes: a number inserts at that offset, a `{start, end}` record replaces that half-open range, and a node replaces its span. Offsets must be finite integers within the file, on UTF-8 character boundaries, with `start <= end`; invalid spans report a rule error without a fix. `fix at span if condition as expr` attaches a fix only when the condition holds. Unchanged text still suppresses the diagnostic; the diagnostic's location remains controlled by `report`, not the fix span.
 
-```zlint
+```dxlint
 fix at {start:comma.offset, end:comma.end_offset} as ""
 fix at end_offset as ";"
 ```
@@ -432,7 +432,7 @@ A macro at the start of a body line is pasted as clauses.
 steps. Each is computed at most once per node, only when something reads it,
 and can read the `let`s above it:
 
-```zlint
+```dxlint
 in ts_statement rule padding-line-between-statements {
   when index > 0 && parent is (ts_block, ts_program)
   let wanted is_conditional || previous.wants_blank_after == true
@@ -448,7 +448,7 @@ field of the same name reads the field instead (`x.parameter` stays the
 field whatever the rule's lets are called). A `let` may read itself on other
 nodes only:
 
-```zlint
+```dxlint
 in ts_class_member rule member-order warn "out of order" {
   option order string[] = ["field", "method"]
   let rank index_of(order, kind)
@@ -475,7 +475,7 @@ so nested rules compose.
 
 Start with `value`, then apply each stage to the preceding value:
 
-```zlint
+```dxlint
 let names {
   value declarations.nodes
   filter (item, i) i % 2 == 0
@@ -489,7 +489,7 @@ A stage names any function, with the preceding value as its first argument: `tri
 
 `then (value) expression` transforms the **whole** preceding value, rather than each item. `label: stage` saves a step's result for later steps. Label the seed with `value label: expression`. Labels are unique within a pipeline, shadow surrounding names only after their step, and never escape the block. Another `value expression` restarts the chain without discarding labels:
 
-```zlint
+```dxlint
 let selected {
   value original: declarations.nodes
   filter (item) item.used
@@ -586,7 +586,7 @@ only adds numbers.
 continues the expression above it, as does a line after a trailing operator
 or inside brackets:
 
-```zlint
+```dxlint
 let wants_blank_after is_conditional
   || is (ts_break, ts_continue, ts_throw)
   || spans_lines && declares != null
@@ -610,7 +610,7 @@ that token, if any) or null; `token_list(n)` the texts of the tokens
 inside `n`; `token_pair(n, [["(", ")"], ["[", "]"]])` the token matching
 `n`'s opening (or closing) bracket token, skipping unmatched closers.
 Gaps, comments and line breaks between tokens are plain source text:
-languages define their policy in `.zlint`.
+languages define their policy in `.dx`.
 
 **Multi-line strings** start with `"""` at the end of a line and end with
 `"""` on a line of its own. That closing line's indentation is removed from
@@ -618,7 +618,7 @@ every line, and the line break before it is not part of the string. A line
 ending in `\` continues on the next without a line break. Escapes and
 `{holes}` work as in `"..."`, and `"` needs no escaping:
 
-```zlint
+```dxlint
 rule header:* error {
   set license """
     /*!
@@ -641,7 +641,7 @@ decisions that depend on earlier ones. `keys`, `values`, `get(record, key)`
 and `len` read records. A lambda sees everything the expression around it
 sees, plus its parameters:
 
-```zlint
+```dxlint
 let wanted find_last(config, c => matches(c.prev, previous) && matches(c.next, node)).blankLine
 ```
 
@@ -680,7 +680,7 @@ let wanted find_last(config, c => matches(c.prev, previous) && matches(c.next, n
 `x` can be a field, an attribute, a fact or a builtin (`previous.offset`); test
 the neighbour itself with `is` (`previous is ts_comma`).
 
-**Functions.** `zlint functions` lists them all. Highlights: `len`, `lower`,
+**Functions.** `dxlint functions` lists them all. Highlights: `len`, `lower`,
 `upper`, `snake_case`, `camel_case`, `pascal_case`, `kebab_case`,
 `screaming_case`, `title_case`, `trim`, `trim_start`, `trim_end`, `replace`,
 `repeat`, `pad_start`, `pad_end`, `starts_with`, `ends_with`, `contains`,
@@ -707,7 +707,7 @@ the neighbour itself with `is` (`previous is ts_comma`).
 
 Regex sources are limited to 64 KiB and 128 nested groups; assertion patterns allow 64 assertions. Assertion/multiline execution allows 50,000 states per compiled program and 10 million state visits per match, shared with its assertion checks. Exhaustion produces a rule error, never a silent non-match.
 
-```zlint
+```dxlint
 group restricted_syntax ts_with
 rule no-restricted-syntax
 in ts_call rule no-eval-call {
@@ -720,7 +720,7 @@ in ts_call rule no-eval-call {
 
 `no-extra-parens` checks expressions in the open `no_extra_parens_inner` group (default: `ts_node`). The `no_extra_parens_checked` attribute on `structure_parens` defaults to true; override it to select reported parentheses by their inner expression or owner. `no_extra_parens_spread_allowed` starts empty and exempts its members only as spread operands:
 
-```zlint
+```dxlint
 drop group no_extra_parens_inner ts_node
 group no_extra_parens_inner ts_function, ts_arrow, structure_assertion
 group no_extra_parens_spread_allowed ts_conditional
@@ -745,7 +745,7 @@ If an expression has several independent failures, evaluation reports one real c
 
 ## Debugging rules
 
-- **`zlint describe <name>`** explains any name in the config: a rule (final
+- **`dxlint describe <name>`** explains any name in the config: a rule (final
   severity or that it is off, options with their values, targets, where it
   is defined and configured), a layer (pattern, parents, fields, rules and attributes on it), a
   group (its final members), an attribute, macro, builtin, fact, function or
@@ -754,16 +754,16 @@ If an expression has several independent failures, evaluation reports one real c
   `file:line:col layer label = value` to stderr for every node it is
   evaluated on. Wrap any part of a `when`, `let` or message to see what it
   computes.
-- **`zlint eval <target> <expr> files...`** prints what an expression gives on
+- **`dxlint eval <target> <expr> files...`** prints what an expression gives on
   every node of a target, with the project's config: attributes, facts,
   macros and options resolve as in a rule.
 
   ```text
-  $ zlint eval ts_call.callee 'resolved' src/a.ts
+  $ dxlint eval ts_call.callee 'resolved' src/a.ts
   src/a.ts:3:1 setTimeout => global
   src/a.ts:4:5 this.load => null
   ```
-- **`zlint tree file --at LINE:COL`** explains one position: the layers
+- **`dxlint tree file --at LINE:COL`** explains one position: the layers
   covering it, then what every child matcher of the innermost one does there
   (rules out the character, is ruled out by its prefilter, does not match,
   matches to where, or runs past its layer), marking the one in the tree.
@@ -779,7 +779,7 @@ once per node. Attributes read their own node like a rule does, and other
 nodes' attributes through fields and neighbours, so they can fold a tree
 bottom-up:
 
-```zlint
+```dxlint
 import .ts
 in ts_logical let operators 1 + sum(children.operators)
 in ts_parenthesized forward operators from expression
@@ -814,13 +814,13 @@ attribute: it stays next to its rule.
 ## Native layers (TypeScript)
 
 `import .ts` (or `native ts` with your own JS language) parses
-`.ts`/`.tsx`/`.js`/`.mjs`/`.cjs` files with zlint's own TypeScript parser and
+`.ts`/`.tsx`/`.js`/`.mjs`/`.cjs` files with dxlint's own TypeScript parser and
 turns its syntax tree into `ts_*` layers: `ts_if` with fields `test`,
 `consequent`, `alternate`; `ts_call` with `callee`, `type_argument`,
 `argument`; `ts_binary`/`ts_logical` with `left`, `operator`, `right`, and so
-on (`zlint tree file.ts` shows any file). Rules on them work like any rule:
+on (`dxlint tree file.ts` shows any file). Rules on them work like any rule:
 
-```zlint
+```dxlint
 import .ts
 in ts_call rule my-no-eval warn "no eval" { when callee == "eval" }
 in ts_if.test, ts_while.test rule assign-in-condition warn "assignment in a condition" {
@@ -838,7 +838,7 @@ children and sits under it, a named layer's matcher searches its whole text; the
 pattern layers (`in .js match ...`) are matched across the file and sit
 under the program. Rules see no difference:
 
-```zlint
+```dxlint
 in ts_comment match todo /\bTODO\b/
 in ts_string, ts_template match escape /\\./
 in todo rule no-todo warn "Unexpected TODO."
@@ -856,7 +856,7 @@ class's first opener is the `<` of `class A<T>`). Every native node knows `space
 `previous_token` and `next_token`; `fix space_after as " "` rewrites just
 that whitespace. Gap `blank_lines` counts physical blank lines; `blank_gaps` counts blank lines between tokens/comments, excluding comment interiors. Spacing rules are one decision per token:
 
-```zlint
+```dxlint
 in ts_comma rule comma-spacing:after warn "A space is required after ','." {
   when next_token not (closer, ts_comma) && !space_after.line_break && !space_after.spaced
   fix space_after as " "
@@ -870,7 +870,7 @@ Files get token nodes only when an active rule needs them. A family name
 turns on and configures every variant (`comma-spacing:before`,
 `comma-spacing:after`): `rule comma-spacing`.
 
-Comments and lines are pattern layers in `std/ts.zlint` (see One tree):
+Comments and lines are pattern layers in `std/ts.dx` (see One tree):
 `ts_line_comment` and `ts_block_comment` (group `ts_comment`) are children of
 the code node whose text, between its other children, holds them, so never
 inside a string, regex or template text; `ts_line` is in the named layer `lines`, over the
@@ -891,7 +891,7 @@ elements have no closing tag. Children stay in the element or fragment's
 
 Project rules can style opening-tag lines without changing child indentation:
 
-```zlint
+```dxlint
 import .ts
 rule indent {
   set mode 2
@@ -934,7 +934,7 @@ is wrong, messages) is written in the rule. A fact taking arguments is called (`
 
 | name | value |
 |---|---|
-| `symbol_metadata` | `{name, own_doc, declarations, aliases, selected_signature}`; raw declaration and alias docs, overload `signature_docs`, declaration kinds and file/lib/package provenance gates. Alias rows retain lookup order, path and module; `selected_signature` is null or `{doc, kind}` (`call`/`construct`). Ambient package gates retain ordinary file provenance. Rust exposes docs and origins; `.zlint` decides deprecation |
+| `symbol_metadata` | `{name, own_doc, declarations, aliases, selected_signature}`; raw declaration and alias docs, overload `signature_docs`, declaration kinds and file/lib/package provenance gates. Alias rows retain lookup order, path and module; `selected_signature` is null or `{doc, kind}` (`call`/`construct`). Ambient package gates retain ordinary file provenance. Rust exposes docs and origins; `.dx` decides deprecation |
 | `type` | the expression's type as text (`Promise<void>`, `never`, `NodeJS.Timeout`), null when unknown |
 | `argument_transfers` | calls, constructions and tagged templates: any/generic argument and spread transfer rows `{offset, mode, error, sender, receiver}`; modes `argument`, `spread`, `array`, `tuple`; `error` marks unresolved provenance, sender/receiver are raw printed types or null |
 | `return_transfer` | returns and expression arrow bodies: transfer record `{mode, error, sender, receiver}` or null; modes `value`, `array`, `promise`, `generic`; `error` marks unresolved provenance, sender/receiver are raw printed types or null |
@@ -1053,7 +1053,7 @@ exactly the ones you want; a built-in ruleset (`import rules:recommended`)
 is a shortcut that turns on a whole category, and anything it turned on can
 be turned off again.
 
-```zlint
+```dxlint
 import .ts
 
 define {
@@ -1080,7 +1080,7 @@ rule padding-line-between-statements {
 
 Promise misuse checks are independent variants; the family enables all nine:
 
-```zlint
+```dxlint
 rule no-misused-promises
 rule no-misused-promises:spreads off
 rule no-misused-promises:predicates off
@@ -1109,7 +1109,7 @@ rule no-misused-promises:conditionals { set flagUnions "strict" }
   way. Layers and attributes defined inside `define` take part in parsing
   only while something needs them (a turned-on rule, or your own items), so
   importing a language never changes what your own matchers match.
-- `zlint rules` lists every defined rule, the off ones with the severity
+- `dxlint rules` lists every defined rule, the off ones with the severity
   they turn on at.
 
 Default options are also the intended shape for per-context families such as comma-dangle variants.
@@ -1118,7 +1118,7 @@ Default options are also the intended shape for per-context families such as com
 
 Language settings describe the source environment, not a rule's policy. `import .ts` declares the JavaScript/TypeScript environment on `.js`:
 
-```zlint
+```dxlint
 import .ts
 language .js {
   files "scripts/**"
@@ -1145,7 +1145,7 @@ shared between rules.
 
 `enum(never, always)` declares string values written as bare names, including hyphenated rule-name characters. Defaults and `set` values need no quotes: `option mode enum(never, always) = never`. A rule may mark at most one option as default: `default option mode enum(never, always) = never "mode"`. Its enum cannot contain severity words (`off`, `hint`, `info`, `warn`, `error`).
 
-```zlint
+```dxlint
 schema statement_kind "*" | "block-like" | "return" "a statement kind"
 schema statement_pair {
   blankLine: "any" | "never" | "always"  "what goes between them"
@@ -1191,7 +1191,7 @@ An imported ruleset is a starting point. Its importer can replace or remove
 anything in it, in order: each of these sees everything above it (imports
 included), and everything below sees the result.
 
-```zlint
+```dxlint
 import ../rules/ts-problems
 
 override in ts_call rule no-eval error "eval is banned here" { when callee == "eval" }
@@ -1226,9 +1226,9 @@ drop ignore "static/**"
 
 | import | loads |
 |---|---|
-| `import .ts`, `.rs`, `.py`, `.c`, `.toml`, `.md`, `.css`, `.json`, `.zlint` | a built-in language: its layers, and every rule written for it, off |
+| `import .ts`, `.rs`, `.py`, `.c`, `.toml`, `.md`, `.css`, `.json`, `.dx` | a built-in language: its layers, and every rule written for it, off |
 | `import rules:recommended` | a built-in ruleset: `rule` lines turning on a category of rules |
-| `import some/path` | another `.zlint` file, relative to this one (`.zlint` is added when there is no extension; quotes are optional) |
+| `import some/path` | another `.dx` file, relative to this one (`.dx` is added when there is no extension; quotes are optional) |
 
 Every language also brings the shared building blocks: `parentheses`,
 `brackets`, `braces` (nesting), `whitespace`, `space`, `identifier`, `number`,
@@ -1238,7 +1238,7 @@ and `final-newline`.
 
 | language | contents |
 |---|---|
-| `.rs`, `.py`, `.c`, `.toml`, `.zlint` | brackets, strings, escapes, comments (`rs_code` etc. name all code layers) |
+| `.rs`, `.py`, `.c`, `.toml`, `.dx` | brackets, strings, escapes, comments (`rs_code` etc. name all code layers) |
 | `.css` | pattern-owned textual delimiters, strings/escapes and block comments; not full CSS validation |
 | `.json` | pattern-owned JSON/JSONC objects/arrays, strings/escapes and comments; not full JSON validation |
 | `.core/lines` | shared line structure/hygiene with syntax-owner comment/raw adapters |
@@ -1393,14 +1393,14 @@ separate bundles.
 | `rules:types` | rules that read declared types (`no-floating-promises`, ...) |
 | `rules:recommended` | what eslint and typescript-eslint recommend without type information |
 
-A `.zlint` file is a config file: `import ../.zlint` builds on the config
+A `.dx` file is a config file: `import ../.dx` builds on the config
 of the directory above.
 
 **Functions** compute a value from their arguments, for logic several rules
 share. A body sees its parameters and nothing of the node: pass in what it
 needs. Functions may call each other and themselves.
 
-```zlint
+```dxlint
 fn indent_width(line) = {
   value line
   trim_start
@@ -1412,11 +1412,11 @@ in ts_class_body rule late-member warn "out of order" {
 }
 ```
 
-Macros paste tokens: they generate zlint code, not text. Everything that
+Macros paste tokens: they generate dxlint code, not text. Everything that
 happens while the config loads starts with `@`: defining a macro, calling
 one, `@each`.
 
-```zlint
+```dxlint
 @macro rs_code_layers .rust, parentheses, brackets, braces  # one line
 
 @macro forbid(name, pattern, why) {                         # lines, with arguments
@@ -1439,15 +1439,15 @@ Write these inside any comment:
 
 | directive | effect |
 |---|---|
-| `zlint-ignore` alone on a line | next line, every rule |
-| `zlint-ignore` after code | this line |
-| `zlint-ignore rule-a rule-b` | only these rules (`*` globs allowed, a family name covers its variants) |
-| `zlint-ignore-start [rules]` ... `zlint-ignore-end` | every line in between |
-| `zlint-ignore-file [rules]` | the whole file |
+| `dxlint-ignore` alone on a line | next line, every rule |
+| `dxlint-ignore` after code | this line |
+| `dxlint-ignore rule-a rule-b` | only these rules (`*` globs allowed, a family name covers its variants) |
+| `dxlint-ignore-start [rules]` ... `dxlint-ignore-end` | every line in between |
+| `dxlint-ignore-file [rules]` | the whole file |
 
 ## Editor and tooling
 
-`zlint lsp` (used by the VS Code extension) understands `.zlint` files as
+`dxlint lsp` (used by the VS Code extension) understands `.dx` files as
 well as the files they lint:
 
 - **hover** on any name: rules with their final severity and option values,
@@ -1461,40 +1461,40 @@ well as the files they lint:
 - config errors in place, with links to related spots ("first defined
   here", "still used here")
 - every diagnostic's rule code links to where the rule is defined
-- with `zlint.inspectHover`, hovering in a linted file shows the layers at
+- with `dxlint.inspectHover`, hovering in a linted file shows the layers at
   the cursor and their facts
 
-Normal CLI linting compiles enabled rules and reachable helpers only. Errors in off-rule bodies and unreachable function bodies are deferred until activation. Parse errors and configured option errors still report. `zlint check`, tooling commands and the language server keep full compilation and validation.
+Normal CLI linting compiles enabled rules and reachable helpers only. Errors in off-rule bodies and unreachable function bodies are deferred until activation. Parse errors and configured option errors still report. `dxlint check`, tooling commands and the language server keep full compilation and validation.
 
 ### Packed sources
 
-`zlint --sources <file|->` reads a JSONL stream of `{"path":"main.ts","text":"..."}` records; `-` reads stdin. Paths resolve relative to the current directory. Sources are registered before config discovery, so the stream may include `.zlint` and its imports. Buffered files and implied directories participate in TypeScript module and global resolution; dependencies not supplied still read from disk.
+`dxlint --sources <file|->` reads a JSONL stream of `{"path":"main.ts","text":"..."}` records; `-` reads stdin. Paths resolve relative to the current directory. Sources are registered before config discovery, so the stream may include `.dx` and its imports. Buffered files and implied directories participate in TypeScript module and global resolution; dependencies not supplied still read from disk.
 
 Only supplied files matching the config are linted: no disk discovery. Use `--sources - --format jsonl --no-cache --jobs 1` to lint an in-memory project without writing source files or a cache. Positional paths and `--fix` cannot be combined with `--sources`. Malformed records and duplicate normalised paths report their input line and exit with a configuration/input error. Buffers last only for that invocation.
 
-Tooling commands also accept packed configs and files: for example, `zlint rules --sources - --config project/.zlint`. `tree` and `eval` still take their target file arguments. `lsp` rejects `--sources` because it owns stdin as a protocol stream.
+Tooling commands also accept packed configs and files: for example, `dxlint rules --sources - --config project/.dx`. `tree` and `eval` still take their target file arguments. `lsp` rejects `--sources` because it owns stdin as a protocol stream.
 
 ## Performance and caching
 
-`zlint --stats` prints throughput, and `zlint --profile` lists the matchers
+`dxlint --stats` prints throughput, and `dxlint --profile` lists the matchers
 that cost the most interpreter steps and the rules that cost the most time.
 Matchers that compile to a DFA never show up there; slow ones are usually
-nullable, use fields, or have no leading literal or lookaround to tell zlint
+nullable, use fields, or have no leading literal or lookaround to tell dxlint
 where they can start.
 
 CLI linting skips compilation of off-rule bodies, unreachable functions and library attributes, and does not build tooling symbols. Layers only off rules need are not parsed.
 
-**`.zlintcache`.** zlint keeps each file's results beside the config and
+**`.dxcache`.** dxlint keeps each file's results beside the config and
 reuses them while the file's text is unchanged and so is everything its lint
 read from other files: the declaration summaries of imported files (an edit
 inside a function body changes nothing for importers, an exported type
 does), module resolution (a new `a.ts` beside `a/index.ts`), tsconfigs and
 `package.json`s, and which files declare globals. Results with problems are
 kept too, so a warm run only lints what changed. Any change to the rules
-(comments and blank lines aside) or to the zlint binary starts afresh.
+(comments and blank lines aside) or to the dxlint binary starts afresh.
 
 `--no-cache` lints everything without reading or writing the cache, and
 `--profile` implies it. `--stats` shows how many files came from the cache.
 A run over the whole project forgets files that no longer exist. The editor
 uses the same cache for its workspace scan, and re-lints the files an edit
-affects as you type, open or not. Add `.zlintcache` to `.gitignore`.
+affects as you type, open or not. Add `.dxcache` to `.gitignore`.

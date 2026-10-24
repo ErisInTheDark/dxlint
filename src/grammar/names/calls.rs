@@ -138,11 +138,11 @@ pub struct KindCalls {
 /// several questions in a row used to finish together).
 const SELECTION_QUESTIONS: u32 = 4;
 
-/// `ZLINT_ATTACHED_SELECTION=1`: candidate selection spends the asking
+/// `DXLINT_ATTACHED_SELECTION=1`: candidate selection spends the asking
 /// question's budget, as before (A/B ruler).
 fn attached_selection() -> bool {
     static ATTACHED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ATTACHED.get_or_init(|| std::env::var_os("ZLINT_ATTACHED_SELECTION").is_some())
+    *ATTACHED.get_or_init(|| std::env::var_os("DXLINT_ATTACHED_SELECTION").is_some())
 }
 
 /// A value question's answer: `Yes(None)` when there is none to ask about.

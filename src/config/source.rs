@@ -1,4 +1,4 @@
-//! Every `.zlint` file that takes part in a configuration, plus the spans
+//! Every `.dx` file that takes part in a configuration, plus the spans
 //! pointing into them. Spans survive macro expansion and imports, so errors
 //! always point at real source text.
 

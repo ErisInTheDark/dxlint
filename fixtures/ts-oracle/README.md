@@ -1,11 +1,11 @@
 # tsc oracle fixtures
 
 Probe the TS type layer against the real TypeScript compiler. Golden messages are
-`checker.typeToString(...)`, so a change to `std/ts/values*.zlint` that silently
+`checker.typeToString(...)`, so a change to `std/ts/values*.dx` that silently
 changes a type shows up here as a scenario diff.
 
 ```sh
-ZLINT_LIBRARY=<repo> zlint fixtures fixtures/ts-oracle
+DXLINT_LIBRARY=<repo> dxlint fixtures fixtures/ts-oracle
 node scratch/tools/ts-oracle.mjs            # regenerate expected/diagnostics
 node scratch/tools/ts-oracle.mjs --check    # diff tsc against what is on disk
 ```
@@ -13,13 +13,13 @@ node scratch/tools/ts-oracle.mjs --check    # diff tsc against what is on disk
 `--check` also takes scenario paths. The generator loads TypeScript 6.0.2 from
 `scratch/wayward/node_modules`, builds one program per scenario, and writes one
 line per expression statement with tsc's printed type. Positions come from the
-tsc AST (1-based, end exclusive), matching zlint's report format.
+tsc AST (1-based, end exclusive), matching dxlint's report format.
 
 ## A scenario
 
-- `.zlint` enables the probe rule for every expression statement:
+- `.dx` enables the probe rule for every expression statement:
 
-  ```zlint
+  ```dxlint
   in ts_expression_statement rule ts-oracle {
     warn "value " (ts_value_print_handle(expression.node) ?? "null")
   }
@@ -29,7 +29,7 @@ tsc AST (1-based, end exclusive), matching zlint's report format.
 - `tsconfig.json` keeps `lib: []` and `types: []` so only hand-declared shapes
   exist. When a standard type is needed, use `lib: ["fixture"]` plus
   `node_modules/typescript/lib/lib.fixture.d.ts` (the generator adds it as a
-  declaration input; zlint resolves it as the library).
+  declaration input; dxlint resolves it as the library).
 - `a.ts` holds the probes. One expression statement per probe, one probe per
   concern; small files keep runs cheap. `expected/diagnostics` is generated,
   never hand-edited.
@@ -51,7 +51,7 @@ expectation stays tsc's answer until the type layer matches it.
 
 Passing today: `printing`, `conditional-infer`, `awaited`.
 
-A default `zlint fixtures` run includes this family, so the seven known-gap
+A default `dxlint fixtures` run includes this family, so the seven known-gap
 scenarios above report as failures there too until they are fixed.
 
 `printing-cosmetic` isolates print differences so the other scenarios can pass:

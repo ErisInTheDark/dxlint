@@ -101,7 +101,7 @@ mod tests {
 
     fn with_rules(settings: &str, rules: &str) -> Linter {
         let source = format!("import .ts\n{settings}\n{rules}\n");
-        let built = build(load_text("test.zlint", &source, &Disk), PathBuf::from("/root"));
+        let built = build(load_text("test.dx", &source, &Disk), PathBuf::from("/root"));
         assert!(built.errors.is_empty(), "{:#?}", built.errors);
         built.linter.expect("compiled")
     }

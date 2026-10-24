@@ -1,6 +1,6 @@
 //! What every name in a configuration is, where it is defined and where it
 //! is used, with a description of each: hover, go to definition, references,
-//! completion and outline in the language server, and `zlint describe`.
+//! completion and outline in the language server, and `dxlint describe`.
 
 use std::collections::HashMap;
 use std::fmt::Write as _;
@@ -67,7 +67,7 @@ pub struct Symbol {
     pub defs: Vec<Span>,
     /// One line: for completion lists.
     pub summary: String,
-    /// Markdown: for hover and `zlint describe`.
+    /// Markdown: for hover and `dxlint describe`.
     pub doc: String,
     /// What completes after it: a layer's fields (`layer.`), an option's
     /// literal values (`set option `).
@@ -337,7 +337,7 @@ impl Symbols {
                 let _ = writeln!(doc, "a node kind of the native `{}` parser", grammar.natives[native.front as usize].name);
             } else if let Some(def) = config.matchers.iter().find(|d| d.name.text == m.name && d.pattern.is_some()) {
                 if let Some((_, span)) = &def.pattern {
-                    let _ = writeln!(doc, "```zlint\nmatch {} {}\n```", m.name, self.source(*span));
+                    let _ = writeln!(doc, "```dxlint\nmatch {} {}\n```", m.name, self.source(*span));
                 }
             }
             if let Some(base) = m.like {
@@ -410,7 +410,7 @@ impl Symbols {
         let owner_kind = kind.word();
         let setting = if o.primary { format!("`rule {owner} set value`") } else { format!("`{owner_kind} {owner} {{ set {} value }}`", o.name) };
         let doc = format!(
-            "of {owner_kind} `{owner}`: {}\n\n```zlint\n{}option {} {}\n```\n\nvalue {}, default {}\n\n{setting} changes it",
+            "of {owner_kind} `{owner}`: {}\n\n```dxlint\n{}option {} {}\n```\n\nvalue {}, default {}\n\n{setting} changes it",
             o.description.unwrap_or("no description"),
             if o.primary { "default " } else { "" },
             o.name,
@@ -465,7 +465,7 @@ impl Symbols {
             }
             for (name, e) in &def.locals {
                 let key = format!("{}.{}", def.name.text, name.text);
-                let doc = format!("a value of rule `{}`, computed once per node:\n```zlint\nlet {} {}\n```", def.name.text, name.text, self.source(e.span));
+                let doc = format!("a value of rule `{}`, computed once per node:\n```dxlint\nlet {} {}\n```", def.name.text, name.text, self.source(e.span));
                 self.add(Kind::Local, &key, format!("value of {}", def.name.text), doc);
                 self.def(Kind::Local, &key, name.span);
             }
@@ -515,7 +515,7 @@ impl Symbols {
     fn attrs_and_macros(&mut self, config: &Config) {
         for def in &config.attrs {
             let on: Vec<&str> = def.targets.iter().map(|t| t.text.as_str()).collect();
-            let line = format!("\n```zlint\nin {} let {} {}\n```", on.join(", "), def.name.text, self.source(def.expr.span));
+            let line = format!("\n```dxlint\nin {} let {} {}\n```", on.join(", "), def.name.text, self.source(def.expr.span));
             let id = self.add(Kind::Attr, &def.name.text, "attribute".into(), String::new());
             if self.symbols[id].doc.is_empty() {
                 self.symbols[id].doc = "computed once per node, on demand; readable as `name`, `field.name`, `parent.name` and through `children`/`previous`/`next`".into();
@@ -536,7 +536,7 @@ impl Symbols {
             self.use_of(f.field.span, Kind::Field, &f.field.text);
         }
         for m in &config.macros {
-            let doc = format!("```zlint\n{}\n```\n\npasted where it is used", self.source(m.span));
+            let doc = format!("```dxlint\n{}\n```\n\npasted where it is used", self.source(m.span));
             let summary = if m.params.is_empty() { "macro".to_string() } else { format!("macro({})", m.params.join(", ")) };
             self.add(Kind::Macro, &m.name.text, summary, doc);
             self.def(Kind::Macro, &m.name.text, m.name.span);
@@ -598,7 +598,7 @@ impl Symbols {
             }
         }
         for s in &config.schemas {
-            let doc = format!("```zlint\nschema {} {}\n```{}", s.name.text, s.schema, s.doc.as_ref().map(|d| format!("\n\n{d}")).unwrap_or_default());
+            let doc = format!("```dxlint\nschema {} {}\n```{}", s.name.text, s.schema, s.doc.as_ref().map(|d| format!("\n\n{d}")).unwrap_or_default());
             self.add(Kind::Schema, &s.name.text, s.doc.clone().unwrap_or_else(|| s.schema.to_string()), doc);
             self.def(Kind::Schema, &s.name.text, s.name.span);
         }

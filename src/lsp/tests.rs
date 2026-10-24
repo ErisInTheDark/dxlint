@@ -178,10 +178,10 @@ impl Client {
 }
 
 fn project(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join("zlint-lsp-tests").join(name);
+    let dir = std::env::temp_dir().join("dxlint-lsp-tests").join(name);
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("tmp dir");
-    std::fs::write(dir.join(".zlint"), CONFIG).expect("config");
+    std::fs::write(dir.join(".dx"), CONFIG).expect("config");
     dir
 }
 
@@ -240,7 +240,7 @@ fn streams_workspace_diagnostics_and_serves_fixes() {
 #[test]
 fn rescans_leave_open_buffers_diagnostics_alone() {
     let dir = project("lsp-rescan-open");
-    let config = dir.join(".zlint");
+    let config = dir.join(".dx");
     let mut c = Client::start(&dir);
     let scan_end = |m: &Value| m["method"] == "$/progress" && m["params"]["value"]["kind"] == "end";
     c.wait("first scan", scan_end);
@@ -267,9 +267,9 @@ fn rescans_leave_open_buffers_diagnostics_alone() {
 }
 
 #[test]
-fn zlint_files_have_hover_definitions_references_and_completion() {
+fn dx_files_have_hover_definitions_references_and_completion() {
     let dir = project("lsp-config-docs");
-    let config = dir.join(".zlint");
+    let config = dir.join(".dx");
     let file = dir.join("f.t");
     std::fs::write(&file, "BAD\n").expect("write");
     let mut c = Client::start(&dir);
@@ -277,9 +277,9 @@ fn zlint_files_have_hover_definitions_references_and_completion() {
     // Diagnostics link their rule's definition.
     let diags = c.diagnostics_for(&file);
     let href = diags[0]["codeDescription"]["href"].as_str().unwrap_or_default();
-    assert!(href.ends_with(".zlint#L7"), "{href}");
+    assert!(href.ends_with(".dx#L7"), "{href}");
 
-    c.notify("textDocument/didOpen", json!({ "textDocument": { "uri": uri(&config), "languageId": "zlint", "version": 1, "text": format!("{CONFIG}rule ") } }));
+    c.notify("textDocument/didOpen", json!({ "textDocument": { "uri": uri(&config), "languageId": "dxlint", "version": 1, "text": format!("{CONFIG}rule ") } }));
     let at = |line: u32, character: u32| json!({ "textDocument": { "uri": uri(&config) }, "position": { "line": line, "character": character } });
 
     // `bad` in `in bad rule no-bad`: the layer, defined a line above.
@@ -313,7 +313,7 @@ fn zlint_files_have_hover_definitions_references_and_completion() {
 #[test]
 fn rule_lines_complete_each_variants_default_option() {
     let dir = project("lsp-default-options");
-    let config = dir.join(".zlint");
+    let config = dir.join(".dx");
     let variants = "schema dangle_mode enum(never, always-multiline)\n\
         define {\n\
         in bad rule dangle:arrays warn \"x\" { default option mode dangle_mode = never }\n\
@@ -323,7 +323,7 @@ fn rule_lines_complete_each_variants_default_option() {
     let base = format!("{CONFIG}{variants}");
     std::fs::write(&config, &base).expect("config");
     let mut c = Client::start(&dir);
-    c.notify("textDocument/didOpen", json!({ "textDocument": { "uri": uri(&config), "languageId": "zlint", "version": 1, "text": base } }));
+    c.notify("textDocument/didOpen", json!({ "textDocument": { "uri": uri(&config), "languageId": "dxlint", "version": 1, "text": base } }));
     // Completes at the end of `typed`'s line `row`, typed after the rules.
     let mut version = 1;
     let mut labels_at = |typed: &str, row: usize| -> Vec<String> {        version += 1;
@@ -351,10 +351,10 @@ fn rule_lines_complete_each_variants_default_option() {
 
 #[test]
 fn editing_an_export_relints_its_importers() {
-    let dir = std::env::temp_dir().join("zlint-lsp-tests").join("lsp-cross-file");
+    let dir = std::env::temp_dir().join("dxlint-lsp-tests").join("lsp-cross-file");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("tmp dir");
-    std::fs::write(dir.join(".zlint"), "import .ts\nin ts_identifier rule typed info \"{text}: {if node always number then 'number' else if node always string then 'string' else 'unknown'}\" { when reference_kind == \"import\" }\n")
+    std::fs::write(dir.join(".dx"), "import .ts\nin ts_identifier rule typed info \"{text}: {if node always number then 'number' else if node always string then 'string' else 'unknown'}\" { when reference_kind == \"import\" }\n")
         .expect("config");
     let a = dir.join("a.ts");
     let b = dir.join("b.ts");
@@ -382,7 +382,7 @@ fn nested_configs_lint_their_own_files() {
     let dir = project("lsp-nested");
     let sub = dir.join("sub");
     std::fs::create_dir_all(&sub).expect("sub dir");
-    std::fs::write(sub.join(".zlint"), CONFIG.replace("no BAD here", "nested says no")).expect("nested config");
+    std::fs::write(sub.join(".dx"), CONFIG.replace("no BAD here", "nested says no")).expect("nested config");
     let top = dir.join("top.t");
     let inner = sub.join("inner.t");
     std::fs::write(&top, "BAD\n").expect("write");
@@ -408,12 +408,12 @@ fn nested_configs_lint_their_own_files() {
 fn scan_reaches_configs_below_uncovered_and_ignored_dirs() {
     // The workspace root has no config; `proj` has one that ignores
     // `skipped`, which still holds a nested config of its own.
-    let dir = std::env::temp_dir().join("zlint-lsp-tests").join("lsp-skip");
+    let dir = std::env::temp_dir().join("dxlint-lsp-tests").join("lsp-skip");
     let _ = std::fs::remove_dir_all(&dir);
     let deep = dir.join("proj").join("skipped").join("sub");
     std::fs::create_dir_all(&deep).expect("dirs");
-    std::fs::write(dir.join("proj").join(".zlint"), format!("{CONFIG}\nignore \"skipped\"\n")).expect("config");
-    std::fs::write(deep.join(".zlint"), CONFIG.replace("no BAD here", "deep says no")).expect("deep config");
+    std::fs::write(dir.join("proj").join(".dx"), format!("{CONFIG}\nignore \"skipped\"\n")).expect("config");
+    std::fs::write(deep.join(".dx"), CONFIG.replace("no BAD here", "deep says no")).expect("deep config");
     let file = deep.join("f.t");
     std::fs::write(&file, "BAD\n").expect("write");
     let mut c = Client::start(&dir);
@@ -429,13 +429,13 @@ fn gitignored_files_lint_only_under_gitignored_configs() {
     std::fs::write(dir.join(".gitignore"), "/scratch\n").expect("gitignore");
     let scratch = dir.join("scratch").join("s");
     std::fs::create_dir_all(&scratch).expect("dirs");
-    std::fs::write(scratch.join(".zlint"), CONFIG.replace("no BAD here", "scratch says no")).expect("config");
+    std::fs::write(scratch.join(".dx"), CONFIG.replace("no BAD here", "scratch says no")).expect("config");
     let tab = scratch.join("tab.t");
     std::fs::write(&tab, "BAD\n").expect("write");
     let mut c = Client::start(&dir);
 
     // A tab that was never opened, under a gitignored config, uses it.
-    c.notify("zlint/focus", json!({ "visible": [], "tabs": [uri(&tab)] }));
+    c.notify("dxlint/focus", json!({ "visible": [], "tabs": [uri(&tab)] }));
     assert_eq!(c.diagnostics_for(&tab)[0]["message"], "scratch says no");
 
     // Buffers: a gitignored file is only linted (and fixed) by a gitignored
@@ -454,7 +454,7 @@ fn config_errors_show_up_in_the_config_and_recover() {
     let dir = project("lsp-config");
     let file = dir.join("a.t");
     std::fs::write(&file, "BAD\n").expect("write");
-    let config = dir.join(".zlint");
+    let config = dir.join(".dx");
     let mut c = Client::start(&dir);
     assert_eq!(c.diagnostics_for(&file).len(), 1);
 
@@ -462,7 +462,7 @@ fn config_errors_show_up_in_the_config_and_recover() {
     let broken = CONFIG.replace("in bad rule", "in bas rule");
     c.notify(
         "textDocument/didOpen",
-        json!({ "textDocument": { "uri": uri(&config), "languageId": "zlint", "version": 1, "text": broken } }),
+        json!({ "textDocument": { "uri": uri(&config), "languageId": "dxlint", "version": 1, "text": broken } }),
     );
     let errors = c.diagnostics_for(&config);
     assert_eq!(errors.len(), 1, "{errors:#?}");

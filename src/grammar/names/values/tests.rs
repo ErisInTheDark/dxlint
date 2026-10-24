@@ -570,7 +570,7 @@ fn reference_arguments_bind_formals_without_leaking_the_declaration_frame() {
 
 #[test]
 fn conditional_recipes_choose_only_proven_branches() {
-    let loaded = crate::config::load_text("conditional.zlint", r#"
+    let loaded = crate::config::load_text("conditional.dx", r#"
         lang demo "*.demo"
         exclusive scalar, other
         in .demo match scalar /s/ { fits scalar }
@@ -717,7 +717,7 @@ fn dynamic_conditionals_use_the_bound_inferred_pattern_before_choosing_branches(
 
 #[test]
 fn language_products_keep_ordered_values_and_member_frames_without_nominal_identity() {
-    let loaded = crate::config::load_text("products.zlint", r#"
+    let loaded = crate::config::load_text("products.dx", r#"
         lang demo "*.demo"
         product duo items fits object as { kind: "duo" } inherits ...items readonly inherits trait frozen optional trait absent
         in .demo match marker /m/ { fits frozen, absent }
@@ -940,7 +940,7 @@ fn product_flags_check_every_selected_source_before_proving_absence() {
 
 #[test]
 fn product_producers_apply_element_recipes_in_each_source_frame() {
-    let loaded = crate::config::load_text("product-recipes.zlint", r#"
+    let loaded = crate::config::load_text("product-recipes.dx", r#"
         lang demo "*.demo"
         product duo items fits object as { kind: "duo" }
         in .demo match item /i/ { fits scalar }
@@ -1023,7 +1023,7 @@ fn selected_definitions_keep_raw_members_and_the_requested_view() {
             unwraps definition
         }
     "#;
-    let loaded = crate::config::load_text("definitions.zlint", source, &crate::config::source::Disk);
+    let loaded = crate::config::load_text("definitions.dx", source, &crate::config::source::Disk);
     let mut errors = loaded.errors;
     let grammar = Grammar::build(&loaded.config, &mut errors);
     assert!(errors.is_empty(), "{errors:?}");
@@ -1302,7 +1302,7 @@ fn exclusive_groups_are_compiled_from_fitted_traits_not_queries() {
         ("exclusive first, missing\n", false),
     ];
     for (source, valid) in sources {
-        let loaded = crate::config::load_text("values.zlint", source, &crate::config::source::Disk);
+        let loaded = crate::config::load_text("values.dx", source, &crate::config::source::Disk);
         let config = loaded.config;
         let mut errors = loaded.errors;
         let grammar = Grammar::build(&config, &mut errors);
@@ -1343,7 +1343,7 @@ fn instance_classes_must_have_real_declarations_not_only_queries() {
     use crate::config::ast::{Name, NameDef, NameItem, Unwrap};
     for (class, valid) in [("type", true), ("missing", false)] {
         let loaded = crate::config::load_text(
-            "values.zlint",
+            "values.dx",
             "lang demo \"*.demo\"\nin .demo match leaf /a/ { scope members; declares type it in nearest members }\n",
             &crate::config::source::Disk,
         );

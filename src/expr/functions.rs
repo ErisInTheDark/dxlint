@@ -1,5 +1,5 @@
 //! Built-in functions available in formatter expressions. Adding one is a
-//! single table entry; `zlint functions` lists them from here.
+//! single table entry; `dxlint functions` lists them from here.
 
 use super::case;
 use super::value::Value;

@@ -1,14 +1,14 @@
-# zoomie-lint
+# dxlint
 
-Rust linter; rules in `.zlint` (docs/language.md). Binary `zlint`.
+Rust linter; rules in `.dx` (docs/language.md). Binary `dxlint`.
 
 ## Commands
 
 - test: `cargo test` (stable Rust owners only: VM, parser, patterns/DFA, cache/reads, type APIs, CLI/LSP; rule behaviour lives in fixtures)
-- rule fixtures: `zlint fixtures [paths...] [--bless]` (default `fixtures/`)
-- self-lint: `cargo run --release --` (uses `.zlint`); must stay clean
-- perf check: `zlint --stats --no-cache <big file>`; compare before/after engine changes
-- CPU profile (Windows, no admin): env `ZLINT_SAMPLE=<report>` on a build with debug line tables; `ZLINT_SAMPLE_CALLERS=a;>b` adds callers of `a`, callees of `b`. Budget steps are not time: profile before trusting them
+- rule fixtures: `dxlint fixtures [paths...] [--bless]` (default `fixtures/`)
+- self-lint: `cargo run --release --` (uses `.dx`); must stay clean
+- perf check: `dxlint --stats --no-cache <big file>`; compare before/after engine changes
+- CPU profile (Windows, no admin): env `DXLINT_SAMPLE=<report>` on a build with debug line tables; `DXLINT_SAMPLE_CALLERS=a;>b` adds callers of `a`, callees of `b`. Budget steps are not time: profile before trusting them
 
 ## Layout
 
@@ -16,19 +16,19 @@ Rust linter; rules in `.zlint` (docs/language.md). Binary `zlint`.
 - `src/pattern`: `Pat`, regex subset parser, compiler, DFA bridge, prefilters
 - `src/grammar`: layers per language, `parse.rs` builds trees
 - `src/expr`: rule expressions; functions registry in `functions.rs`
-- `src/engine`: linter, fixes, suppressions, `.zlintcache` (`cache.rs`), symbol index; end-to-end tests in `engine/tests.rs`
+- `src/engine`: linter, fixes, suppressions, `.dxcache` (`cache.rs`), symbol index; end-to-end tests in `engine/tests.rs`
 - `src/engine/frontend.rs`: the `Frontend` trait, the engine's only view of a native front end (kinds/fields, parse, per-file facts, project state); `lib.rs` `FRONTENDS` registers them
 - `src/native/ts`: TypeScript front end (`frontend.rs` implements `Frontend`); `modules.rs` project (summaries, resolution, globals)
-- `src/native/ts/topics/<family>.rs`: native facts grouped by family (`FACTS` list, read via `Facts::with_file`; whole-file results via `NativeFile::cached`); legacy home of rule logic being moved to `std/ts/<family>.zlint`
+- `src/native/ts/topics/<family>.rs`: native facts grouped by family (`FACTS` list, read via `Facts::with_file`; whole-file results via `NativeFile::cached`); legacy home of rule logic being moved to `std/ts/<family>.dx`
 - `std/`: built-in languages (`import .ts`); matchers, plus rule definitions in `define { }` (off until `rule name`), topic files under `std/<lang>/`
 - `rules/`: built-in rulesets (`import rules:x`): only `rule name` lines
-- nothing is compiled in: `src/config/std_lib.rs` reads both from `ZLINT_LIBRARY=<dir>`, else the nearest ancestor of the executable holding `std/` and `rules/` (no rebuild for .zlint edits; pinned binaries need `ZLINT_LIBRARY`)
+- nothing is compiled in: `src/config/std_lib.rs` reads both from `DXLINT_LIBRARY=<dir>`, else the nearest ancestor of the executable holding `std/` and `rules/` (no rebuild for .dx edits; pinned binaries need `DXLINT_LIBRARY`)
 
 ## Invariants
 
-- Rule behaviour tests: scenario folders under `fixtures/`, each with `.zlint`, input files, `expected/diagnostics` and changed text under `expected/fixed/`; see docs/fixtures.md. Runner writes ignored `actual/`; bless only intentional changes.
+- Rule behaviour tests: scenario folders under `fixtures/`, each with `.dx`, input files, `expected/diagnostics` and changed text under `expected/fixed/`; see docs/fixtures.md. Runner writes ignored `actual/`; bless only intentional changes.
 
-- `.zlint` defines languages and rules; Rust is the language-neutral engine that runs them. Syntax, names, types, calls, modules, effects and narrowing are declared in `std/<lang>/` (docs/design/type-layers.md); rule options, what is wrong, positions, messages and fixes live in rule `.zlint` (shared logic as `fn`)
+- `.dx` defines languages and rules; Rust is the language-neutral engine that runs them. Syntax, names, types, calls, modules, effects and narrowing are declared in `std/<lang>/` (docs/design/type-layers.md); rule options, what is wrong, positions, messages and fixes live in rule `.dx` (shared logic as `fn`)
 - The engine knows no language and no rule: nothing in Rust is named after a rule, takes rule options or builds messages. The TS native front end is being migrated out: never add native TS semantics; native TS code only shrinks. Missing expressiveness: extend the engine/DSL generically
 - One owner per syntax. Regular or textual structure (lines, comments, escapes, whitespace runs, words) is a pattern layer
 - Engine/tree queries (`descendants`, `walk`, `paired_token`...) are language-neutral; they belong to the engine, not a front end
@@ -40,7 +40,7 @@ Rust linter; rules in `.zlint` (docs/language.md). Binary `zlint`.
 - new std module or ruleset: add its file (and the docs table entry)
 - std rules and their layers live in `define { }`; library layers parse only while needed (`engine/prune.rs`), so a needed layer's parents and pattern references must stay reachable
 - with every rule on (`rule *`), std must build without errors (`engine/tests.rs` checks)
-- native code reads the filesystem only through `engine/reads.rs` (self-lint enforces); shared project answers keep their `Reads` (`Cached`); directory searches go through a registered `Discovery`. Else `.zlintcache` replays stale results
+- native code reads the filesystem only through `engine/reads.rs` (self-lint enforces); shared project answers keep their `Reads` (`Cached`); directory searches go through a registered `Discovery`. Else `.dxcache` replays stale results
 - lint output depends only on file text, config tokens and recorded reads
 
 ## Scratch

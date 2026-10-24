@@ -199,7 +199,7 @@ mod tests {
     use crate::grammar::Tree;
 
     fn grammar(source: &str) -> Grammar {
-        let loaded = crate::config::load_text("shapes.zlint", source, &Disk);
+        let loaded = crate::config::load_text("shapes.dx", source, &Disk);
         assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
         let mut errors = Vec::new();
         let grammar = Grammar::build(&loaded.config, &mut errors);

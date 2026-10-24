@@ -4,7 +4,7 @@ use crate::grammar::{Edge, Grammar, Node, Tree};
 
 #[test]
 fn outside_lookup_keeps_nested_locals_and_rejects_invalid_anchors() {
-    let loaded = crate::config::load_text("lookup.zlint", r#"
+    let loaded = crate::config::load_text("lookup.dx", r#"
         lang demo "*.demo"
         in .demo match name /x/
         in .demo match declaration name:name

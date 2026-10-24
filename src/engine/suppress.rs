@@ -1,15 +1,15 @@
-//! `zlint-ignore` directives, written in any comment syntax:
+//! `dxlint-ignore` directives, written in any comment syntax:
 //!
 //! ```text
-//! // zlint-ignore                  -> next line (comment alone on its line)
-//! x = 1 // zlint-ignore rule-a     -> this line, only rule-a
-//! # zlint-ignore-file style-*      -> whole file, rules matching style-*
-//! /* zlint-ignore-start rule-a */  -> from here...
-//! /* zlint-ignore-end rule-a */    -> ...to here (or the end of the file)
+//! // dxlint-ignore                  -> next line (comment alone on its line)
+//! x = 1 // dxlint-ignore rule-a     -> this line, only rule-a
+//! # dxlint-ignore-file style-*      -> whole file, rules matching style-*
+//! /* dxlint-ignore-start rule-a */  -> from here...
+//! /* dxlint-ignore-end rule-a */    -> ...to here (or the end of the file)
 //! ```
 //!
 //! A rule name also matches every `family:variant` formatter of that family:
-//! `zlint-ignore semi` silences `semi:never` too.
+//! `dxlint-ignore semi` silences `semi:never` too.
 
 use std::collections::HashMap;
 
@@ -19,7 +19,7 @@ use super::diagnostic::Diagnostic;
 use crate::line_index::LineIndex;
 use crate::path_globs::wildcard;
 
-const DIRECTIVE: &str = "zlint-ignore";
+const DIRECTIVE: &str = "dxlint-ignore";
 
 /// Rule patterns; empty means "every rule".
 type Rules = Vec<String>;
@@ -137,24 +137,24 @@ mod tests {
     #[test]
     fn line_and_next_line_directives() {
         check(
-            "// zlint-ignore\nA\nB // zlint-ignore rule-b\nC\n",
+            "// dxlint-ignore\nA\nB // dxlint-ignore rule-b\nC\n",
             &[("any", "A", false), ("rule-b", "B", false), ("rule-x", "B", true), ("any", "C", true)],
         );
     }
 
     #[test]
     fn file_directive_with_globs_and_prose_mentions() {
-        check("/* zlint-ignore-file style-* */\nsee the zlint-ignore docs\nX\n", &[("style-a", "X", false), ("other", "X", true)]);
+        check("/* dxlint-ignore-file style-* */\nsee the dxlint-ignore docs\nX\n", &[("style-a", "X", false), ("other", "X", true)]);
     }
 
     #[test]
     fn ranges_open_and_close() {
-        let text = "/* zlint-ignore-start semi */\nA\n/* zlint-ignore-end semi */\nB\n/*zlint-ignore-start*/\nC\n";
+        let text = "/* dxlint-ignore-start semi */\nA\n/* dxlint-ignore-end semi */\nB\n/*dxlint-ignore-start*/\nC\n";
         check(text, &[("semi:never", "A", false), ("quotes", "A", true), ("semi", "B", true), ("any", "C", false)]);
     }
 
     #[test]
     fn families_match_their_variants() {
-        check("X // zlint-ignore semi\n", &[("semi:never", "X", false), ("semicolon", "X", true)]);
+        check("X // dxlint-ignore semi\n", &[("semi:never", "X", false), ("semicolon", "X", true)]);
     }
 }

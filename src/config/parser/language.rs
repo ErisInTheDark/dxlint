@@ -67,7 +67,7 @@ mod tests {
 
     #[test]
     fn language_options_accept_declarations_and_scoped_settings() {
-        let loaded = load_text("test.zlint", r#"
+        let loaded = load_text("test.dx", r#"
 lang js "*.js"
 language .js {
   option globals { [key: string]: "readonly" | "writable" | "off" } = {}
@@ -85,7 +85,7 @@ language .js {
 
     #[test]
     fn invalid_language_clauses_preserve_following_items() {
-        let loaded = load_text("test.zlint", r#"
+        let loaded = load_text("test.dx", r#"
 lang js "*.js"
 language .js { when true }
 in .js rule later warn "present"

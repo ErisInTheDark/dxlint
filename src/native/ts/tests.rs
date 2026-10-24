@@ -160,12 +160,12 @@ fn every_kind_has_a_unique_layer_name() {
     assert_eq!(Kind::Program.name(), "ts_program");
 }
 
-/// `ZLINT_TS_CORPUS=<dir> cargo test --release corpus -- --ignored --nocapture`
+/// `DXLINT_TS_CORPUS=<dir> cargo test --release corpus -- --ignored --nocapture`
 /// parses every TypeScript/JavaScript file under a directory.
 #[test]
 #[ignore]
 fn corpus() {
-    let Ok(dir) = std::env::var("ZLINT_TS_CORPUS") else { return };
+    let Ok(dir) = std::env::var("DXLINT_TS_CORPUS") else { return };
     let mut failed = 0;
     let mut total = 0;
     let mut bytes = 0;

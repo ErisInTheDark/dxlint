@@ -1,4 +1,4 @@
-//! zlint types -> LSP JSON.
+//! dxlint types -> LSP JSON.
 
 use std::collections::HashMap;
 
@@ -35,7 +35,7 @@ pub fn diagnostic(text: &str, lines: &LineIndex, d: &Diagnostic) -> Value {
         "range": range(text, lines, d.start, d.end),
         "severity": severity(d.severity),
         "code": d.rule,
-        "source": "zlint",
+        "source": "dxlint",
         "message": d.message,
     });
     if let Some(fix) = &d.fix {
@@ -63,7 +63,7 @@ pub fn diagnostics(text: &str, diags: &[Diagnostic], linter: &Linter) -> Value {
     )
 }
 
-/// `file:///rules.zlint#L12`: where a rule is defined.
+/// `file:///rules.dx#L12`: where a rule is defined.
 fn rule_link(linter: &Linter, rule: &str) -> Option<String> {
     let r = linter.rules.iter().find(|r| r.name == rule)?;
     let f = linter.sources.get(r.span.file);
@@ -86,7 +86,7 @@ pub fn config_error(sources: &SourceMap, e: &ConfigError, uri_of: &dyn Fn(crate:
         message.push_str("\nnote: ");
         message.push_str(note);
     }
-    let mut v = json!({ "range": range, "severity": 1, "source": "zlint", "code": "config", "message": message });
+    let mut v = json!({ "range": range, "severity": 1, "source": "dxlint", "code": "config", "message": message });
     let related: Vec<Value> = e
         .related
         .iter()

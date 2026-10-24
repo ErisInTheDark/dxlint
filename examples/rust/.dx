@@ -1,5 +1,5 @@
 # Example: Rust rules showing fields, lists and nested layers.
-# Try it: cd examples/rust && zlint
+# Try it: cd examples/rust && dxlint
 
 import .rs
 

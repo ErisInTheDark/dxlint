@@ -1,4 +1,4 @@
 class Task {
-first() {} // zlint-ignore lines-between-class-members
+first() {} // dxlint-ignore lines-between-class-members
 second() {}
 }

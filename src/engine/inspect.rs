@@ -1,4 +1,4 @@
-//! What zlint sees at one position of a source file, for writing rules: the
+//! What dxlint sees at one position of a source file, for writing rules: the
 //! layers covering it, the field each sits in, and the native facts of the
 //! innermost native node. The language server shows it as a hover.
 

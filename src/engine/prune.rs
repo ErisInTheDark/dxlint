@@ -491,7 +491,7 @@ mod tests {
     fn lint_pruning_preserves_function_declaration_errors() {
         for definitions in ["fn unused() = 1\nfn unused() = 2", "fn len(x) = 1"] {
             let source = format!("lang t \"*.t\"\n{definitions}\n");
-            let mut loaded = config::load_text("test.zlint", &source, &Disk);
+            let mut loaded = config::load_text("test.dx", &source, &Disk);
             assert!(loaded.errors.is_empty(), "{:#?}", loaded.errors);
             prune_for_lint(&mut loaded.config, &mut loaded.errors);
             let built = build(loaded, PathBuf::from("/root"));
@@ -511,7 +511,7 @@ define {
 in .t match token /X/
 in token rule active warn "x"
 "#;
-        let built = build(config::load_text("test.zlint", source, &Disk), PathBuf::from("/root"));
+        let built = build(config::load_text("test.dx", source, &Disk), PathBuf::from("/root"));
         assert!(built.errors.is_empty(), "{:#?}", built.errors);
         assert_eq!(built.linter.unwrap().lint(Path::new("/root/test.t"), "X").len(), 1);
     }

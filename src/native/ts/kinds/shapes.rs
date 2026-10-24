@@ -266,9 +266,9 @@ mod tests {
 
     /// Optional external fixtures keep licensed projects out of this repo.
     #[test]
-    #[ignore = "requires ZLINT_TS_SHAPE_FIXTURES external JS/TS paths"]
+    #[ignore = "requires DXLINT_TS_SHAPE_FIXTURES external JS/TS paths"]
     fn project_fixture_edges_follow_field_shapes() {
-        let paths = std::env::var_os("ZLINT_TS_SHAPE_FIXTURES").expect("ZLINT_TS_SHAPE_FIXTURES");
+        let paths = std::env::var_os("DXLINT_TS_SHAPE_FIXTURES").expect("DXLINT_TS_SHAPE_FIXTURES");
         for path in std::env::split_paths(&paths) {
             let source = crate::engine::reads::read(&path).expect("shape fixture");
             let jsx = crate::native::ts::reads(&path).expect("JS/TS fixture");

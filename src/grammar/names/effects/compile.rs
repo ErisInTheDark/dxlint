@@ -161,7 +161,7 @@ mod tests {
         let source = format!(
             "lang demo \"*.demo\"\nin .demo match unit /a/\nin .demo match owner /</ block:unit handler:unit finalizer:unit />/\nin owner {{\n{items}\n}}\n"
         );
-        let loaded = crate::config::load_text("effects.zlint", &source, &crate::config::source::Disk);
+        let loaded = crate::config::load_text("effects.dx", &source, &crate::config::source::Disk);
         let (config, mut errors) = (loaded.config, loaded.errors);
         assert!(errors.is_empty(), "execution declarations must parse: {errors:?}");
         Grammar::build(&config, &mut errors);
