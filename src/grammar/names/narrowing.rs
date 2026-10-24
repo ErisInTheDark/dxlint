@@ -33,6 +33,15 @@ pub(crate) struct State {
     /// guards' owner nodes ([`Narrowing::tested_roots`]); `None` when they
     /// can't be told.
     tested: super::memo::Memo<u32, Option<std::rc::Rc<TestedRoots>>>,
+    /// Per file, the texts of those roots' names ([`Narrowing::tested_names`]);
+    /// `None` when a root has no name text to look for.
+    tested_names: super::memo::Memo<u32, Option<std::rc::Rc<crate::fx_hash::FxHashSet<Box<str>>>>>,
+}
+
+/// A character that can continue a name: names split only where none of
+/// these stand, so a name inside a read's text is one of its words.
+fn word_char(c: char) -> bool {
+    !c.is_ascii() || c.is_ascii_alphanumeric() || c == '_' || c == '$'
 }
 
 /// Binding root -> the guard owners (node ids, in the root's file) whose
@@ -68,6 +77,7 @@ impl State {
             + self.writes.finish(epoch, failed, cut, |_| true)
             + self.guards.finish(epoch, failed, cut, |_| true)
             + self.tested.finish(epoch, failed, cut, |_| true)
+            + self.tested_names.finish(epoch, failed, cut, |_| true)
     }
 }
 
@@ -81,8 +91,18 @@ impl Narrowing<'_> {
     }
 
     fn refine_graph(&self, at: Leaf, mut base: NodeValue) -> NodeValue {
-        if crate::levers::on(crate::levers::Lever::LoneSkip) && !matches!(&base, NodeValue::Alternatives(rows) if rows.len() > 1) {
-            return base;
+        let lone = !matches!(&base, NodeValue::Alternatives(rows) if rows.len() > 1);
+        if lone && crate::levers::on(crate::levers::Lever::LoneSkip) { return base }
+        // A lone declared alternative only narrows through a guard testing
+        // its root (any write picks that alternative), and a root is read by
+        // its name: a read whose text holds no tested root's name skips the
+        // place and flow lookups.
+        if lone {
+            if let Target::Node(read) = at.target {
+                if let Some(names) = self.tested_names(read.file) {
+                    if !self.mentions(read, &names) { return base }
+                }
+            }
         }
         let Known::Yes((subject, written)) = self.find_place(at, true, true) else { return base };
         let effects = self.semantic.effects();
@@ -228,6 +248,39 @@ impl Narrowing<'_> {
         if budget.exhausted() { return None }
         memo.insert(self.semantic.epoch, file, roots.clone());
         roots
+    }
+
+    /// The name texts of `file`'s tested roots; `None` when the roots can't
+    /// be told or one has no word-shaped text (its reads can't be found by
+    /// name).
+    fn tested_names(&self, file: u32) -> Option<std::rc::Rc<crate::fx_hash::FxHashSet<Box<str>>>> {
+        let memo = &self.semantic.narrowing_places.tested_names;
+        if let Some(names) = memo.get(&file) { return names }
+        let names = (|| {
+            let roots = self.tested_roots(file)?;
+            let tree = self.semantic.world.tree(file)?;
+            let text = self.semantic.world.text(file)?;
+            let mut names = crate::fx_hash::FxHashSet::default();
+            for root in roots.keys() {
+                if root.file != file { return None }
+                let data = tree.nodes.get(root.node as usize)?;
+                let name = text.get(data.start as usize..data.end as usize)?;
+                if name.is_empty() || !name.chars().all(word_char) { return None }
+                names.insert(Box::from(name));
+            }
+            Some(std::rc::Rc::new(names))
+        })();
+        if self.semantic.question.budget.exhausted() { return None }
+        memo.insert(self.semantic.epoch, file, names.clone());
+        names
+    }
+
+    /// Whether a word of `read`'s text is one of `names`.
+    fn mentions(&self, read: NodeRef, names: &crate::fx_hash::FxHashSet<Box<str>>) -> bool {
+        if names.is_empty() { return false }
+        let (Some(tree), Some(text)) = (self.semantic.world.tree(read.file), self.semantic.world.text(read.file)) else { return true };
+        let Some(text) = tree.nodes.get(read.node as usize).and_then(|data| text.get(data.start as usize..data.end as usize)) else { return true };
+        text.split(|c: char| !word_char(c)).any(|word| names.contains(word))
     }
 
     /// Whether node `inner` lies within node `outer` (both in `file`).
