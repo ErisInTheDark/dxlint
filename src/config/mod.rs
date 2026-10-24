@@ -17,41 +17,21 @@ use std::path::{Path, PathBuf};
 /// The project config file name dxlint looks for.
 pub const CONFIG_NAME: &str = ".dx";
 
-/// What the config file used to be called.
-pub const OLD_CONFIG_NAME: &str = ".zlint";
-
-/// The nearest `.dx` in `start` or any parent directory. A nearer config
-/// under its old name stops the search: it needs renaming ([`find_old`]),
-/// and a config further up is not the project's.
+/// The nearest `.dx` in `start` or any parent directory.
 pub fn find(start: &Path) -> Option<PathBuf> {
-    nearest(start).filter(|p| p.file_name().is_some_and(|n| n == CONFIG_NAME))
-}
-
-/// The nearest config, when it still has its old name.
-pub fn find_old(start: &Path) -> Option<PathBuf> {
-    nearest(start).filter(|p| p.file_name().is_some_and(|n| n == OLD_CONFIG_NAME))
-}
-
-fn nearest(start: &Path) -> Option<PathBuf> {
     let mut dir = Some(source::normalize_path(start));
     while let Some(d) = dir {
-        for name in [CONFIG_NAME, OLD_CONFIG_NAME] {
-            let candidate = d.join(name);
-            if crate::engine::reads::is_file(&candidate) {
-                return Some(candidate);
-            }
+        let candidate = d.join(CONFIG_NAME);
+        if crate::engine::reads::is_file(&candidate) {
+            return Some(candidate);
         }
         dir = d.parent().map(Path::to_path_buf);
     }
     None
 }
 
-/// "no .dx found", with a hint when an old `.zlint` sits around.
-pub fn not_found_message(start: &Path) -> String {
-    match find_old(start) {
-        Some(old) => format!("no {CONFIG_NAME} found, but {} is there: config files are named `{CONFIG_NAME}` now, rename it", old.display()),
-        None => format!("no {CONFIG_NAME} found in this directory or any parent; pass one with --config"),
-    }
+pub fn not_found_message() -> String {
+    format!("no {CONFIG_NAME} found in this directory or any parent; pass one with --config")
 }
 
 use ast::Config;

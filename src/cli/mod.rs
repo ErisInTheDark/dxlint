@@ -370,7 +370,7 @@ fn load_with(output: &mut Output<'_>, arg: &ConfigArg, runtime: bool) -> Result<
         None => match config::find(output.cwd) {
             Some(p) => p,
             None => {
-                render::error(output, &config::not_found_message(output.cwd));
+                render::error(output, &config::not_found_message());
                 return Err(2);
             }
         },

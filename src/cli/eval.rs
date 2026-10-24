@@ -42,7 +42,7 @@ pub fn run(output: &mut Output<'_>, arg: &ConfigArg, target: &str, expr: &str, f
         None => match config::find(cwd) {
             Some(p) => p,
             None => {
-                render::error(output, &config::not_found_message(cwd));
+                render::error(output, &config::not_found_message());
                 return 2;
             }
         },

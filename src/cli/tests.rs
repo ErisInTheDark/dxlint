@@ -680,14 +680,7 @@ fn unreadable_config_is_explained() {
 }
 
 #[test]
-fn configs_are_named_dot_dx_and_import_each_other() {
-    // A config under its old name is pointed at, not silently ignored.
-    let dir = project("cli-old-name", &[(".zlint", RULES), ("a.t", "LOUD\n")]);
-    let out = dxlint(&dir, &[]);
-    assert_eq!(out.code, 2);
-    assert!(String::from_utf8_lossy(&out.stderr).contains("rename it"), "{}", String::from_utf8_lossy(&out.stderr));
-
-    // A nested config builds on its parent's by importing it.
+fn nested_configs_import_their_parent() {
     let dir = project("cli-dot-dx", &[(".dx", RULES), ("sub/.dx", "import ../.dx\nrule no-shout error\n"), ("sub/a.t", "LOUD\n")]);
     let out = dxlint(&dir.join("sub"), &["--format", "jsonl"]);
     assert_eq!(out.code, 1, "{}", String::from_utf8_lossy(&out.stderr));
