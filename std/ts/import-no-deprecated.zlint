@@ -46,7 +46,22 @@ in ts_import.default_import rule import-no-deprecated:default {
   warn import_message(parent.import_default_tag)
 }
 
+# The names this file's deprecated imports bind: only a use spelled as one
+# of them resolves any further.
+fn import_local_node(specifier) = specifier.local.node ?? specifier.imported.node
+in ts_program let import_deprecated_names {
+  value descendants(ts_import_specifier)
+  filter (specifier) specifier.import_tag != null
+  map (specifier) import_local_node(specifier).text
+}
+in ts_program let import_deprecated_defaults {
+  value descendants(ts_import)
+  filter (item) item.import_default_tag != null
+  map (item) item.default_import.node.text
+}
+
 in ts_identifier rule import-no-deprecated:use {
+  when contains(ts_program.import_deprecated_names, text) || contains(ts_program.import_deprecated_defaults, text)
   when resolved == "import"
   when containing(ts_jsx_opening) == null && containing(ts_jsx_closing) == null
   let declaration scope_declaration
