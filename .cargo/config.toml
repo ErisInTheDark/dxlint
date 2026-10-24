@@ -1,0 +1,4 @@
+# Linux binaries for the npm package are static musl builds, linked with the
+# rust-lld that ships with the toolchain, so they build on any host.
+[target.x86_64-unknown-linux-musl]
+linker = "rust-lld"

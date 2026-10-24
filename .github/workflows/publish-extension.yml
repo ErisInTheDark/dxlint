@@ -1,0 +1,122 @@
+name: publish vscode extension
+run-name: ${{ github.event_name == 'workflow_dispatch' && 'prepare dxlint extension release' || format('release dxlint extension {0}', github.event.client_payload.version) }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: exact version override; blank increments the committed patch
+        required: false
+        default: ""
+        type: string
+  repository_dispatch:
+    types: [publish-vscode-extension]
+
+concurrency:
+  group: publish-vscode-extension
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: require main
+        run: test "$GITHUB_REF" = refs/heads/main
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - name: prepare version
+        id: release
+        working-directory: editors/vscode
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          version="$(node -e '
+            const fs = require("fs");
+            const manifest = JSON.parse(fs.readFileSync("package.json", "utf8"));
+            const stable = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+            const [major, minor, patch] = stable.exec(manifest.version).slice(1).map(Number);
+            const version = process.env.REQUESTED_VERSION || `${major}.${minor}.${patch + 1}`;
+            if (!stable.test(version)) throw new Error(`version must be major.minor.patch: ${version}`);
+            if (version !== manifest.version) {
+              manifest.version = version;
+              fs.writeFileSync("package.json", JSON.stringify(manifest, null, 2) + "\n");
+            }
+            console.log(version);
+          ')"
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+      - name: commit version
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          if git diff --quiet -- editors/vscode/package.json; then
+            echo "editors/vscode/package.json already contains $VERSION; preparing a publish retry."
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add -- editors/vscode/package.json
+            git commit -m "release dxlint extension $VERSION"
+            git push origin HEAD:main
+          fi
+      - name: dispatch committed publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          commit="$(git rev-parse HEAD)"
+          gh api --method POST "repos/$GITHUB_REPOSITORY/dispatches" \
+            -f event_type=publish-vscode-extension \
+            -f "client_payload[version]=$VERSION" \
+            -f "client_payload[commit]=$commit"
+
+  # Builds the .vsix, attests its provenance and attaches both to a GitHub
+  # release. Upload that .vsix on the Marketplace website until its OIDC
+  # publishing exists; id-token is already granted for that step.
+  publish:
+    if: github.event_name == 'repository_dispatch'
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: require prepared main commit
+        env:
+          EXPECTED_COMMIT: ${{ github.event.client_payload.commit }}
+        run: test "$GITHUB_REF" = refs/heads/main && test "$GITHUB_SHA" = "$EXPECTED_COMMIT"
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - name: package
+        working-directory: editors/vscode
+        env:
+          EXPECTED_VERSION: ${{ github.event.client_payload.version }}
+        run: |
+          test "$(node -p 'require("./package.json").version')" = "$EXPECTED_VERSION"
+          cp ../../LICENSE LICENSE
+          npm ci
+          npm run package
+      - name: attest
+        id: attest
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: editors/vscode/dxlint.vsix
+      - name: attach the vsix and its attestation to a release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ github.event.client_payload.version }}
+          BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+        run: |
+          cp "$BUNDLE" "dxlint-$VERSION.vsix.sigstore.json"
+          cp editors/vscode/dxlint.vsix "dxlint-$VERSION.vsix"
+          gh release create "vscode-v$VERSION" --target "$GITHUB_SHA" \
+            --title "dxlint for VS Code $VERSION" \
+            --notes "Verify with: gh attestation verify dxlint-$VERSION.vsix --repo $GITHUB_REPOSITORY" \
+            "dxlint-$VERSION.vsix" "dxlint-$VERSION.vsix.sigstore.json"

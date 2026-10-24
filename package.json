@@ -1,6 +1,11 @@
 {
-  "name": "dxlint",
+  "name": "dxlint-repo",
   "private": true,
-  "description": "npm-linkable launcher for the locally built dxlint binary",
-  "bin": { "dxlint": "bin/dxlint.cmd" }
+  "description": "Development scripts; the published package is package/",
+  "scripts": {
+    "build:binaries": "node scripts/build-binaries.mjs",
+    "docs:rules": "node scripts/rules-index.mjs",
+    "pack": "node scripts/publish-package.mjs --pack",
+    "package:vsix": "npm --prefix editors/vscode run package"
+  }
 }

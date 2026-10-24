@@ -1,0 +1,15 @@
+#!/usr/bin/env node
+// Runs the dxlint binary for this platform. It finds its library (std/,
+// rules/) in the nearest directory above it that holds both: this package.
+const { spawnSync } = require("node:child_process");
+const path = require("node:path");
+
+const binary = path.join(__dirname, `dxlint-${process.platform}-${process.arch}${process.platform === "win32" ? ".exe" : ""}`);
+const result = spawnSync(binary, process.argv.slice(2), { stdio: "inherit", windowsHide: true });
+if (result.error) {
+  process.stderr.write(result.error.code === "ENOENT"
+    ? `dxlint: no binary for ${process.platform}-${process.arch} (expected ${binary})\n`
+    : `dxlint: ${result.error.message}\n`);
+  process.exit(2);
+}
+process.exit(result.status ?? 1);
