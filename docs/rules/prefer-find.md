@@ -8,7 +8,7 @@ Reports filtering an array just to take its first matching element. `find()` ret
 | Needs types | yes |
 | Fix | none |
 | Rulesets | `rules:types` |
-| Parity | 45 / 47 corpus cases |
+| Parity | 47 / 47 corpus cases |
 
 ## Enable
 
@@ -45,7 +45,6 @@ Correct:
 
 ## Differences from upstream
 
-- Array intersection types may not be recognised as arrays, so qualifying calls can be missed.
 - dxlint reports the pattern without upstream's editor suggestion to replace it with `find()`.
 - Both variants currently use a message mentioning `.filter(...)[0]`, including `.at(0)` reports.
 

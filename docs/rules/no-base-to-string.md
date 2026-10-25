@@ -8,7 +8,7 @@ Reports string conversions that use an object's unhelpful default representation
 | Needs types | yes |
 | Fix | none |
 | Rulesets | none |
-| Parity | 308 / 317 corpus cases |
+| Parity | 312 / 317 corpus cases |
 
 ## Enable
 
@@ -50,7 +50,6 @@ rule no-base-to-string {
 
 ## Differences from upstream
 
-- Tuple unions and default-object type origins can produce different results, such as `[string, string] | [Foo, Foo]` passed to `.join("")`.
 - Recursive unions can hide an object branch that should be reported, such as `type Value = { foo: string } | Value[]`.
 - Unresolved or cyclic interface bases can prevent the default string conversion from being identified.
 - A mapped `toString` member can be treated as a custom implementation when upstream would report it.

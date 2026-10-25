@@ -8,7 +8,7 @@ Controls whether a comma belongs at the end of its item line or the start of the
 | Needs types | no |
 | Fix | autofix |
 | Rulesets | `rules:format` |
-| Parity | 137 / 140 corpus cases |
+| Parity | 140 / 140 corpus cases |
 
 ## Enable
 
@@ -53,6 +53,5 @@ rule comma-style {
 
 - The upstream string option is named `style`.
 - Upstream's AST-node `exceptions` object is not exposed.
-- Three corpus cases contain index signatures with several parameters. TypeScript permits only one index parameter; dxlint does not recover these malformed declarations like the upstream parser.
 
 Adapted from the [ESLint Stylistic](https://eslint.style/rules/comma-style) documentation (MIT).

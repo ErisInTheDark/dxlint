@@ -8,7 +8,7 @@ Reports assignments of `any` to variables and properties. Also checks destructur
 | Needs types | yes |
 | Fix | none |
 | Rulesets | none |
-| Parity | 89 / 92 corpus cases |
+| Parity | 92 / 92 corpus cases |
 
 ## Enable
 
@@ -48,6 +48,6 @@ Assigning `any` to `unknown` is allowed because the receiving code must narrow i
 
 ## Differences from upstream
 
-- Nested inferred arrays can stop destructuring checks before the unsafe leaf. For example, `const [[[[x]]]] = [[[[1 as any]]]]` can be missed.
+- None known: every upstream test case matches.
 
 Adapted from the [typescript-eslint](https://typescript-eslint.io/rules/no-unsafe-assignment) documentation (MIT).

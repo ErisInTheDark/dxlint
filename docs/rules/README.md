@@ -4,7 +4,7 @@ Every rule dxlint ships, 433 in all. Turn one on with `rule <name>` after import
 
 - **Types**: the rule reads type information (from your `tsconfig.json`; TypeScript itself never runs).
 - **Fix**: `autofix` rules are fixed by `dxlint --fix` and by the editor's quick fixes.
-- **Parity**: the share of the upstream rule's own test cases where dxlint gives the same result. 329 of the 391 measured rules match every case; 43,270 of 43,622 cases match overall. Each page lists its known differences.
+- **Parity**: the share of the upstream rule's own test cases where dxlint gives the same result. 335 of the 391 measured rules match every case; 43,320 of 43,622 cases match overall. Each page lists its known differences.
 
 Pages are adapted from the documentation of [ESLint](https://eslint.org/docs/latest/rules/), [typescript-eslint](https://typescript-eslint.io/rules/), [ESLint Stylistic](https://eslint.style/rules) and [eslint-plugin-import](https://github.com/import-js/eslint-plugin-import), all MIT licensed.
 
@@ -18,7 +18,7 @@ Pages are adapted from the documentation of [ESLint](https://eslint.org/docs/lat
 | [arrow-body-style](arrow-body-style.md) | Controls whether arrow functions use block bodies or return expressions directly. |  | autofix | 100% |
 | [arrow-parens](arrow-parens.md) | Enforces consistent parentheses around arrow parameters. |  | autofix | 93.6% |
 | [arrow-spacing](arrow-spacing.md) | Controls spaces before and after an arrow function's `=>`. |  | autofix | 100% |
-| [await-thenable](await-thenable.md) | Reports awaiting values that are not promises or other thenables. | yes |  | 93.2% |
+| [await-thenable](await-thenable.md) | Reports awaiting values that are not promises or other thenables. | yes |  | 97.7% |
 | [ban-ts-comment](ban-ts-comment.md) | Controls TypeScript directive comments that suppress or enable compiler checks. |  |  | 100% |
 | [ban-tslint-comment](ban-tslint-comment.md) | Reports obsolete TSLint enable and disable comments. |  | autofix | 100% |
 | [blank-lines](blank-lines.md) | Limits consecutive blank lines. |  | autofix |  |
@@ -32,7 +32,7 @@ Pages are adapted from the documentation of [ESLint](https://eslint.org/docs/lat
 | [class-methods-use-this](class-methods-use-this.md) | Reports instance methods and function-valued fields that never use `this`. |  |  | 100% |
 | [comma-dangle](comma-dangle.md) | Controls trailing commas in lists, including arrays, objects, calls, imports and TypeScript declarations. |  | autofix | 97.5% |
 | [comma-spacing](comma-spacing.md) | Enforces spaces around commas. |  | autofix | 98.9% |
-| [comma-style](comma-style.md) | Controls whether a comma belongs at the end of its item line or the start of the following line. |  | autofix | 97.9% |
+| [comma-style](comma-style.md) | Controls whether a comma belongs at the end of its item line or the start of the following line. |  | autofix | 100% |
 | [complexity](complexity.md) | Limits cyclomatic complexity: the number of independent paths through a function. |  |  | 100% |
 | [computed-property-spacing](computed-property-spacing.md) | Controls spaces inside computed property brackets, such as `object[key]` and `{ [key]: value }`. |  | autofix | 100% |
 | [consistent-generic-constructors](consistent-generic-constructors.md) | Enforces one location for generic arguments when constructing a value: the type annotation or the constructor call. |  | autofix | 100% |
@@ -118,16 +118,16 @@ Pages are adapted from the documentation of [ESLint](https://eslint.org/docs/lat
 | [method-signature-style](method-signature-style.md) | Reports function members written in the wrong signature style. |  | autofix | 100% |
 | [multiline-comment-style](multiline-comment-style.md) | Reports multiline comments that do not follow the selected shape. |  | autofix | 95.5% |
 | [multiline-ternary](multiline-ternary.md) | Reports missing or unwanted line breaks between conditional expression operands. |  | autofix | 100% |
-| [naming-convention](naming-convention.md) | Reports names that do not follow the convention for their declaration kind. |  |  | 96.6% |
+| [naming-convention](naming-convention.md) | Reports names that do not follow the convention for their declaration kind. |  |  | 97.8% |
 | [new-cap](new-cap.md) | Reports lowercase constructor names and capitalised functions called without `new`. |  |  | 100% |
 | [new-parens](new-parens.md) | Reports missing or unwanted empty parentheses in constructor calls. |  | autofix | 100% |
 | [newline-per-chained-call](newline-per-chained-call.md) | Reports chained calls that need a preceding line break. |  | autofix | 100% |
 | [no-alert](no-alert.md) | Reports calls to the global `alert`, `confirm` and `prompt` functions. |  |  | 100% |
 | [no-array-constructor](no-array-constructor.md) | Reports array constructor calls that can use array literals instead. |  | autofix | 100% |
-| [no-array-delete](no-array-delete.md) | Reports deleting an array element. | yes |  | 90.3% |
+| [no-array-delete](no-array-delete.md) | Reports deleting an array element. | yes |  | 100% |
 | [no-async-promise-executor](no-async-promise-executor.md) | Reports async functions passed as `Promise` executors. |  |  | 100% |
 | [no-await-in-loop](no-await-in-loop.md) | Reports `await` operations inside loops, including `await using`. |  |  | 100% |
-| [no-base-to-string](no-base-to-string.md) | Reports string conversions that use an object's unhelpful default representation, such as `"[object Object]"`. | yes |  | 97.2% |
+| [no-base-to-string](no-base-to-string.md) | Reports string conversions that use an object's unhelpful default representation, such as `"[object Object]"`. | yes |  | 98.4% |
 | [no-bitwise](no-bitwise.md) | Reports bitwise operators. |  |  | 100% |
 | [no-blank-lines-in-optional-blocks](no-blank-lines-in-optional-blocks.md) | Reports blank lines between an `if` or loop header and its single unbraced statement. |  | autofix |  |
 | [no-caller](no-caller.md) | Reports `arguments.caller` and `arguments.callee`. |  |  | 100% |
@@ -180,7 +180,7 @@ Pages are adapted from the documentation of [ESLint](https://eslint.org/docs/lat
 | [no-extraneous-class](no-extraneous-class.md) | Reports empty classes, constructor-only classes and classes used only as static namespaces. |  |  | 100% |
 | [no-fallthrough](no-fallthrough.md) | Reports switch cases that run into the next case without a break or other exit. |  |  | 96.6% |
 | [no-floating-decimal](no-floating-decimal.md) | Requires digits on both sides of a decimal point. |  | autofix | 100% |
-| [no-floating-promises](no-floating-promises.md) | Reports promise expressions whose rejection is not handled. | yes |  | 89.5% |
+| [no-floating-promises](no-floating-promises.md) | Reports promise expressions whose rejection is not handled. | yes |  | 92.3% |
 | [no-for-in-array](no-for-in-array.md) | Reports `for-in` loops over arrays. | yes |  | 100% |
 | [no-func-assign](no-func-assign.md) | Reports writes to function declaration names. |  |  | 100% |
 | [no-generated-empty-object-type](no-generated-empty-object-type.md) | Reports type operations that resolve to the empty object type, `{}`. | yes |  | 92.6% |
@@ -208,8 +208,8 @@ Pages are adapted from the documentation of [ESLint](https://eslint.org/docs/lat
 | [no-meaningless-void-operator](no-meaningless-void-operator.md) | Reports `void` when it does not discard a useful call result. | yes | autofix | 95.3% |
 | [no-misleading-character-class](no-misleading-character-class.md) | Reports character classes that split a visible Unicode character into separate parts. |  |  | 100% |
 | [no-misused-new](no-misused-new.md) | Reports constructor-like declarations in the wrong place: a class method named `new`, an interface constructing itself, or an interface/type member named `constructor`. |  |  | 100% |
-| [no-misused-promises](no-misused-promises.md) | Reports promises used where a boolean, ordinary object, or synchronous callback is expected. | yes |  | 94.4% |
-| [no-misused-spread](no-misused-spread.md) | Reports spreads whose types suggest a likely mistake, such as promises, functions, maps, arrays, or class instances copied into objects. | yes |  | 96.3% |
+| [no-misused-promises](no-misused-promises.md) | Reports promises used where a boolean, ordinary object, or synchronous callback is expected. | yes |  | 95.2% |
+| [no-misused-spread](no-misused-spread.md) | Reports spreads whose types suggest a likely mistake, such as promises, functions, maps, arrays, or class instances copied into objects. | yes |  | 99.3% |
 | [no-mixed-enums](no-mixed-enums.md) | Reports enums containing both numeric and string members. | yes |  | 100% |
 | [no-mixed-operators](no-mixed-operators.md) | Requires parentheses around mixtures of operators in the same configured group. |  |  | 100% |
 | [no-mixed-spaces-and-tabs](no-mixed-spaces-and-tabs.md) | Reports indentation containing both tabs and spaces. |  |  | 100% |
@@ -282,12 +282,12 @@ Pages are adapted from the documentation of [ESLint](https://eslint.org/docs/lat
 | [no-unnecessary-type-assertion](no-unnecessary-type-assertion.md) | Reports assertions that do not change an expression's type. | yes | autofix | 93.9% |
 | [no-unnecessary-type-constraint](no-unnecessary-type-constraint.md) | Reports generic type parameters constrained to `any` or `unknown`. |  |  | 100% |
 | [no-unnecessary-type-conversion](no-unnecessary-type-conversion.md) | Reports conversion idioms that do not change a value's type or value. | yes |  | 100% |
-| [no-unnecessary-type-parameters](no-unnecessary-type-parameters.md) | Reports type parameters that do not relate multiple parts of a signature. | yes |  | 96.5% |
+| [no-unnecessary-type-parameters](no-unnecessary-type-parameters.md) | Reports type parameters that do not relate multiple parts of a signature. | yes |  | 100% |
 | [no-unneeded-ternary](no-unneeded-ternary.md) | Reports ternaries that can be replaced with simpler boolean expressions. |  | autofix | 100% |
 | [no-unreachable-loop](no-unreachable-loop.md) | Reports loops whose bodies always exit before a second iteration. |  |  | 100% |
 | [no-unreachable](no-unreachable.md) | Reports code that cannot run after an unconditional exit. |  |  | 100% |
 | [no-unsafe-argument](no-unsafe-argument.md) | Reports `any` values passed to typed parameters. | yes |  | 80.0% |
-| [no-unsafe-assignment](no-unsafe-assignment.md) | Reports assignments of `any` to variables and properties. | yes |  | 96.7% |
+| [no-unsafe-assignment](no-unsafe-assignment.md) | Reports assignments of `any` to variables and properties. | yes |  | 100% |
 | [no-unsafe-call](no-unsafe-call.md) | Reports calls through values typed as `any` or the unsafe `Function` type. | yes |  | 97.4% |
 | [no-unsafe-declaration-merging](no-unsafe-declaration-merging.md) | Reports merging a class and interface with the same name. |  |  | 100% |
 | [no-unsafe-enum-assignment](no-unsafe-enum-assignment.md) | Reports values that do not share the enum type expected by an assignment, argument, return, or other receiving location. | yes |  | 88.0% |
@@ -298,7 +298,7 @@ Pages are adapted from the documentation of [ESLint](https://eslint.org/docs/lat
 | [no-unsafe-negation](no-unsafe-negation.md) | Reports a negation applied directly to the left operand of `in` or `instanceof`. |  |  | 100% |
 | [no-unsafe-optional-chaining](no-unsafe-optional-chaining.md) | Reports optional chains used where an `undefined` result would cause an error. |  |  | 100% |
 | [no-unsafe-return](no-unsafe-return.md) | Reports unsafe `any` return values, including arrays and promises. | yes |  | 98.4% |
-| [no-unsafe-type-assertion](no-unsafe-type-assertion.md) | Reports type assertions that narrow a value's type without a runtime check, including unsafe assertions involving `any`. | yes |  | 93.1% |
+| [no-unsafe-type-assertion](no-unsafe-type-assertion.md) | Reports type assertions that narrow a value's type without a runtime check, including unsafe assertions involving `any`. | yes |  | 94.1% |
 | [no-unsafe-unary-minus](no-unsafe-unary-minus.md) | Reports unary `-` applied to values that are not numeric. | yes |  | 100% |
 | [no-unused-expressions](no-unused-expressions.md) | Reports expression statements whose values are discarded without a useful effect. |  |  | 100% |
 | [no-unused-imports](no-unused-imports.md) | Reports imported names that are never used. |  |  |  |
@@ -343,7 +343,7 @@ Pages are adapted from the documentation of [ESLint](https://eslint.org/docs/lat
 | [prefer-destructuring](prefer-destructuring.md) | Reports property or array-element reads that can be written as destructuring declarations or assignments. | yes | autofix | 100% |
 | [prefer-enum-initializers](prefer-enum-initializers.md) | Reports enum members without explicit values. |  |  | 100% |
 | [prefer-exponentiation-operator](prefer-exponentiation-operator.md) | Reports calls to `Math.pow` that can use the `**` operator. |  | autofix | 100% |
-| [prefer-find](prefer-find.md) | Reports filtering an array just to take its first matching element. | yes |  | 95.7% |
+| [prefer-find](prefer-find.md) | Reports filtering an array just to take its first matching element. | yes |  | 100% |
 | [prefer-for-of](prefer-for-of.md) | Reports index-based loops whose index is used only to read the current element. |  |  | 97.1% |
 | [prefer-function-type](prefer-function-type.md) | Reports interfaces and object type literals containing only one call signature when a function type can express the same contract. |  | autofix | 100% |
 | [prefer-includes](prefer-includes.md) | Reports membership checks written as `indexOf` comparisons or simple regular expression tests. | yes | autofix | 97.6% |
@@ -358,7 +358,7 @@ Pages are adapted from the documentation of [ESLint](https://eslint.org/docs/lat
 | [prefer-promise-reject-errors](prefer-promise-reject-errors.md) | Requires Promise rejection reasons to be errors. | yes |  | 100% |
 | [prefer-readonly-parameter-types](prefer-readonly-parameter-types.md) | Requires parameter types to be deeply readonly. | yes |  | 99.2% |
 | [prefer-readonly](prefer-readonly.md) | Requires private members to be `readonly` when they are not reassigned outside the constructor. | yes | autofix | 100% |
-| [prefer-reduce-type-parameter](prefer-reduce-type-parameter.md) | Reports assertions on the initial value passed to `Array#reduce`. | yes | autofix | 90.3% |
+| [prefer-reduce-type-parameter](prefer-reduce-type-parameter.md) | Reports assertions on the initial value passed to `Array#reduce`. | yes | autofix | 100% |
 | [prefer-regex-literals](prefer-regex-literals.md) | Reports `RegExp` constructors with fixed patterns and flags. |  |  | 100% |
 | [prefer-regexp-exec](prefer-regexp-exec.md) | Prefers `RegExp#exec` to `String#match` when the expression has no global flag. | yes | autofix | 100% |
 | [prefer-rest-params](prefer-rest-params.md) | Reports use of the implicit `arguments` object. |  |  | 100% |
@@ -372,7 +372,7 @@ Pages are adapted from the documentation of [ESLint](https://eslint.org/docs/lat
 | [quotes](quotes.md) | Enforces one string delimiter style: double quotes by default. |  | autofix | 100% |
 | [radix](radix.md) | Requires an explicit radix for `parseInt` and rejects invalid radix values. |  |  | 100% |
 | [related-getter-setter-pairs](related-getter-setter-pairs.md) | Requires a getter's return type to be assignable to the corresponding setter's parameter type. | yes |  | 100% |
-| [require-array-sort-compare](require-array-sort-compare.md) | Requires a comparison function for array `sort` and `toSorted` calls. | yes |  | 86.5% |
+| [require-array-sort-compare](require-array-sort-compare.md) | Requires a comparison function for array `sort` and `toSorted` calls. | yes |  | 97.3% |
 | [require-atomic-updates](require-atomic-updates.md) | Reports updates that read a shared value before `await` or `yield` and write it afterwards. |  |  | 100% |
 | [require-await](require-await.md) | Reports async functions that neither await work nor return promises. | yes |  | 100% |
 | [require-unicode-regexp](require-unicode-regexp.md) | Requires regular expressions to use Unicode mode with a `u` or `v` flag. |  |  | 100% |
@@ -418,7 +418,7 @@ Pages are adapted from the documentation of [ESLint](https://eslint.org/docs/lat
 | [space-infix-ops](space-infix-ops.md) | Requires spaces around infix operators, assignments and conditional-expression punctuation. |  | autofix | 100% |
 | [space-unary-ops](space-unary-ops.md) | Controls spaces beside unary operators. |  | autofix | 100% |
 | [spaced-comment](spaced-comment.md) | Controls whitespace after line and block comment openers. |  | autofix | 99.0% |
-| [strict-boolean-expressions](strict-boolean-expressions.md) | Reports unsafe types in boolean conditions, logical negations, assertion arguments and array predicates. | yes |  | 97.2% |
+| [strict-boolean-expressions](strict-boolean-expressions.md) | Reports unsafe types in boolean conditions, logical negations, assertion arguments and array predicates. | yes |  | 98.2% |
 | [strict-void-return](strict-void-return.md) | Reports value-returning functions used where a void-returning callback is expected. | yes |  | 96.4% |
 | [strict](strict.md) | Requires or disallows `"use strict"` directives. |  | autofix | 99.2% |
 | [switch-colon-spacing](switch-colon-spacing.md) | Controls spaces around `case` and `default` colons when the adjacent tokens are on the same line. |  | autofix | 100% |
@@ -432,7 +432,7 @@ Pages are adapted from the documentation of [ESLint](https://eslint.org/docs/lat
 | [type-annotation-spacing](type-annotation-spacing.md) | Controls spaces around TypeScript type annotation punctuation. |  | autofix | 100% |
 | [type-generic-spacing](type-generic-spacing.md) | Keeps spacing around TypeScript generic brackets consistent. |  | autofix | 100% |
 | [type-named-tuple-spacing](type-named-tuple-spacing.md) | Requires named tuple members to use `name: Type` or `name?: Type`. |  | autofix | 100% |
-| [unbound-method](unbound-method.md) | Reports methods extracted from their object without binding their receiver. | yes |  | 98.2% |
+| [unbound-method](unbound-method.md) | Reports methods extracted from their object without binding their receiver. | yes |  | 98.6% |
 | [unicode-bom](unicode-bom.md) | Controls whether a file starts with the Unicode byte order mark, U+FEFF. |  | autofix | 100% |
 | [unified-signatures](unified-signatures.md) | Reports overloads that could be combined using a union, an optional parameter or a rest parameter. |  |  | 100% |
 | [use-isnan](use-isnan.md) | Reports comparisons with `NaN`, including `Number.NaN`. |  |  | 100% |

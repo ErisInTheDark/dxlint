@@ -8,7 +8,7 @@ Requires a comparison function for array `sort` and `toSorted` calls. Without on
 | Needs types | yes |
 | Fix | none |
 | Rulesets | none |
-| Parity | 32 / 37 corpus cases |
+| Parity | 36 / 37 corpus cases |
 
 ## Enable
 
@@ -46,8 +46,6 @@ rule require-array-sort-compare {
 
 ## Differences from upstream
 
-- Some array union or intersection receivers are not recognised, such as `number[] | string[]`.
-- Constrained string arrays can be reported despite `ignoreStringArrays`, for example `T extends string[]`.
-- Array narrowing through `Array.isArray` can be missed, such as a `string | string[]` receiver inside the guarded branch.
+- A type parameter constrained to the generic spelling `Array<string>` can be reported despite `ignoreStringArrays` (`T extends string[]` is not).
 
 Adapted from the [typescript-eslint](https://typescript-eslint.io/rules/require-array-sort-compare) documentation (MIT).

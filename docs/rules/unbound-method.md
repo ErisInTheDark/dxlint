@@ -8,7 +8,7 @@ Reports methods extracted from their object without binding their receiver. Call
 | Needs types | yes |
 | Fix | none |
 | Rulesets | `rules:types` |
-| Parity | 214 / 218 corpus cases |
+| Parity | 215 / 218 corpus cases |
 
 ## Enable
 
@@ -55,6 +55,6 @@ rule unbound-method {
 ## Differences from upstream
 
 - Can miss methods destructured from contextually typed callback parameters or from items in a `for...of` loop.
-- Can miss computed method references with template-expression keys, such as ``foo[`ba${'zz'}`]``, or numeric keys such as `foo[1]`.
+- Can miss computed method references with numeric keys, such as `foo[1]`.
 
 Adapted from the [typescript-eslint](https://typescript-eslint.io/rules/unbound-method) documentation (MIT).

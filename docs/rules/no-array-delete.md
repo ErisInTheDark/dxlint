@@ -8,7 +8,7 @@ Reports deleting an array element. `delete` leaves a hole without changing the a
 | Needs types | yes |
 | Fix | none |
 | Rulesets | none |
-| Parity | 28 / 31 corpus cases |
+| Parity | 31 / 31 corpus cases |
 
 ## Enable
 
@@ -35,7 +35,6 @@ arr.splice(0, 1);
 
 ## Differences from upstream
 
-- Some array unions and intersections are not recognised. For example, deletion from `number[] | string[] | boolean[]` can go unreported.
 - dxlint does not offer upstream's replacement suggestion.
 
 Adapted from the [typescript-eslint](https://typescript-eslint.io/rules/no-array-delete) documentation (MIT).

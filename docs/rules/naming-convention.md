@@ -8,7 +8,7 @@ Reports names that do not follow the convention for their declaration kind. Form
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |
-| Parity | 86 / 89 corpus cases |
+| Parity | 87 / 89 corpus cases |
 
 ## Enable
 
@@ -85,8 +85,7 @@ rule naming-convention:variable {
 - Use variants instead of upstream selector arrays. `format` becomes `formats`; `custom.regex` and `custom.match` become `customRegex` and `customMatch`.
 - Upstream selector modifiers, type filters, name `filter`, grouped selectors, and selector-priority configuration are not exposed as rule options. The available options do not require types; upstream type-filtered configurations can.
 - A named import alias such as `import { "??" as foo } from "foo_bar"` is not assigned the expected import naming context in one corpus case.
-- One corpus mismatch comes from the harness's array type filter on nullable unions of different array kinds.
-- Another comes from the harness checking a typed property key rather than the property's annotated value type. These two harness mismatches do not establish failures in the available naming options.
+- One corpus mismatch comes from the harness checking a typed property key rather than the property's annotated value type. It does not establish a failure in the available naming options.
 - Message wording uses the declaration label and the name, with separate reasons for format, underscore, affix, and pattern failures.
 
 Adapted from the [typescript-eslint](https://typescript-eslint.io/rules/naming-convention) documentation (MIT).

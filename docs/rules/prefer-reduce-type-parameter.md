@@ -8,7 +8,7 @@ Reports assertions on the initial value passed to `Array#reduce`. An explicit ty
 | Needs types | yes |
 | Fix | autofix |
 | Rulesets | none |
-| Parity | 28 / 31 corpus cases |
+| Parity | 31 / 31 corpus cases |
 
 ## Enable
 
@@ -33,6 +33,6 @@ Correct:
 
 ## Differences from upstream
 
-- Some constrained generic, union, and intersection receivers do not expose their array `reduce` signatures correctly. For example, a receiver of type `U extends T[]` may be missed.
+- None known: every upstream test case matches.
 
 Adapted from the [typescript-eslint](https://typescript-eslint.io/rules/prefer-reduce-type-parameter) documentation (MIT).

@@ -8,7 +8,7 @@ Reports awaiting values that are not promises or other thenables. It also checks
 | Needs types | yes |
 | Fix | none |
 | Rulesets | `rules:types` |
-| Parity | 123 / 132 corpus cases |
+| Parity | 129 / 132 corpus cases |
 
 ## Enable
 
@@ -51,9 +51,7 @@ await createValue();
 
 - dxlint does not provide upstream's suggestions to remove or change asynchronous syntax.
 - The corpus exposes incomplete type answers for instances of subclasses of `Array`, such as `class Items extends Array {}; await new Items();`.
-- Generator iterator symbols are not always resolved, affecting `for await...of` over synchronous generators.
 - Well-known symbol absence is not always known: an object with `Symbol.dispose` may escape the `await using` check for missing `Symbol.asyncDispose`.
-- Union array and tuple elements are not always projected into aggregator checks, as in `Promise.all(x)` where `x` is `[number] | [Promise<number>]`.
 - Inherited generic iterable elements are not always substituted correctly, affecting aggregators receiving an interface extending `Array<T>`.
 
 Adapted from the [typescript-eslint](https://typescript-eslint.io/rules/await-thenable) documentation (MIT).

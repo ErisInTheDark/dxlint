@@ -8,7 +8,7 @@ Reports unsafe types in boolean conditions, logical negations, assertion argumen
 | Needs types | yes |
 | Fix | none |
 | Rulesets | none |
-| Parity | 212 / 218 corpus cases |
+| Parity | 214 / 218 corpus cases |
 
 ## Enable
 
@@ -74,10 +74,8 @@ rule strict-boolean-expressions {
 
 - Upstream offers suggestions for some diagnostics; dxlint does not provide fixes or suggestions here.
 - ESLint suppression comments are not interpreted.
-- An implicitly typed arrow parameter, such as `x => !x`, can be classified differently.
 - Nested logical expressions can miss an inherited boolean-test position, as in `(1 && []) || ('a' && {})`.
 - Contextual parameter types in block-bodied `find` predicates can differ, such as `items.find(x => { return x; })`.
-- The numeric type of a constrained rest tuple's `length` can be missed.
 - Without `strictNullChecks`, nullable values can be normalised differently, changing the accompanying condition diagnostic.
 
 Adapted from the [typescript-eslint](https://typescript-eslint.io/rules/strict-boolean-expressions) documentation (MIT).

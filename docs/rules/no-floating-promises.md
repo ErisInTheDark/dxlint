@@ -8,7 +8,7 @@ Reports promise expressions whose rejection is not handled. Await or return the 
 | Needs types | yes |
 | Fix | none |
 | Rulesets | `rules:types` |
-| Parity | 162 / 181 corpus cases |
+| Parity | 167 / 181 corpus cases |
 
 ## Enable
 
@@ -65,7 +65,6 @@ rule no-floating-promises {
 - dxlint does not offer upstream's editor suggestions for adding `await` or `void`.
 - Inherited promise constructors and their result types can lose promise information.
 - Constrained generic arrays can miss promise elements, such as `S extends Array<T | Promise<T>>`.
-- Some tuple and mixed-array expressions are missed, including `[1, Promise.reject()]`.
 - Generator resume and delegated results are not fully checked.
 - Promise results after spread arguments can be missed.
 - Safe-promise allowances can incorrectly accept structural or intersection aliases when the allowance cannot be resolved.

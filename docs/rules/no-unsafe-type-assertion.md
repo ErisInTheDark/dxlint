@@ -8,7 +8,7 @@ Reports type assertions that narrow a value's type without a runtime check, incl
 | Needs types | yes |
 | Fix | none |
 | Rulesets | none |
-| Parity | 95 / 102 corpus cases |
+| Parity | 96 / 102 corpus cases |
 
 ## Enable
 

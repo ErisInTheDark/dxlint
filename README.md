@@ -21,8 +21,8 @@ warn: Promises must be awaited, end with a call to .catch, end with a call to .t
 
 ## Why
 
-- **Fast.** On a 2,000-file TypeScript codebase, on one core, a full run takes half as long as ESLint, a cached run a quarter, in a sixth of the memory.
-- **Your ESLint rules.** 99.2% of ESLint's and typescript-eslint's own rule test cases give the same result. Type-aware rules read your `tsconfig.json` without running TypeScript.
+- **Fast.** On a 2,000-file TypeScript codebase, on one core, a full run takes under half as long as ESLint, a cached run a fifth, in under a third of the memory.
+- **Your ESLint rules.** 99.3% of ESLint's and typescript-eslint's own rule test cases give the same result. Type-aware rules read your `tsconfig.json` without running TypeScript.
 - **A cache you can trust.** `.dxcache` records everything a file's result depended on, other files included, so an edit re-checks exactly the files it affects.
 - **Rules are code you own.** Built-in rules are `.dx` files: override one, write your own in a few lines, or describe a whole new language.
 
@@ -72,12 +72,14 @@ in ts_call.callee rule no-alert-calls error "use the notification service instea
 
 ## Performance
 
-One core (`--jobs 1`), wayward (2,094 TypeScript files, its full ESLint config ported, type-aware rules included):
+One core (`--jobs 1`, both pinned to the same core, wall time, measured in one session), wayward (2,094 TypeScript files, its full ESLint config ported, type-aware rules included):
 
 | | ESLint | dxlint |
 | --- | --- | --- |
-| first run | 135.9 s | 65.4 s |
-| cached run, nothing changed | 2.9 s | 0.8 s |
-| peak memory | 3.5 GB | 0.57 GB |
+| first run | 164 s | 72 s |
+| cached run, nothing changed | 4.4 s | 0.8 s |
+| peak memory | 2.0 GB | 0.6 GB |
+
+Note: This isn't a fair comparison because [eslint --cache doesn't work with typescript-eslint](https://typescript-eslint.io/troubleshooting/faqs/eslint/?utm_source=chatgpt.com#can-i-use-eslints---cache-with-typescript-eslint).
 
 By default dxlint uses every core.

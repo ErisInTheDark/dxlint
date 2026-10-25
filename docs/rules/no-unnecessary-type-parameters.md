@@ -8,7 +8,7 @@ Reports type parameters that do not relate multiple parts of a signature. A conc
 | Needs types | yes |
 | Fix | none |
 | Rulesets | none |
-| Parity | 164 / 170 corpus cases |
+| Parity | 170 / 170 corpus cases |
 
 ## Enable
 
@@ -39,7 +39,6 @@ Uses in inferred return types count; uses only inside the implementation do not.
 
 ## Differences from upstream
 
-- Inferred generic callback returns can remain unresolved. A method returning `items.map(item => "" + item).join(",")` may therefore miss an unnecessary parameter.
 - dxlint reports the issue without offering upstream's replacement suggestion.
 
 Adapted from the [typescript-eslint](https://typescript-eslint.io/rules/no-unnecessary-type-parameters) documentation (MIT).

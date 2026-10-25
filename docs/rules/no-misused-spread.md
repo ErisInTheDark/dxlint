@@ -8,7 +8,7 @@ Reports spreads whose types suggest a likely mistake, such as promises, function
 | Needs types | yes |
 | Fix | none |
 | Rulesets | none |
-| Parity | 129 / 134 corpus cases |
+| Parity | 133 / 134 corpus cases |
 
 ## Enable
 
@@ -51,8 +51,6 @@ rule no-misused-spread {
 
 ## Differences from upstream
 
-- Array unions and intersections can be missed, for example spreading `number[] | string[]` into an object.
-- Map types inferred from constructor arguments containing pair arrays can be missed.
 - Iterable types exported by ambient modules can lose their symbol-member or origin information, affecting detection and package-based exemptions.
 - The string diagnostic recommends `Intl.Segmenter` and explains code-point versus UTF-16 splitting; wording differs from upstream.
 - Upstream suggestions are not supplied.
