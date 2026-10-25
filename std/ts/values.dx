@@ -4,7 +4,10 @@ import .ts/values/inspection
 
 define {
 
-exclusive null, undefined, string, number, boolean, bigint, symbol, object
+# A primitive intersected with an object type stays (a branded `string &
+# { tag }`, `string & number[]`); only nullish values exclude objects.
+exclusive null, undefined, string, number, boolean, bigint, symbol
+exclusive null, undefined, object
 exclusive falsy, truthy
 exclusive thenable, nonthenable
 # TypeScript's `object` keyword takes every non-primitive: a shape with members is one.
@@ -147,10 +150,12 @@ fn ts_value_array_rest(n) = {
 fn ts_value_string_array(n) = {
   value arms: value_parts(n)
   value ts_value_array_like(n) && all(arms, arm => {
-    value empty: any(arm.parts, part => part.product_known && part.product != null && count(part.product.elements) == 0)
+    # A type parameter's own part stands beside its constraint's.
+    value parts: filter(arm.parts, part => !contains(part.traits, "parameter"))
+    value empty: any(parts, part => part.product_known && part.product != null && count(part.product.elements) == 0)
     value element: value_constituents(value_lookup(arm.handle, 0).member)
-    value count(arm.parts) == 1 && (empty || element != null && count(element) > 0
-      && all(element, item => count(item) == 1 && contains(first(item).traits, "string")))
+    value count(parts) == 1 && (empty || element != null && count(element) > 0
+      && all(element, item => any(item, part => contains(part.traits, "string"))))
   })
 }
 fn ts_value_const_context(n) = {
