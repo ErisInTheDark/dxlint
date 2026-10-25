@@ -30,7 +30,7 @@ use crate::pattern::Pat;
 const RESERVED: &[&str] = &[
     "import", "macro", "lang", "group", "match", "in", "layer", "rule", "indent", "dedent", "like", "set", "ignore", "option", "when",
     "fix", "as", "files", "report", "until", "or", "if", "then", "else", "true", "false", "null", "off", "hint", "info",
-    "warn", "error", "native", "let", "drop", "override", "amend", "forward", "is", "define", "schema", "each", "language",
+    "warn", "error", "native", "let", "drop", "override", "forward", "is", "define", "schema", "each", "language",
 ];
 
 /// Items about names and effects; words only
@@ -337,11 +337,6 @@ impl<'a> Parser<'a> {
         match (t.kind, &*t.text) {
             (Tk::Ident, "import") => self.import(),
             (Tk::Ident, "@macro") => { self.macro_def(); }
-            (Tk::Ident, "macro") => {
-                // Still defines it, so its calls do not cascade.
-                self.errors.push(ConfigError::new(t.span, "macros are defined with `@macro`").note("`@macro name { ... }`, called as `@name`"));
-                self.macro_def();
-            }
             (Tk::Ident, "fn") => self.fn_def(),
             (Tk::Ident, "lang") => self.lang(),
             (Tk::Ident, "language") => self.language_options(),
@@ -376,12 +371,6 @@ impl<'a> Parser<'a> {
             (Tk::Ident, "override") => self.override_item(ctx),
             (Tk::Ident, "define") => self.define_block(),
             (Tk::Ident, "schema") => self.schema_item(),
-            (Tk::Ident, "amend") => {
-                self.errors.push(
-                    ConfigError::new(t.span, "`amend` is now part of `rule`").note("write `rule name { ... }`: its clauses add to the rule, and `set option value` sets options"),
-                );
-                self.bump();
-            }
             (Tk::Ident, _) if self.ts.expand(&mut self.errors) => return,
             (Tk::Ident, name) if Dropped::find(&self.config.dropped, name).is_some() => {
                 let d = Dropped::find(&self.config.dropped, name).expect("found").clone();
@@ -391,7 +380,7 @@ impl<'a> Parser<'a> {
             _ => {
                 self.errors.push(
                     ConfigError::new(t.span, format!("expected an item, found {}", t.describe())).note(
-                        "items are: lang, language, group, match, in ..., rule, indent, let, fn, macro, schema, import, ignore, native, define, drop, override",
+                        "items are: lang, language, group, match, in ..., rule, indent, let, fn, @macro, schema, import, ignore, native, define, drop, override",
                     ),
                 );
                 self.bump();
@@ -2608,13 +2597,13 @@ mod tests {
 
     #[test]
     fn rules_without_a_context_configure_and_matchers_take_no_fields() {
-        let (c, errors, _) = parse_str("set x off\namend rule y {}\nrule lonely warn \"x\"\nin a.b match c /x/\nin a indent extra\n");
+        let (c, errors, _) = parse_str("set x off\nrule lonely warn \"x\"\nin a.b match c /x/\nin a indent extra\n");
         let all: Vec<&str> = errors.iter().map(|e| e.message.as_str()).collect();
-        // `rule` without `in` configures an existing rule; `set` and `amend`
-        // outside one say how they are written now.
+        // `rule` without `in` configures an existing rule; `set` outside one
+        // says how it is written.
         assert_eq!((c.rules.len(), c.configs.len()), (0, 1));
-        assert_eq!(errors.len(), 4, "{all:#?}");
-        assert!(all[0].contains("`set` only sets options") && all[1].contains("`amend` is now part of `rule`") && all[2].contains("can use a field"), "{all:#?}");
+        assert_eq!(errors.len(), 3, "{all:#?}");
+        assert!(all[0].contains("`set` only sets options") && all[1].contains("can use a field"), "{all:#?}");
         assert!(errors[0].notes.iter().any(|n| n.contains("rule x <severity>")), "{:#?}", errors[0]);
     }
 
@@ -2704,8 +2693,14 @@ mod tests {
         let c = ok("@macro text \"x\"\nin x rule a warn @text { when text == \"y\" }\n");
         assert!(matches!(c.rules[0].message.as_ref().map(|e| &e.kind), Some(ExprKind::Str(_))), "{:?}", c.rules[0].message);
         assert!(matches!(&c.rules[0].when[0].kind, ExprKind::Binary(_, l, _) if matches!(l.kind, ExprKind::Var(_))), "{:?}", c.rules[0].when);
-        let (_, errors, _) = parse_str("macro m \"x\"\n");
-        assert_eq!(errors.iter().map(|e| e.message.as_str()).collect::<Vec<_>>(), ["macros are defined with `@macro`"]);
+    }
+
+    #[test]
+    fn template_holes_take_trait_tests() {
+        let (c, errors, _) = parse_str("in x rule a info \"{ node always marked }\"\nin x rule b info \"{ node could (marked, other) } and on\"\n");
+        assert!(errors.is_empty(), "{errors:#?}");
+        let messages: Vec<String> = c.rules.iter().map(|rule| format!("{:?}", rule.message)).collect();
+        assert!(messages.len() == 2 && messages.iter().all(|m| m.contains("Trait(")), "{messages:#?}");
     }
 
     #[test]
