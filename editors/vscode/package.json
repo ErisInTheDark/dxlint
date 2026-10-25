@@ -2,7 +2,7 @@
   "name": "dxlint",
   "displayName": "dxlint",
   "description": "dxlint diagnostics, fixes and formatting as you type, plus language support for .dx rule files",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "ErisInTheDark",
   "license": "MIT",
   "repository": {
