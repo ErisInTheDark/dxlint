@@ -40,6 +40,24 @@ fn deprecation_doc(n, site) = {
   value first(filter(map(owners, owner => deprecation_leading_doc(site_text(n, owner).leading)),
     doc => doc != null))
 }
+# The documentation an imported name carries on the way: the export
+# specifier or `export default` that publishes it, then its declaration.
+fn import_remote_site(n, site) = {
+  value parent: site_parent(n, site)
+  value if parent == null then true else !contains(["ts_import", "ts_import_specifier"], parent.kind)
+}
+fn import_deprecation_doc(n, site) = {
+  value owners: walk([site], current => site_parent(n, current))
+  value first(filter(map(owners, owner => deprecation_leading_doc(site_text(n, owner).leading)),
+    doc => doc != null))
+}
+fn import_remote_sites(n, sites) = filter(sites ?? [], site => import_remote_site(n, site))
+fn import_deprecation_tag(n) = {
+  value values: import_remote_sites(n, name_definitions(n, "value"))
+  value types: if count(values) > 0 then [] else import_remote_sites(n, name_definitions(n, "type"))
+  value sites: if count(values) > 0 then values else types
+  value deprecation_first(map(reverse(sites), site => import_deprecation_doc(n, site)))
+}
 fn deprecation_local_doc(n) = {
   value owner: find(walk([] n.declaration, current =>
     if current is (ts_declarator, ts_identifier) then current.parent.node else null),
@@ -115,7 +133,11 @@ fn deprecation_reason(n) = {
   value signatures: if call != null && selection != null && !selection.uncertain && count(selection.selected) == 1
     then selection.selected else []
   value docs: map(unique([] signatures owners), site => deprecation_doc(subject, site))
-  value deprecation_first([deprecation_local_doc(subject)] docs)
+  value own: deprecation_first([deprecation_local_doc(subject)] docs)
+  # A name bound by an import is deprecated where its module publishes it.
+  value imported: if own == null && subject is ts_identifier && name_binding(subject).node.deprecation_import == true
+    then import_deprecation_tag(subject) else null
+  value own ?? imported
 }
 
 in ts_node let deprecation_import

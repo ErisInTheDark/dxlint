@@ -5,22 +5,6 @@ import .ts/deprecation
 
 define {
 
-fn import_remote_site(n, site) = {
-  value parent: site_parent(n, site)
-  value if parent == null then true else !contains(["ts_import", "ts_import_specifier"], parent.kind)
-}
-fn import_deprecation_doc(n, site) = {
-  value owners: walk([site], current => site_parent(n, current))
-  value first(filter(map(owners, owner => deprecation_leading_doc(site_text(n, owner).leading)),
-    doc => doc != null))
-}
-fn import_remote_sites(n, sites) = filter(sites ?? [], site => import_remote_site(n, site))
-fn import_deprecation_tag(n) = {
-  value values: import_remote_sites(n, name_definitions(n, "value"))
-  value types: if count(values) > 0 then [] else import_remote_sites(n, name_definitions(n, "type"))
-  value sites: if count(values) > 0 then values else types
-  value deprecation_first(map(reverse(sites), site => import_deprecation_doc(n, site)))
-}
 fn import_message(tag) = "Deprecated" (if tag.reason == "" then "." else ": " tag.reason)
 
 fn import_namespace_root(n) = last(walk([n], current =>
