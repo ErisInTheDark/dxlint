@@ -1,5 +1,5 @@
 import .ts
-rule no-deprecated
+rule es-no-deprecated
 
 # Project inputs remain readable, but the original Rust test linted only this main file.
 ignore "defs.ts"

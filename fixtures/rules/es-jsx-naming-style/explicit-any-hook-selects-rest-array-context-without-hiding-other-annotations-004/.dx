@@ -1,0 +1,3 @@
+import .ts
+override in ts_type_keyword let no_explicit_any_checked false
+rule es-no-explicit-any

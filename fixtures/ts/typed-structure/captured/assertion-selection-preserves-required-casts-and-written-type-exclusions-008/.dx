@@ -1,5 +1,5 @@
 import .ts
-rule no-unnecessary-type-assertion {
+rule es-no-unnecessary-type-assertion {
   set typesToIgnore ['number']
   set checkLiteralConstAssertions true
 }

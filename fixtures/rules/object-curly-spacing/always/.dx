@@ -1,2 +1,0 @@
-import .ts
-rule object-curly-spacing { set style "always"; set arraysInObjects false; set objectsInObjects false }

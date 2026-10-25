@@ -1,2 +1,2 @@
-file.js:1:1-1:34 use-isnan:switch#0
-file.js:1:16-1:32 use-isnan:case#0
+file.js:1:1-1:34 es-use-isnan:switch#0
+file.js:1:16-1:32 es-use-isnan:case#0

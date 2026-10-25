@@ -1,2 +1,2 @@
 import .ts
-rule return-await { set mode "never" }
+rule es-return-await { set mode "never" }

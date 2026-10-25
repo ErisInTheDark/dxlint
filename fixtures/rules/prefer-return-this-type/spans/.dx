@@ -1,2 +1,0 @@
-import .ts
-rule prefer-return-this-type

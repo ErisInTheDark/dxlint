@@ -1,5 +1,5 @@
-a.ts:1:101-1:110 promise-function-async#1
-a.ts:1:128-1:145 promise-function-async#1
-a.ts:1:180-1:186 promise-function-async#1
-a.ts:1:204-1:215 promise-function-async#1
-a.ts:1:300-1:318 promise-function-async#1
+a.ts:1:101-1:110 es-promise-function-async#1
+a.ts:1:128-1:145 es-promise-function-async#1
+a.ts:1:180-1:186 es-promise-function-async#1
+a.ts:1:204-1:215 es-promise-function-async#1
+a.ts:1:300-1:318 es-promise-function-async#1

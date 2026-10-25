@@ -1,5 +1,5 @@
-input.ts:15:10-15:16 strict-void-return#2
-input.ts:16:17-16:23 strict-void-return#2
-input.ts:3:10-3:13 strict-void-return#0
-input.ts:5:9-5:12 strict-void-return#0
-input.ts:8:37-8:40 strict-void-return#0
+input.ts:15:10-15:16 es-strict-void-return#2
+input.ts:16:17-16:23 es-strict-void-return#2
+input.ts:3:10-3:13 es-strict-void-return#0
+input.ts:5:9-5:12 es-strict-void-return#0
+input.ts:8:37-8:40 es-strict-void-return#0

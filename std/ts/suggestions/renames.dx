@@ -17,7 +17,7 @@ fn rename_fix_allowed(n, replacement) = replacement != null
   }
 
 group useless_rename_import ts_import_specifier
-in useless_rename_import rule no-useless-rename:import {
+in useless_rename_import rule es-no-useless-rename:import {
   let original_name imported.module_name_info
   when aliases_same(original_name, local.module_name_info)
   let replacement local.node
@@ -26,7 +26,7 @@ in useless_rename_import rule no-useless-rename:import {
 }
 
 group useless_rename_export ts_export_specifier
-in useless_rename_export rule no-useless-rename:export {
+in useless_rename_export rule es-no-useless-rename:export {
   let original_name local.module_name_info
   when aliases_same(original_name, exported.module_name_info)
   let replacement local.node
@@ -35,7 +35,7 @@ in useless_rename_export rule no-useless-rename:export {
 }
 
 group useless_rename_destructuring ts_pattern_property, ts_property
-in useless_rename_destructuring rule no-useless-rename:destructuring {
+in useless_rename_destructuring rule es-no-useless-rename:destructuring {
   let original_name key.module_name_info
   when is ts_pattern_property || parent.flow_destructuring_target == true
   when {

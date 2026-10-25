@@ -1,2 +1,2 @@
 import .ts
-rule no-useless-empty-export
+rule es-no-useless-empty-export

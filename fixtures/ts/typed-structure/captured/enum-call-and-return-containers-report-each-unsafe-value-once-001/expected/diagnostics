@@ -1,2 +1,2 @@
-a.ts:1:107-1:115 no-unsafe-enum-assignment#2
-a.ts:1:236-1:244 no-unsafe-enum-assignment#2
+a.ts:1:107-1:115 es-no-unsafe-enum-assignment#2
+a.ts:1:236-1:244 es-no-unsafe-enum-assignment#2

@@ -1,2 +1,2 @@
-a.ts:1:33-1:34 no-mixed-enums#0
-a.ts:1:89-1:90 no-mixed-enums#0
+a.ts:1:33-1:34 es-no-mixed-enums#0
+a.ts:1:89-1:90 es-no-mixed-enums#0

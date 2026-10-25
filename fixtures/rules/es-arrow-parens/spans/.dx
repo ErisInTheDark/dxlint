@@ -1,0 +1,2 @@
+import .ts
+rule es-arrow-parens { set style "as-needed" }

@@ -1,2 +1,2 @@
 import .css
-rule no-trailing-spaces { set ignoreComments true }
+rule shared-no-trailing-spaces { set ignoreComments true }

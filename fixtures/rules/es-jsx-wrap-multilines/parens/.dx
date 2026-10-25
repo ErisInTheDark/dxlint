@@ -1,0 +1,2 @@
+import .ts
+rule es-jsx-wrap-multilines { set logical "parens"; set prop true; set propertyValue "parens" }

@@ -1,2 +1,2 @@
 import .ts
-rule no-confusing-arrow { set allowParens false }
+rule es-no-confusing-arrow { set allowParens false }

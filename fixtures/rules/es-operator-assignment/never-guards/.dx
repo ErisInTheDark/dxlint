@@ -1,0 +1,2 @@
+import .ts
+rule es-operator-assignment { set mode "never" }

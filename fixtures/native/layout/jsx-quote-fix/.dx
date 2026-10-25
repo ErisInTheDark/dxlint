@@ -1,2 +1,2 @@
 import .ts
-rule jsx-quotes
+rule es-jsx-quotes

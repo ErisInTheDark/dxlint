@@ -1,2 +1,2 @@
 import .ts
-rule prefer-string-starts-ends-with { set allowSingleElementEquality always }
+rule es-prefer-string-starts-ends-with { set allowSingleElementEquality always }

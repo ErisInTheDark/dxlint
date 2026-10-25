@@ -1,4 +1,4 @@
 import .ts
-rule max-lines { set max 1
+rule es-max-lines { set max 1
 set skipComments true
 }

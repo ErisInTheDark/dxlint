@@ -1,2 +1,2 @@
 import .ts
-rule explicit-member-accessibility:* { set accessibility 'no-public' }
+rule es-explicit-member-accessibility:* { set accessibility 'no-public' }

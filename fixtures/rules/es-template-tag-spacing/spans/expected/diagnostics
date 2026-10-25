@@ -1,0 +1,3 @@
+file.ts:1:4-1:5 es-template-tag-spacing#0
+file.ts:2:4-2:10 es-template-tag-spacing#0
+file.ts:3:4-4:1 es-template-tag-spacing:comment#0

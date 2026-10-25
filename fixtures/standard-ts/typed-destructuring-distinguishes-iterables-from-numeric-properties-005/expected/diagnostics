@@ -1,2 +1,2 @@
-file.ts:1:31-1:40 prefer-destructuring#0
-file.ts:1:42-1:51 prefer-destructuring#0
+file.ts:1:31-1:40 es-prefer-destructuring#0
+file.ts:1:42-1:51 es-prefer-destructuring#0

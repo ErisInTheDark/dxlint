@@ -1,2 +1,2 @@
-input.tsx:1:18-1:19 jsx-max-props-per-line:singleline#0
-input.tsx:4:6-4:7 jsx-max-props-per-line:multiline#0
+input.tsx:1:18-1:19 es-jsx-max-props-per-line:singleline#0
+input.tsx:4:6-4:7 es-jsx-max-props-per-line:multiline#0

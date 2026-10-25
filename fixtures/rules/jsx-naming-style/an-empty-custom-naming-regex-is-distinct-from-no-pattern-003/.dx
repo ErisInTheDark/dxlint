@@ -1,7 +1,0 @@
-import .ts
-
-            rule naming-convention:variable {
-                set formats []
-                set customRegex ""
-                set customMatch false
-            }

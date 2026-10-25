@@ -116,9 +116,9 @@ fn curly_replacement(source, n, block) = if !block then "{{" n.text "}}" else {
   fix at node if curly_fix_allowed(node, curly_info.block) as curly_replacement(source, node, curly_info.block)
   warn "{if curly_expected == 1 then 'Expected' else 'Unnecessary'} {{ after '{curly_info.name}'{if curly_info.condition then ' condition' else ''}."
 }
-in ts_if.consequent rule curly:if { @suggestion_curly_policy }
-in ts_if.alternate rule curly:else { @suggestion_curly_policy }
-in ts_for.body, ts_while.body rule curly:loop { @suggestion_curly_policy }
-in ts_for_in.body, ts_for_of.body, ts_do_while.body rule curly:loop-body { @suggestion_curly_policy }
+in ts_if.consequent rule es-curly:if { @suggestion_curly_policy }
+in ts_if.alternate rule es-curly:else { @suggestion_curly_policy }
+in ts_for.body, ts_while.body rule es-curly:loop { @suggestion_curly_policy }
+in ts_for_in.body, ts_for_of.body, ts_do_while.body rule es-curly:loop-body { @suggestion_curly_policy }
 
 }

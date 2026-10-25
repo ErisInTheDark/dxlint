@@ -1,6 +1,6 @@
-input.ts:13:18-13:19 strict-boolean-expressions#0
-input.ts:1:7-1:8 strict-boolean-expressions#0
-input.ts:2:29-2:30 strict-boolean-expressions#0
-input.ts:3:38-3:39 strict-boolean-expressions#0
-input.ts:4:10-4:11 strict-boolean-expressions#0
-input.ts:5:14-5:15 strict-boolean-expressions#0
+input.ts:13:18-13:19 es-strict-boolean-expressions#0
+input.ts:1:7-1:8 es-strict-boolean-expressions#0
+input.ts:2:29-2:30 es-strict-boolean-expressions#0
+input.ts:3:38-3:39 es-strict-boolean-expressions#0
+input.ts:4:10-4:11 es-strict-boolean-expressions#0
+input.ts:5:14-5:15 es-strict-boolean-expressions#0

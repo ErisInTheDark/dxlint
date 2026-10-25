@@ -1,2 +1,2 @@
 import .ts
-rule no-restricted-properties { set options [{object: 'source', property: 'bad'}] }
+rule es-no-restricted-properties { set options [{object: 'source', property: 'bad'}] }

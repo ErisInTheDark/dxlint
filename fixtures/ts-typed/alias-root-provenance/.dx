@@ -1,6 +1,6 @@
 import .ts
 ignore "**/tsconfig.json"
-rule prefer-readonly-parameter-types {
+rule es-prefer-readonly-parameter-types {
   set allow [{from: "file", name: "MyArray"}]
 }
 in ts_parameter rule alias-root {

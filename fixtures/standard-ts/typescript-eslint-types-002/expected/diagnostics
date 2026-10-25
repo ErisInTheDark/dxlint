@@ -1,1 +1,1 @@
-a.ts:1:7-1:8 no-unused-vars:variables#1
+a.ts:1:7-1:8 es-no-unused-vars:variables#1

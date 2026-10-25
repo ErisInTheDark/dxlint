@@ -1,5 +1,5 @@
 import .ts
-rule no-confusing-void-expression
+rule es-no-confusing-void-expression
 in ts_call rule optional-number-contract {
   when node could number && node could undefined
   warn "Optional call preserves its number and undefined results."

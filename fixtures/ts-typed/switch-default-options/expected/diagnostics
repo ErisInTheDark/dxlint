@@ -1,6 +1,6 @@
-a.ts:14:11-14:16 switch-exhaustiveness-check#0
-a.ts:23:11-23:16 switch-exhaustiveness-check#0
-a.ts:23:11-23:16 switch-exhaustiveness-check#0
-a.ts:26:11-26:16 switch-exhaustiveness-check#0
-a.ts:2:37-2:52 switch-exhaustiveness-check#0
-default.ts:2:3-2:38 default-case#0
+a.ts:14:11-14:16 es-switch-exhaustiveness-check#0
+a.ts:23:11-23:16 es-switch-exhaustiveness-check#0
+a.ts:23:11-23:16 es-switch-exhaustiveness-check#0
+a.ts:26:11-26:16 es-switch-exhaustiveness-check#0
+a.ts:2:37-2:52 es-switch-exhaustiveness-check#0
+default.ts:2:3-2:38 es-default-case#0

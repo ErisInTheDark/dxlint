@@ -1,5 +1,5 @@
 import .ts
-rule switch-colon-spacing {
+rule es-switch-colon-spacing {
   set before false
   set after false
 }

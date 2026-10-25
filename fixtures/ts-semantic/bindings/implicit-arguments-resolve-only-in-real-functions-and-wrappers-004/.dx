@@ -1,2 +1,2 @@
 import .ts
-rule no-undef
+rule es-no-undef

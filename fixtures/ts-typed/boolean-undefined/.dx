@@ -3,4 +3,4 @@ language .js {
   files "disabled.ts"
   set globals { undefined: "off" }
 }
-rule strict-boolean-expressions
+rule es-strict-boolean-expressions

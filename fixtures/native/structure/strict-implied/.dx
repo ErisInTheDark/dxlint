@@ -3,4 +3,4 @@ language .js {
   set sourceType "script"
   set impliedStrict true
 }
-rule strict
+rule es-strict

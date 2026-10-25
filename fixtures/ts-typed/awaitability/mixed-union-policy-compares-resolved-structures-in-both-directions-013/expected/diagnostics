@@ -1,1 +1,1 @@
-file.ts:1:123-1:128 no-misused-promises:conditionals#0
+file.ts:1:123-1:128 es-no-misused-promises:conditionals#0

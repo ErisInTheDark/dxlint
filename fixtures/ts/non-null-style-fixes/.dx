@@ -1,4 +1,4 @@
 import .ts
-rule non-nullable-type-assertion-style
+rule es-non-nullable-type-assertion-style
 ignore "tsconfig.json"
 ignore "node_modules/typescript/lib/lib.fixture.d.ts"

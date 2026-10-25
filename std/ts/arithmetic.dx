@@ -56,7 +56,7 @@ fn arithmetic_pair_error(left, right, options) = when {
 
 in ts_node let arithmetic_type value_parts(node)
 
-in ts_binary, ts_assignment rule restrict-plus-operands {
+in ts_binary, ts_assignment rule es-restrict-plus-operands {
   option allowAny boolean = true "allow any operands"
   option allowBoolean boolean = true "allow boolean operands"
   option allowNullish boolean = true "allow null and undefined operands"

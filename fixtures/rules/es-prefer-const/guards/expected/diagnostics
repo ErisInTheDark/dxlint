@@ -1,0 +1,5 @@
+file.js:1:5-1:5 es-prefer-const#0
+file.js:2:5-2:5 es-prefer-const#0
+file.js:3:8-3:8 es-prefer-const#0
+file.js:4:9-4:9 es-prefer-const#0
+file.js:5:5-5:5 es-prefer-const#0

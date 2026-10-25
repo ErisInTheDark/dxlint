@@ -1,2 +1,2 @@
 import .ts
-rule no-unused-vars:variables { set enableAutofixRemoval { imports: true } }
+rule es-no-unused-vars:variables { set enableAutofixRemoval { imports: true } }

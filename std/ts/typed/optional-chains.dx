@@ -273,7 +273,7 @@ fn optional_report(source, report, boundary, op, unsafe) = {
   span: report.span, edit: if optional_safe(report.items, op, unsafe) then optional_edit(source, report, boundary) else null
 }
 
-in ts_logical rule prefer-optional-chain {
+in ts_logical rule es-prefer-optional-chain {
   option checkAny boolean = true "Check any values"
   option checkUnknown boolean = true "Check unknown values"
   option checkString boolean = true "Check string values"
@@ -304,7 +304,7 @@ in ts_logical rule prefer-optional-chain {
     fix at chain.edit.target if chain.edit != null as chain.edit.text
   }
 }
-in ts_logical rule prefer-optional-chain:empty-object {
+in ts_logical rule es-prefer-optional-chain:empty-object {
   option requireNullish boolean = false "Require a nullable checked operand"
   when contains(["||", "??"], operator) && unparenthesised_node(right.node) is ts_object && { value unparenthesised_node(right.node).property.nodes; count } == 0
   let enclosing { value node; walk (n) if n.parent is ts_parenthesized then n.parent.node else null; last }

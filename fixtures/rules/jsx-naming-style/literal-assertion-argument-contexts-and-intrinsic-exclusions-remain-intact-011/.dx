@@ -1,4 +1,0 @@
-import .ts
-rule consistent-type-assertions
-rule consistent-type-assertions:object set 'never'
-rule consistent-type-assertions:array set 'never'

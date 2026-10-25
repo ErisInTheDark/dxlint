@@ -1,4 +1,4 @@
-a.js:10:3-10:3 max-statements-per-line#0
-a.js:3:12-3:12 max-statements-per-line#0
-a.js:4:5-4:5 max-statements-per-line#0
-a.js:8:16-8:16 max-statements-per-line#0
+a.js:10:3-10:3 es-max-statements-per-line#0
+a.js:3:12-3:12 es-max-statements-per-line#0
+a.js:4:5-4:5 es-max-statements-per-line#0
+a.js:8:16-8:16 es-max-statements-per-line#0

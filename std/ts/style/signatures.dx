@@ -21,7 +21,7 @@ fn overload_report_site(n) = {
   value separated: bodiless && terminator != null && terminator.text == ";" && terminator.start == n.end_offset
   value { start: n.offset, end: if separated then terminator.end else n.end_offset }
 }
-in ts_function, ts_method, ts_method_signature, ts_call_signature, ts_export rule adjacent-overload-signatures {
+in ts_function, ts_method, ts_method_signature, ts_call_signature, ts_export rule es-adjacent-overload-signatures {
   when parent is (ts_program, ts_block, ts_class, ts_interface, ts_type_literal)
   when overload_identity != null && overload_identity != previous.overload_identity
   when earlier_overload(parent.overload_entries, overload_identity, offset)
@@ -32,17 +32,17 @@ in ts_function, ts_method, ts_method_signature, ts_call_signature, ts_export rul
 
 # `new (): I` in interface `I` (type arguments aside), and `constructor()`
 # signatures in interfaces and type literals.
-in ts_call_signature rule no-misused-new {
+in ts_call_signature rule es-no-misused-new {
   when parent is ts_interface && kind == "new" && { value return_type.nonempty ?? ""; re_replace /\s*<[\s\S]*$/ "" } == ts_interface.name
   report at { start: offset, end: signature_source_end }
   warn "Interfaces cannot be constructed, only classes."
 }
-in ts_method_signature rule no-misused-new:constructor {
+in ts_method_signature rule es-no-misused-new:constructor {
   when key == "constructor"
   report at { start: offset, end: signature_source_end }
   warn "Interfaces cannot be constructed, only classes."
 }
-in ts_method rule no-misused-new:class {
+in ts_method rule es-no-misused-new:class {
   when key == "new" && body == null && return_type == ts_class.name
   warn "Class cannot have method named `new`."
 }
@@ -126,7 +126,7 @@ fn function_type_fix(source, n, info) = {
     || !expression_fix_retains_comments(span, replacement) then null
     else { start: start, end: owner.end_offset, text: replacement }
 }
-in ts_call_signature rule prefer-function-type {
+in ts_call_signature rule es-prefer-function-type {
   let container parent.function_type_container
   when return_type != null && container.eligible == true
   let this_offset container.this
@@ -186,7 +186,7 @@ in ts_method_signature, ts_property_signature let signature_report_end {
   value next: token(node, "after")
   value if next != null && contains([";", ","], next.text) then next.end else end_offset
 }
-in ts_method_signature rule method-signature-style {
+in ts_method_signature rule es-method-signature-style {
   option mode ("method" | "property") = "property" "Preferred method signature notation."
   when mode == "property" && kind != "get" && kind != "set"
   report at { start: offset, end: signature_report_end }
@@ -194,7 +194,7 @@ in ts_method_signature rule method-signature-style {
   let replacement signature_property_edit
   fix at { start: replacement.start ?? offset, end: replacement.end ?? offset } if replacement != null as replacement.text
 }
-in ts_property_signature rule method-signature-style:property {
+in ts_property_signature rule es-method-signature-style:property {
   option mode ("method" | "property") = "property" "Preferred method signature notation."
   when mode == "method" && type.is_function_type == true
   report at { start: offset, end: signature_report_end }
@@ -284,7 +284,7 @@ fn unified_names(a, b) = {
 }
 fn unified_pair(a, b, outer_names, group_count) = { difference: unified_comparison(a, b, outer_names), a: a, b: b, count: group_count }
 group unified_signature_node ts_function, ts_method, ts_method_signature, ts_call_signature
-in unified_signature_node rule unified-signatures {
+in unified_signature_node rule es-unified-signatures {
   option ignoreDifferentlyNamedParameters boolean = false "Ignore overloads with different parameter names."
   option ignoreOverloadsWithDifferentJSDoc boolean = false "Ignore overloads with different block comments."
   let signature unified_signature

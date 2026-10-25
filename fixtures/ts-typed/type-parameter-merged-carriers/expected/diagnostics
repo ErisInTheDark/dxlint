@@ -1,3 +1,3 @@
-input.ts:1:23-1:24 no-unnecessary-type-parameters#0
-input.ts:2:31-2:32 no-unnecessary-type-parameters#0
-input.ts:4:31-4:32 no-unnecessary-type-parameters#0
+input.ts:1:23-1:24 es-no-unnecessary-type-parameters#0
+input.ts:2:31-2:32 es-no-unnecessary-type-parameters#0
+input.ts:4:31-4:32 es-no-unnecessary-type-parameters#0

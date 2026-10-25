@@ -1,2 +1,2 @@
 import .ts
-rule no-unnecessary-type-assertion { when node not ts_type_assertion }
+rule es-no-unnecessary-type-assertion { when node not ts_type_assertion }

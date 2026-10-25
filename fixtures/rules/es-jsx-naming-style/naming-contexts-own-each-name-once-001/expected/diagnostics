@@ -1,0 +1,8 @@
+a.ts:11:25-11:35 es-naming-convention:enum-member#0
+a.ts:12:18-12:29 es-naming-convention:function#0
+a.ts:3:13-3:25 es-naming-convention:object-property#0
+a.ts:4:13-4:23 es-naming-convention:object-method#0
+a.ts:7:15-7:24 es-naming-convention:class#0
+a.ts:8:13-8:25 es-naming-convention:class-property#0
+a.ts:9:13-9:23 es-naming-convention:class-method#0
+a.ts:9:24-9:44 es-naming-convention:parameter#0

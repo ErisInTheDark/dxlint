@@ -1,7 +1,7 @@
-input.ts:11:1-11:18 no-meaningless-void-operator#0
-input.ts:12:1-12:18 no-meaningless-void-operator#1
-input.ts:13:1-13:26 no-meaningless-void-operator#0
-input.ts:2:1-2:13 no-meaningless-void-operator#0
-input.ts:4:1-4:9 no-meaningless-void-operator#1
-input.ts:5:1-5:27 no-meaningless-void-operator#1
-input.ts:6:1-6:18 no-meaningless-void-operator#0
+input.ts:11:1-11:18 es-no-meaningless-void-operator#0
+input.ts:12:1-12:18 es-no-meaningless-void-operator#1
+input.ts:13:1-13:26 es-no-meaningless-void-operator#0
+input.ts:2:1-2:13 es-no-meaningless-void-operator#0
+input.ts:4:1-4:9 es-no-meaningless-void-operator#1
+input.ts:5:1-5:27 es-no-meaningless-void-operator#1
+input.ts:6:1-6:18 es-no-meaningless-void-operator#0

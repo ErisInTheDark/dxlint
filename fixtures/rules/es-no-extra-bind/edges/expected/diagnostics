@@ -1,0 +1,6 @@
+file.js:1:40-1:44 es-no-extra-bind#0
+file.js:3:3-3:7 es-no-extra-bind#0
+file.js:4:27-4:31 es-no-extra-bind#0
+file.js:5:33-5:37 es-no-extra-bind#0
+file.js:6:34-6:38 es-no-extra-bind#0
+file.js:7:37-7:41 es-no-extra-bind#0

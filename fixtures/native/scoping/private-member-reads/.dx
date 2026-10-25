@@ -1,2 +1,2 @@
 import .ts
-rule no-unused-private-class-members
+rule es-no-unused-private-class-members

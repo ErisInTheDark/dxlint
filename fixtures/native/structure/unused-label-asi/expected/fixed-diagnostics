@@ -1,7 +1,7 @@
-a.js:11:3-11:8 no-unused-labels#0
-a.js:14:3-14:8 no-unused-labels#0
-a.js:17:3-17:8 no-unused-labels#0
-a.js:20:3-20:8 no-unused-labels#0
-a.js:2:3-2:8 no-unused-labels#0
-a.js:5:3-5:8 no-unused-labels#0
-a.js:8:3-8:8 no-unused-labels#0
+a.js:11:3-11:8 es-no-unused-labels#0
+a.js:14:3-14:8 es-no-unused-labels#0
+a.js:17:3-17:8 es-no-unused-labels#0
+a.js:20:3-20:8 es-no-unused-labels#0
+a.js:2:3-2:8 es-no-unused-labels#0
+a.js:5:3-5:8 es-no-unused-labels#0
+a.js:8:3-8:8 es-no-unused-labels#0

@@ -1,7 +1,7 @@
-a.js:1:11-1:17 nonblock-statement-body-position#1
-a.js:1:23-1:28 nonblock-statement-body-position#1
-a.js:2:14-2:21 nonblock-statement-body-position#1
-a.js:3:4-3:11 nonblock-statement-body-position#1
-a.js:4:10-4:17 nonblock-statement-body-position#1
-a.js:5:27-5:34 nonblock-statement-body-position#1
-a.js:6:28-6:35 nonblock-statement-body-position#1
+a.js:1:11-1:17 es-nonblock-statement-body-position#1
+a.js:1:23-1:28 es-nonblock-statement-body-position#1
+a.js:2:14-2:21 es-nonblock-statement-body-position#1
+a.js:3:4-3:11 es-nonblock-statement-body-position#1
+a.js:4:10-4:17 es-nonblock-statement-body-position#1
+a.js:5:27-5:34 es-nonblock-statement-body-position#1
+a.js:6:28-6:35 es-nonblock-statement-body-position#1

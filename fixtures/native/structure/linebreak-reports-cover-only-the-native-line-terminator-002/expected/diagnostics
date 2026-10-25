@@ -1,2 +1,2 @@
-a.ts:1:13-1:14 linebreak-style#0
-a.ts:1:26-1:27 linebreak-style#0
+a.ts:1:13-1:14 shared-linebreak-style#0
+a.ts:1:26-1:27 shared-linebreak-style#0

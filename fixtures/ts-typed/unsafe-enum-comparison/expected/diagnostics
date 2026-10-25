@@ -1,8 +1,8 @@
-a.ts:12:20-12:34 no-unsafe-enum-comparison#0
-a.ts:26:1-26:16 no-unsafe-enum-comparison#0
-a.ts:28:1-28:19 no-unsafe-enum-comparison#0
-a.ts:31:1-31:31 no-unsafe-enum-comparison#0
-a.ts:39:3-39:20 no-unsafe-enum-comparison#0
-a.ts:4:1-4:18 no-unsafe-enum-comparison#0
-a.ts:5:1-5:27 no-unsafe-enum-comparison#0
-a.ts:6:1-6:23 no-unsafe-enum-comparison#0
+a.ts:12:20-12:34 es-no-unsafe-enum-comparison#0
+a.ts:26:1-26:16 es-no-unsafe-enum-comparison#0
+a.ts:28:1-28:19 es-no-unsafe-enum-comparison#0
+a.ts:31:1-31:31 es-no-unsafe-enum-comparison#0
+a.ts:39:3-39:20 es-no-unsafe-enum-comparison#0
+a.ts:4:1-4:18 es-no-unsafe-enum-comparison#0
+a.ts:5:1-5:27 es-no-unsafe-enum-comparison#0
+a.ts:6:1-6:23 es-no-unsafe-enum-comparison#0

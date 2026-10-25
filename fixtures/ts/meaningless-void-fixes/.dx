@@ -1,2 +1,2 @@
 import .ts
-rule no-meaningless-void-operator
+rule es-no-meaningless-void-operator

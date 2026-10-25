@@ -131,35 +131,35 @@ fn redundant_findings(n) = {
 
 in ts_union, ts_intersection {
   let redundant_findings redundant_findings(node)
-  rule no-redundant-type-constituents {
+  rule es-no-redundant-type-constituents {
     each part in redundant_findings {
       when part.mode == "overrides"
       report at part.site
       warn "'{part.name}' overrides all other types in this {part.container} type."
     }
   }
-  rule no-redundant-type-constituents:overridden {
+  rule es-no-redundant-type-constituents:overridden {
     each part in redundant_findings {
       when part.mode == "overridden"
       report at part.site
       warn "'{part.name}' is overridden by other types in this {part.container} type."
     }
   }
-  rule no-redundant-type-constituents:error {
+  rule es-no-redundant-type-constituents:error {
     each part in redundant_findings {
       when part.mode == "error"
       report at part.site
       warn "'{part.name}' is an 'error' type that acts as 'any' and overrides all other types in this {part.container} type."
     }
   }
-  rule no-redundant-type-constituents:literal {
+  rule es-no-redundant-type-constituents:literal {
     each part in redundant_findings {
       when part.mode == "literal"
       report at part.site
       warn "{part.name} is overridden by {part.primitive} in this union type."
     }
   }
-  rule no-redundant-type-constituents:primitive {
+  rule es-no-redundant-type-constituents:primitive {
     each part in redundant_findings {
       when part.mode == "primitive"
       report at part.site

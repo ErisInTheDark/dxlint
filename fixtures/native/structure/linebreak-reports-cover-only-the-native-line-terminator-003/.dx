@@ -1,2 +1,2 @@
 import .ts
-rule linebreak-style
+rule shared-linebreak-style

@@ -1,8 +1,8 @@
-input.ts:1:10-1:16 no-restricted-types:name#0
-input.ts:1:27-1:36 no-restricted-types:name#0
-input.ts:2:14-2:20 no-restricted-types:name#0
-input.ts:3:20-3:26 no-restricted-types:name#0
-input.ts:4:21-4:27 no-restricted-types:name#0
-input.ts:5:24-5:30 no-restricted-types:name#0
-input.ts:6:10-6:16 no-restricted-types:name#0
-input.ts:7:16-7:22 no-restricted-types:name#0
+input.ts:1:10-1:16 es-no-restricted-types:name#0
+input.ts:1:27-1:36 es-no-restricted-types:name#0
+input.ts:2:14-2:20 es-no-restricted-types:name#0
+input.ts:3:20-3:26 es-no-restricted-types:name#0
+input.ts:4:21-4:27 es-no-restricted-types:name#0
+input.ts:5:24-5:30 es-no-restricted-types:name#0
+input.ts:6:10-6:16 es-no-restricted-types:name#0
+input.ts:7:16-7:22 es-no-restricted-types:name#0

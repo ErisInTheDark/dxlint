@@ -1,2 +1,2 @@
 import .ts
-rule implicit-arrow-linebreak { set mode "below" }
+rule es-implicit-arrow-linebreak { set mode "below" }

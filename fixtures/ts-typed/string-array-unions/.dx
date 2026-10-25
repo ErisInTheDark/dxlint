@@ -1,2 +1,2 @@
 import .ts
-rule require-array-sort-compare
+rule es-require-array-sort-compare

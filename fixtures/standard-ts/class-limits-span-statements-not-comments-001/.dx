@@ -1,2 +1,2 @@
 import .ts
-rule max-classes-per-file
+rule es-max-classes-per-file

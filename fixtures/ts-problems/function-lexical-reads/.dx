@@ -1,3 +1,3 @@
 import .ts
-rule no-extra-bind
-rule prefer-arrow-callback
+rule es-no-extra-bind
+rule es-prefer-arrow-callback

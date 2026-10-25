@@ -1,3 +1,0 @@
-import .ts
-override in ts_jsx_opening let indent_reset name == 'foo' || name == 'Foo'
-rule indent { set mode 4 }

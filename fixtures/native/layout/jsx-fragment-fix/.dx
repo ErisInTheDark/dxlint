@@ -1,2 +1,2 @@
 import .ts
-rule jsx-shorthand-fragment
+rule es-jsx-shorthand-fragment

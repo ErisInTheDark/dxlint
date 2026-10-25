@@ -1,2 +1,2 @@
 import .ts
-rule no-duplicate-type-constituents
+rule es-no-duplicate-type-constituents

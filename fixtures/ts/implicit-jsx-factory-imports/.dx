@@ -1,4 +1,4 @@
 import .ts
 rule * off
-rule consistent-type-imports
-rule no-unused-vars
+rule es-consistent-type-imports
+rule es-no-unused-vars

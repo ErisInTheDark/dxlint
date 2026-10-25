@@ -68,7 +68,7 @@ fn spread_object_category(n) = {
     else if spread_class_value(n, arms) then "class" else null
 }
 in ts_spread, ts_jsx_spread_attribute let no_misused_spread_checked true
-in ts_spread, ts_jsx_spread_attribute rule no-misused-spread {
+in ts_spread, ts_jsx_spread_attribute rule es-no-misused-spread {
   option allow (string | type_specifier_file | type_specifier_lib | type_specifier_package)[] = [] "types safe to spread"
   let object_spread node is ts_jsx_spread_attribute || parent is ts_object
   let sequence_spread parent is (ts_array, ts_call)

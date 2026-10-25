@@ -1,6 +1,6 @@
-barrel.ts:1:10-1:13 no-deprecated#0
-barrel.ts:1:22-1:30 no-deprecated#0
-main.ts:3:1-3:4 no-deprecated#0
-main.ts:5:1-5:9 no-deprecated#0
-main.ts:7:10-7:13 no-deprecated#0
-main.ts:9:10-9:18 no-deprecated#0
+barrel.ts:1:10-1:13 es-no-deprecated#0
+barrel.ts:1:22-1:30 es-no-deprecated#0
+main.ts:3:1-3:4 es-no-deprecated#0
+main.ts:5:1-5:9 es-no-deprecated#0
+main.ts:7:10-7:13 es-no-deprecated#0
+main.ts:9:10-9:18 es-no-deprecated#0

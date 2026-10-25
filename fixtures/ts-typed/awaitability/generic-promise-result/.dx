@@ -1,3 +1,3 @@
 import .ts
-rule require-await
-rule return-await { set mode "always" }
+rule es-require-await
+rule es-return-await { set mode "always" }

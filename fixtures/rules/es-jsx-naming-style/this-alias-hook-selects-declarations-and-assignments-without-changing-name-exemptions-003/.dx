@@ -1,0 +1,3 @@
+import .ts
+override in ts_declarator, ts_assignment let no_this_alias_checked false
+rule es-no-this-alias

@@ -1,2 +1,0 @@
-import .ts
-rule lines-around-comment:* { set beforeLineComment true; set afterLineComment true }

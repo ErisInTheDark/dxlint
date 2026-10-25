@@ -10,4 +10,4 @@ language .js { files "scripts/private/**"
   set globals { app: "off" }
 }
 
-rule no-global-assign
+rule es-no-global-assign

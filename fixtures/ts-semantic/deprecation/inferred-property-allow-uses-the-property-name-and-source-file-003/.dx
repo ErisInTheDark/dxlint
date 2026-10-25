@@ -1,5 +1,5 @@
 import .ts
-rule no-deprecated 
+rule es-no-deprecated 
 override in ts_node let no_deprecated_checked {
   value symbols: deprecation_symbols(node)
   value origins: map(symbols.sites, site => declaration_origin(node, site))

@@ -1,6 +1,6 @@
 import .ts
-rule no-undef
-rule no-unsafe-member-access
+rule es-no-undef
+rule es-no-unsafe-member-access
 
 # Project inputs remain readable, but the original Rust test linted only this main file.
 ignore "node_modules/typescript/lib/lib.es5.d.ts"

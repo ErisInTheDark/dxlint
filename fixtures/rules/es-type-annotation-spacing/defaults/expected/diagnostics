@@ -1,0 +1,16 @@
+a.ts:1:11-1:11 es-type-annotation-spacing:before#1
+a.ts:1:11-1:12 es-type-annotation-spacing:after#0
+a.ts:2:16-2:16 es-type-annotation-spacing:before#1
+a.ts:2:16-2:17 es-type-annotation-spacing:after#0
+a.ts:2:25-2:25 es-type-annotation-spacing:before#1
+a.ts:2:25-2:26 es-type-annotation-spacing:after#0
+a.ts:3:17-3:17 es-type-annotation-spacing:before#1
+a.ts:3:17-3:18 es-type-annotation-spacing:after#0
+a.ts:4:21-4:21 es-type-annotation-spacing:before#1
+a.ts:4:21-4:22 es-type-annotation-spacing:after#0
+a.ts:4:35-4:35 es-type-annotation-spacing:before#1
+a.ts:4:35-4:36 es-type-annotation-spacing:after#0
+a.ts:4:44-4:44 es-type-annotation-spacing:before#1
+a.ts:4:44-4:45 es-type-annotation-spacing:after#0
+a.ts:5:16-5:16 es-type-annotation-spacing:before#1
+a.ts:5:16-5:17 es-type-annotation-spacing:after#0

@@ -318,13 +318,13 @@ fn reduce_type_argument_fix(source, n) = {
     else { target: call, text: replacement }
 }
 
-in ts_as, ts_type_assertion rule prefer-reduce-type-parameter {
+in ts_as, ts_type_assertion rule es-prefer-reduce-type-parameter {
   when reduce_type_argument(node)
   warn "Unnecessary assertion: Array#reduce accepts a type parameter for the default value."
   let edit reduce_type_argument_fix(source, node)
   fix at edit.target if edit != null as edit.text
 }
-in ts_call.type_argument, ts_new.type_argument, ts_type_reference.type_argument, ts_class.type_argument, ts_jsx_opening.type_argument, ts_tagged_template.type_argument rule no-unnecessary-type-arguments {
+in ts_call.type_argument, ts_new.type_argument, ts_type_reference.type_argument, ts_class.type_argument, ts_jsx_opening.type_argument, ts_tagged_template.type_argument rule es-no-unnecessary-type-arguments {
   # Only the last type argument can be redundant (TypeScript ESLint checks no other).
   when last(parent.type_argument.nodes) == node
   let redundancy type_argument_redundancy(node)

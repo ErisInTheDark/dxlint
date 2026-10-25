@@ -1,2 +1,2 @@
 import .ts
-rule no-unnecessary-boolean-literal-compare
+rule es-no-unnecessary-boolean-literal-compare

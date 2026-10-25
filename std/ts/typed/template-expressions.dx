@@ -64,7 +64,7 @@ fn template_interpolation_fix(source, n, interpolation, next_opens, post_opens) 
 
 in ts_template let template_expression_nodes expression.nodes
 in ts_template_type let template_expression_nodes type.nodes
-in ts_template, ts_template_type rule no-unnecessary-template-expression {
+in ts_template, ts_template_type rule es-no-unnecessary-template-expression {
   when parent not ts_tagged_template
   let single count(template_expression_nodes) == 1 && first([] quasi.text) == "`${{" && last([] quasi.text) == "}}`"
   let comments descendants(ts_comment)

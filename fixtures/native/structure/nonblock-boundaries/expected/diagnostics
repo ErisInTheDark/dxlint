@@ -1,2 +1,2 @@
-a.js:1:13-1:19 nonblock-statement-body-position#0
-a.js:2:16-2:23 nonblock-statement-body-position#0
+a.js:1:13-1:19 es-nonblock-statement-body-position#0
+a.js:2:16-2:23 es-nonblock-statement-body-position#0

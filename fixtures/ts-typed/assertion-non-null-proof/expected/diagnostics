@@ -1,5 +1,5 @@
-input.ts:10:21-10:37 non-nullable-type-assertion-style#0
-input.ts:1:59-1:65 no-unnecessary-type-assertion:non-null#1
-input.ts:2:59-2:65 no-unnecessary-type-assertion:non-null#1
-input.ts:6:20-6:49 non-nullable-type-assertion-style#0
-input.ts:8:22-8:53 non-nullable-type-assertion-style#0
+input.ts:10:21-10:37 es-non-nullable-type-assertion-style#0
+input.ts:1:59-1:65 es-no-unnecessary-type-assertion:non-null#1
+input.ts:2:59-2:65 es-no-unnecessary-type-assertion:non-null#1
+input.ts:6:20-6:49 es-non-nullable-type-assertion-style#0
+input.ts:8:22-8:53 es-non-nullable-type-assertion-style#0

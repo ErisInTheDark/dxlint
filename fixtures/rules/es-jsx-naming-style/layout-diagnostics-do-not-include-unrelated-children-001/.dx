@@ -1,0 +1,4 @@
+import .ts
+rule es-jsx-indent-props { set mode 2 }
+rule es-jsx-closing-bracket-location
+rule es-jsx-closing-tag-location

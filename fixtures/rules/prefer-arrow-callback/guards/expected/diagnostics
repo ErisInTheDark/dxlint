@@ -1,6 +1,0 @@
-file.ts:1:5-1:32 prefer-arrow-callback#0
-file.ts:2:5-2:33 prefer-arrow-callback#0
-file.ts:3:5-3:43 prefer-arrow-callback#0
-file.ts:4:15-4:42 prefer-arrow-callback#0
-file.ts:5:6-5:33 prefer-arrow-callback#0
-file.ts:6:5-6:32 prefer-arrow-callback#0

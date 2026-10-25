@@ -1,2 +1,2 @@
-a.ts:1:10-1:15 no-underscore-dangle#0
-a.ts:1:16-1:22 no-underscore-dangle#0
+a.ts:1:10-1:15 es-no-underscore-dangle#0
+a.ts:1:16-1:22 es-no-underscore-dangle#0

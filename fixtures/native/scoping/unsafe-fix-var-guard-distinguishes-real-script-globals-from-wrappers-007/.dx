@@ -1,4 +1,4 @@
 import .ts
 language .js { set sourceType 'module'
 set ecmaVersion 5 }
-rule no-var
+rule es-no-var

@@ -1,5 +1,5 @@
-input.ts:1:17-1:17 quote-props#6
-input.ts:1:35-1:35 quote-props#6
-input.ts:3:19-3:19 quote-props#6
-input.ts:4:15-4:15 quote-props#6
-input.ts:5:32-5:32 quote-props#6
+input.ts:1:17-1:17 es-quote-props#6
+input.ts:1:35-1:35 es-quote-props#6
+input.ts:3:19-3:19 es-quote-props#6
+input.ts:4:15-4:15 es-quote-props#6
+input.ts:5:32-5:32 es-quote-props#6

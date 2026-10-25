@@ -1,5 +1,5 @@
 import .ts
-rule no-unused-vars:variables { set ignorePattern "^_"; set reportUsedIgnorePattern true }
-rule no-unused-vars:parameters
-rule no-unused-vars:caught-errors
-rule no-unused-vars:globals
+rule es-no-unused-vars:variables { set ignorePattern "^_"; set reportUsedIgnorePattern true }
+rule es-no-unused-vars:parameters
+rule es-no-unused-vars:caught-errors
+rule es-no-unused-vars:globals

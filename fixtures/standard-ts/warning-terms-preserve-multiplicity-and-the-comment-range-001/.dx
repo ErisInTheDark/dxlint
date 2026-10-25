@@ -1,5 +1,5 @@
 import .ts
-rule no-warning-comments {
+rule es-no-warning-comments {
 set terms ['todo', 'fixme', 'todo']
 set location 'anywhere'
 }

@@ -1,2 +1,2 @@
-input.ts:4:18-4:30 no-misused-promises:void-variables#0
-input.ts:5:16-7:2 no-misused-promises:void-variables#0
+input.ts:4:18-4:30 es-no-misused-promises:void-variables#0
+input.ts:5:16-7:2 es-no-misused-promises:void-variables#0

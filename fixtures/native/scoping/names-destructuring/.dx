@@ -1,2 +1,2 @@
 import .ts
-rule camelcase { set ignoreDestructuring true }
+rule es-camelcase { set ignoreDestructuring true }

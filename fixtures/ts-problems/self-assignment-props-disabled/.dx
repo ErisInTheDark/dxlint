@@ -1,2 +1,2 @@
 import .ts
-rule no-self-assign { set props false }
+rule es-no-self-assign { set props false }

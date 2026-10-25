@@ -1,3 +1,0 @@
-import .ts
-override in ts_interface, ts_type_literal let no_empty_object_type_checked true
-rule no-empty-object-type

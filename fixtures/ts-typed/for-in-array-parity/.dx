@@ -1,2 +1,2 @@
 import .ts
-rule no-for-in-array
+rule es-no-for-in-array

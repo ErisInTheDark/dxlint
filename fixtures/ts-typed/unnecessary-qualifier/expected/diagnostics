@@ -1,7 +1,7 @@
-a.ts:18:17-18:28 no-unnecessary-qualifier#0
-a.ts:19:25-19:48 no-unnecessary-qualifier#0
-a.ts:20:45-20:50 no-unnecessary-qualifier#0
-a.ts:23:18-23:29 no-unnecessary-qualifier#0
-a.ts:4:16-4:17 no-unnecessary-qualifier#0
-a.ts:5:16-5:17 no-unnecessary-qualifier#0
-a.ts:9:19-9:20 no-unnecessary-qualifier#0
+a.ts:18:17-18:28 es-no-unnecessary-qualifier#0
+a.ts:19:25-19:48 es-no-unnecessary-qualifier#0
+a.ts:20:45-20:50 es-no-unnecessary-qualifier#0
+a.ts:23:18-23:29 es-no-unnecessary-qualifier#0
+a.ts:4:16-4:17 es-no-unnecessary-qualifier#0
+a.ts:5:16-5:17 es-no-unnecessary-qualifier#0
+a.ts:9:19-9:20 es-no-unnecessary-qualifier#0

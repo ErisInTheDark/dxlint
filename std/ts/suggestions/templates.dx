@@ -94,7 +94,7 @@ fn concatenation_fix(source, n) = if concatenation_legacy_escape(n) then null el
   value if semicolon == null || !retained then null else (if semicolon then ";" else "") replacement
 }
 
-in ts_binary rule prefer-template {
+in ts_binary rule es-prefer-template {
   when string_addition && nonstring_addition && !inside_addition
   let replacement concatenation_fix(source, node)
   fix at node if replacement != null as expression_fix_edges(node, replacement)

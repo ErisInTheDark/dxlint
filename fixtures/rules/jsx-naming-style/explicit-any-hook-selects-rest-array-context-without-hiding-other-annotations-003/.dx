@@ -1,3 +1,0 @@
-import .ts
-override in ts_type_keyword let no_explicit_any_checked parent not ts_type_alias
-rule no-explicit-any

@@ -1,7 +1,7 @@
-a.js:11:3-11:10 nonblock-statement-body-position#0
-a.js:13:3-13:10 nonblock-statement-body-position#0
-a.js:15:3-15:10 nonblock-statement-body-position#0
-a.js:2:3-2:9 nonblock-statement-body-position#0
-a.js:4:3-4:8 nonblock-statement-body-position#0
-a.js:6:3-6:10 nonblock-statement-body-position#0
-a.js:8:3-8:10 nonblock-statement-body-position#0
+a.js:11:3-11:10 es-nonblock-statement-body-position#0
+a.js:13:3-13:10 es-nonblock-statement-body-position#0
+a.js:15:3-15:10 es-nonblock-statement-body-position#0
+a.js:2:3-2:9 es-nonblock-statement-body-position#0
+a.js:4:3-4:8 es-nonblock-statement-body-position#0
+a.js:6:3-6:10 es-nonblock-statement-body-position#0
+a.js:8:3-8:10 es-nonblock-statement-body-position#0

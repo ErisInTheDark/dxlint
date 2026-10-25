@@ -1,2 +1,2 @@
 import .ts
-rule strict-boolean-expressions
+rule es-strict-boolean-expressions

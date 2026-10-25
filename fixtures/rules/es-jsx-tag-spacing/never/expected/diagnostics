@@ -1,0 +1,8 @@
+file.tsx:1:12-1:13 es-jsx-tag-spacing#6
+file.tsx:1:14-1:16 es-jsx-tag-spacing:before-self-closing#7
+file.tsx:1:17-1:18 es-jsx-tag-spacing#1
+file.tsx:2:12-2:13 es-jsx-tag-spacing#6
+file.tsx:2:14-2:15 es-jsx-tag-spacing#7
+file.tsx:2:21-2:22 es-jsx-tag-spacing#3
+file.tsx:2:23-2:24 es-jsx-tag-spacing#6
+file.tsx:2:25-2:26 es-jsx-tag-spacing#7

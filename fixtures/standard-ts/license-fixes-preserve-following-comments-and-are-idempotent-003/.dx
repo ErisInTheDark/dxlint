@@ -1,2 +1,2 @@
 import .ts
-rule header:invalid { set license "/* Copyright Example */" }
+rule es-header:invalid { set license "/* Copyright Example */" }

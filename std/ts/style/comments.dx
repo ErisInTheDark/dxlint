@@ -24,7 +24,7 @@ fn tslint_comment_edit(source, n) = {
       text: if re_test(prefix, /\S$/) && re_test(tail, /^\S/) && !re_test(tail, /^[;,)}\]]/) then " " else ""
     }
 }
-in ts_comment rule ban-tslint-comment {
+in ts_comment rule es-ban-tslint-comment {
   let content re_replace(text, /^\/\/|^\/\*|\*\/$/, "")
   let normalised re_replace(content, /^\s+|\s+$/, "")
   when re_test(content, /^\s*tslint:(enable|disable)(?:-(line|next-line))?(:|\s|$)/)
@@ -34,7 +34,7 @@ in ts_comment rule ban-tslint-comment {
 }
 
 # Only directives before the first code token are triple-slash references.
-in ts_line_comment rule triple-slash-reference {
+in ts_line_comment rule es-triple-slash-reference {
   option lib ("always" | "never") = "always" "When lib directives are allowed."
   option path ("always" | "never") = "never" "When path directives are allowed."
   option types ("always" | "never" | "prefer-import") = "prefer-import" "When types directives are allowed."
@@ -52,22 +52,22 @@ in ts_block_comment match jsdoc_line /^[ \t]*\*(?!\/)/
 in ts_block_comment match jsdoc_close_indent /^[ \t]+(?=\*\/)/
 in ts_block_comment match jsdoc_blank_run /^(?:[ \t]*\r?\n)+/
 # Blank lines inside the block have no `*` at all.
-in jsdoc_blank_run rule check-alignment:blank {
+in jsdoc_blank_run rule es-check-alignment:blank {
   when re_test(parent_text, /^\/\*\*[^*]/)
   warn "Expected JSDoc block to be aligned."
 }
 # `/**` then anything but another `*` (`/*****` banners are not JSDoc).
 @macro is_jsdoc re_test(parent_text, /^\/\*\*[^*]/)
-in jsdoc_line rule check-alignment {
+in jsdoc_line rule es-check-alignment {
   when @is_jsdoc && text != parent_indent " *"
   warn "Expected JSDoc block to be aligned."
 }
-in jsdoc_close_indent rule check-alignment:close {
+in jsdoc_close_indent rule es-check-alignment:close {
   when @is_jsdoc && text != parent_indent " "
   warn "Expected JSDoc block to be aligned."
 }
 in ts_block_comment match jsdoc_typed_tag /^[ \t]*\*[ \t]*@(?:param|arg|argument|returns?|property|prop|throws|yields)[ \t]+\{/
-in jsdoc_typed_tag rule no-types {
+in jsdoc_typed_tag rule es-no-types {
   when @is_jsdoc
   warn "Types are not permitted on @{re_replace(text, /^.*@(\w+).*$/, '$1')}."
 }

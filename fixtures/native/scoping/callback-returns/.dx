@@ -1,2 +1,2 @@
 import .ts
-rule array-callback-return
+rule es-array-callback-return

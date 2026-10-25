@@ -1,1 +1,1 @@
-a.js:4:3-4:9 no-param-reassign:property#0
+a.js:4:3-4:9 es-no-param-reassign:property#0

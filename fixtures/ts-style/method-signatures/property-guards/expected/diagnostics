@@ -1,7 +1,7 @@
-input.ts:10:52-10:62 method-signature-style#0
-input.ts:10:63-10:82 method-signature-style#0
-input.ts:4:3-4:16 method-signature-style#0
-input.ts:5:3-5:39 method-signature-style#0
-input.ts:6:3-6:20 method-signature-style#0
-input.ts:7:3-7:29 method-signature-style#0
-input.ts:9:42-9:52 method-signature-style#0
+input.ts:10:52-10:62 es-method-signature-style#0
+input.ts:10:63-10:82 es-method-signature-style#0
+input.ts:4:3-4:16 es-method-signature-style#0
+input.ts:5:3-5:39 es-method-signature-style#0
+input.ts:6:3-6:20 es-method-signature-style#0
+input.ts:7:3-7:29 es-method-signature-style#0
+input.ts:9:42-9:52 es-method-signature-style#0

@@ -1,3 +1,3 @@
-a.ts:12:10-12:19 return-await#2
-a.ts:5:31-5:38 return-await#0
-a.ts:8:16-8:25 return-await#2
+a.ts:12:10-12:19 es-return-await#2
+a.ts:5:31-5:38 es-return-await#0
+a.ts:8:16-8:25 es-return-await#2

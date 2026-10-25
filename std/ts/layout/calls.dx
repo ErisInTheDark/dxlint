@@ -5,7 +5,7 @@ import .ts/format
 
 define {
 
-in ts_open_paren rule space-before-function-paren {
+in ts_open_paren rule es-space-before-function-paren {
   option style "always" | "never" = "always" "spaces before function parameter lists"
   option named "always" | "never" | "ignore" | null = null "named function policy"
   option anonymous "always" | "never" | "ignore" | null = null "anonymous function policy"
@@ -38,7 +38,7 @@ fn layout_invocation_chain(gap, allow_newlines, before, after) = {
   value prefix: if before then (if re_test(joined, /^\s/) then joined else " " joined) else trim_start(joined)
   value if after then (if re_test(prefix, /\s$/) then prefix else prefix " ") else trim_end(prefix)
 }
-in ts_open_paren rule function-call-spacing {
+in ts_open_paren rule es-function-call-spacing {
   option mode "always" | "never" = "never" "spacing before invocation parentheses"
   option allowNewlines boolean = false "allow line breaks before invocation parentheses"
   option chain_before boolean = true "space before optional invocation punctuation"
@@ -65,7 +65,7 @@ in ts_open_paren rule function-call-spacing {
 }
 
 # Empty constructor argument lists belong to this new expression, not its callee.
-in ts_new rule new-parens {
+in ts_new rule es-new-parens {
   option style "always" | "never" = "always" "empty constructor parentheses"
   let constructor_open opener.ts_open_paren.offset
   let constructor_close closer.ts_close_paren.offset

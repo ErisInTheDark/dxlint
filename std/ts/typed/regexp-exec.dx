@@ -68,7 +68,7 @@ fn regexp_exec_fix(n) = {
     else (if semicolon then ";" else "") replacement
 }
 
-in ts_call rule prefer-regexp-exec {
+in ts_call rule es-prefer-regexp-exec {
   when regexp_match_exec_offset != null
   let method unparenthesised_node(callee.node)
   report at method.property.node ?? method.index.node

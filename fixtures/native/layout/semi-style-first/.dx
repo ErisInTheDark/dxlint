@@ -1,2 +1,2 @@
 import .ts
-rule semi-style { set style "first" }
+rule es-semi-style { set style "first" }

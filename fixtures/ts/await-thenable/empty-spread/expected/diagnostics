@@ -1,6 +1,6 @@
-a.ts:26:22-26:42 await-thenable:aggregate#0
-a.ts:27:22-27:60 await-thenable:aggregate#0
-a.ts:28:22-28:30 await-thenable:aggregate#0
-a.ts:29:42-29:43 await-thenable:aggregate#0
-a.ts:30:22-30:23 await-thenable:aggregate#0
-a.ts:31:3-31:20 await-thenable#0
+a.ts:26:22-26:42 es-await-thenable:aggregate#0
+a.ts:27:22-27:60 es-await-thenable:aggregate#0
+a.ts:28:22-28:30 es-await-thenable:aggregate#0
+a.ts:29:42-29:43 es-await-thenable:aggregate#0
+a.ts:30:22-30:23 es-await-thenable:aggregate#0
+a.ts:31:3-31:20 es-await-thenable#0

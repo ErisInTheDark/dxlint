@@ -1,1 +1,1 @@
-main.ts:1:168-1:182 no-misused-promises:void-arguments#0
+main.ts:1:168-1:182 es-no-misused-promises:void-arguments#0

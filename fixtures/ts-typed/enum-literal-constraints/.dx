@@ -2,4 +2,4 @@ import .ts
 
 # A number literal is a numeric enum only as one of its members: a formal
 # bounded by the enum infers the enum, and the literal is reported.
-rule no-unsafe-enum-assignment
+rule es-no-unsafe-enum-assignment

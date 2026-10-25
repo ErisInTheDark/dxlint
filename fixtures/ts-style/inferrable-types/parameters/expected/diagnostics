@@ -1,6 +1,6 @@
-input.ts:1:13-1:27 no-inferrable-types#0
-input.ts:1:29-1:46 no-inferrable-types#0
-input.ts:1:48-1:65 no-inferrable-types#0
-input.ts:2:16-2:39 no-inferrable-types#0
-input.ts:3:32-3:49 no-inferrable-types#0
-input.ts:3:59-3:75 no-inferrable-types#0
+input.ts:1:13-1:27 es-no-inferrable-types#0
+input.ts:1:29-1:46 es-no-inferrable-types#0
+input.ts:1:48-1:65 es-no-inferrable-types#0
+input.ts:2:16-2:39 es-no-inferrable-types#0
+input.ts:3:32-3:49 es-no-inferrable-types#0
+input.ts:3:59-3:75 es-no-inferrable-types#0

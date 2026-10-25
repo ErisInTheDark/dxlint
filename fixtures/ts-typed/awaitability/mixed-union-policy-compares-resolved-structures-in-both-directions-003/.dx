@@ -1,2 +1,2 @@
 import .ts
-rule no-misused-promises:conditionals { set flagUnions "none" }
+rule es-no-misused-promises:conditionals { set flagUnions "none" }

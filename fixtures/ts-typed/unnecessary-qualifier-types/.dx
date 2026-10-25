@@ -1,2 +1,2 @@
 import .ts
-rule no-unnecessary-qualifier
+rule es-no-unnecessary-qualifier

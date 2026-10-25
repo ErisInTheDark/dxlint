@@ -54,17 +54,17 @@ fn unsafe_call_this_kind(n) = {
   value if subject == null then null else unsafe_call_kind(subject)
 }
 
-in ts_call.callee rule no-unsafe-call {
+in ts_call.callee rule es-no-unsafe-call {
   let unsafe_kind unsafe_call_value_kind(node, false)
   when unsafe_kind != null
   warn if unsafe_kind == "error" then if unsafe_call_this_kind(node) == "error" then "Unsafe call of a `this` type that could not be resolved." else "Unsafe call of a type that could not be resolved." else "Unsafe call of {if unsafe_kind == 'function' then 'a `Function`' else 'an `any`'} typed value."
 }
-in ts_new rule no-unsafe-call:new {
+in ts_new rule es-no-unsafe-call:new {
   let unsafe_kind unsafe_call_value_kind(callee.node, true)
   when unsafe_kind != null
   warn if unsafe_kind == "error" then "Unsafe construction of a type that could not be resolved." else "Unsafe construction of {if unsafe_kind == 'function' then 'a `Function`' else 'an `any`'} typed value."
 }
-in ts_tagged_template.tag rule no-unsafe-call:tag {
+in ts_tagged_template.tag rule es-no-unsafe-call:tag {
   let unsafe_kind unsafe_call_value_kind(node, false)
   when unsafe_kind != null
   warn if unsafe_kind == "error" then "Unsafe use of a template tag whose type could not be resolved." else "Unsafe use of {if unsafe_kind == 'function' then 'a `Function`' else 'an `any`'} typed template tag."

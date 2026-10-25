@@ -1,5 +1,5 @@
-a.js:1:15-1:21 one-var#0
-a.js:1:8-1:14 one-var#0
-a.js:4:3-4:8 one-var#0
-a.js:6:32-6:38 one-var#0
-a.js:7:30-7:36 one-var#0
+a.js:1:15-1:21 es-one-var#0
+a.js:1:8-1:14 es-one-var#0
+a.js:4:3-4:8 es-one-var#0
+a.js:6:32-6:38 es-one-var#0
+a.js:7:30-7:36 es-one-var#0

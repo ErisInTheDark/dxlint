@@ -1,2 +1,2 @@
-a.ts:1:120-1:140 require-await#0
-a.ts:1:197-1:216 require-await#0
+a.ts:1:120-1:140 es-require-await#0
+a.ts:1:197-1:216 es-require-await#0

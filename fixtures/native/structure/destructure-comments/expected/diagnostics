@@ -1,4 +1,4 @@
-a.js:1:7-1:33 prefer-destructuring#0
-a.js:2:7-2:33 prefer-destructuring#0
-a.js:3:7-3:34 prefer-destructuring#0
-a.js:4:7-4:22 prefer-destructuring#0
+a.js:1:7-1:33 es-prefer-destructuring#0
+a.js:2:7-2:33 es-prefer-destructuring#0
+a.js:3:7-3:34 es-prefer-destructuring#0
+a.js:4:7-4:22 es-prefer-destructuring#0

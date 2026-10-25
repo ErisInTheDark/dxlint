@@ -1,3 +1,3 @@
-input.ts:1:15-1:15 prefer-function-type#1
-input.ts:2:12-2:12 prefer-function-type#1
-input.ts:3:12-3:12 prefer-function-type#1
+input.ts:1:15-1:15 es-prefer-function-type#1
+input.ts:2:12-2:12 es-prefer-function-type#1
+input.ts:3:12-3:12 es-prefer-function-type#1

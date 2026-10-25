@@ -1,0 +1,4 @@
+a.ts:1:9-2:3 es-padded-blocks:top#1
+a.ts:2:8-3:1 es-padded-blocks:bottom#1
+a.ts:4:12-5:3 es-padded-blocks:top#1
+a.ts:5:17-6:1 es-padded-blocks:bottom#1

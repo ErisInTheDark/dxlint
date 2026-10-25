@@ -17,7 +17,7 @@ in ts_object let keyed [] property.key_entry
 in ts_property, ts_method let duplicate_key parent is ts_object && parent.flow_destructuring_target != true && key_entry != null && { value parent.keyed; slice 0 index; any (e) @duplicate_of(e) }
 # At the name: a computed key reports the expression inside its brackets.
 @macro at_key_name (if node is ts_computed_key then node.expression.node else node)
-in ts_property.key, ts_method.key rule no-dupe-keys {
+in ts_property.key, ts_method.key rule es-no-dupe-keys {
   when parent.duplicate_key
   report at @at_key_name
   warn "Duplicate key '{parent.static_name}'."
@@ -29,7 +29,7 @@ in ts_method let member_entry if !@has_static_name || body == null || static_nam
 in ts_class_property let member_entry if !@has_static_name then null else { name: static_name, kind: accessor_kind, static: is_static }
 in ts_class let member_entries [] member.member_entry
 in ts_method, ts_class_property let duplicate_member parent is ts_class && member_entry != null && { value parent.member_entries; slice 0 index; any (e) @duplicate_of(e) && e.static == is_static }
-in ts_method.key, ts_class_property.key rule no-dupe-class-members {
+in ts_method.key, ts_class_property.key rule es-no-dupe-class-members {
   when parent.duplicate_member
   report at @at_key_name
   warn "Duplicate name '{parent.static_name}'."
@@ -46,7 +46,7 @@ fn problem_duplicate_parameters(owner) = {
     site => site.ts_name_site == owner && site.ts_name_kind == "parameter")) >= 2
   map (binding) binding.key
 }
-in ts_function rule no-dupe-args {
+in ts_function rule es-no-dupe-args {
   when body != null
   let duplicate_open node_at(function_head_site(node).end)
   when duplicate_open is ts_open_paren
@@ -58,7 +58,7 @@ in ts_function rule no-dupe-args {
 
 in ts_enum_member let enum_value init.literal_value
 in ts_enum let enum_values [] member.enum_value
-in ts_enum_member rule no-duplicate-enum-values {
+in ts_enum_member rule es-no-duplicate-enum-values {
   when enum_value != null && {
     value parent.enum_values
     slice 0 index

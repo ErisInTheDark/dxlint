@@ -1,4 +1,4 @@
 import .ts
 
-        rule member-ordering:interface { set optionality required-first }
+        rule es-member-ordering:interface { set optionality required-first }
         override in ts_property_signature let member_ordering_rank 0

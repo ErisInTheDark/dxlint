@@ -11,7 +11,7 @@ in ts_function let structure_iife_callee { direct: true, prototype: false, wrapp
 in ts_parenthesized let structure_iife_callee expression.structure_iife_callee
 in ts_member, ts_index let structure_iife_callee if (object.structure_iife_callee).direct && contains(["call", "apply"], static_name) then { direct: false, prototype: true, wrapped: (object.structure_iife_callee).wrapped, node: (object.structure_iife_callee).node } else null
 
-in ts_call rule wrap-iife {
+in ts_call rule es-wrap-iife {
   option mode "outside" | "inside" | "any" = "outside"
   option functionPrototypeMethods boolean = false "include function call/apply invocations"
   let info callee.structure_iife_callee
@@ -177,7 +177,7 @@ fn structure_parens_replacement(source, pairs) = {
   }
 }
 
-in structure_parens rule no-extra-parens {
+in structure_parens rule es-no-extra-parens {
   option conditionalAssign boolean = true "enforce assignments in conditions"
   option ternaryOperandBinaryExpressions boolean = true "enforce binary ternary operands"
   option nestedBinaryExpressions boolean = true "enforce nested binary operands"

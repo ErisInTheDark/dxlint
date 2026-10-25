@@ -24,7 +24,7 @@ in ts_jsx_attribute, ts_jsx_spread_attribute {
   let jsx_prop_indent_operator jsx_indent_operator(jsx_prop_indent_line)
   let jsx_prop_indent_extra previous.jsx_prop_indent_extra == true || !jsx_prop_indent_operator && !contains(jsx_prop_indent_line, "<") && (if previous == null then parent.jsx_prop_indent_operator else previous.jsx_prop_indent_operator)
 }
-in ts_jsx_attribute, ts_jsx_spread_attribute rule jsx-indent-props {
+in ts_jsx_attribute, ts_jsx_spread_attribute rule es-jsx-indent-props {
   option mode int | "tab" | "first" = 4 "prop indent size or alignment"
   let size if mode == "tab" then 1 else mode
   let base_indent if mode == "tab" then jsx_indent_tabs(parent.jsx_line_prefix) else jsx_indent_spaces(parent.jsx_line_prefix)
@@ -80,7 +80,7 @@ in ts_jsx_element, ts_jsx_fragment {
   let jsx_child_has_jsx any(body.nodes, item => item is (ts_jsx_element, ts_jsx_fragment))
 }
 fn jsx_child_group_contains(row, line) = row.first == line || row.last == line
-in ts_jsx_element.body, ts_jsx_fragment.body rule jsx-one-expression-per-line {
+in ts_jsx_element.body, ts_jsx_fragment.body rule es-jsx-one-expression-per-line {
   option mode "always" | "single-child" | "single-line" = "always" "same-line child layout"
   let opening_line position(parent.opening.end_offset).js_line
   let closing_line { value parent.closing.offset.nonempty ?? parent.opening.end_offset; position }.js_line
@@ -119,7 +119,7 @@ fn jsx_newline_text(text, remove) = {
   }
   value result.text
 }
-in ts_jsx_element.body, ts_jsx_fragment.body rule jsx-newline {
+in ts_jsx_element.body, ts_jsx_fragment.body rule es-jsx-newline {
   option prevent boolean = false "prevent blank lines between children"
   option allowMultilines boolean = false "keep blank lines around multiline children"
   let multiline previous.jsx_child_preceding_multiline == true || jsx_child_next_multiline
@@ -132,7 +132,7 @@ in ts_jsx_element.body, ts_jsx_fragment.body rule jsx-newline {
   let fixed jsx_newline_text(previous.text, remove)
   fix at previous.node if fixed != previous.text as fixed
 }
-in ts_jsx_text rule jsx-child-element-spacing {
+in ts_jsx_text rule es-jsx-child-element-spacing {
   let after { value result: "^" jsx_space_regex() "*\n"; value re_test(text, result) } && jsx_trim_space(text) != ""
   let before jsx_trim_space(text) != "" && { value result: "\n" jsx_space_regex() "*$"; value re_test(text, result) }
   let preceding after && previous != null
@@ -176,7 +176,7 @@ fn jsx_wrap_edit(source, n, selected, parenthesized, opening, closing) = {
     }
   } else { start: n.offset, end: n.end_offset, text: "(\n" n.text "\n)" }
 }
-in ts_jsx_element, ts_jsx_fragment rule jsx-wrap-multilines {
+in ts_jsx_element, ts_jsx_fragment rule es-jsx-wrap-multilines {
   option declaration jsx_wrap_mode = "parens" "variable initializer wrapping"
   option assignment jsx_wrap_mode = "parens" "assignment wrapping"
   option return jsx_wrap_mode = "parens" "return expression wrapping"
@@ -199,7 +199,7 @@ in ts_jsx_element, ts_jsx_fragment rule jsx-wrap-multilines {
   let original { offset: edit.start, end_offset: edit.end, text: byte_slice(source, edit.start, edit.end) }
   fix at edit if expression_fix_retains_comments(original, edit.text) as edit.text
 }
-in ts_jsx_element, ts_jsx_fragment rule jsx-function-call-newline {
+in ts_jsx_element, ts_jsx_fragment rule es-jsx-function-call-newline {
   option mode "always" | "multiline" = "multiline" "call argument linebreak policy"
   when jsx_call_argument && (mode == "always" || jsx_break(text))
   when !space_before.line_break || next_token not ts_comma && !space_after.line_break
@@ -255,7 +255,7 @@ in ts_jsx_expression {
   let jsx_presence_expression_inner expression.jsx_presence_inner.nonempty ?? expression.node
   let jsx_presence_comments { value descendants(ts_comment); count }
 }
-in ts_jsx_expression, ts_jsx_text, ts_string, ts_jsx_element, ts_jsx_fragment rule jsx-curly-brace-presence {
+in ts_jsx_expression, ts_jsx_text, ts_string, ts_jsx_element, ts_jsx_fragment rule es-jsx-curly-brace-presence {
   option mode "always" | "never" | "ignore" = "never" "default brace policy"
   option props "always" | "never" | "ignore" | null = null "attribute literal brace policy"
   option children "always" | "never" | "ignore" | null = null "child literal brace policy"
@@ -363,10 +363,10 @@ schema jsx_curly_config {when?: "always" | "never"; allowMultiline?: boolean; sp
   let jsx_fix_text if jsx_break(jsx_brace_edge) then jsx_curly_trim(jsx_fix_gap, jsx_brace_open) else ""
   fix at { start: if jsx_brace_open then end_offset else offset - byte_len(jsx_fix_gap), end: if jsx_brace_open then end_offset + byte_len(jsx_fix_gap) else offset } as (if !jsx_brace_open && spacing == "always" then " " else "") jsx_fix_text (if jsx_brace_open && spacing == "always" then " " else "")
 }
-in ts_open_brace rule jsx-curly-spacing:after {
+in ts_open_brace rule es-jsx-curly-spacing:after {
   @jsx_curly_spacing_body
 }
-in ts_close_brace rule jsx-curly-spacing:before {
+in ts_close_brace rule es-jsx-curly-spacing:before {
   @jsx_curly_spacing_body
 }
 @macro jsx_curly_newline_body {
@@ -382,11 +382,11 @@ in ts_close_brace rule jsx-curly-spacing:before {
 }
 group jsx_curly_newline_singleline ts_open_brace, ts_close_brace
 group jsx_curly_newline_multiline ts_open_brace, ts_close_brace
-in jsx_curly_newline_singleline rule jsx-curly-newline:singleline {
+in jsx_curly_newline_singleline rule es-jsx-curly-newline:singleline {
   when parent is ts_jsx_expression && parent.jsx_brace_container && parent.jsx_brace_single
   @jsx_curly_newline_body
 }
-in jsx_curly_newline_multiline rule jsx-curly-newline:multiline {
+in jsx_curly_newline_multiline rule es-jsx-curly-newline:multiline {
   when parent is ts_jsx_expression && parent.jsx_brace_container && !parent.jsx_brace_single
   @jsx_curly_newline_body
 }
@@ -429,11 +429,11 @@ in ts_open_angle, ts_close_angle, ts_punctuator {
   let original { offset: edit.start, end_offset: edit.end, text: byte_slice(source, edit.start, edit.end) }
   fix at edit if expression_fix_retains_comments(original, replacement) as replacement
 }
-in ts_open_angle, ts_close_angle, ts_punctuator rule jsx-tag-spacing {
+in ts_open_angle, ts_close_angle, ts_punctuator rule es-jsx-tag-spacing {
   let jsx_tag_before_self false
   @jsx_tag_spacing_body
 }
-in ts_punctuator rule jsx-tag-spacing:before-self-closing {
+in ts_punctuator rule es-jsx-tag-spacing:before-self-closing {
   let jsx_tag_before_self true
   @jsx_tag_spacing_body
 }
@@ -465,15 +465,15 @@ in ts_jsx_opening let jsx_closing_bracket_location_enabled true
   report at node
   warn "The closing bracket must be {if placement == 'after-tag' then 'placed after the opening tag' else if placement == 'after-props' then 'placed after the last prop' else if placement == 'props-aligned' then 'aligned with the last prop' else if placement == 'tag-aligned' then 'aligned with the opening tag' else 'aligned with the line containing the opening tag'}{if expected_column != null then ' (expected column ' expected_column (if last_prop != null && last_line == here.js_line then ' on the next line)' else ')') else ''}"
 }
-in jsx_paired_brackets rule jsx-closing-bracket-location:paired {
+in jsx_paired_brackets rule es-jsx-closing-bracket-location:paired {
   when parent is ts_jsx_opening && parent.parent is ts_jsx_element && parent.parent.closing != null && end_offset == parent.end_offset
   @jsx_closing_bracket_body
 }
-in jsx_self_closing_brackets rule jsx-closing-bracket-location:self-closing {
+in jsx_self_closing_brackets rule es-jsx-closing-bracket-location:self-closing {
   when parent is ts_jsx_opening && jsx_tag_self_slash
   @jsx_closing_bracket_body
 }
-in ts_open_angle rule jsx-closing-tag-location {
+in ts_open_angle rule es-jsx-closing-tag-location {
   option mode "tag-aligned" | "line-aligned" = "tag-aligned" "closing-tag alignment"
   let here position(offset)
   let expected if mode == "tag-aligned" then position(parent.parent.opening.offset).js_column else jsx_indent(parent.parent.opening.jsx_line_prefix) + 1
@@ -494,14 +494,14 @@ in ts_jsx_element {
   let jsx_self_closing_enabled jsx_intrinsic_name || !contains(jsx_name_spelling, ":")
 }
 group jsx_self_closing_elements ts_jsx_element
-in jsx_self_closing_elements rule jsx-self-closing-comp {
+in jsx_self_closing_elements rule es-jsx-self-closing-comp {
   let content jsx_items(body)
   let empty len(content) == 0 || len(content) == 1 && { value body.node; jsx_items; first } is ts_jsx_text && { value content; first; contains "\n" } && { value content; first; jsx_strip_space } == "" && !{ value content; first; re_test /\u{a0}/ }
   when closing != null && empty && jsx_self_closing_enabled
   warn "Empty components are self-closing"
   fix at { start: opening.end_offset - 1, end: closing.end_offset } as " />"
 }
-in ts_jsx_element rule jsx-pascal-case {
+in ts_jsx_element rule es-jsx-pascal-case {
   option allowAllCaps boolean = false "allow screaming snake case"
   option allowLeadingUnderscore boolean = false "allow one leading underscore"
   option allowNamespace boolean = false "check only the first namespace segment"
@@ -522,7 +522,7 @@ in ts_jsx_element rule jsx-pascal-case {
   when !jsx_intrinsic_name && bad != null && jsx_utf16_length(bad) != 1
   warn "Imported JSX component {bad} must be in PascalCase{if allowAllCaps then ' or SCREAMING_SNAKE_CASE' else ''}"
 }
-in ts_jsx_element rule jsx-shorthand-fragment {
+in ts_jsx_element rule es-jsx-shorthand-fragment {
   when contains(["Fragment", "React.Fragment"], jsx_name_spelling) && opening.property == null
   report at opening.node
   warn "Use shorthand fragment syntax `<>...</>` instead of `<{jsx_name_spelling}>...</{jsx_name_spelling}>`."
@@ -531,7 +531,7 @@ in ts_jsx_element rule jsx-shorthand-fragment {
   let content byte_slice(text, body_start, body_end)
   fix at node if closing != null && opening.type_argument == null && expression_fix_clean(opening.node) && expression_fix_clean(closing.node) as "<>" content "</>"
 }
-in ts_jsx_attribute rule jsx-shorthand-boolean {
+in ts_jsx_attribute rule es-jsx-shorthand-boolean {
   when value is ts_jsx_expression && value.jsx_boolean_true == true
   warn "Omit the value for boolean attributes."
   fix at { start: name.end_offset, end: end_offset } if expression_fix_clean(node) && (next == null || next.offset > end_offset) as ""
@@ -543,7 +543,7 @@ fn jsx_contains_quote(text, double) = { value result: if double then '"' else "'
   value result_2: if double then /&(?:quot|#\+?0*34|#[xX]\+?0*22);/ else /&(?:apos|#\+?0*39|#[xX]\+?0*27);/
   value re_test(text, result_2)
 }
-in ts_jsx_attribute.value rule jsx-quotes {
+in ts_jsx_attribute.value rule es-jsx-quotes {
   option mode "prefer-double" | "prefer-single" = "prefer-double" "preferred attribute quote"
   let double mode == "prefer-double"
   when is ts_string
@@ -567,11 +567,11 @@ in ts_jsx_attribute.value rule jsx-quotes {
     end: if !jsx_equals_before && mode == "never" then gap.end else if jsx_equals_before then offset else end_offset
   } if mode == "always" || jsx_gap_safe(gap.text) as if mode == "always" then " " else ""
 }
-in ts_equals rule jsx-equals-spacing:before {
+in ts_equals rule es-jsx-equals-spacing:before {
   let jsx_equals_before true
   @jsx_equals_spacing_body
 }
-in ts_equals rule jsx-equals-spacing:after {
+in ts_equals rule es-jsx-equals-spacing:after {
   let jsx_equals_before false
   @jsx_equals_spacing_body
 }
@@ -591,7 +591,7 @@ in ts_jsx_attribute, ts_jsx_spread_attribute {
 in ts_jsx_attribute let jsx_prop_name jsx_strip_space(name)
 in ts_parenthesized let jsx_unparenthesized_text expression.jsx_unparenthesized_text.nonempty ?? expression
 in ts_jsx_spread_attribute let jsx_prop_name argument.jsx_unparenthesized_text.nonempty ?? argument
-in ts_jsx_attribute, ts_jsx_spread_attribute rule jsx-first-prop-new-line {
+in ts_jsx_attribute, ts_jsx_spread_attribute rule es-jsx-first-prop-new-line {
   option mode "always" | "never" | "multiline" | "multiline-multiprop" | "multiprop" = "multiline-multiprop" "first prop placement"
   let should_wrap mode == "always" || mode == "multiline" && !parent.jsx_opening_single || mode == "multiline-multiprop" && !parent.jsx_opening_single && parent.jsx_property_count > 1 || mode == "multiprop" && parent.jsx_property_count > 1
   let should_inline mode == "never" || mode == "multiprop" && !parent.jsx_opening_single && parent.jsx_property_count <= 1
@@ -613,11 +613,11 @@ in ts_jsx_attribute, ts_jsx_spread_attribute rule jsx-first-prop-new-line {
 }
 group jsx_max_props_singleline ts_jsx_attribute, ts_jsx_spread_attribute
 group jsx_max_props_multiline ts_jsx_attribute, ts_jsx_spread_attribute
-in jsx_max_props_singleline rule jsx-max-props-per-line:singleline {
+in jsx_max_props_singleline rule es-jsx-max-props-per-line:singleline {
   when parent.jsx_opening_single && jsx_prop_headline
   @jsx_max_props_body
 }
-in jsx_max_props_multiline rule jsx-max-props-per-line:multiline {
+in jsx_max_props_multiline rule es-jsx-max-props-per-line:multiline {
   when !(parent.jsx_opening_single && jsx_prop_headline)
   @jsx_max_props_body
 }
@@ -630,13 +630,13 @@ in jsx_max_props_multiline rule jsx-max-props-per-line:multiline {
 }
 group jsx_props_style_singleline ts_jsx_attribute, ts_jsx_spread_attribute
 group jsx_props_style_multiline ts_jsx_attribute, ts_jsx_spread_attribute
-in jsx_props_style_singleline rule jsx-props-style:singleline {
+in jsx_props_style_singleline rule es-jsx-props-style:singleline {
   default option max int(0..) | null = null "single-line prop limit before wrapping"
   when parent.jsx_opening_single
   let need_wrap max != null && parent.jsx_property_count > max
   @jsx_props_style_body
 }
-in jsx_props_style_multiline rule jsx-props-style:multiline {
+in jsx_props_style_multiline rule es-jsx-props-style:multiline {
   default option min int(0..) = 0 "minimum props before multiline wrapping"
   when !parent.jsx_opening_single
   let need_wrap parent.jsx_property_count >= min && !parent.jsx_first_prop_headline

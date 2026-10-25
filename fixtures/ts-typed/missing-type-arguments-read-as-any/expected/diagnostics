@@ -1,3 +1,3 @@
-input.ts:12:5-12:10 no-misused-promises:conditionals#0
-input.ts:13:5-13:14 no-misused-promises:conditionals#0
-input.ts:14:5-14:11 no-misused-promises:conditionals#0
+input.ts:12:5-12:10 es-no-misused-promises:conditionals#0
+input.ts:13:5-13:14 es-no-misused-promises:conditionals#0
+input.ts:14:5-14:11 es-no-misused-promises:conditionals#0

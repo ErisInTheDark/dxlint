@@ -80,7 +80,7 @@ fn strict_void_reports(n, allow_any) = when {
   }
 }
 
-in ts_call.argument, ts_new.argument, ts_declarator.init, ts_assignment.right, ts_property, ts_method, ts_class_property.init, ts_return.argument, ts_arrow.body, ts_array.element, ts_jsx_expression.expression rule strict-void-return {
+in ts_call.argument, ts_new.argument, ts_declarator.init, ts_assignment.right, ts_property, ts_method, ts_class_property.init, ts_return.argument, ts_arrow.body, ts_array.element, ts_jsx_expression.expression rule es-strict-void-return {
   option allowReturnAny boolean = false "Allow callbacks returning any"
   when not (ts_spread, ts_block)
   when not ts_property || node.value not ts_assignment_pattern

@@ -1,4 +1,4 @@
 import .ts
 
-        rule member-ordering:class-declaration set alphabetically
+        rule es-member-ordering:class-declaration set alphabetically
         override in ts_class_property let member_ordering_rank 0

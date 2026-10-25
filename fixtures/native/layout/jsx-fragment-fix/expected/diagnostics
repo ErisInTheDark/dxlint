@@ -1,8 +1,8 @@
-input.tsx:1:16-1:26 jsx-shorthand-fragment#0
-input.tsx:1:26-1:42 jsx-shorthand-fragment#0
-input.tsx:2:20-2:30 jsx-shorthand-fragment#0
-input.tsx:2:48-2:64 jsx-shorthand-fragment#0
-input.tsx:3:20-3:32 jsx-shorthand-fragment#0
-input.tsx:4:17-4:30 jsx-shorthand-fragment#0
-input.tsx:5:24-5:43 jsx-shorthand-fragment#0
-input.tsx:6:24-6:34 jsx-shorthand-fragment#0
+input.tsx:1:16-1:26 es-jsx-shorthand-fragment#0
+input.tsx:1:26-1:42 es-jsx-shorthand-fragment#0
+input.tsx:2:20-2:30 es-jsx-shorthand-fragment#0
+input.tsx:2:48-2:64 es-jsx-shorthand-fragment#0
+input.tsx:3:20-3:32 es-jsx-shorthand-fragment#0
+input.tsx:4:17-4:30 es-jsx-shorthand-fragment#0
+input.tsx:5:24-5:43 es-jsx-shorthand-fragment#0
+input.tsx:6:24-6:34 es-jsx-shorthand-fragment#0

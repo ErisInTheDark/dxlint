@@ -1,3 +1,3 @@
 import .ts
 import .ts/typed/enums
-rule no-unsafe-enum-comparison
+rule es-no-unsafe-enum-comparison

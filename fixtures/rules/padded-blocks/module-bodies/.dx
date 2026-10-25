@@ -1,5 +1,0 @@
-import .ts
-rule padded-blocks:* {
-  set blocks "never"
-  set classes "always"
-}

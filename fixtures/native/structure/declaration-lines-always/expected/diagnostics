@@ -1,2 +1,2 @@
-a.js:1:11-1:12 one-var-declaration-per-line#0
-a.js:1:8-1:9 one-var-declaration-per-line#0
+a.js:1:11-1:12 es-one-var-declaration-per-line#0
+a.js:1:8-1:9 es-one-var-declaration-per-line#0

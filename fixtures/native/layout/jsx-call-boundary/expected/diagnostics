@@ -1,2 +1,2 @@
-input.tsx:1:14-1:19 jsx-function-call-newline#0
-input.tsx:1:21-1:31 jsx-function-call-newline#0
+input.tsx:1:14-1:19 es-jsx-function-call-newline#0
+input.tsx:1:21-1:31 es-jsx-function-call-newline#0

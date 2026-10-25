@@ -52,7 +52,7 @@ fn core_list_fix_text(info, empty, overrides) =
   }
 
 group core_list
-  in core_list rule list-style {
+  in core_list rule es-list-style {
     option empty "ignore" | "always" | "never" = "ignore" "empty bracket spacing"
     option singleLine { spacing?: "always" | "never"; maxItems?: number } = { spacing: "never" } "single-line lists"
     option multiLine { minItems?: number } = { minItems: 0 } "multiline lists"

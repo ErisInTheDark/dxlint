@@ -1,7 +1,7 @@
 import .ts
 ignore "**/tsconfig.json"
 ignore "node_modules/typescript/lib/lib.fixture.d.ts"
-rule strict-void-return
+rule es-strict-void-return
 in ts_call rule overload-context {
   when callee.text == "foo"
   let headers { value value_signatures(callee.node); flat_map (arm) arm }

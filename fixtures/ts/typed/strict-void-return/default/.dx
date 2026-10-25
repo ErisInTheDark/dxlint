@@ -1,5 +1,5 @@
 import .ts
 import .ts/typed/strict-void-return
-rule strict-void-return
+rule es-strict-void-return
 ignore "tsconfig.json"
 ignore "node_modules/typescript/lib/lib.fixture.d.ts"

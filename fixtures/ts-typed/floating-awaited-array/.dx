@@ -1,2 +1,2 @@
 import .ts
-rule no-floating-promises
+rule es-no-floating-promises

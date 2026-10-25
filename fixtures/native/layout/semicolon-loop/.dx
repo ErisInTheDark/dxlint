@@ -1,2 +1,2 @@
 import .ts
-rule semi
+rule es-semi

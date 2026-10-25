@@ -86,7 +86,7 @@ fn qualifier_unnecessary(n) = {
   }
 }
 fn qualifier_outer(n) = if n.parent is (ts_member, ts_qualified_name) && qualifier_receiver(n.parent.node) == n then n.parent.node else null
-in ts_member, ts_qualified_name rule no-unnecessary-qualifier {
+in ts_member, ts_qualified_name rule es-no-unnecessary-qualifier {
   when qualifier_unnecessary(node)
   when !{
     value qualifier_outer(node)

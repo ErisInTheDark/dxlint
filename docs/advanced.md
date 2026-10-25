@@ -92,10 +92,10 @@ body line (`warn "..."`). The message can use everything an expression can
 `warn` and its message is its name. `dxlint rules` shows messages with option
 values filled in and other holes left as written.
 
-**Names.** A rule name may be `family:variant` (`semi:never`,
-`no-multiple-empty-lines:eof`): several rules that make up one. `rule
-semi` turns on and configures `semi` and every `semi:*` variant, `rule
-semi:* off` reaches every variant, and suppressing `semi` suppresses the
+**Names.** A rule name may be `family:variant` (`es-semi:never`,
+`es-no-multiple-empty-lines:eof`): several rules that make up one. `rule
+es-semi` turns on and configures `es-semi` and every `es-semi:*` variant, `rule
+es-semi:* off` reaches every variant, and suppressing `es-semi` suppresses the
 whole family. A second definition with a name already in use is an error;
 use [`override`](#changing-imported-definitions-override-drop) to replace one.
 
@@ -141,7 +141,7 @@ steps. Each is computed at most once per node, only when something reads it,
 and can read the `let`s above it:
 
 ```dx
-in ts_statement rule padding-line-between-statements {
+in ts_statement rule es-padding-line-between-statements {
   when index > 0 && parent is (ts_block, ts_program)
   let wanted is_conditional || previous.wants_blank_after == true
   when wanted && !{ value (gap_before.nonempty ?? ""); re_test /\n[ \t]*\r?\n/ }
@@ -195,7 +195,7 @@ schema statement_pair {
   max: int(0..) = 2                      # optional, with a default
 }
 
-in ts_program rule padding-line-between-statements {
+in ts_program rule es-padding-line-between-statements {
   option config statement_pair[] = [] "blank-line requirements"
   option style "1tbs" | "stroustrup" | "allman" = "1tbs"
   option ignore regex | null = null
@@ -241,15 +241,15 @@ define {
   }
 }
 
-rule no-cond-assign                  # on, at its default severity
-rule eqeqeq error                    # on, as an error
+rule es-no-cond-assign                  # on, at its default severity
+rule es-eqeqeq error                    # on, as an error
 rule demo:arrays error set always-multiline
-rule semi:always info "no ;"         # a severity and a new message
+rule es-semi:always info "no ;"         # a severity and a new message
 rule style-* off                     # `*` globs over rule names
-rule brace-style:* {                 # options are set in a block
+rule es-brace-style:* {                 # options are set in a block
   set style "stroustrup"
 }
-rule padding-line-between-statements {
+rule es-padding-line-between-statements {
   set config [
     { blankLine: "always", prev: "*", next: "return" },
   ]
@@ -260,10 +260,10 @@ rule padding-line-between-statements {
 Promise misuse checks are independent variants; the family enables all nine:
 
 ```dx
-rule no-misused-promises
-rule no-misused-promises:spreads off
-rule no-misused-promises:predicates off
-rule no-misused-promises:conditionals { set flagUnions "strict" }
+rule es-no-misused-promises
+rule es-no-misused-promises:spreads off
+rule es-no-misused-promises:predicates off
+rule es-no-misused-promises:conditionals { set flagUnions "strict" }
 ```
 
 `flagUnions` defaults to `"none"` (only provably all-thenable values). `"strict"` also flags known mixed unions whose awaited and ordinary arms are mutually assignable; `"all"` flags any known thenable arm.
@@ -280,7 +280,7 @@ rule no-misused-promises:conditionals { set flagUnions "strict" }
   language import defines it (`rule rs-indent` → "comes with `import .rs`").
   Rulesets skip rules of languages you did not import.
 - **Option values** must fit the option's [type](#option-types). A mismatch
-  says where: ``option `config` of `padding-line-between-statements`:
+  says where: ``option `config` of `es-padding-line-between-statements`:
   `[1].blankLine` must be "any" | "never" | "always", got "sometimes"``.
 
 - `dxlint rules` lists every defined rule, the off ones with the severity
@@ -394,7 +394,7 @@ ending in `\` continues on the next without a line break. Escapes and
 `{holes}` work as in `"..."`, and `"` needs no escaping:
 
 ```dx
-rule header:* error {
+rule es-header:* error {
   set license """
     /*!
      * Copyright 2025 Someone. Modification and/or \
@@ -484,7 +484,7 @@ Regex sources are limited to 64 KiB and 128 nested groups; assertion patterns al
 
 ```dx
 group restricted_syntax ts_with
-rule no-restricted-syntax
+rule es-no-restricted-syntax
 in ts_call rule no-eval-call {
   when callee.text == "eval"
   warn "Avoid eval."
@@ -493,7 +493,7 @@ in ts_call rule no-eval-call {
 
 `restricted_syntax` is an empty, open group: add syntax to prohibit it. Contextual exclusions and custom messages belong in ordinary rules, not selector options.
 
-`no-extra-parens` checks expressions in the open `no_extra_parens_inner` group (default: `ts_node`). The `no_extra_parens_checked` attribute on `structure_parens` defaults to true; override it to select reported parentheses by their inner expression or owner. `no_extra_parens_spread_allowed` starts empty and exempts its members only as spread operands:
+`es-no-extra-parens` checks expressions in the open `no_extra_parens_inner` group (default: `ts_node`). The `no_extra_parens_checked` attribute on `structure_parens` defaults to true; override it to select reported parentheses by their inner expression or owner. `no_extra_parens_spread_allowed` starts empty and exempts its members only as spread operands:
 
 ```dx
 drop group no_extra_parens_inner ts_node
@@ -669,10 +669,10 @@ included), and everything below sees the result.
 ```dx
 import ../rules/ts-problems
 
-override in ts_call rule no-eval error "eval is banned here" { when callee == "eval" }
+override in ts_call rule es-no-eval error "eval is banned here" { when callee == "eval" }
 override @macro newline "\n"
-drop rule no-console                     # the name is free again
-drop rule semi:*                         # rule names take globs
+drop rule es-no-console                     # the name is free again
+drop rule es-semi:*                         # rule names take globs
 drop in ts_call let operators            # one layer's definition
 drop let operators                       # every layer's
 drop group ts_statement ts_with          # some members, or `drop group g` for all
@@ -689,7 +689,7 @@ drop ignore "static/**"
   above the override are dropped with the old rule. `override match x
   pattern` replaces the whole definition, parents included, so write
   `override in A match x ...` to keep it in `A`. Overriding a built-in rule
-  (`override in my_layer rule no-console ...`) replaces it with your own.
+  (`override in my_layer rule es-no-console ...`) replaces it with your own.
 - **`drop`** removes a definition. Whatever still uses it (rules, `let`s,
   patterns, `like` bases, group members, children, expressions, `rule` lines
   below) is an error **at the `drop`**, with a link to each use, so the fix
@@ -708,8 +708,8 @@ drop ignore "static/**"
 Every language also brings the shared building blocks: `parentheses`,
 `brackets`, `braces` (nesting), `whitespace`, `space`, `identifier`, `number`,
 the `newline` macro (the file's own line break), and the language-neutral
-rules `trailing-whitespace`, `max-line-length`, `tab-indent`, `blank-lines`
-and `final-newline`.
+rules `shared-trailing-whitespace`, `shared-max-line-length`, `shared-tab-indent`, `shared-blank-lines`
+and `shared-final-newline`.
 
 | language | contents |
 |---|---|
@@ -725,11 +725,12 @@ A language's rules live in topic files it imports itself (`.rs/format`, for exam
 
 | ruleset | turns on |
 |---|---|
-| `rules:correctness` | code that is almost certainly wrong (`no-cond-assign`, `use-isnan`, `valid-typeof`, ...) |
-| `rules:suspicious` | likely mistakes, or code that does nothing (`no-fallthrough`, `no-self-assign`, ...) |
-| `rules:conventions` | one consistent way to write things (`prefer-const`, `eqeqeq`, ...) |
+| `rules:correctness` | code that is almost certainly wrong (`es-no-cond-assign`, `es-use-isnan`, `es-valid-typeof`, ...) |
+| `rules:suspicious` | likely mistakes, or code that does nothing (`es-no-fallthrough`, `es-no-self-assign`, ...) |
+| `rules:conventions` | one consistent way to write things (`es-prefer-const`, `es-eqeqeq`, ...) |
 | `rules:format` | layout and spacing, as eslint's and @stylistic's defaults lay code out, and the `rs-*` rules |
-| `rules:types` | rules that read declared types (`no-floating-promises`, ...) |
+| `rules:es-no-semi` | semicolon-free JavaScript/TypeScript on top of `rules:format`: guard `;` at the start of lines beginning with `(`, `[` or a template |
+| `rules:types` | rules that read declared types (`es-no-floating-promises`, ...) |
 | `rules:recommended` | what eslint and typescript-eslint recommend without type information |
 
 A `.dx` file is a config file: `import ../.dx` builds on the config
@@ -842,7 +843,7 @@ lang rust "*.rs" {
     match braces                                 # braces nest
     match rs_string /"/ until /"/ {
       match rs_escape /\\./
-      rule no-tabs warn "tab in a string" { when contains(text, "\t") }
+      rule es-no-tabs warn "tab in a string" { when contains(text, "\t") }
     }
   }
 }
@@ -998,7 +999,7 @@ and any language-specific continuation lines:
 ```dx
 in rs_code layer lines match line /^[ \t]*\S/   # each code line, first char included
 
-in line rule indent {
+in line rule es-indent {
   indent in parentheses, brackets, braces
   let level indent_anchor repeat("    ", indent_level)
   when slice(text, 0, -1) != level

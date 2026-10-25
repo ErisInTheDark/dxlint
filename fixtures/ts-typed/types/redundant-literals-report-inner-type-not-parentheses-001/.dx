@@ -1,2 +1,2 @@
 import .ts
-rule no-redundant-type-constituents:*
+rule es-no-redundant-type-constituents:*

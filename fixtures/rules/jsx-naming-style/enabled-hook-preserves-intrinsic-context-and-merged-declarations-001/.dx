@@ -1,4 +1,0 @@
-import .ts
-
-        rule naming-convention
-        override in ts_identifier let naming_convention_checked true

@@ -1,2 +1,2 @@
 import .ts
-rule comma-dangle { set style "never" }
+rule es-comma-dangle { set style "never" }

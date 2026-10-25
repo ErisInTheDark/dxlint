@@ -1,3 +1,3 @@
 import .ts
 
-rule no-unsafe-negation
+rule es-no-unsafe-negation

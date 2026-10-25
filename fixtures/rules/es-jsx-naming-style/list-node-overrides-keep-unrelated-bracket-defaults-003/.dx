@@ -1,0 +1,5 @@
+import .ts
+import .css
+import .json
+import .markdown
+rule es-list-style { set overrides { "{}": "off" } }

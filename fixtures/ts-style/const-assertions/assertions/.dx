@@ -1,2 +1,2 @@
 import .ts
-rule prefer-as-const
+rule es-prefer-as-const

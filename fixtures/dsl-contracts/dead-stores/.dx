@@ -1,2 +1,2 @@
 import .ts
-rule no-useless-assignment
+rule es-no-useless-assignment

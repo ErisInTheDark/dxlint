@@ -1,2 +1,2 @@
 import .ts
-rule no-global-assign { set exceptions ["Object"] }
+rule es-no-global-assign { set exceptions ["Object"] }

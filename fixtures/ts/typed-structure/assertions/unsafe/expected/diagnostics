@@ -1,3 +1,3 @@
-a.ts:1:109-1:125 no-unsafe-type-assertion#2
-a.ts:1:188-1:207 no-unsafe-type-assertion#1
-a.ts:1:250-1:260 no-unsafe-type-assertion#3
+a.ts:1:109-1:125 es-no-unsafe-type-assertion#2
+a.ts:1:188-1:207 es-no-unsafe-type-assertion#1
+a.ts:1:250-1:260 es-no-unsafe-type-assertion#3

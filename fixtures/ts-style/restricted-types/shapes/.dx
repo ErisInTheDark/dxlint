@@ -1,5 +1,5 @@
 import .ts
-rule no-restricted-types { set types {
+rule es-no-restricted-types { set types {
   "{}": { fixWith: "object" }, "[]": { fixWith: "unknown[]" },
   "Box<any>": { fixWith: "Safe" }, Banned: { fixWith: "Ok" },
   "Banned<any>": { fixWith: "Full" }, "{/*keep*/}": { fixWith: "object" }

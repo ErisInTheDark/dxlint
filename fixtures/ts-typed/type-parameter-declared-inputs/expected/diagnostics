@@ -1,8 +1,8 @@
-input.ts:15:28-15:29 no-unnecessary-type-parameters#0
-input.ts:1:26-1:27 no-unnecessary-type-parameters#0
-input.ts:3:11-3:12 no-unnecessary-type-parameters#0
-input.ts:5:15-5:16 no-unnecessary-type-parameters#0
-input.ts:6:16-6:17 no-unnecessary-type-parameters#0
-input.ts:7:31-7:32 no-unnecessary-type-parameters#0
-input.ts:8:27-8:28 no-unnecessary-type-parameters#0
-input.ts:9:27-9:28 no-unnecessary-type-parameters#0
+input.ts:15:28-15:29 es-no-unnecessary-type-parameters#0
+input.ts:1:26-1:27 es-no-unnecessary-type-parameters#0
+input.ts:3:11-3:12 es-no-unnecessary-type-parameters#0
+input.ts:5:15-5:16 es-no-unnecessary-type-parameters#0
+input.ts:6:16-6:17 es-no-unnecessary-type-parameters#0
+input.ts:7:31-7:32 es-no-unnecessary-type-parameters#0
+input.ts:8:27-8:28 es-no-unnecessary-type-parameters#0
+input.ts:9:27-9:28 es-no-unnecessary-type-parameters#0

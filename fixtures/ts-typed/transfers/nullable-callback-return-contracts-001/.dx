@@ -1,2 +1,2 @@
 import .ts
-rule no-unsafe-return
+rule es-no-unsafe-return

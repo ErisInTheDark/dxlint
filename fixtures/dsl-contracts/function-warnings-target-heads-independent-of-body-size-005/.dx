@@ -1,2 +1,2 @@
 import .ts
-rule require-await
+rule es-require-await

@@ -1,7 +1,0 @@
-import .ts
-rule jsx-tag-spacing {
-set closingSlash 'never'
-set beforeSelfClosing 'never'
-set afterOpening 'allow'
-set beforeClosing 'allow'
-}

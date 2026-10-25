@@ -1,6 +1,6 @@
-a.js:1:11-1:15 multiline-ternary#0
-a.js:2:5-2:8 multiline-ternary#0
-a.js:4:11-4:15 multiline-ternary#0
-a.js:5:5-5:8 multiline-ternary#0
-a.js:7:11-7:15 multiline-ternary#0
-a.js:8:5-8:8 multiline-ternary#0
+a.js:1:11-1:15 es-multiline-ternary#0
+a.js:2:5-2:8 es-multiline-ternary#0
+a.js:4:11-4:15 es-multiline-ternary#0
+a.js:5:5-5:8 es-multiline-ternary#0
+a.js:7:11-7:15 es-multiline-ternary#0
+a.js:8:5-8:8 es-multiline-ternary#0

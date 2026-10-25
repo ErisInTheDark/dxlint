@@ -1,2 +1,2 @@
-a.ts:1:70-1:73 no-deprecated#0
-a.ts:1:77-1:82 no-deprecated#0
+a.ts:1:70-1:73 es-no-deprecated#0
+a.ts:1:77-1:82 es-no-deprecated#0

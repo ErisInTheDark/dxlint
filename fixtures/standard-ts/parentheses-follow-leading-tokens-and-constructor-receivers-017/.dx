@@ -1,2 +1,2 @@
 import .ts
-rule no-extra-parens
+rule es-no-extra-parens

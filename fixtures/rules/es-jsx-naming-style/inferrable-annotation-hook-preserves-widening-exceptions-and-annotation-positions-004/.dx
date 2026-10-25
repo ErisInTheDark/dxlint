@@ -1,0 +1,3 @@
+import .ts
+override in inferrable_annotation let no_inferrable_types_checked node is ts_class_property && node.key == "property"
+rule es-no-inferrable-types

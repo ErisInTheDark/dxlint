@@ -77,7 +77,7 @@ fn rejection_findings(call) = {
   }
 }
 
-in ts_call rule use-unknown-in-catch-callback-variable {
+in ts_call rule es-use-unknown-in-catch-callback-variable {
   each finding in rejection_findings(node) {
     report at { start: finding.offset, end: finding.end }
     warn "Prefer the safe `: unknown` for a `" finding.method "`" (if finding.method == "then" then " rejection" else "") " callback variable." (when {

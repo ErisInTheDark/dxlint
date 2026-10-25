@@ -1,7 +1,7 @@
-input.ts:10:9-10:18 strict-void-return#0
-input.ts:15:12-15:15 strict-void-return#0
-input.ts:18:12-18:13 strict-void-return#2
-input.ts:3:9-3:12 strict-void-return#0
-input.ts:4:15-4:16 strict-void-return#2
-input.ts:5:18-5:20 strict-void-return#1
-input.ts:6:23-6:29 strict-void-return#2
+input.ts:10:9-10:18 es-strict-void-return#0
+input.ts:15:12-15:15 es-strict-void-return#0
+input.ts:18:12-18:13 es-strict-void-return#2
+input.ts:3:9-3:12 es-strict-void-return#0
+input.ts:4:15-4:16 es-strict-void-return#2
+input.ts:5:18-5:20 es-strict-void-return#1
+input.ts:6:23-6:29 es-strict-void-return#2

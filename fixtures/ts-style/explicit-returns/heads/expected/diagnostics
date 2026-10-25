@@ -1,8 +1,8 @@
-file.ts:10:3-10:12 explicit-function-return-type:method#0
-file.ts:13:3-13:16 explicit-function-return-type:method#0
-file.ts:16:3-16:11 explicit-function-return-type:arrow#0
-file.ts:19:3-19:9 explicit-function-return-type:method#0
-file.ts:1:1-1:18 explicit-function-return-type#0
-file.ts:22:3-22:10 explicit-function-return-type:arrow#0
-file.ts:4:18-4:27 explicit-function-return-type#0
-file.ts:7:16-7:18 explicit-function-return-type:arrow#0
+file.ts:10:3-10:12 es-explicit-function-return-type:method#0
+file.ts:13:3-13:16 es-explicit-function-return-type:method#0
+file.ts:16:3-16:11 es-explicit-function-return-type:arrow#0
+file.ts:19:3-19:9 es-explicit-function-return-type:method#0
+file.ts:1:1-1:18 es-explicit-function-return-type#0
+file.ts:22:3-22:10 es-explicit-function-return-type:arrow#0
+file.ts:4:18-4:27 es-explicit-function-return-type#0
+file.ts:7:16-7:18 es-explicit-function-return-type:arrow#0

@@ -1,3 +1,3 @@
 import .ts
 import .json
-rule list-style { set singleLine { maxItems: 1 } }
+rule es-list-style { set singleLine { maxItems: 1 } }

@@ -1,8 +1,8 @@
-a.js:1:1-1:4 no-var#0
-a.js:2:1-2:4 no-var#0
-a.js:3:45-3:48 no-var#0
-a.js:4:1-4:4 no-var#0
-a.js:5:30-5:33 no-var#0
-a.js:6:29-6:32 no-var#0
-a.js:7:24-7:27 no-var#0
-a.js:7:47-7:50 no-var#0
+a.js:1:1-1:4 es-no-var#0
+a.js:2:1-2:4 es-no-var#0
+a.js:3:45-3:48 es-no-var#0
+a.js:4:1-4:4 es-no-var#0
+a.js:5:30-5:33 es-no-var#0
+a.js:6:29-6:32 es-no-var#0
+a.js:7:24-7:27 es-no-var#0
+a.js:7:47-7:50 es-no-var#0

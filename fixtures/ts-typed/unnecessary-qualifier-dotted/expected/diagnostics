@@ -1,2 +1,2 @@
-input.ts:4:14-4:19 no-unnecessary-qualifier#0
-input.ts:7:23-7:24 no-unnecessary-qualifier#0
+input.ts:4:14-4:19 es-no-unnecessary-qualifier#0
+input.ts:7:23-7:24 es-no-unnecessary-qualifier#0

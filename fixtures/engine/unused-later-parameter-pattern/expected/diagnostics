@@ -1,1 +1,1 @@
-input.ts:1:33-1:39 no-unused-vars:parameters#1
+input.ts:1:33-1:39 es-no-unused-vars:parameters#1

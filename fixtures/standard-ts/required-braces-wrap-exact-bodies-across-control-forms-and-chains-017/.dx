@@ -1,2 +1,2 @@
 import .ts
-rule curly
+rule es-curly

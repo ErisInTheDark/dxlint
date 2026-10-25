@@ -1,3 +1,3 @@
 import .ts
-rule no-multi-spaces
+rule es-no-multi-spaces
 override in multiple_space_gap let multiple_spaces_checked !(parent is ts_property) && !multiple_space_eol_comment

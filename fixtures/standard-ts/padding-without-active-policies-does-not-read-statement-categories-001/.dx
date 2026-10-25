@@ -1,4 +1,4 @@
 import .ts
 
 override in ts_node let structure_padding_categories byte_slice("x", [])
-rule padding-line-between-statements { set options [] }
+rule es-padding-line-between-statements { set options [] }

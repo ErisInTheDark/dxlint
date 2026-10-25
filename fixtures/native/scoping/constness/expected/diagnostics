@@ -1,2 +1,2 @@
-assignment.mjs:1:12-1:12 prefer-const#0
-destructuring.mjs:1:7-1:7 prefer-const#0
+assignment.mjs:1:12-1:12 es-prefer-const#0
+destructuring.mjs:1:7-1:7 es-prefer-const#0

@@ -1,2 +1,2 @@
 import .ts
-rule no-confusing-arrow
+rule es-no-confusing-arrow

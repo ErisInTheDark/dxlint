@@ -1,6 +1,6 @@
-input.ts:10:1-10:6 no-base-to-string#0
-input.ts:20:8-20:13 no-base-to-string#1
-input.ts:4:8-4:14 no-base-to-string#1
-input.ts:6:1-6:6 no-base-to-string#1
-input.ts:7:1-7:6 no-base-to-string#0
-input.ts:9:8-9:13 no-base-to-string#1
+input.ts:10:1-10:6 es-no-base-to-string#0
+input.ts:20:8-20:13 es-no-base-to-string#1
+input.ts:4:8-4:14 es-no-base-to-string#1
+input.ts:6:1-6:6 es-no-base-to-string#1
+input.ts:7:1-7:6 es-no-base-to-string#0
+input.ts:9:8-9:13 es-no-base-to-string#1

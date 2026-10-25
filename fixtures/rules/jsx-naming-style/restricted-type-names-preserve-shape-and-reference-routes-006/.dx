@@ -1,2 +1,0 @@
-import .ts
-rule no-restricted-types { set types { " Banned < A , B > ": true } }

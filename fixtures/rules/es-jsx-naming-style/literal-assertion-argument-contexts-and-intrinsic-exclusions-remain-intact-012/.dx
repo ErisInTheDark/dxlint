@@ -1,0 +1,4 @@
+import .ts
+rule es-consistent-type-assertions { set assertionStyle 'as' }
+rule es-consistent-type-assertions:object set 'never'
+rule es-consistent-type-assertions:array set 'never'

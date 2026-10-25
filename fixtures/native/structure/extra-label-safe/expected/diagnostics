@@ -1,8 +1,8 @@
-a.js:1:36-1:40 no-extra-label#0
-a.js:1:48-1:52 no-extra-label#0
-a.js:2:41-2:47 no-extra-label#0
-a.js:3:25-3:30 no-extra-label#0
-a.js:4:44-4:48 no-extra-label#0
-a.js:5:41-5:46 no-extra-label#0
-a.js:6:22-6:27 no-extra-label#0
-a.js:7:43-7:48 no-extra-label#0
+a.js:1:36-1:40 es-no-extra-label#0
+a.js:1:48-1:52 es-no-extra-label#0
+a.js:2:41-2:47 es-no-extra-label#0
+a.js:3:25-3:30 es-no-extra-label#0
+a.js:4:44-4:48 es-no-extra-label#0
+a.js:5:41-5:46 es-no-extra-label#0
+a.js:6:22-6:27 es-no-extra-label#0
+a.js:7:43-7:48 es-no-extra-label#0

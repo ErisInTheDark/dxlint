@@ -2,4 +2,4 @@ import .ts
 
 # Rest arguments typed by a bare formal infer it as their tuple; a formal
 # no argument infers takes its default (both as TypeScript does).
-rule no-misused-promises
+rule es-no-misused-promises

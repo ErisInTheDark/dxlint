@@ -1,4 +1,4 @@
 import .ts
-rule prefer-readonly {
+rule es-prefer-readonly {
   set onlyInlineLambdas true
 }

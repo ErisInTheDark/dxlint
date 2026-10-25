@@ -8,19 +8,19 @@ group optional_chain_head ts_non_null, ts_parenthesized
 in optional_chain_head let heads_optional_chain is (ts_member.object, ts_index.object) && parent.optional != null
   || is ts_call.callee && parent.optional != null
   || parent is ts_parenthesized && parent.heads_optional_chain == true
-in ts_non_null rule no-extra-non-null-assertion {
+in ts_non_null rule es-no-extra-non-null-assertion {
   when parent is ts_non_null || parent is ts_parenthesized && parent.under_non_null == true || heads_optional_chain
   fix as { value result: len(text) - 1; value slice(text, 0, result) }
   warn "Forbidden extra non-null assertion."
 }
 # `x?.y!` (at the end of the chain), `(x?.y)!`.
 @macro non_null_chain_message "Optional chain expressions can return undefined by design - using a non-null assertion is unsafe and wrong."
-in ts_non_null rule no-non-null-asserted-optional-chain {
+in ts_non_null rule es-no-non-null-asserted-optional-chain {
   when expression.in_optional_chain == true
   when not (ts_member.object, ts_index.object, ts_call.callee)
   warn @non_null_chain_message
 }
-in ts_non_null.expression rule no-non-null-asserted-optional-chain:paren {
+in ts_non_null.expression rule es-no-non-null-asserted-optional-chain:paren {
   when is ts_parenthesized && wraps_optional_chain == true
   report at unparenthesised_node(node)
   warn @non_null_chain_message
@@ -58,7 +58,7 @@ fn problem_optional_use(n) = {
   }
   last
 }
-in ts_member.optional, ts_index.optional, ts_call.optional rule no-unsafe-optional-chaining {
+in ts_member.optional, ts_index.optional, ts_call.optional rule es-no-unsafe-optional-chaining {
   option disallowArithmeticOperators boolean = false
   when (if parent is ts_call then parent.callee.in_optional_chain else parent.object.in_optional_chain) != true
   let chain problem_optional_root(parent.node)

@@ -1,2 +1,2 @@
 import .ts
-rule no-empty-function
+rule es-no-empty-function

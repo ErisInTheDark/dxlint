@@ -1,2 +1,2 @@
 import .ts
-rule dot-notation { set allowProtectedClassPropertyAccess true }
+rule es-dot-notation { set allowProtectedClassPropertyAccess true }

@@ -1,7 +1,7 @@
-input.ts:1:1-1:9 capitalized-comments:line#0
-input.ts:2:1-2:16 capitalized-comments:block#0
-input.ts:3:1-5:4 capitalized-comments:block#0
-input.ts:6:1-6:8 capitalized-comments:line#0
-input.ts:7:1-7:7 capitalized-comments:line#0
-input.ts:8:1-8:7 capitalized-comments:line#0
-input.ts:9:1-9:8 capitalized-comments:line#0
+input.ts:1:1-1:9 es-capitalized-comments:line#0
+input.ts:2:1-2:16 es-capitalized-comments:block#0
+input.ts:3:1-5:4 es-capitalized-comments:block#0
+input.ts:6:1-6:8 es-capitalized-comments:line#0
+input.ts:7:1-7:7 es-capitalized-comments:line#0
+input.ts:8:1-8:7 es-capitalized-comments:line#0
+input.ts:9:1-9:8 es-capitalized-comments:line#0

@@ -1,1 +1,1 @@
-a.ts:1:250-1:254 no-unnecessary-condition:truthiness-assertion#2
+a.ts:1:250-1:254 es-no-unnecessary-condition:truthiness-assertion#2

@@ -5,7 +5,7 @@ define {
 fn backreference_reason(kind) = (if kind == "nested" then "from within that group" else if kind == "forward" then "which appears later in the pattern" else if kind == "backward" then "which appears before in the same lookbehind" else if kind == "disjunctive" then "which is in another alternative" else "which is in a negative lookaround")
 fn misleading_message(kind) = (if kind == "surrogatePairWithoutUFlag" then "Unexpected surrogate pair in character class. Use 'u' flag." else if kind == "surrogatePair" then "Unexpected surrogate pair in character class." else if kind == "combiningClass" then "Unexpected combined character in character class." else if kind == "emojiModifier" then "Unexpected modified Emoji in character class." else if kind == "regionalIndicatorSymbol" then "Unexpected national flag in character class." else "Unexpected joined character sequence in character class.")
 
-in ts_regex rule no-empty-character-class {
+in ts_regex rule es-no-empty-character-class {
   when contains(text, "[")
   each f in regexp_empty_class_findings {
     warn "Empty class."
@@ -13,7 +13,7 @@ in ts_regex rule no-empty-character-class {
 }
 
 # On literals, and on plain string patterns of `RegExp(...)` (at the string).
-in regexp_site rule no-control-regex {
+in regexp_site rule es-no-control-regex {
   when is ts_regex || regexp_candidate
   when is ts_regex || regexp_input.written == "string"
   each f in regexp_control_findings {
@@ -22,7 +22,7 @@ in regexp_site rule no-control-regex {
   }
 }
 
-in regexp_site rule no-useless-backreference {
+in regexp_site rule es-no-useless-backreference {
   when is ts_regex || regexp_candidate
   each f in regexp_backreference_findings {
     warn "Backreference '{first(f.data)}' will be ignored. It references group '{ { value f.data; slice 1; first } }'{last(f.data)} {backreference_reason(f.kind)}."
@@ -32,7 +32,7 @@ in regexp_site rule no-useless-backreference {
 # Each sequence where it is written (or at the pattern when it is
 # computed). With computed flags, nothing is known.
 in regexp_site let misleading_character_class_findings regexp_misleading_findings
-in regexp_site rule no-misleading-character-class {
+in regexp_site rule es-no-misleading-character-class {
   when is ts_regex || regexp_candidate
   when type_of(regexp_input.flags) == "str" || is ts_regex
   each f in misleading_character_class_findings {
@@ -42,7 +42,7 @@ in regexp_site rule no-misleading-character-class {
 }
 
 # Literals, and `RegExp` calls with a string literal pattern and flags.
-in regexp_site rule no-regex-spaces {
+in regexp_site rule es-no-regex-spaces {
   when is ts_regex || regexp_candidate
   let spaces_argument if is (ts_call, ts_new) then { value argument.nodes; first; unparenthesised_node } else null
   let spaces_fixable is ts_regex || regexp_input.source == slice(spaces_argument.text, 1, -1)
@@ -54,7 +54,7 @@ in regexp_site rule no-regex-spaces {
 }
 
 # The flags first (`RegExp` checks them first), then the pattern.
-in ts_call, ts_new rule no-invalid-regexp {
+in ts_call, ts_new rule es-no-invalid-regexp {
   option allowConstructorFlags string[] = [] "flags beyond the standard ones that are allowed"
   when regexp_candidate
   when callee.global_value == "RegExp"

@@ -1,4 +1,4 @@
-input.tsx:2:2-2:5 jsx-indent-props#0
-input.tsx:3:2-3:5 jsx-indent-props#0
-input.tsx:7:4-7:7 jsx-indent-props#0
-input.tsx:8:8-8:12 jsx-indent-props#0
+input.tsx:2:2-2:5 es-jsx-indent-props#0
+input.tsx:3:2-3:5 es-jsx-indent-props#0
+input.tsx:7:4-7:7 es-jsx-indent-props#0
+input.tsx:8:8-8:12 es-jsx-indent-props#0

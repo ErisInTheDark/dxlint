@@ -75,9 +75,9 @@ in ts_function, ts_arrow, ts_method let explicit_return_shape {
     warn "Missing return type on function."
   }
 }
-@explicit_return_rule(explicit-function-return-type, ts_function)
-@explicit_return_rule(explicit-function-return-type:method, ts_method)
-@explicit_return_rule(explicit-function-return-type:arrow, ts_arrow)
+@explicit_return_rule(es-explicit-function-return-type, ts_function)
+@explicit_return_rule(es-explicit-function-return-type:method, ts_method)
+@explicit_return_rule(es-explicit-function-return-type:arrow, ts_arrow)
 
 # explicit-module-boundary-types: what other modules see needs types.
 group style_boundary_export ts_export, ts_export_assignment
@@ -144,9 +144,9 @@ in ts_parameter let boundary_argument {
     warn if parameter_check then (if boundary_argument.name != null then "Argument '" boundary_argument.name "'" else boundary_argument.pattern " argument") " should be typed" (if boundary_argument.any then " with a non-any type" else "") "." else "Missing return type on function."
   }
 }
-@boundary_rule(explicit-module-boundary-types, ts_function, false)
-@boundary_rule(explicit-module-boundary-types:method, ts_method, false)
-@boundary_rule(explicit-module-boundary-types:arrow, ts_arrow, false)
-@boundary_rule(explicit-module-boundary-types:argument, ts_parameter, true)
+@boundary_rule(es-explicit-module-boundary-types, ts_function, false)
+@boundary_rule(es-explicit-module-boundary-types:method, ts_method, false)
+@boundary_rule(es-explicit-module-boundary-types:arrow, ts_arrow, false)
+@boundary_rule(es-explicit-module-boundary-types:argument, ts_parameter, true)
 
 }

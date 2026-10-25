@@ -56,7 +56,7 @@ fn ts_return_this_annotation(n) = {
     }
 }
 
-in ts_method, ts_function, ts_arrow rule prefer-return-this-type {
+in ts_method, ts_function, ts_arrow rule es-prefer-return-this-type {
   let annotation ts_return_this_annotation(node)
   when annotation != null
   report at annotation

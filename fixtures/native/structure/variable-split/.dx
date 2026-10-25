@@ -1,2 +1,2 @@
 import .ts
-rule one-var { set options ["never"] }
+rule es-one-var { set options ["never"] }

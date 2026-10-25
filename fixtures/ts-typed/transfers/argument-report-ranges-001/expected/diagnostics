@@ -1,6 +1,6 @@
-a.ts:10:8-10:15 no-unsafe-argument:array#0
-a.ts:11:9-11:15 no-unsafe-argument#0
-a.ts:6:20-6:26 no-unsafe-argument#0
-a.ts:6:7-6:13 no-unsafe-argument#0
-a.ts:8:8-8:14 no-unsafe-argument#0
-a.ts:9:8-9:17 no-unsafe-argument:spread#0
+a.ts:10:8-10:15 es-no-unsafe-argument:array#0
+a.ts:11:9-11:15 es-no-unsafe-argument#0
+a.ts:6:20-6:26 es-no-unsafe-argument#0
+a.ts:6:7-6:13 es-no-unsafe-argument#0
+a.ts:8:8-8:14 es-no-unsafe-argument#0
+a.ts:9:8-9:17 es-no-unsafe-argument:spread#0

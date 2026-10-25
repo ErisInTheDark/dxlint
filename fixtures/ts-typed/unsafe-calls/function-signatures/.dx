@@ -1,2 +1,2 @@
 import .ts
-rule no-unsafe-call
+rule es-no-unsafe-call

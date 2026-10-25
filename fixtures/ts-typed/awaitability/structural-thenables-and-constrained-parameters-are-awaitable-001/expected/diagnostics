@@ -1,2 +1,2 @@
-file.ts:4:17-4:23 no-misused-promises:conditionals#0
-file.ts:5:17-5:28 no-misused-promises:conditionals#0
+file.ts:4:17-4:23 es-no-misused-promises:conditionals#0
+file.ts:5:17-5:28 es-no-misused-promises:conditionals#0

@@ -10,4 +10,4 @@ language .js {
   set ecmaVersion 3
 }
 
-rule no-unused-expressions
+rule es-no-unused-expressions

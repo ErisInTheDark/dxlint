@@ -65,7 +65,7 @@ fn structure_iterable_members(arms, lookup) = {
     else null
 }
 
-in ts_declarator, ts_assignment rule prefer-destructuring {
+in ts_declarator, ts_assignment rule es-prefer-destructuring {
   option options ({ array?: boolean; object?: boolean; VariableDeclarator?: { array?: boolean; object?: boolean }; AssignmentExpression?: { array?: boolean; object?: boolean }; enforceForRenamedProperties?: boolean; enforceForDeclarationWithTypeAnnotation?: boolean })[] = [] "destructuring categories, per declaration or assignment, renamed-property and annotated-declaration enforcement"
   when structure_destructure_eligible
   let typed structure_typescript(file)
@@ -125,7 +125,7 @@ fn structure_property_info(subject, key) = {
   option allowIndexSignaturePropertyAccess boolean = false "allow bracket access through string-like index signatures"
 }
 
-in ts_index rule dot-notation:computed {
+in ts_index rule es-dot-notation:computed {
   @structure_dot_options
   let key index.structure_unwrapped
   let literal key.literal_value
@@ -151,7 +151,7 @@ in ts_index rule dot-notation:computed {
   fix at { start: open, end: end_offset } if fixable as separator name trailing
 }
 
-in ts_member rule dot-notation:keyword {
+in ts_member rule es-dot-notation:keyword {
   @structure_dot_options
   when !allowKeywords && structure_dot_keyword(property.text)
   let dot property.space_before.start - 1
@@ -192,8 +192,8 @@ in ts_parenthesized let structure_single_conditional expression is ts_conditiona
   }
 }
 
-@structure_mixed_operator_rule(no-mixed-operators:child, structure_operator_span)
-@structure_mixed_operator_rule(no-mixed-operators:parent, parent.structure_operator_span)
+@structure_mixed_operator_rule(es-no-mixed-operators:child, structure_operator_span)
+@structure_mixed_operator_rule(es-no-mixed-operators:parent, parent.structure_operator_span)
 
 fn structure_declaration_issue(message, fix) = if message == null then null else { message: message, fix: fix }
 fn structure_fix_edits(source, edits) = if count(edits) == 0 then null else {
@@ -274,7 +274,7 @@ fn structure_declaration_findings(info, settings, source) = {
   value map(issues, issue => {node: info.node, message: issue.message, fix: issue.fix})
 }
 
-in structure_lexical_scope, ts_variable_declaration rule one-var {
+in structure_lexical_scope, ts_variable_declaration rule es-one-var {
   option options ("always" | "never" | "consecutive" | { separateRequires?: boolean; var?: "always" | "never" | "consecutive"; let?: "always" | "never" | "consecutive"; const?: "always" | "never" | "consecutive"; using?: "always" | "never" | "consecutive"; awaitUsing?: "always" | "never" | "consecutive"; initialized?: "always" | "never" | "consecutive"; uninitialized?: "always" | "never" | "consecutive" })[] = [] "declaration grouping policy"
   let settings { value options; first; nonempty } ?? "always"
   let scoped if type_of(settings) == "str" then settings == "always"
@@ -325,7 +325,7 @@ fn structure_strip_comments(content, start, comments) = {
   value byte_slice(content, 0, end)
 }
 
-in ts_line rule max-len {
+in ts_line rule es-max-len {
   option options (number | { code?: number; comments?: number; tabWidth?: number; ignorePattern?: string; ignoreComments?: boolean; ignoreStrings?: boolean; ignoreUrls?: boolean; ignoreTemplateLiterals?: boolean; ignoreRegExpLiterals?: boolean; ignoreTrailingComments?: boolean })[] = [] "line limits, tab stops and exemptions"
   let settings last(options)
   let code_limit if { value options; first; type_of } == "num" then first(options) else settings.code.nonempty ?? 80
@@ -362,7 +362,7 @@ in structure_comment let structure_comment_body if is ts_block_comment then { va
 in structure_comment let structure_directive { value structure_comment_body; trim_start; structure_is_directive }
 in ts_comment let structure_comment_beside { value js_line_start: position(offset).js_line_start; value byte_slice(source, js_line_start, offset); trim } != ""
 
-in ts_line_comment rule line-comment-position {
+in ts_line_comment rule es-line-comment-position {
   option options ("above" | "beside" | { position?: "above" | "beside"; ignorePattern?: string; applyDefaultIgnorePatterns?: boolean })[] = [] "line comment position and exemptions"
   let settings first(options)
   let position if type_of(settings) == "str" then settings else settings.position.nonempty ?? "above"
@@ -463,7 +463,7 @@ fn structure_comment_alignment(row, comment, source) = {
   value { start: row.offset, end: row.offset + byte_len(leading), text: prefix (if starred then "" else missing) }
 }
 
-in ts_block_comment rule multiline-comment-style:shape {
+in ts_block_comment rule es-multiline-comment-style:shape {
   @structure_comment_style_options
   when structure_style_eligible && structure_multiline
   when if mode == "bare-block" then trim(structure_block_first) == "" && trim(structure_block_last) == ""
@@ -479,7 +479,7 @@ in ts_block_comment rule multiline-comment-style:shape {
   warn if mode == "bare-block" then "Expected a block comment without padding stars." else "Expected multiple line comments instead of a block comment."
 }
 
-in ts_block_comment rule multiline-comment-style:open {
+in ts_block_comment rule es-multiline-comment-style:open {
   @structure_comment_style_options
   when mode == "starred-block" && structure_style_eligible && structure_multiline
   when {
@@ -495,7 +495,7 @@ in ts_block_comment rule multiline-comment-style:open {
   warn "Expected a linebreak after '/*'."
 }
 
-in ts_block_comment rule multiline-comment-style:close {
+in ts_block_comment rule es-multiline-comment-style:close {
   @structure_comment_style_options
   when mode == "starred-block" && structure_style_eligible && structure_multiline && trim(structure_block_last) != ""
   let style_indent structure_comment_indent(node, source)
@@ -504,7 +504,7 @@ in ts_block_comment rule multiline-comment-style:close {
   warn "Expected a linebreak before '*/'."
 }
 
-in ts_line rule multiline-comment-style:alignment {
+in ts_line rule es-multiline-comment-style:alignment {
   @structure_comment_style_options
   when mode == "starred-block"
   let comment {
@@ -536,7 +536,7 @@ in ts_line_comment let structure_group_unsafe contains(structure_comment_body, "
     walk (comment) if comment.structure_joins_next then comment.structure_next_comment.node else null
     any (comment) contains(comment.structure_comment_body, "*/")
   }
-in ts_line_comment rule multiline-comment-style:consecutive {
+in ts_line_comment rule es-multiline-comment-style:consecutive {
   @structure_comment_style_options
   when mode != "separate-lines" && structure_style_eligible && !structure_joins_previous && structure_joins_next && !structure_group_unsafe
   let style_group { value node; walk (comment) if comment.structure_joins_next then comment.structure_next_comment.node else null }
@@ -547,7 +547,7 @@ in ts_line_comment rule multiline-comment-style:consecutive {
   warn "Expected a block comment instead of consecutive line comments."
 }
 
-in ts_question, ts_colon rule multiline-ternary {
+in ts_question, ts_colon rule es-multiline-ternary {
   option mode "always" | "always-multiline" | "never" = "always"
   option ignoreJSX boolean = false "ignore conditionals in JSX expressions"
   when parent is ts_conditional
@@ -570,13 +570,13 @@ in ts_question, ts_colon rule multiline-ternary {
 }
 
 in ts_line match structure_tab_run /\t+/
-in structure_tab_run rule no-tabs {
+in structure_tab_run rule es-no-tabs {
   option allowIndentationTabs boolean = false "allow tabs at the start of a line"
   when !allowIndentationTabs || !{ value parent.text; byte_slice 0 (offset - parent.offset); re_test /^[ \t]*$/ }
   warn "Unexpected tab character."
 }
 
-in ts_line rule no-mixed-spaces-and-tabs {
+in ts_line rule es-no-mixed-spaces-and-tabs {
   option mode "default" | "smart-tabs" = "default"
   let indentation re_find(structure_line_content, /^[ \t]+/)
   let mixed if indentation == null then null
@@ -594,7 +594,7 @@ in ts_line rule no-mixed-spaces-and-tabs {
   warn "Mixed spaces and tabs."
 }
 
-in ts_program rule unicode-bom {
+in ts_program rule es-unicode-bom {
   option mode "always" | "never" = "never"
   when mode == "always" && !bom || mode == "never" && bom
   fix at { start: 0, end: if mode == "never" then 3 else 0 } as if mode == "always" then "\u{feff}" else ""
@@ -602,13 +602,13 @@ in ts_program rule unicode-bom {
   warn if mode == "always" then "Expected Unicode BOM (Byte Order Mark)." else "Unexpected Unicode BOM (Byte Order Mark)."
 }
 
-in ts_regex rule wrap-regex {
+in ts_regex rule es-wrap-regex {
   when is (ts_member.object, ts_index.object)
   fix as "(" text ")"
   warn "Wrap the regexp literal in parens to disambiguate the slash."
 }
 
-in ts_declarator rule one-var-declaration-per-line {
+in ts_declarator rule es-one-var-declaration-per-line {
   option mode "initializations" | "always" = "initializations"
   when previous_sibling != null && !re_test(previous_gap, /[\n\r\u{2028}\u{2029}]/)
   when !parent.structure_loop_declaration
@@ -617,7 +617,7 @@ in ts_declarator rule one-var-declaration-per-line {
   warn "Expected variable declaration to be on a new line."
 }
 
-in ts_binary rule eqeqeq {
+in ts_binary rule es-eqeqeq {
   option options ("always" | "smart" | "allow-null" | { null: "always" | "never" | "ignore" })[] = [] "equality mode and null policy"
   let mode { value options; first; nonempty } ?? "always"
   let null_mode { value last(options).null; nonempty } ?? "always"
@@ -645,7 +645,7 @@ fn operand_add(info) =
   || info.type_keyword || contains([":", "[", "(", "<"], info.last) || operand_assignment(info.last)
   || contains(["[", "(", "{{", "=>", ":"], info.before) || operand_assignment(info.before)
 
-in ts_program rule indent-binary-ops {
+in ts_program rule es-indent-binary-ops {
   option mode number | "tab" = 2 "indent width or tabs"
   let width if mode == "tab" then 1 else mode
   let unit if mode == "tab" then "\t" else " "
@@ -694,7 +694,7 @@ fn structure_operator_fix(before, after, next, policy, operator, before_comment,
   }
 
 in ts_binary.operator, ts_logical.operator, ts_assignment.operator, ts_equals, ts_question, ts_colon,
-  ts_union.structure_type_operators, ts_intersection.structure_type_operators rule operator-linebreak {
+  ts_union.structure_type_operators, ts_intersection.structure_type_operators rule es-operator-linebreak {
   option mode "before" | "after" | "none" | null = null "operator side of a line break"
   option overrides { [key: string]: "before" | "after" | "none" | "ignore" } = {} "operator-specific placement"
   when parent is (ts_binary, ts_logical, ts_assignment)
@@ -770,7 +770,7 @@ in max_statements_counted let max_statements_exit_offset offset + {
 }
 in max_statements_counted let max_statements_exit_line position(max_statements_exit_offset).js_line
 
-in ts_line rule max-statements-per-line {
+in ts_line rule es-max-statements-per-line {
   option max int(1..) = 1 "maximum statements on one line"
   let row position(offset).js_line
   let statements { value overlapping(max_statements_counted); filter (statement) statement.max_statements_counted_here.nonempty ?? true }
@@ -888,8 +888,8 @@ in structure_comment rule name {
   fix at { start: comment_fix_site, end: comment_fix_site } as "\n"
 }
 }
-@structure_comment_gap(lines-around-comment:before, true)
-@structure_comment_gap(lines-around-comment:after, false)
+@structure_comment_gap(es-lines-around-comment:before, true)
+@structure_comment_gap(es-lines-around-comment:after, false)
 
 in ts_parenthesized let structure_unwrapped_end expression.structure_unwrapped_end.nonempty ?? expression.end_offset
 in ts_parenthesized let structure_unwrapped_text expression.structure_unwrapped_text.nonempty ?? expression.text
@@ -914,7 +914,7 @@ in ts_call, ts_new let structure_call_depth (callee.structure_chain_info).depth.
 @structure_chain_owner(ts_member, property.offset, property.structure_unwrapped_text.nonempty ?? property.text, false)
 @structure_chain_owner(ts_index, index.offset, index.structure_unwrapped_text.nonempty ?? index.text, true)
 
-in ts_call rule newline-per-chained-call {
+in ts_call rule es-newline-per-chained-call {
   option ignoreChainWithDepth number = 2 "allow chains up to this depth"
   let info callee.structure_chain_info
   when info != null && info.depth > ignoreChainWithDepth && !re_test(info.gap, /[\n\r\u{2028}\u{2029}]/)
@@ -927,7 +927,7 @@ in ts_call rule newline-per-chained-call {
   warn "Expected line break before `{callee_name}`."
 }
 
-in ts_arrow.body rule implicit-arrow-linebreak {
+in ts_arrow.body rule es-implicit-arrow-linebreak {
   option mode "beside" | "below" = "beside"
   when not ts_block
   let broken space_before.line_break
@@ -936,7 +936,7 @@ in ts_arrow.body rule implicit-arrow-linebreak {
   warn if mode == "beside" then "Expected no linebreak before this expression." else "Expected a linebreak before this expression."
 }
 
-in ts_arrow rule no-confusing-arrow {
+in ts_arrow rule es-no-confusing-arrow {
   option allowParens boolean = true "parentheses disambiguate a conditional body"
   option onlyOneSimpleParam boolean = false "check only single identifier parameters"
   when body is ts_conditional || !allowParens && body is ts_parenthesized && body.structure_single_conditional
@@ -945,7 +945,7 @@ in ts_arrow rule no-confusing-arrow {
   warn "Arrow function used ambiguously with a conditional expression."
 }
 
-in ts_if.consequent, ts_if.alternate, ts_while.body, ts_do_while.body, ts_for.body, ts_for_in.body, ts_for_of.body rule nonblock-statement-body-position {
+in ts_if.consequent, ts_if.alternate, ts_while.body, ts_do_while.body, ts_for.body, ts_for_in.body, ts_for_of.body rule es-nonblock-statement-body-position {
   option mode "beside" | "below" | "any" = "beside"
   option overrides { if?: "beside" | "below" | "any"; else?: "beside" | "below" | "any"; while?: "beside" | "below" | "any"; do?: "beside" | "below" | "any"; for?: "beside" | "below" | "any" } = {} "position by statement"
   let kind if parent is ts_if then (if is ts_if.alternate then "else" else "if") else if parent is ts_while then "while" else if parent is ts_do_while then "do" else "for"

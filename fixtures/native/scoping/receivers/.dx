@@ -1,2 +1,2 @@
 import .ts
-rule no-invalid-this
+rule es-no-invalid-this

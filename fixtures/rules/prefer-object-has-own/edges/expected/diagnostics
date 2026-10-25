@@ -1,9 +1,0 @@
-file.js:2:20-2:52 prefer-object-has-own#0
-file.js:3:32-3:64 prefer-object-has-own#0
-file.js:4:20-4:52 prefer-object-has-own#0
-file.js:5:15-5:47 prefer-object-has-own#0
-file.js:6:15-6:47 prefer-object-has-own#0
-file.js:7:28-7:68 prefer-object-has-own#0
-file.js:8:1-8:56 prefer-object-has-own#0
-file.js:9:16-9:105 prefer-object-has-own#0
-file.js:9:58-9:104 prefer-object-has-own#0

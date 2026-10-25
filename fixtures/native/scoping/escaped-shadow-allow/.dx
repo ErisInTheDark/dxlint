@@ -1,2 +1,2 @@
 import .ts
-rule no-shadow { set allow ["a"] }
+rule es-no-shadow { set allow ["a"] }

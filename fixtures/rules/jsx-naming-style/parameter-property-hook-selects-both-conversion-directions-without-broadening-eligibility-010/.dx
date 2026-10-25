@@ -1,3 +1,0 @@
-import .ts
-override in ts_parameter, ts_class_property let parameter_properties_checked parameter_modifiers == 'private readonly'
-rule parameter-properties { set prefer 'parameter-property' }

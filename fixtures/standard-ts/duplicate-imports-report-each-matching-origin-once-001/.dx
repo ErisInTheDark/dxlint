@@ -1,3 +1,3 @@
 import .ts
-rule no-duplicate-imports
+rule es-no-duplicate-imports
 group duplicate_imports_checked ts_export

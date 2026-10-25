@@ -1,2 +1,0 @@
-import .ts
-rule jsx-wrap-multilines { set declaration "parens-new-line"; set arrow false; set propertyValue "ignore" }

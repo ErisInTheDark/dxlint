@@ -1,2 +1,2 @@
 import .ts
-rule no-unexpected-multiline
+rule es-no-unexpected-multiline

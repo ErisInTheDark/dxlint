@@ -1,4 +1,4 @@
 import .ts
-rule no-invalid-void-type {
+rule es-no-invalid-void-type {
   set allowAsThisParameter true
 }

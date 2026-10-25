@@ -1,5 +1,5 @@
 import .ts
-rule no-restricted-types { set types {
+rule es-no-restricted-types { set types {
   Disabled: true, " Disabled ": false, Null: null,
   Empty: "", Record: {}, True: true,
   Message: "Use {{safe}}.", RecordMessage: { message: "Use safe.", fixWith: "" },

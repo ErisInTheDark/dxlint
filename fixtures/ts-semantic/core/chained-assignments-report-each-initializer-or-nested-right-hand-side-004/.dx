@@ -1,2 +1,2 @@
 import .ts
-rule no-multi-assign
+rule es-no-multi-assign

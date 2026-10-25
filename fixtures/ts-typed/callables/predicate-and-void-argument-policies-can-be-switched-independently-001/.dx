@@ -1,6 +1,6 @@
 import .ts
-rule no-misused-promises
-rule no-misused-promises:void-arguments off
+rule es-no-misused-promises
+rule es-no-misused-promises:void-arguments off
 
 # Project inputs remain readable, but the original Rust test linted only this main file.
 ignore "node_modules/typescript/lib/lib.fixture.d.ts"

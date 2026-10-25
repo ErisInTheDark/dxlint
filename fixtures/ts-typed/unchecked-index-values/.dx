@@ -1,5 +1,5 @@
 import .ts
-rule switch-exhaustiveness-check
+rule es-switch-exhaustiveness-check
 in ts_index rule index-value-contract {
   when contains(["arrayRead", "recordRead", "namedRead", "fixedRead", "optionalRead",
     "dynamicRead", "variadicRead", "dynamicRecordRead", "unionRead"], parent.name.text)

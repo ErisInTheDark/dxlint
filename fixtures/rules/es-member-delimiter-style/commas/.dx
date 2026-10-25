@@ -1,0 +1,2 @@
+import .ts
+rule es-member-delimiter-style { set multiline { delimiter: "comma", requireLast: true } }

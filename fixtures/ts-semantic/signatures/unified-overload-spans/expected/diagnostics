@@ -1,3 +1,3 @@
-file.ts:2:1-2:40 unified-signatures#0
-file.ts:4:24-4:33 unified-signatures#0
-file.ts:7:19-7:28 unified-signatures#0
+file.ts:2:1-2:40 es-unified-signatures#0
+file.ts:4:24-4:33 es-unified-signatures#0
+file.ts:7:19-7:28 es-unified-signatures#0

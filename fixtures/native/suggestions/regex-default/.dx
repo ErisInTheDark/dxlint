@@ -1,2 +1,2 @@
 import .ts
-rule prefer-regex-literals
+rule es-prefer-regex-literals

@@ -1,2 +1,2 @@
-a.ts:1:46-1:49 no-unsafe-assignment:tuple#0
-a.ts:1:9-1:10 no-unsafe-assignment:object#0
+a.ts:1:46-1:49 es-no-unsafe-assignment:tuple#0
+a.ts:1:9-1:10 es-no-unsafe-assignment:object#0

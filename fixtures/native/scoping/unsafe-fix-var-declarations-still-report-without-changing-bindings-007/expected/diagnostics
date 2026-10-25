@@ -1,2 +1,2 @@
-file.js:1:16-1:19 no-var#0
-file.js:1:23-1:26 no-var#0
+file.js:1:16-1:19 es-no-var#0
+file.js:1:23-1:26 es-no-var#0

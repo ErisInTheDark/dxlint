@@ -1,3 +1,3 @@
 import .ts
 import .ts/typed/type-parameters
-rule no-unnecessary-type-parameters
+rule es-no-unnecessary-type-parameters

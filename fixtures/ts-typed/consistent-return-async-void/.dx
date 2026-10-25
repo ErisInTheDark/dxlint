@@ -1,2 +1,2 @@
 import .ts
-rule consistent-return
+rule es-consistent-return

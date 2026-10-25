@@ -1,5 +1,5 @@
-a.js:2:9-2:10 yield-star-spacing:after#1
-a.js:2:9-2:10 yield-star-spacing:before#0
-a.js:3:20-3:21 yield-star-spacing:after#1
-a.js:3:20-3:21 yield-star-spacing:before#0
-a.js:4:18-4:19 yield-star-spacing:after#1
+a.js:2:9-2:10 es-yield-star-spacing:after#1
+a.js:2:9-2:10 es-yield-star-spacing:before#0
+a.js:3:20-3:21 es-yield-star-spacing:after#1
+a.js:3:20-3:21 es-yield-star-spacing:before#0
+a.js:4:18-4:19 es-yield-star-spacing:after#1

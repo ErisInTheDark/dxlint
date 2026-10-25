@@ -1,3 +1,3 @@
-a.js:1:58-1:62 no-unused-vars:array-elements#1
-a.js:1:8-1:14 no-unused-vars:array-elements#1
-a.js:1:96-1:102 no-unused-vars:array-elements#1
+a.js:1:58-1:62 es-no-unused-vars:array-elements#1
+a.js:1:8-1:14 es-no-unused-vars:array-elements#1
+a.js:1:96-1:102 es-no-unused-vars:array-elements#1

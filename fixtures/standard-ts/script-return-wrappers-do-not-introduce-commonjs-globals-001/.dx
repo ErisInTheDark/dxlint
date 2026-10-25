@@ -2,4 +2,4 @@ import .ts
 language .js { set sourceType "script"
           set globalReturn true
         }
-rule no-implicit-globals
+rule es-no-implicit-globals

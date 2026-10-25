@@ -1,0 +1,2 @@
+import .ts
+rule es-no-empty-object-type { set allowInterfaces 'with-single-extends' }

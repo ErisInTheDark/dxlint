@@ -10,7 +10,7 @@ in .t, paren {
 }
 
 
-        in .t rule header warn "files start with a header" {
+        in .t rule es-header warn "files start with a header" {
           when !starts_with(text, "// header")
           fix as "// header\n" text
         }

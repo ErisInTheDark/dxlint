@@ -36,7 +36,7 @@ in ts_parameter let style_head_end name.end_offset
 in ts_method, ts_class_property, ts_parameter let style_head_offset { value [] decorator.after_decorator; last; nonempty } ?? offset
 in ts_method, ts_class_property, ts_parameter let style_member { name: style_member_name, head: style_head_offset, end: style_head_end, public: style_public_modifier, key: style_key_offset, key_end: style_key_end }
 in ts_method let class_constructor parent is ts_class && key is (ts_identifier, ts_string) && static_name == "constructor" && !contains([] modifier, "static") && kind != "get" && kind != "set"
-in ts_class_property rule explicit-member-accessibility:property {
+in ts_class_property rule es-explicit-member-accessibility:property {
   option accessibility ("explicit" | "no-public" | "off") = "explicit" "Required accessibility."
   option ignoredMethodNames string[] = [] "Ignored method names."
   option overrides { properties?: string; methods?: string; accessors?: string; constructors?: string; parameterProperties?: string } = {} "Requirements by member kind."
@@ -48,7 +48,7 @@ in ts_class_property rule explicit-member-accessibility:property {
   let edit if check == "no-public" then style_public_range else null
   fix at { start: edit.start ?? offset, end: edit.end ?? offset } if edit != null as ""
 }
-in ts_method rule explicit-member-accessibility:method {
+in ts_method rule es-explicit-member-accessibility:method {
   option accessibility ("explicit" | "no-public" | "off") = "explicit" "Required accessibility."
   option ignoredMethodNames string[] = [] "Ignored method names."
   option overrides { properties?: string; methods?: string; accessors?: string; constructors?: string; parameterProperties?: string } = {} "Requirements by member kind."
@@ -64,7 +64,7 @@ in ts_method rule explicit-member-accessibility:method {
   let edit if check == "no-public" then style_public_range else null
   fix at { start: edit.start ?? offset, end: edit.end ?? offset } if edit != null as ""
 }
-in ts_parameter rule explicit-member-accessibility:parameter {
+in ts_parameter rule es-explicit-member-accessibility:parameter {
   option accessibility ("explicit" | "no-public" | "off") = "explicit" "Required accessibility."
   option ignoredMethodNames string[] = [] "Ignored method names."
   option overrides { properties?: string; methods?: string; accessors?: string; constructors?: string; parameterProperties?: string } = {} "Requirements by member kind."
@@ -95,14 +95,14 @@ in ts_class let constructor_member_writes { value [] member.constructor_member_w
 in ts_class let setter_member_names [] member.setter_member_name
 in ts_method let literal_member_candidate kind == "get" && !contains([] modifier, "override") && body.first_member_literal && (member_static_name == null || !contains(parent.setter_member_names, member_static_name))
 in ts_class_property let literal_member_candidate contains([] modifier, "readonly") && !contains([] modifier, "declare") && !contains([] modifier, "override") && init.member_literal == true && (member_static_name == null || !contains(parent.constructor_member_writes, member_static_name))
-in ts_method.key rule class-literal-property-style {
+in ts_method.key rule es-class-literal-property-style {
   option mode ("fields" | "getters") = "fields" "Preferred literal member declaration."
   when mode == "fields" && parent.literal_member_candidate
   let shape parent.style_member
   report at { start: shape.key, end: shape.key_end }
   warn "Literals should be exposed using readonly fields."
 }
-in ts_class_property.key rule class-literal-property-style:getters {
+in ts_class_property.key rule es-class-literal-property-style:getters {
   option mode ("fields" | "getters") = "fields" "Preferred literal member declaration."
   when mode == "getters" && parent.literal_member_candidate
   let shape parent.style_member
@@ -128,9 +128,9 @@ in ts_class let no_extraneous_class_checked true
     warn message
   }
 }
-@extraneous_class_rule(no-extraneous-class:empty, "empty", "Unexpected empty class.")
-@extraneous_class_rule(no-extraneous-class:constructor, "constructor", "Unexpected class with only a constructor.")
-@extraneous_class_rule(no-extraneous-class:static, "static", "Unexpected class with only static properties.")
+@extraneous_class_rule(es-no-extraneous-class:empty, "empty", "Unexpected empty class.")
+@extraneous_class_rule(es-no-extraneous-class:constructor, "constructor", "Unexpected class with only a constructor.")
+@extraneous_class_rule(es-no-extraneous-class:static, "static", "Unexpected class with only static properties.")
 
 # Constructors that do nothing a missing one would not.
 in ts_identifier let constructor_forwarding_key {spread: false, name: text}
@@ -142,7 +142,7 @@ in ts_call let constructor_super_call if callee is ts_super then node else null
 in ts_expression_statement let constructor_super_call expression.constructor_super_call
 in ts_block let constructor_super_call if count(body) == 1 then first([] body.constructor_super_call) else null
 fn constructor_spreads_arguments(arg) = arg is ts_spread && arg.argument is ts_identifier && arg.argument == "arguments"
-in ts_method rule no-useless-constructor {
+in ts_method rule es-no-useless-constructor {
   # A public constructor of a derived class may widen a protected one.
   when class_constructor && body != null && count(decorator) == 0 && !{ value @modifiers; re_test /\b(?:private|protected)\b/ }
   when !(ts_class.extends != null && { value @modifiers; re_test /\bpublic\b/ })

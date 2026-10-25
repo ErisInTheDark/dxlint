@@ -1,6 +1,0 @@
-a.ts:1:41-1:41 type-annotation-spacing:before#1
-a.ts:1:44-1:45 type-annotation-spacing:after#0
-a.ts:1:44-1:45 type-annotation-spacing:between#1
-a.ts:2:44-2:44 type-annotation-spacing:before#1
-a.ts:2:47-2:48 type-annotation-spacing:after#0
-a.ts:2:47-2:48 type-annotation-spacing:between#1

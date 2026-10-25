@@ -22,7 +22,7 @@ in ts_import_attribute_comma {
   let comma_style_field "attribute"
 }
 in ts_comma, ts_import_attribute_comma let comma_style_checked comma_style_owner is comma_style_lists
-in ts_comma, ts_import_attribute_comma rule comma-style {
+in ts_comma, ts_import_attribute_comma rule es-comma-style {
   option style "last" | "first" = "last" "comma line position"
   when if style == "last" then space_before.line_break else space_after.line_break
   when comma_style_checked
@@ -56,7 +56,7 @@ fn layout_attribute_sites(sites, style, policies) = {
     multiline: site.multiline, allowed: site.allowed, tsx_single: site.tsx_single
   }) else []
 }
-in ts_array, ts_array_pattern, ts_object, ts_object_pattern, ts_function, ts_arrow, ts_method, ts_function_type, ts_call, ts_new, ts_import_call, ts_import, ts_export, ts_enum, ts_tuple_type, ts_class, ts_interface, ts_type_alias, ts_type_reference, ts_method_signature, ts_call_signature, ts_import_attributes rule comma-dangle {
+in ts_array, ts_array_pattern, ts_object, ts_object_pattern, ts_function, ts_arrow, ts_method, ts_function_type, ts_call, ts_new, ts_import_call, ts_import, ts_export, ts_enum, ts_tuple_type, ts_class, ts_interface, ts_type_alias, ts_type_reference, ts_method_signature, ts_call_signature, ts_import_attributes rule es-comma-dangle {
   option style trailing_comma_mode = "never" "trailing comma policy"
   option arrays trailing_comma_mode | null = null "array policy"
   option objects trailing_comma_mode | null = null "object policy"
@@ -78,7 +78,7 @@ in ts_array, ts_array_pattern, ts_object, ts_object_pattern, ts_function, ts_arr
   }
 }
 
-in ts_empty, ts_semicolon rule no-extra-semi {
+in ts_empty, ts_semicolon rule es-no-extra-semi {
   when is ts_empty && parent not (ts_for, ts_for_in, ts_for_of, ts_while, ts_do_while, ts_if, ts_labeled, ts_with)
     || is ts_semicolon && parent is ts_class
   let semi_directive next is ts_expression_statement && next.expression is ts_string
@@ -94,7 +94,7 @@ in layout_semi_owner let layout_semi_last parent is ts_do_while || parent is ts_
 in ts_variable_declaration let layout_semi_initializer parent is ts_for && offset == parent.init.offset
 in ts_semicolon let layout_semi_header if parent is ts_for then parent.init != null && (parent.test == null && previous_token not ts_semicolon || offset < parent.test.offset) || parent.test != null && offset >= parent.test.end_offset else parent.layout_semi_initializer.nonempty ?? false
 in ts_semicolon let layout_semi_statement parent is layout_semi_owner && end_offset == parent.end_offset
-in ts_semicolon rule semi-style {
+in ts_semicolon rule es-semi-style {
   option style "last" | "first" = "last" "semicolon line position"
   when layout_semi_header || layout_semi_statement
   let semi_at_end style == "last" || layout_semi_header
@@ -111,7 +111,7 @@ in ts_semicolon rule semi-style {
   option after boolean = true "space after semicolon"
   when layout_semi_header || layout_semi_statement || parent is (ts_type_alias, ts_function, ts_method) && end_offset == parent.end_offset || parent is (ts_interface, ts_type_literal)
 }
-in ts_semicolon rule semi-spacing:before {
+in ts_semicolon rule es-semi-spacing:before {
   @layout_semi_spacing_options
   let semi_space space_before != null && !space_before.line_break && space_before.spaced
   when semi_space != before
@@ -120,7 +120,7 @@ in ts_semicolon rule semi-spacing:before {
   fix at { start: semi_fix_start, end: offset } if !space_before.line_break && { value overlapping(ts_comment, semi_fix_start, offset); count } == 0 as if before then " " else ""
   warn if semi_space then "Unexpected whitespace before semicolon." else "Missing whitespace before semicolon."
 }
-in ts_semicolon rule semi-spacing:after {
+in ts_semicolon rule es-semi-spacing:after {
   @layout_semi_spacing_options
   when previous_token != null && next_token != null
   when !space_before.line_break && !space_after.line_break && next_token not (ts_close_paren, ts_close_brace)
@@ -131,7 +131,7 @@ in ts_semicolon rule semi-spacing:after {
   warn if space_after.spaced then "Unexpected whitespace after semicolon." else "Missing whitespace after semicolon."
 }
 
-in ts_comma rule comma-spacing:before {
+in ts_comma rule es-comma-spacing:before {
   option before boolean = false "space before comma"
   option after boolean = true "space after comma"
   # Cheapest and most selective first: most commas are spaced as wanted.
@@ -145,7 +145,7 @@ in ts_comma rule comma-spacing:before {
   warn if before then "A space is required before ','." else "There should be no space before ','."
 }
 
-in ts_comma rule comma-spacing:after {
+in ts_comma rule es-comma-spacing:after {
   option before boolean = false "space before comma"
   option after boolean = true "space after comma"
   # Cheapest and most selective first: most commas are spaced as wanted.
@@ -166,7 +166,7 @@ fn layout_next_position_len(source, offset) = {
   value char: byte_char(source, offset)
   value if char == "\r" && byte_char(source, offset + 1) == "\n" then 2 else byte_len(char)
 }
-in semicolon_statement rule semi {
+in semicolon_statement rule es-semi {
   option mode "always" | "never" = "always" "statement semicolon policy"
   option omitLastInOneLineBlock boolean = false "omit final semicolons in single-line blocks"
   option omitLastInOneLineClassBody boolean = false "omit final semicolons in single-line class bodies"

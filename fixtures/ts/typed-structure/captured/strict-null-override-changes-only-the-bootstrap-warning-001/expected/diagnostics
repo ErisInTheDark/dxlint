@@ -1,2 +1,2 @@
-main.ts:1:1-1:1 no-unnecessary-condition:strict#0
-main.ts:1:5-1:9 no-unnecessary-condition#2
+main.ts:1:1-1:1 es-no-unnecessary-condition:strict#0
+main.ts:1:5-1:9 es-no-unnecessary-condition#2

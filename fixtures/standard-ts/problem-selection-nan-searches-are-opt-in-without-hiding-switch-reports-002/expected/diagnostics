@@ -1,3 +1,3 @@
-file.js:1:1-1:34 use-isnan:switch#0
-file.js:1:16-1:32 use-isnan:case#0
-file.js:1:35-1:53 use-isnan:index-of#0
+file.js:1:1-1:34 es-use-isnan:switch#0
+file.js:1:16-1:32 es-use-isnan:case#0
+file.js:1:35-1:53 es-use-isnan:index-of#0

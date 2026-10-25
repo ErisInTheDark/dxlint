@@ -1,2 +1,2 @@
 import .ts
-rule quote-props { set style "consistent-as-needed" }
+rule es-quote-props { set style "consistent-as-needed" }

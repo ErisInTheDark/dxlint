@@ -1,7 +1,0 @@
-import .ts
-rule class-methods-use-this {
-  set exceptMethods ["exempt"]
-}
-rule class-methods-use-this:field {
-  set exceptMethods ["exempt"]
-}

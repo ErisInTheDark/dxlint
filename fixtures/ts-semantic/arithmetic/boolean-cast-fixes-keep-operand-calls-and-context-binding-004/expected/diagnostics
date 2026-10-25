@@ -1,1 +1,1 @@
-fixes.js:1:6-1:15 no-extra-boolean-cast#1
+fixes.js:1:6-1:15 es-no-extra-boolean-cast#1

@@ -6,11 +6,11 @@ in ts_throw let thrown_identifier if (argument.unwrapped_node.nonempty ?? argume
 in ts_block let first_throw first([] body.thrown_identifier)
 in ts_try let catch_rethrows parameter is ts_identifier && handler.first_throw == parameter
 
-in ts_try rule no-useless-catch {
+in ts_try rule es-no-useless-catch {
   when catch_rethrows && finalizer == null
   warn "Unnecessary try/catch wrapper."
 }
-in ts_try.kind rule no-useless-catch:clause {
+in ts_try.kind rule es-no-useless-catch:clause {
   when parent.catch_rethrows && parent.finalizer != null
   report at { start: offset, end: parent.handler.end_offset }
   warn "Unnecessary catch clause."
@@ -36,7 +36,7 @@ in ts_identifier let error_undefined_identifier identifier_name == "undefined"
 in ts_parenthesized forward error_undefined_identifier from expression
 in ts_identifier let error_undefined_global identifier_name == "undefined" && resolved == "global"
 in ts_parenthesized forward error_undefined_global from expression
-in ts_throw rule no-throw-literal {
+in ts_throw rule es-no-throw-literal {
   when !argument.could_be_error || argument.error_undefined_global == true
   warn if argument.could_be_error then "Do not throw undefined." else "Expected an error object to be thrown."
 }
@@ -60,7 +60,7 @@ fn caught_throw_cause_kind(parameter, argument, preceding) =
     value caught_throw_property_kind(parameter, property_2)
   }
 
-in ts_throw rule preserve-caught-error {
+in ts_throw rule es-preserve-caught-error {
   option requireCatchParameter boolean = false "require a catch parameter when throwing a symptom error"
   option errorClassNames (string | { name: string; argumentPosition: number })[] = [] "additional error constructors and options positions"
   let caught_info catch_throw

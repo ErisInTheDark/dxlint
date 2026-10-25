@@ -1,2 +1,2 @@
-control.ts:1:23-1:40 curly:loop#0
-control.ts:1:8-1:42 curly:if#0
+control.ts:1:23-1:40 es-curly:loop#0
+control.ts:1:8-1:42 es-curly:if#0

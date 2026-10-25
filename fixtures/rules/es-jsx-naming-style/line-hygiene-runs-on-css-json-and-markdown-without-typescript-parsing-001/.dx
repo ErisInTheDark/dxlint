@@ -1,0 +1,6 @@
+import .ts
+import .css
+import .json
+import .markdown
+rule shared-no-trailing-spaces
+rule shared-linebreak-style

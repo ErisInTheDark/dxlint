@@ -3,7 +3,7 @@ define {
 
 group restricted_syntax
 
-in restricted_syntax rule no-restricted-syntax {
+in restricted_syntax rule es-no-restricted-syntax {
   warn "This syntax is not allowed."
 }
 

@@ -1,2 +1,2 @@
-a.js:1:126-1:146 require-await#0
-a.js:1:42-1:65 require-await#0
+a.js:1:126-1:146 es-require-await#0
+a.js:1:42-1:65 es-require-await#0

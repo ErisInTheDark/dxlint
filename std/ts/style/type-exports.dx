@@ -50,7 +50,7 @@ fn export_policy_text(source, n, inline) = if n.operator == "*" then {
   value newline: if contains(source, "\r\n") then "\r\n" else "\n"
   value "export type {{ " types " }}" source_suffix ";" newline body
 }
-in ts_export rule consistent-type-exports {
+in ts_export rule es-consistent-type-exports {
   option fixMixedExportsWithInlineTypeSpecifier boolean = false "Use inline type specifiers in mixed exports."
   when kind == null && (count(export_types) > 0 || export_star)
   let replacement export_policy_text(source, node, fixMixedExportsWithInlineTypeSpecifier)

@@ -1,0 +1,5 @@
+file.ts:1:1-1:14 es-space-unary-ops#0
+file.ts:1:16-1:28 es-space-unary-ops#1
+file.ts:2:1-2:7 es-space-unary-ops#2
+file.ts:2:9-2:16 es-space-unary-ops#4
+file.ts:3:17-3:23 es-space-unary-ops#3

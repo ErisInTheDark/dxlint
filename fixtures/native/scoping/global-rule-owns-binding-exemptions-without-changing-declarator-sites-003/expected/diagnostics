@@ -1,6 +1,6 @@
-a.js:1:18-1:28 no-implicit-globals#1
-a.js:1:38-1:39 no-implicit-globals#2
-a.js:1:47-1:48 no-implicit-globals#2
-a.js:1:5-1:10 no-implicit-globals#1
-a.js:1:5-1:7 no-implicit-globals#1
-a.js:1:54-1:61 no-implicit-globals#2
+a.js:1:18-1:28 es-no-implicit-globals#1
+a.js:1:38-1:39 es-no-implicit-globals#2
+a.js:1:47-1:48 es-no-implicit-globals#2
+a.js:1:5-1:10 es-no-implicit-globals#1
+a.js:1:5-1:7 es-no-implicit-globals#1
+a.js:1:54-1:61 es-no-implicit-globals#2

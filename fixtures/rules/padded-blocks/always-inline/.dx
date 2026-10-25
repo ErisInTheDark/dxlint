@@ -1,2 +1,0 @@
-import .ts
-rule padded-blocks:* { set style "always" }

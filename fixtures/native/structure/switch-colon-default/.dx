@@ -1,2 +1,2 @@
 import .ts
-rule switch-colon-spacing
+rule es-switch-colon-spacing

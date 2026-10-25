@@ -1,2 +1,2 @@
-file.ts:1:1-1:1 multiline-comment-style:open#0
-file.ts:1:7-1:7 multiline-comment-style:alignment#1
+file.ts:1:1-1:1 es-multiline-comment-style:open#0
+file.ts:1:7-1:7 es-multiline-comment-style:alignment#1

@@ -1,2 +1,2 @@
-input.jsonc:1:15-1:17 no-trailing-spaces#0
-input.jsonc:3:4-3:6 no-trailing-spaces#0
+input.jsonc:1:15-1:17 shared-no-trailing-spaces#0
+input.jsonc:3:4-3:6 shared-no-trailing-spaces#0

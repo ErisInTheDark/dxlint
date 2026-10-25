@@ -1,2 +1,2 @@
 import .ts
-rule no-constant-condition
+rule es-no-constant-condition

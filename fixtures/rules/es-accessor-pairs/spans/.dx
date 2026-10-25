@@ -1,0 +1,2 @@
+import .ts
+rule es-accessor-pairs { set getWithoutSet true }

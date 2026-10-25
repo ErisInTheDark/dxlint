@@ -218,7 +218,7 @@ fn structure_padding_finding(source, pair, comments) = {
   }
 }
 
-in structure_padding_owner rule padding-line-between-statements {
+in structure_padding_owner rule es-padding-line-between-statements {
   option options { blankLine: "any" | "always" | "never"; prev: string | { selector: string; lineMode?: "any" | "singleline" | "multiline" } | (string | { selector: string; lineMode?: "any" | "singleline" | "multiline" })[]; next: string | { selector: string; lineMode?: "any" | "singleline" | "multiline" } | (string | { selector: string; lineMode?: "any" | "singleline" | "multiline" })[] }[] = [] "ordered statement padding policies"
   when any(options, policy => policy.blankLine != "any")
   let prepared_options map(options, config => {

@@ -1,5 +1,5 @@
-input.ts:12:26-12:37 no-misused-spread#6
-input.ts:13:24-13:42 no-misused-spread#6
-input.ts:20:26-20:37 no-misused-spread#4
-input.ts:25:27-25:39 no-misused-spread#1
-input.ts:6:20-6:36 no-misused-spread#1
+input.ts:12:26-12:37 es-no-misused-spread#6
+input.ts:13:24-13:42 es-no-misused-spread#6
+input.ts:20:26-20:37 es-no-misused-spread#4
+input.ts:25:27-25:39 es-no-misused-spread#1
+input.ts:6:20-6:36 es-no-misused-spread#1

@@ -1,5 +1,0 @@
-file.js:1:11-1:30 no-unneeded-ternary#0
-file.js:2:11-2:36 no-unneeded-ternary#0
-file.js:3:11-3:36 no-unneeded-ternary#0
-file.js:4:11-4:29 no-unneeded-ternary:default-assignment#0
-file.js:5:11-5:30 no-unneeded-ternary#0

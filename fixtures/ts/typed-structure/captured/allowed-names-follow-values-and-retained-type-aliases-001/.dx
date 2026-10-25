@@ -1,4 +1,4 @@
 import .ts
 import .ts/spreads
-rule no-misused-spread { set allow ['safe'] }
+rule es-no-misused-spread { set allow ['safe'] }
 override in ts_spread, ts_jsx_spread_attribute let no_misused_spread_checked type_value_allowed([{from: "file", name: "Branded"}], argument.node) == false

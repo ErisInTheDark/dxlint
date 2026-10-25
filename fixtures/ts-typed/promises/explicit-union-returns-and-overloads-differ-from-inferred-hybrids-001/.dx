@@ -1,2 +1,2 @@
 import .ts
-rule promise-function-async
+rule es-promise-function-async

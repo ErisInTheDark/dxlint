@@ -1,2 +1,2 @@
 import .ts
-rule object-shorthand { set mode "never" }
+rule es-object-shorthand { set mode "never" }

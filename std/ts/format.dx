@@ -1,8 +1,8 @@
 # .ts/format: syntax-owned rules and textual edges.
 # Native layout policy also lives in .ts/layout.
-# Rule names are eslint rule names without the plugin prefix;
+# Rule names are `es-` and the eslint rule name without its plugin prefix;
 # `family:variant` rules are parts of one eslint rule. All are off until
-# turned on: `rule semi:always`, `rule quotes:double { set style "double" }`.
+# turned on: `rule es-semi:always`, `rule es-quotes:double { set style "double" }`.
 
 import .ts/import-attributes
 import .ts/expression-fixes
@@ -12,7 +12,7 @@ define {
 # ---- blank lines ---------------------------------------------------------
 
 # No blank lines between a header and its single-statement body.
-in ts_if.consequent, ts_while.body, ts_for.body, ts_for_in.body, ts_for_of.body rule no-blank-lines-in-optional-blocks warn "Avoid blank lines between a conditional or loop statement and its single non-block statement." {
+in ts_if.consequent, ts_while.body, ts_for.body, ts_for_in.body, ts_for_of.body rule es-no-blank-lines-in-optional-blocks warn "Avoid blank lines between a conditional or loop statement and its single non-block statement." {
   when not ts_block && !space_before.comments && space_before.blank_lines > 0
   let optional_header { value space_before.text; re_find /^[ \t]*/; nonempty } ?? ""
   let optional_indent { value space_before.text; re_find /[ \t]*\z/; nonempty } ?? ""
@@ -95,7 +95,7 @@ in ts_variable_declaration let format_lexical_bindings {
   })
 }
 in ts_variable_declaration let format_lexical_initialized all(declaration.nodes, declarator => count(declarator.init.nodes) > 0)
-in ts_variable_declaration.kind rule no-var warn "Unexpected var, use let or const instead." {
+in ts_variable_declaration.kind rule es-no-var warn "Unexpected var, use let or const instead." {
   when text == "var"
   when ts_namespace.format_global_scope != true
   let owner parent.node
@@ -109,7 +109,7 @@ in ts_variable_declaration.kind rule no-var warn "Unexpected var, use let or con
 
 # ---- spacing ---------------------------------------------------------------
 
-in ts_open_paren rule space-in-parens:after {
+in ts_open_paren rule es-space-in-parens:after {
   option mode "always" | "never" = "never" "spacing inside parentheses"
   option exceptions ("{}" | "[]" | "()" | "empty")[] = [] "invert spacing for nested delimiters"
   let paren_edge token(node, "after")
@@ -131,7 +131,7 @@ in ts_open_paren rule space-in-parens:after {
   fix space_after as if paren_wants then " " else ""
   warn if paren_space != "" then "There should be no space after this paren." else "There must be a space after this paren."
 }
-in ts_close_paren rule space-in-parens:before {
+in ts_close_paren rule es-space-in-parens:before {
   option mode "always" | "never" = "never" "spacing inside parentheses"
   option exceptions ("{}" | "[]" | "()" | "empty")[] = [] "invert spacing for nested delimiters"
   let paren_edge token(node, "before")
@@ -160,7 +160,7 @@ fn format_gap_text(gap, spaced, comments) = (if spaced then " " else "") {
   map (comment) comment.text
   join ""
 }
-in ts_array, ts_array_pattern rule array-bracket-spacing {
+in ts_array, ts_array_pattern rule es-array-bracket-spacing {
   option style "always" | "never" = "never" "spacing inside array brackets"
   option singleValue boolean | null = null "override spacing around a single element"
   option objectsInArrays boolean | null = null "override spacing beside object elements"
@@ -193,7 +193,7 @@ in ts_array, ts_array_pattern rule array-bracket-spacing {
     warn if array_edge.wanted then (if array_edge.open then "A space is required after '['." else "A space is required before ']'.") else (if array_edge.open then "There should be no space after '['." else "There should be no space before ']'.")
   }
 }
-in ts_dot, ts_punctuator, ts_member.optional rule dot-location {
+in ts_dot, ts_punctuator, ts_member.optional rule es-dot-location {
   @ts_token_context
   option style "object" | "property" = "property" "line for a member-access dot"
   when text == "." || text == "?."
@@ -214,25 +214,25 @@ in ts_dot, ts_punctuator, ts_member.optional rule dot-location {
   let template_before { value space_before.text; re_find /\s*$/; nonempty } ?? ""
   let template_after { value space_after.text; re_find /^\s*/; nonempty } ?? ""
 }
-in ts_template.quasi rule template-curly-spacing:after warn "Unexpected space(s) after '${{'." {
+in ts_template.quasi rule es-template-curly-spacing:after warn "Unexpected space(s) after '${{'." {
   @format_template_curly
   when mode == "never" && ends_with(text, "${{") && template_after != "" && !re_test(template_after, /[\n\r\u{2028}\u{2029}]/)
   report at { start: end_offset, end: end_offset + byte_len(template_after) }
   fix space_after as ""
 }
-in ts_template.quasi rule template-curly-spacing:before warn "Unexpected space(s) before '}}'." {
+in ts_template.quasi rule es-template-curly-spacing:before warn "Unexpected space(s) before '}}'." {
   @format_template_curly
   when mode == "never" && starts_with(text, "}}") && template_before != "" && !re_test(template_before, /[\n\r\u{2028}\u{2029}]/)
   report at { start: offset - byte_len(template_before), end: offset }
   fix space_before as ""
 }
-in ts_template.quasi rule template-curly-spacing:missing-after warn "Expected space(s) after '${{'." {
+in ts_template.quasi rule es-template-curly-spacing:missing-after warn "Expected space(s) after '${{'." {
   @format_template_curly
   when mode == "always" && ends_with(text, "${{") && template_after == ""
   report at { start: end_offset - 2, end: end_offset }
   fix space_after as " "
 }
-in ts_template.quasi rule template-curly-spacing:missing-before warn "Expected space(s) before '}}'." {
+in ts_template.quasi rule es-template-curly-spacing:missing-before warn "Expected space(s) before '}}'." {
   @format_template_curly
   when mode == "always" && starts_with(text, "}}") && template_before == ""
   report at { start: offset, end: offset + 1 }
@@ -245,7 +245,7 @@ in ts_template.quasi rule template-curly-spacing:missing-before warn "Expected s
   let tag_comments { value overlapping(ts_comment); filter (comment) comment.offset >= tag_gap.start && comment.end_offset <= tag_gap.end }
   let tag_line_comment any(tag_comments, comment => comment is ts_line_comment)
 }
-in ts_tagged_template rule template-tag-spacing warn "Unexpected space between template tag and template literal." {
+in ts_tagged_template rule es-template-tag-spacing warn "Unexpected space between template tag and template literal." {
   @format_template_tag
   when style == "never" && tag_gap.spaced && !tag_line_comment
   report at { start: tag_gap.start, end: tag_gap.end }
@@ -254,12 +254,12 @@ in ts_tagged_template rule template-tag-spacing warn "Unexpected space between t
     value expression_fix_edits(text, offset, edits)
   }
 }
-in ts_tagged_template rule template-tag-spacing:comment warn "Unexpected space between template tag and template literal." {
+in ts_tagged_template rule es-template-tag-spacing:comment warn "Unexpected space between template tag and template literal." {
   @format_template_tag
   when style == "never" && tag_gap.spaced && tag_line_comment
   report at { start: tag_gap.start, end: tag_gap.end }
 }
-in ts_tagged_template rule template-tag-spacing:missing warn "Missing space between template tag and template literal." {
+in ts_tagged_template rule es-template-tag-spacing:missing warn "Missing space between template tag and template literal." {
   @format_template_tag
   when style == "always" && !tag_gap.spaced
   report at { start: offset, end: quasi.offset }
@@ -291,25 +291,25 @@ in ts_arrow, ts_function_type let format_arrow_comments overlapping(ts_comment)
   let arrow_previous arrow_previous_comment.offset.nonempty ?? token_neighbours.before.start
   let arrow_next arrow_next_comment.offset.nonempty ?? token_neighbours.after.start
 }
-in ts_arrow.operator, ts_punctuator rule arrow-spacing:before warn "Missing space before =>." {
+in ts_arrow.operator, ts_punctuator rule es-arrow-spacing:before warn "Missing space before =>." {
   @format_arrow_spacing
   when before && arrow_before == ""
   report at arrow_previous
   fix space_before as " "
 }
-in ts_arrow.operator, ts_punctuator rule arrow-spacing:after warn "Missing space after =>." {
+in ts_arrow.operator, ts_punctuator rule es-arrow-spacing:after warn "Missing space after =>." {
   @format_arrow_spacing
   when after && arrow_after == ""
   report at arrow_next
   fix space_after as " "
 }
-in ts_arrow.operator, ts_punctuator rule arrow-spacing:unexpected-before warn "Unexpected space before =>." {
+in ts_arrow.operator, ts_punctuator rule es-arrow-spacing:unexpected-before warn "Unexpected space before =>." {
   @format_arrow_spacing
   when !before && arrow_before != ""
   report at arrow_previous
   fix space_before as ""
 }
-in ts_arrow.operator, ts_punctuator rule arrow-spacing:unexpected-after warn "Unexpected space after =>." {
+in ts_arrow.operator, ts_punctuator rule es-arrow-spacing:unexpected-after warn "Unexpected space after =>." {
   @format_arrow_spacing
   when !after && arrow_after != ""
   report at arrow_next
@@ -321,7 +321,7 @@ in ts_arrow.operator, ts_punctuator rule arrow-spacing:unexpected-after warn "Un
   option requireForBlockBody boolean = false "keep parentheses with a block body"
 }
 in ts_parameter let format_arrow_plain name is ts_identifier && optional == null && type == null && init == null && count(modifier) == 0 && count(decorator) == 0
-in ts_arrow.parameter rule arrow-parens:missing {
+in ts_arrow.parameter rule es-arrow-parens:missing {
   @format_arrow_parens
   let arrow_previous token_neighbours.before
   when count(parent.parameter) == 1
@@ -331,7 +331,7 @@ in ts_arrow.parameter rule arrow-parens:missing {
   fix as "(" text ")"
   warn if arrow_block then "Expected parentheses around arrow function argument having a body with curly braces." else "Expected parentheses around arrow function argument."
 }
-in ts_arrow rule arrow-parens {
+in ts_arrow rule es-arrow-parens {
   @format_arrow_parens
   when style == "as-needed"
   let arrow_block requireForBlockBody && body is ts_block
@@ -389,7 +389,7 @@ in ts_mapped_type let format_object_tail type.format_curly_tail.nonempty ?? type
   let curly_objects objectsInObjects != null && objectsInObjects != (style == "always")
   let curly_empty if curly_attributes then (if is ts_open_brace then next_token is ts_close_brace else previous_token is ts_open_brace) else parent.format_object_empty
 }
-in ts_open_brace rule object-curly-spacing:open {
+in ts_open_brace rule es-object-curly-spacing:open {
   @format_object_curly_options
   when !curly_empty
   let curly_gap re_find(ts_token_gap_text(source, node, false), /^\s*/)
@@ -401,7 +401,7 @@ in ts_open_brace rule object-curly-spacing:open {
   fix space_after as if curly_required then " " else ""
   warn if curly_required then "A space is required after '\{'." else "There should be no space after '\{'."
 }
-in ts_close_brace rule object-curly-spacing:close {
+in ts_close_brace rule es-object-curly-spacing:close {
   @format_object_curly_options
   when !curly_empty
   let curly_gap re_find(ts_token_gap_text(source, node, true), /\s*$/)
@@ -417,7 +417,7 @@ in ts_close_brace rule object-curly-spacing:close {
   fix space_before as if curly_required then " " else ""
   warn if curly_required then "A space is required before '\}'." else "There should be no space before '\}'."
 }
-in ts_open_brace rule object-curly-spacing:empty {
+in ts_open_brace rule es-object-curly-spacing:empty {
   @format_object_curly_options
   when curly_empty && emptyObjects != "ignore" && !space_after.comments && !space_after.line_break && next_token is ts_close_brace
   let curly_wanted if emptyObjects == "always" then " " else ""
@@ -626,7 +626,7 @@ fn format_key_fix(site, before, wanted) = when {
   }
   warn if utf16_len(spacing_entry.site.after) > spacing_entry.policy.after then "Extra space before value for {if spacing_entry.site.owner.format_key_computed == true then 'computed ' else ''}key '{spacing_entry.site.owner.format_key_label}'." else "Missing space before value for {if spacing_entry.site.owner.format_key_computed == true then 'computed ' else ''}key '{spacing_entry.site.owner.format_key_label}'."
 }
-in ts_colon, ts_import_attribute_colon rule key-spacing {
+in ts_colon, ts_import_attribute_colon rule es-key-spacing {
   @format_key_individual
   let key_gap { value space_before.text; re_find /\s*$/; nonempty } ?? ""
   when {
@@ -638,7 +638,7 @@ in ts_colon, ts_import_attribute_colon rule key-spacing {
   fix space_before as format_key_fixed_gap(key_gap, key_line.before, !format_key_typed, format_key_typed)
   @format_key_before_report
 }
-in ts_colon, ts_import_attribute_colon rule key-spacing:after {
+in ts_colon, ts_import_attribute_colon rule es-key-spacing:after {
   @format_key_individual
   let key_gap { value space_after.text; re_find /^\s*/; nonempty } ?? ""
   when {
@@ -650,7 +650,7 @@ in ts_colon, ts_import_attribute_colon rule key-spacing:after {
   fix space_after as format_key_fixed_gap(key_gap, key_line.after, format_key_typed, !format_key_typed)
   @format_key_after_report
 }
-in key_spacing_containers rule key-spacing:aligned-before {
+in key_spacing_containers rule es-key-spacing:aligned-before {
   @format_key_aligned_entries
   each spacing_entry in key_aligned_entries {
     @format_key_aligned_entry
@@ -667,7 +667,7 @@ in key_spacing_containers rule key-spacing:aligned-before {
     @format_key_before_report
   }
 }
-in key_spacing_containers rule key-spacing:aligned-after {
+in key_spacing_containers rule es-key-spacing:aligned-after {
   @format_key_aligned_entries
   each spacing_entry in key_aligned_entries {
     @format_key_aligned_entry
@@ -704,7 +704,7 @@ schema format_keyword_policy { before?: boolean; after?: boolean }
   let keyword_around keyword_statement || keyword_module || keyword_modifier || is ts_variable_declaration.kind || parent is ts_class && text == "extends" || parent is ts_export && text == "default" || parent is (ts_import, ts_export) && text == "with" || parent is (ts_as, ts_satisfies) && contains(["as", "satisfies"], text) || is (ts_debugger, ts_break, ts_continue, ts_return) && contains(["debugger", "break", "continue", "return"], text)
   let keyword_leading parent is (ts_function, ts_arrow, ts_class) && contains(["function", "async", "class"], text) && offset == parent.offset || parent is ts_unary && contains(["typeof", "void", "delete"], text) || parent is (ts_new, ts_await, ts_yield) && contains(["new", "await", "yield"], text) || is (ts_super, ts_this) || is ts_yield && text == "yield"
 }
-in ts_keyword, ts_variable_declaration.kind, ts_try.kind, ts_unary.operator, ts_function.modifier, ts_arrow.modifier, ts_method.modifier, ts_method.kind, ts_class_property.modifier, ts_import.kind, ts_export.kind, ts_for_of.modifier, ts_super, ts_this, ts_debugger, ts_break, ts_continue, ts_return, ts_yield rule keyword-spacing:before {
+in ts_keyword, ts_variable_declaration.kind, ts_try.kind, ts_unary.operator, ts_function.modifier, ts_arrow.modifier, ts_method.modifier, ts_method.kind, ts_class_property.modifier, ts_import.kind, ts_export.kind, ts_for_of.modifier, ts_super, ts_this, ts_debugger, ts_break, ts_continue, ts_return, ts_yield rule es-keyword-spacing:before {
   @ts_token_context
   @format_keyword_options
   # Cheapest and most selective first: most keywords are spaced as wanted.
@@ -724,7 +724,7 @@ in ts_keyword, ts_variable_declaration.kind, ts_try.kind, ts_unary.operator, ts_
   fix space_before as if keyword_required then " " else ""
   warn if keyword_required then "Expected space(s) before \"{keyword_label}\"." else "Unexpected space(s) before \"{keyword_label}\"."
 }
-in ts_keyword, ts_variable_declaration.kind, ts_try.kind, ts_method.modifier, ts_method.kind, ts_class_property.modifier, ts_import.kind, ts_export.kind, ts_for_of.modifier, ts_debugger, ts_break, ts_continue, ts_return rule keyword-spacing:after {
+in ts_keyword, ts_variable_declaration.kind, ts_try.kind, ts_method.modifier, ts_method.kind, ts_class_property.modifier, ts_import.kind, ts_export.kind, ts_for_of.modifier, ts_debugger, ts_break, ts_continue, ts_return rule es-keyword-spacing:after {
   @ts_token_context
   @format_keyword_options
   # Cheapest and most selective first: most keywords are spaced as wanted.

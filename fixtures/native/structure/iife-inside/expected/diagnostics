@@ -1,8 +1,8 @@
-a.js:1:11-1:26 wrap-iife#0
-a.js:2:12-2:27 wrap-iife#1
-a.js:3:13-3:28 wrap-iife#1
-a.js:4:12-4:39 wrap-iife#1
-a.js:5:5-5:20 wrap-iife#1
-a.js:6:9-6:24 wrap-iife#1
-a.js:7:16-7:31 wrap-iife#1
-a.js:8:12-8:36 wrap-iife#1
+a.js:1:11-1:26 es-wrap-iife#0
+a.js:2:12-2:27 es-wrap-iife#1
+a.js:3:13-3:28 es-wrap-iife#1
+a.js:4:12-4:39 es-wrap-iife#1
+a.js:5:5-5:20 es-wrap-iife#1
+a.js:6:9-6:24 es-wrap-iife#1
+a.js:7:16-7:31 es-wrap-iife#1
+a.js:8:12-8:36 es-wrap-iife#1

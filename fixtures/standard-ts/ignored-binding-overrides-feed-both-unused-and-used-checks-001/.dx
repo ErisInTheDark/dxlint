@@ -1,4 +1,4 @@
 import .ts
 override in ts_identifier let no_unused_vars_ignored if text == "forced" then false else if text == "checked" then true else null
-rule no-unused-vars:array-elements { set ignorePattern "^(forced|_)"
+rule es-no-unused-vars:array-elements { set ignorePattern "^(forced|_)"
 set reportUsedIgnorePattern true }

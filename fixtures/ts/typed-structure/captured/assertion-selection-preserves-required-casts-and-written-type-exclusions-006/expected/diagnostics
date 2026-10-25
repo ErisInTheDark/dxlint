@@ -1,2 +1,2 @@
-a.ts:1:111-1:120 no-unnecessary-type-assertion#1
-a.ts:1:98-1:109 no-unnecessary-type-assertion#1
+a.ts:1:111-1:120 es-no-unnecessary-type-assertion#1
+a.ts:1:98-1:109 es-no-unnecessary-type-assertion#1

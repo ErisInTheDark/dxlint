@@ -1,2 +1,2 @@
 import .ts
-rule no-shadow { set ignoreOnInitialization true }
+rule es-no-shadow { set ignoreOnInitialization true }

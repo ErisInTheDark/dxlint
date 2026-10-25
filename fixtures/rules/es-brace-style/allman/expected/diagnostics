@@ -1,0 +1,7 @@
+a.ts:1:10-1:11 es-brace-style:body#0
+a.ts:1:10-1:11 es-brace-style:open#0
+a.ts:1:19-1:20 es-brace-style:close#0
+a.ts:1:19-1:20 es-brace-style:keyword#1
+a.ts:1:26-1:27 es-brace-style:body#0
+a.ts:1:26-1:27 es-brace-style:open#0
+a.ts:1:35-1:36 es-brace-style:close#0

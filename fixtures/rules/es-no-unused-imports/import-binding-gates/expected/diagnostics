@@ -1,0 +1,8 @@
+input.ts:1:29-1:40 es-no-unused-imports#0
+input.ts:1:52-1:63 es-no-unused-imports#0
+input.ts:2:8-2:21 es-no-unused-imports#0
+input.ts:3:13-3:28 es-no-unused-imports#0
+input.ts:4:10-4:20 es-no-unused-imports#0
+input.ts:4:22-4:32 es-no-unused-imports#0
+input.ts:5:15-5:25 es-no-unused-imports#0
+input.ts:7:8-7:20 es-no-unused-imports#0

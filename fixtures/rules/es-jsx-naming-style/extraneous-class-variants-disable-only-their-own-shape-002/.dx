@@ -1,0 +1,3 @@
+import .ts
+rule es-no-extraneous-class
+rule es-no-extraneous-class:empty off

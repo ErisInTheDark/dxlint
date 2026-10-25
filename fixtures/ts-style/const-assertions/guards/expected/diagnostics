@@ -1,2 +1,2 @@
-input.ts:1:8-1:11 prefer-as-const:annotation#0
-input.ts:2:18-2:19 prefer-as-const:annotation#0
+input.ts:1:8-1:11 es-prefer-as-const:annotation#0
+input.ts:2:18-2:19 es-prefer-as-const:annotation#0

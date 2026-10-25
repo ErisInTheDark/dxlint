@@ -1,6 +1,6 @@
-input.ts:2:3-2:46 method-signature-style#0
-input.ts:3:3-3:27 method-signature-style#0
-input.ts:4:3-4:41 method-signature-style#0
-input.ts:5:3-5:31 method-signature-style#0
-input.ts:6:3-6:19 method-signature-style#0
-input.ts:8:3-8:28 method-signature-style#0
+input.ts:2:3-2:46 es-method-signature-style#0
+input.ts:3:3-3:27 es-method-signature-style#0
+input.ts:4:3-4:41 es-method-signature-style#0
+input.ts:5:3-5:31 es-method-signature-style#0
+input.ts:6:3-6:19 es-method-signature-style#0
+input.ts:8:3-8:28 es-method-signature-style#0

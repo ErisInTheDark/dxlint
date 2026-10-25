@@ -1,6 +1,0 @@
-import .ts
-rule jsx-wrap-multilines {
-  set declaration "parens-new-line"; set assignment "parens-new-line"
-  set return "parens-new-line"; set arrow "parens-new-line"
-  set logical "parens-new-line"; set prop "parens-new-line"; set propertyValue "parens-new-line"
-}

@@ -75,7 +75,7 @@ fn includes_quote(text) = "'" {
   re_replace /\u{2029}/ "\\u2029"
 } "'"
 
-in ts_binary rule prefer-includes {
+in ts_binary rule es-prefer-includes {
   let negative includes_negative(operator.text, ts_runtime_number(right.node))
   when negative != null
   let info includes_index_call(left.node)
@@ -84,7 +84,7 @@ in ts_binary rule prefer-includes {
   let replacement includes_index_replacement(source, node, info, negative)
   fix if replacement != null as replacement
 }
-in ts_call rule prefer-includes:regex {
+in ts_call rule es-prefer-includes:regex {
   when count(argument) == 1
   let method unparenthesised_node(callee.node)
   when collection_method(method, "test")

@@ -1,3 +1,0 @@
-import .ts
-rule space-in-parens:after
-rule space-in-parens:before

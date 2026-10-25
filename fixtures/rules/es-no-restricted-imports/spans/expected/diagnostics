@@ -1,0 +1,4 @@
+file.ts:1:15-1:18 es-no-restricted-imports:names#0
+file.ts:2:1-2:26 es-no-restricted-imports#0
+file.ts:3:10-3:13 es-no-restricted-imports:pattern-names#0
+file.ts:4:8-4:9 es-no-restricted-imports:pattern-names#0

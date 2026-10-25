@@ -1,2 +1,2 @@
 import .ts
-rule no-multi-assign { set ignoreNonDeclaration true }
+rule es-no-multi-assign { set ignoreNonDeclaration true }

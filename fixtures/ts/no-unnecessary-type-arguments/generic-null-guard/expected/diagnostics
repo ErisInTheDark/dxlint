@@ -1,2 +1,2 @@
-a.ts:5:16-5:17 no-unnecessary-type-arguments#1
-a.ts:9:16-9:17 no-unnecessary-type-arguments#1
+a.ts:5:16-5:17 es-no-unnecessary-type-arguments#1
+a.ts:9:16-9:17 es-no-unnecessary-type-arguments#1

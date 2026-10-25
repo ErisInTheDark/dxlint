@@ -1,0 +1,2 @@
+import .ts
+rule es-space-before-blocks { set functions "never"; set keywords "off"; set classes "always"; set modules "never" }

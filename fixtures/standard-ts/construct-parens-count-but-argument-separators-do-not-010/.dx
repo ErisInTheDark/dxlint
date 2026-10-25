@@ -1,2 +1,2 @@
 import .ts
-rule wrap-iife { set mode "inside" }
+rule es-wrap-iife { set mode "inside" }

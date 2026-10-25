@@ -1,2 +1,2 @@
 import .ts
-rule non-nullable-type-assertion-style
+rule es-non-nullable-type-assertion-style

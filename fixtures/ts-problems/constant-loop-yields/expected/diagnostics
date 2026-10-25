@@ -1,6 +1,6 @@
-input.ts:12:33-12:34 no-constant-condition:loop#0
-input.ts:14:36-14:41 no-constant-condition:loop#0
-input.ts:1:28-1:29 no-constant-condition:loop#0
-input.ts:3:37-3:38 no-constant-condition:loop#0
-input.ts:6:41-6:42 no-constant-condition:loop#0
-input.ts:8:41-8:46 no-constant-condition#0
+input.ts:12:33-12:34 es-no-constant-condition:loop#0
+input.ts:14:36-14:41 es-no-constant-condition:loop#0
+input.ts:1:28-1:29 es-no-constant-condition:loop#0
+input.ts:3:37-3:38 es-no-constant-condition:loop#0
+input.ts:6:41-6:42 es-no-constant-condition:loop#0
+input.ts:8:41-8:46 es-no-constant-condition#0

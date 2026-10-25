@@ -1,4 +1,4 @@
 class Task {
 first() {}
-second() {} // dxlint-ignore lines-between-class-members
+second() {} // dxlint-ignore es-lines-between-class-members
 }

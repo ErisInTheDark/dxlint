@@ -1,0 +1,6 @@
+a.ts:1:41-1:41 es-type-annotation-spacing:before#1
+a.ts:1:44-1:45 es-type-annotation-spacing:after#0
+a.ts:1:44-1:45 es-type-annotation-spacing:between#1
+a.ts:2:44-2:44 es-type-annotation-spacing:before#1
+a.ts:2:47-2:48 es-type-annotation-spacing:after#0
+a.ts:2:47-2:48 es-type-annotation-spacing:between#1

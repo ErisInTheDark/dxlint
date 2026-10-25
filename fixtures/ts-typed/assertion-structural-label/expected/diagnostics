@@ -1,2 +1,2 @@
-input.ts:2:1-2:30 no-unsafe-type-assertion#2
-input.ts:4:1-4:38 no-unsafe-type-assertion#2
+input.ts:2:1-2:30 es-no-unsafe-type-assertion#2
+input.ts:4:1-4:38 es-no-unsafe-type-assertion#2

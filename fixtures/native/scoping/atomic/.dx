@@ -1,2 +1,2 @@
 import .ts
-rule require-atomic-updates
+rule es-require-atomic-updates

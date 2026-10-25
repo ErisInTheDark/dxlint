@@ -1,2 +1,2 @@
-input.ts:1:16-1:29 array-type:mutable#0
-input.ts:2:17-2:34 array-type:readonly#0
+input.ts:1:16-1:29 es-array-type:mutable#0
+input.ts:2:17-2:34 es-array-type:readonly#0

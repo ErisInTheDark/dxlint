@@ -1,3 +1,3 @@
 import .ts
-rule prefer-nullish-coalescing
+rule es-prefer-nullish-coalescing
 ignore "tsconfig.json"

@@ -1,0 +1,3 @@
+a.ts:1:13-1:18 es-no-async-promise-executor#0
+a.ts:2:13-2:18 es-no-async-promise-executor#0
+a.ts:3:17-3:22 es-no-async-promise-executor#0

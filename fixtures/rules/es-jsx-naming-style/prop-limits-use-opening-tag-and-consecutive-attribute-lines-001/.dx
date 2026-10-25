@@ -1,0 +1,3 @@
+import .ts
+rule es-jsx-max-props-per-line:singleline set 2
+rule es-jsx-max-props-per-line:multiline set 1

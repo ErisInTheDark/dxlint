@@ -1,2 +1,2 @@
 import .ts
-rule no-unused-labels
+rule es-no-unused-labels

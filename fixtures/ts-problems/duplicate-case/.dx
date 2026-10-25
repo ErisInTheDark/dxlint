@@ -1,2 +1,2 @@
 import .ts
-rule no-duplicate-case
+rule es-no-duplicate-case

@@ -1,2 +1,2 @@
-file.ts:1:23-1:27 no-unnecessary-template-expression#0
-file.ts:1:35-1:42 no-unnecessary-template-expression#0
+file.ts:1:23-1:27 es-no-unnecessary-template-expression#0
+file.ts:1:35-1:42 es-no-unnecessary-template-expression#0

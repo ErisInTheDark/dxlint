@@ -1,3 +1,0 @@
-import .ts
-rule no-extraneous-class
-rule no-extraneous-class:static off

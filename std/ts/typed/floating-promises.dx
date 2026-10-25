@@ -100,7 +100,7 @@ fn floating_promise_failure(n, check_thenables, ignore_void, safe_promises, safe
   filter (failure) failure != null
   first
 }
-in ts_expression_statement.expression, ts_arrow.body rule no-floating-promises {
+in ts_expression_statement.expression, ts_arrow.body rule es-no-floating-promises {
   option checkThenables boolean = false "Check promise-like types with fulfilment and rejection callbacks"
   option ignoreVoid boolean = true "Treat the void operator as explicit promise handling"
   option ignoreIIFE boolean = false "Ignore a directly invoked function expression"
@@ -130,7 +130,7 @@ fn floating_promise_array(arms, n, check_thenables, safe_promises) = any(arms ??
       item => floating_promise_arm(item, n, check_thenables, safe_promises)))
   }))
 
-in ts_expression_statement.expression, ts_arrow.body rule no-floating-promises:array {
+in ts_expression_statement.expression, ts_arrow.body rule es-no-floating-promises:array {
   option checkThenables boolean = false "Check promise-like types with fulfilment and rejection callbacks"
   option ignoreVoid boolean = true "Treat the void operator as explicit promise handling"
   option ignoreIIFE boolean = false "Ignore a directly invoked function expression"

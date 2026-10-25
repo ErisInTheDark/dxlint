@@ -1,2 +1,2 @@
 import .ts
-rule padding-line-between-statements { set options [{ blankLine: "always", prev: "iife", next: "*" }] }
+rule es-padding-line-between-statements { set options [{ blankLine: "always", prev: "iife", next: "*" }] }

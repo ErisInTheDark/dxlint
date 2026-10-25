@@ -1,2 +1,2 @@
-input.ts:3:15-3:47 no-unnecessary-type-assertion#1
-input.ts:4:16-4:48 no-unnecessary-type-assertion#1
+input.ts:3:15-3:47 es-no-unnecessary-type-assertion#1
+input.ts:4:16-4:48 es-no-unnecessary-type-assertion#1

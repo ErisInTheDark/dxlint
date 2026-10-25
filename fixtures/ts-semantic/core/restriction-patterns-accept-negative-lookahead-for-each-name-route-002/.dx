@@ -1,2 +1,2 @@
 import .ts
-rule no-restricted-imports { set patterns [{group: ["pkg"], importNamePattern: "^(?!foo)(?!bar).+$"}] }
+rule es-no-restricted-imports { set patterns [{group: ["pkg"], importNamePattern: "^(?!foo)(?!bar).+$"}] }

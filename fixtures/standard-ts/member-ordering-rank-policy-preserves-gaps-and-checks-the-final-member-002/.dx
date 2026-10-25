@@ -1,5 +1,5 @@
 import .ts
 
-        rule member-ordering:class-declaration
+        rule es-member-ordering:class-declaration
         override in ts_class_property let member_ordering_rank
             if static_name == "unchecked" then null else if static_name == "late" then 0 else 1

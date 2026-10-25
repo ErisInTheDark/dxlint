@@ -1,3 +1,0 @@
-import .ts
-language .js { files "script.js"; set sourceType "script" }
-rule no-useless-assignment

@@ -1,2 +1,2 @@
-file.ts:1:169-1:175 restrict-template-expressions#0
-file.ts:1:182-1:187 restrict-template-expressions#0
+file.ts:1:169-1:175 es-restrict-template-expressions#0
+file.ts:1:182-1:187 es-restrict-template-expressions#0

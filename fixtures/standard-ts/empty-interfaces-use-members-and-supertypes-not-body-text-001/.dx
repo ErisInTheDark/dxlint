@@ -1,2 +1,2 @@
 import .ts
-rule no-empty-interface
+rule es-no-empty-interface

@@ -1,2 +1,2 @@
 import .ts
-rule no-extra-bind
+rule es-no-extra-bind

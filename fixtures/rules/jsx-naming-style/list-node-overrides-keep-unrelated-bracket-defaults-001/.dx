@@ -1,7 +1,0 @@
-import .ts
-import .css
-import .json
-import .markdown
-rule list-style { set empty "never"
-          set overrides { JSONObjectExpression: { empty: "always" } }
-        }

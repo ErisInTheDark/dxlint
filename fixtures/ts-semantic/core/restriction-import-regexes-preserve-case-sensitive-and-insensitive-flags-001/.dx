@@ -1,4 +1,4 @@
 import .ts
-rule no-restricted-imports {
+rule es-no-restricted-imports {
           set patterns [{regex: "foo/(?!bar)", caseSensitive: false}]
         }

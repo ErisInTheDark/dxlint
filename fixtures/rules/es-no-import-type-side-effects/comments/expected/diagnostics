@@ -1,0 +1,3 @@
+file.ts:1:1-1:77 es-no-import-type-side-effects#0
+file.ts:2:1-6:12 es-no-import-type-side-effects#0
+file.ts:7:1-7:50 es-no-import-type-side-effects#0

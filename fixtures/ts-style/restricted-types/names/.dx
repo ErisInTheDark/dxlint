@@ -1,2 +1,2 @@
 import .ts
-rule no-restricted-types { set types { Banned: { fixWith: "Ok" }, "NS.Banned": { fixWith: "NS.Ok" } } }
+rule es-no-restricted-types { set types { Banned: { fixWith: "Ok" }, "NS.Banned": { fixWith: "NS.Ok" } } }

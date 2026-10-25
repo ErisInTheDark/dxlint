@@ -57,7 +57,7 @@ fn problem_number_precision(text) = {
   }
 }
 
-in ts_number rule no-loss-of-precision {
+in ts_number rule es-no-loss-of-precision {
   when !re_test(text, /^[0-9]{1,15}$/)
   when problem_number_precision(text)
   warn "This number literal will lose precision at runtime."

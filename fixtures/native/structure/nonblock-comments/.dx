@@ -1,4 +1,4 @@
 import .ts
-rule nonblock-statement-body-position {
+rule es-nonblock-statement-body-position {
   set overrides { while: "below" }
 }

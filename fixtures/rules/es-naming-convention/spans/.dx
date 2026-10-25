@@ -1,0 +1,5 @@
+import .ts
+rule es-naming-convention:variable { set formats ["UPPER_CASE"] }
+rule es-naming-convention:parameter { set formats ["PascalCase"] }
+rule es-naming-convention:class-property { set formats ["snake_case"] }
+rule es-naming-convention:parameter-property { set formats ["snake_case"] }

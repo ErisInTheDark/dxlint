@@ -1,5 +1,5 @@
 import .ts
 import .ts/typed/readonly-parameters
-rule prefer-readonly-parameter-types {
+rule es-prefer-readonly-parameter-types {
   set treatMethodsAsReadonly true
 }

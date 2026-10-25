@@ -1,5 +1,5 @@
 import .ts
-rule no-misused-promises:void-inherited-methods
+rule es-no-misused-promises:void-inherited-methods
 
 # Project inputs remain readable, but the original Rust test linted only this main file.
 ignore "node_modules/typescript/lib/lib.fixture.d.ts"

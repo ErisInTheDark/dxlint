@@ -1,6 +1,6 @@
-input.ts:2:10-2:13 no-deprecated#0
-input.ts:3:17-3:24 no-deprecated#0
-input.ts:4:15-4:18 no-deprecated#0
-input.ts:5:21-5:29 no-deprecated#0
-input.ts:7:17-7:27 no-deprecated#0
-input.ts:8:22-8:32 no-deprecated#0
+input.ts:2:10-2:13 es-no-deprecated#0
+input.ts:3:17-3:24 es-no-deprecated#0
+input.ts:4:15-4:18 es-no-deprecated#0
+input.ts:5:21-5:29 es-no-deprecated#0
+input.ts:7:17-7:27 es-no-deprecated#0
+input.ts:8:22-8:32 es-no-deprecated#0

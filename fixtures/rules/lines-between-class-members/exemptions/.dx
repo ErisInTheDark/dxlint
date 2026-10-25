@@ -1,2 +1,0 @@
-import .ts
-rule lines-between-class-members { set exceptAfterSingleLine true; set exceptAfterOverload true }

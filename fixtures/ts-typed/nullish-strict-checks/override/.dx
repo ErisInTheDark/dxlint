@@ -1,3 +1,3 @@
 import .ts
-rule prefer-nullish-coalescing { set allowRuleToRunWithoutStrictNullChecksIKnowWhatIAmDoing true }
+rule es-prefer-nullish-coalescing { set allowRuleToRunWithoutStrictNullChecksIKnowWhatIAmDoing true }
 ignore "tsconfig.json"

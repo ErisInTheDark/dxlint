@@ -1,3 +1,3 @@
 import .ts
 rule * off
-rule prefer-regexp-exec
+rule es-prefer-regexp-exec

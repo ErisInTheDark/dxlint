@@ -170,7 +170,7 @@ in ts_index let deprecation_key index.node
 in ts_node let deprecation_export_name if is ts_export_specifier.local then parent.exported.node ?? node else null
 in ts_node let no_deprecated_checked true
 
-in ts_identifier, ts_private_name, ts_super, ts_jsx_attribute.name, ts_index, ts_pattern_property.key, ts_property.key rule no-deprecated {
+in ts_identifier, ts_private_name, ts_super, ts_jsx_attribute.name, ts_index, ts_pattern_property.key, ts_property.key rule es-no-deprecated {
   option allow (string | type_specifier_file | type_specifier_lib | type_specifier_package)[] = [] "Allowed deprecated symbols"
   when !deprecation_excluded
   when deprecation_export_name == null || deprecation_export_name is ts_identifier

@@ -1,2 +1,2 @@
-input.ts:1:10-1:11 comma-style#2
-input.ts:2:31-2:32 comma-style#2
+input.ts:1:10-1:11 es-comma-style#2
+input.ts:2:31-2:32 es-comma-style#2

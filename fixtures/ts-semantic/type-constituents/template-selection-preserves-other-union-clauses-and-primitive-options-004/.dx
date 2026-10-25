@@ -1,2 +1,2 @@
 import .ts
-rule restrict-template-expressions { set allow ['Custom'] }
+rule es-restrict-template-expressions { set allow ['Custom'] }

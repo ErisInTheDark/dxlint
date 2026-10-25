@@ -11,10 +11,10 @@ define {
   report at { start: eval_info.offset, end: eval_info.end }
   warn "`eval` can be harmful."
 }
-in ts_identifier rule no-eval { @suggestion_eval_policy }
-in ts_member, ts_index rule no-eval:member { @suggestion_eval_policy }
+in ts_identifier rule es-no-eval { @suggestion_eval_policy }
+in ts_member, ts_index rule es-no-eval:member { @suggestion_eval_policy }
 
-in ts_declarator rule no-undef-init {
+in ts_declarator rule es-no-undef-init {
   when init == "undefined" && init.resolved == "global" && re_test(ts_variable_declaration.kind, /^(var|let)$/)
   let undef_initializer { offset: type.end_offset ?? name.end_offset, end_offset: init.end_offset }
   fix at { start: undef_initializer.offset, end: undef_initializer.end_offset } if ts_variable_declaration.kind == "let" && name is ts_identifier && expression_fix_clean(undef_initializer) as ""
@@ -26,7 +26,7 @@ in ts_call let parse_int_name { value callee.node; unparenthesised_node; parse_i
 fn valid_radix(value) = value.type == "number" && value.value >= 2 && value.value <= 36 && value.value % 1 == 0
 fn invalid_radix(n) = n is ts_identifier && n.text == "undefined" && n.resolved == "global" || (n is (ts_number, ts_string, ts_boolean, ts_null, ts_regex, ts_bigint) || n is ts_unary && contains(["+", "-"], n.operator) && n.argument is ts_number) && !valid_radix(n.literal_value)
 
-in ts_call rule radix {
+in ts_call rule es-radix {
   option mode ("always" | "as-needed") = "always" "legacy radix policy"
   when parse_int_name != null
   let argument_count count(argument)
@@ -46,29 +46,29 @@ in ts_call rule radix {
   }
 }
 
-in ts_identifier rule no-shadow-restricted-names {
+in ts_identifier rule es-no-shadow-restricted-names {
   option reportGlobalThis boolean = true "include globalThis among restricted names"
   when contains(["NaN", "Infinity", "undefined", "eval", "arguments", "globalThis"], identifier_name)
     && restricted_binding && (text != "globalThis" || reportGlobalThis)
   warn "Shadowing of global property '{text}'."
 }
 
-in ts_member, ts_index rule no-proto {
+in ts_member, ts_index rule es-no-proto {
   when static_name == "__proto__"
   warn "The '__proto__' property is deprecated."
 }
 
-in ts_member, ts_index rule no-iterator {
+in ts_member, ts_index rule es-no-iterator {
   when static_name == "__iterator__"
   warn "Reserved name '__iterator__'."
 }
 
-in ts_call rule symbol-description {
+in ts_call rule es-symbol-description {
   when callee == "Symbol" && callee.resolved == "global" && count(argument) == 0
   warn "Expected Symbol to have a description."
 }
 
-in ts_call rule prefer-numeric-literals {
+in ts_call rule es-prefer-numeric-literals {
   when count(argument) == 2 && parse_int_name != null
   when first([] argument.literal_value).type == "string"
   when { value argument; last_argument: last; value contains(["2", "8", "16"], last_argument) }
@@ -94,13 +94,13 @@ in ts_call rule prefer-numeric-literals {
   fix if (literal is ts_string || literal is ts_template && count(literal.expression) == 0) && re_test(digits, valid_digits) && expression_fix_clean(node) as expression_fix_edges(node, replacement)
 }
 
-in ts_member, ts_index rule no-console {
+in ts_member, ts_index rule es-no-console {
   option allow string[] = [] "console methods to allow"
   when object == "console" && object.resolved == "global" && !contains(allow, static_name)
   warn if count(allow) == 0 then "Unexpected console statement." else "Unexpected console statement. Only these console methods are allowed: {join(allow, ', ')}."
 }
 
-in ts_call rule prefer-object-has-own {
+in ts_call rule es-prefer-object-has-own {
   when own_property_call
   warn "Use 'Object.hasOwn()' instead of 'Object.prototype.hasOwnProperty.call()'."
   let target unparenthesised_node(callee.node)

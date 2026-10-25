@@ -1,2 +1,2 @@
 import .ts
-rule multiline-ternary
+rule es-multiline-ternary

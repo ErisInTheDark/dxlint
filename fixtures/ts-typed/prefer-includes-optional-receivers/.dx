@@ -1,2 +1,2 @@
 import .ts
-rule prefer-includes
+rule es-prefer-includes

@@ -1,2 +1,2 @@
 import .ts
-rule consistent-type-assertions { set assertionStyle 'never' }
+rule es-consistent-type-assertions { set assertionStyle 'never' }

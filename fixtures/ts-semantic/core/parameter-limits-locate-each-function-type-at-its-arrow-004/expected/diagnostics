@@ -1,2 +1,2 @@
-a.ts:1:33-1:35 max-params#0
-a.ts:1:59-1:61 max-params#0
+a.ts:1:33-1:35 es-max-params#0
+a.ts:1:59-1:61 es-max-params#0

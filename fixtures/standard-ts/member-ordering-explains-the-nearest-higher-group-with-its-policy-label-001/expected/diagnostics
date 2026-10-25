@@ -1,2 +1,2 @@
-file.ts:1:39-1:49 member-ordering:class-declaration#1
+file.ts:1:39-1:49 es-member-ordering:class-declaration#1
 file.ts:1:39-1:49 rank-label-probe#0 middle

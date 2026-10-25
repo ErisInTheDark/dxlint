@@ -1,5 +1,0 @@
-import .ts
-rule padded-blocks:* {
-  set style "always"
-  set allowSingleLineBlocks true
-}

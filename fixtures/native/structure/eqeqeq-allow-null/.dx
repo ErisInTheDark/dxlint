@@ -1,2 +1,2 @@
 import .ts
-rule eqeqeq { set options ["allow-null"] }
+rule es-eqeqeq { set options ["allow-null"] }

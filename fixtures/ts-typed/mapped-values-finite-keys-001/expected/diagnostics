@@ -2,5 +2,5 @@ input.ts:11:1-11:13 unsafe-result#0 unsafe result
 input.ts:14:1-14:14 unsafe-result#0 unsafe result
 input.ts:16:1-16:12 unsafe-result#0 unsafe result
 input.ts:17:1-17:13 unsafe-result#0 unsafe result
-input.ts:20:29-20:30 no-useless-default-assignment#2
-input.ts:22:31-22:31 no-useless-default-assignment#2
+input.ts:20:29-20:30 es-no-useless-default-assignment#2
+input.ts:22:31-22:31 es-no-useless-default-assignment#2

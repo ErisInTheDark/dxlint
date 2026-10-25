@@ -1,2 +1,2 @@
 import .ts
-rule nonblock-statement-body-position { set mode "below" }
+rule es-nonblock-statement-body-position { set mode "below" }

@@ -20,12 +20,12 @@ fn import_namespace(n) = {
 in ts_import_specifier let import_tag import_deprecation_tag(local.node ?? imported.node)
 in ts_import let import_default_tag if default_import == null then null else import_deprecation_tag(default_import.node)
 
-in ts_import_specifier rule import-no-deprecated:specifier {
+in ts_import_specifier rule es-import-no-deprecated:specifier {
   when import_tag != null
   warn import_message(import_tag)
 }
 
-in ts_import.default_import rule import-no-deprecated:default {
+in ts_import.default_import rule es-import-no-deprecated:default {
   when parent.import_default_tag != null
   warn import_message(parent.import_default_tag)
 }
@@ -44,7 +44,7 @@ in ts_program let import_deprecated_defaults {
   map (item) item.default_import.node.text
 }
 
-in ts_identifier rule import-no-deprecated:use {
+in ts_identifier rule es-import-no-deprecated:use {
   when contains(ts_program.import_deprecated_names, text) || contains(ts_program.import_deprecated_defaults, text)
   when resolved == "import"
   when containing(ts_jsx_opening) == null && containing(ts_jsx_closing) == null
@@ -61,7 +61,7 @@ in ts_program let import_namespace_names {
   map (item) item.namespace.node.text
 }
 
-in ts_member.property rule import-no-deprecated:namespace {
+in ts_member.property rule es-import-no-deprecated:namespace {
   when count(ts_program.import_namespace_names) > 0
   when contains(ts_program.import_namespace_names, import_namespace_root(parent.node).text ?? "")
   when import_namespace(parent.node)

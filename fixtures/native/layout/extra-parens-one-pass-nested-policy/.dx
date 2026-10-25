@@ -1,2 +1,2 @@
 import .ts
-rule no-extra-parens { set nestedBinaryExpressions false }
+rule es-no-extra-parens { set nestedBinaryExpressions false }

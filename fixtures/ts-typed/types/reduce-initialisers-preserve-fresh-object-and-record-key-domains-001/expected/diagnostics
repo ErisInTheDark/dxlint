@@ -1,2 +1,2 @@
-input.ts:3:34-3:57 prefer-reduce-type-parameter#0
-input.ts:4:34-4:81 prefer-reduce-type-parameter#0
+input.ts:3:34-3:57 es-prefer-reduce-type-parameter#0
+input.ts:4:34-4:81 es-prefer-reduce-type-parameter#0

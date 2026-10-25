@@ -1,9 +1,0 @@
-a.ts:14:3-14:14 class-methods-use-this#0
-a.ts:15:25-15:27 class-methods-use-this:field#0
-a.ts:2:3-2:9 class-methods-use-this#0
-a.ts:3:3-3:12 class-methods-use-this#0
-a.ts:4:3-4:12 class-methods-use-this#0
-a.ts:5:3-5:12 class-methods-use-this#0
-a.ts:6:3-6:28 class-methods-use-this:field#1
-a.ts:7:3-7:11 class-methods-use-this:field#1
-a.ts:9:3-9:15 class-methods-use-this#0

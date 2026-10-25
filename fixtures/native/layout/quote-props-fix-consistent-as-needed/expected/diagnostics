@@ -1,7 +1,7 @@
-input.ts:1:21-1:21 quote-props#4
-input.ts:1:39-1:39 quote-props#4
-input.ts:2:37-2:37 quote-props#6
-input.ts:3:19-3:19 quote-props#4
-input.ts:3:44-3:44 quote-props#4
-input.ts:4:22-4:22 quote-props#4
-input.ts:5:32-5:32 quote-props#4
+input.ts:1:21-1:21 es-quote-props#4
+input.ts:1:39-1:39 es-quote-props#4
+input.ts:2:37-2:37 es-quote-props#6
+input.ts:3:19-3:19 es-quote-props#4
+input.ts:3:44-3:44 es-quote-props#4
+input.ts:4:22-4:22 es-quote-props#4
+input.ts:5:32-5:32 es-quote-props#4

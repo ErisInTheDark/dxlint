@@ -1,3 +1,0 @@
-import .ts
-override in ts_type_keyword let no_invalid_void_type_checked false
-rule no-invalid-void-type

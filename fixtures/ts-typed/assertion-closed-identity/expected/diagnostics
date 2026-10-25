@@ -1,5 +1,5 @@
-input.ts:13:19-13:31 no-unnecessary-type-assertion#1
-input.ts:16:17-16:35 no-unnecessary-type-assertion#1
-input.ts:19:19-19:40 no-unnecessary-type-assertion#1
-input.ts:2:17-2:28 no-unnecessary-type-assertion#1
-input.ts:3:17-3:23 no-unnecessary-type-assertion#1
+input.ts:13:19-13:31 es-no-unnecessary-type-assertion#1
+input.ts:16:17-16:35 es-no-unnecessary-type-assertion#1
+input.ts:19:19-19:40 es-no-unnecessary-type-assertion#1
+input.ts:2:17-2:28 es-no-unnecessary-type-assertion#1
+input.ts:3:17-3:23 es-no-unnecessary-type-assertion#1

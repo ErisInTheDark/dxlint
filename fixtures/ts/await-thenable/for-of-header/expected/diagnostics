@@ -1,2 +1,2 @@
-input.ts:10:1-10:44 await-thenable:for-of#0
-input.ts:7:1-7:42 await-thenable:for-of#0
+input.ts:10:1-10:44 es-await-thenable:for-of#0
+input.ts:7:1-7:42 es-await-thenable:for-of#0

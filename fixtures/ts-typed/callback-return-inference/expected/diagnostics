@@ -1,4 +1,4 @@
-input.ts:11:5-11:28 no-misused-promises:conditionals#0
-input.ts:15:5-15:40 no-misused-promises:conditionals#0
-input.ts:5:5-5:25 no-misused-promises:conditionals#0
-input.ts:8:5-8:28 no-misused-promises:conditionals#0
+input.ts:11:5-11:28 es-no-misused-promises:conditionals#0
+input.ts:15:5-15:40 es-no-misused-promises:conditionals#0
+input.ts:5:5-5:25 es-no-misused-promises:conditionals#0
+input.ts:8:5-8:28 es-no-misused-promises:conditionals#0

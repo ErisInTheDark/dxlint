@@ -1,2 +1,2 @@
 import .ts
-rule no-restricted-exports { set restrictedNamedExportsPattern "^(?!foo)(?!bar).+$" }
+rule es-no-restricted-exports { set restrictedNamedExportsPattern "^(?!foo)(?!bar).+$" }

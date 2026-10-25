@@ -128,7 +128,7 @@ fn readonly_initializer_annotation(initializer) = {
   else readonly_primitive_annotation(initializer)
 }
 
-in ts_class_property rule prefer-readonly {
+in ts_class_property rule es-prefer-readonly {
   option onlyInlineLambdas boolean = false "Limit initialised members to direct arrow functions"
   when !onlyInlineLambdas || init == null || init is ts_arrow
   when (contains([] modifier, "private") || key is ts_private_name)
@@ -146,7 +146,7 @@ in ts_class_property rule prefer-readonly {
   fix at key.node if fixable as "readonly " key (if annotation != null then ": " annotation else "")
 }
 
-in ts_parameter rule prefer-readonly:parameter {
+in ts_parameter rule es-prefer-readonly:parameter {
   option onlyInlineLambdas boolean = false "Limit initialised members to direct arrow functions"
   when !onlyInlineLambdas || init == null || init is ts_arrow
   when contains([] modifier, "private") && !contains([] modifier, "readonly")

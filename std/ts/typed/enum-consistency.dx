@@ -59,7 +59,7 @@ fn enum_consistency_mismatch(n) = if count(n.member.nodes) == 0 then null else {
     else first_problem.init.node ?? first_problem
 }
 
-in ts_enum rule no-mixed-enums {
+in ts_enum rule es-no-mixed-enums {
   let mismatch enum_consistency_mismatch(node)
   when mismatch != null
   report at mismatch

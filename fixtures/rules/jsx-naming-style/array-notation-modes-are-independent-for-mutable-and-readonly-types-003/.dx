@@ -1,3 +1,0 @@
-import .ts
-rule array-type:mutable set 'array'
-rule array-type:readonly set 'array-simple'

@@ -1,3 +1,3 @@
-input.ts:1:16-1:17 semi-spacing:before#1
-input.ts:3:1-3:2 semi-spacing:before#1
-input.ts:4:15-4:16 semi-spacing:before#1
+input.ts:1:16-1:17 es-semi-spacing:before#1
+input.ts:3:1-3:2 es-semi-spacing:before#1
+input.ts:4:15-4:16 es-semi-spacing:before#1

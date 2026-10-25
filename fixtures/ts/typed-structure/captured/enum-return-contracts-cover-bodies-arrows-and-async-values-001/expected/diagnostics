@@ -1,1 +1,1 @@
-a.ts:1:168-1:177 no-unsafe-enum-assignment:returns#0
+a.ts:1:168-1:177 es-no-unsafe-enum-assignment:returns#0

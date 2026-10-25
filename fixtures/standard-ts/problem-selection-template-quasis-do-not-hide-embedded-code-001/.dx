@@ -1,3 +1,3 @@
 import .ts
 override in problem_irregular_ws let irregular_whitespace_checked !{ value overlapping(problem_template); any (template) any(template.quasi.node, quasi => quasi.offset <= offset && end_offset <= quasi.end_offset) }
-rule no-irregular-whitespace
+rule es-no-irregular-whitespace

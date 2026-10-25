@@ -1,0 +1,2 @@
+import .ts
+rule es-jsx-closing-bracket-location { set mode "props-aligned" }

@@ -81,7 +81,7 @@ fn object_spread_fix(source, n) = {
     else (if semicolon then ";" else "") replacement
 }
 
-in ts_call rule prefer-object-spread {
+in ts_call rule es-prefer-object-spread {
   when ts_global_method_candidate(node, "assign")
   let first_argument { value argument.nodes; first; unparenthesised_node }
   when first_argument is ts_object

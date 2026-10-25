@@ -1,2 +1,2 @@
 import .ts
-rule no-mixed-enums
+rule es-no-mixed-enums

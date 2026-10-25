@@ -3,7 +3,7 @@
 define {
 
 # ---- expressions -----------------------------------------------------------------------
-in ts_assignment rule no-multi-assign {
+in ts_assignment rule es-no-multi-assign {
   option ignoreNonDeclaration boolean = false "Allow chained assignments outside declaration initializers."
   let owner { value parent.node; walk (current) if current is ts_parenthesized then current.parent.node else null; last }
   when owner is ts_declarator && unparenthesised_node(owner.init.node) == node
@@ -26,7 +26,7 @@ in ts_binary let counted_loop_increment if operator == "+" then { left: left, ri
 in ts_update let incremented_loop_name if operator == "++" then argument else null
 fn increments_name(sum, name) = sum != null && (sum.left == name && sum.right_unit == true || sum.right == name && sum.left_unit == true)
 in ts_assignment let incremented_loop_name if operator == "+=" && right.loop_increment_unit == true || operator == "=" && increments_name(right.counted_loop_increment, left) then left else null
-in ts_for rule prefer-for-of {
+in ts_for rule es-prefer-for-of {
   let binding init.counted_loop_initialisation
   let comparison test.counted_loop_test
   when binding != null && comparison.array != null && comparison.name == binding.name && update.incremented_loop_name == binding.name
@@ -66,23 +66,23 @@ in ts_assignment let parameter_assignment_entry {
 }
 in style_tree_node let parameter_assignment_entries if is ts_class then [] else [] parameter_assignment_entry { value [] children.parameter_assignment_entries; fold ([]) (entries, child) entries child }
 in ts_class let parameter_assignment_catalog { value [] children.parameter_assignment_entries; fold ([]) (entries, child) entries child }
-in ts_assignment rule no-unnecessary-parameter-property-assignment {
+in ts_assignment rule es-no-unnecessary-parameter-property-assignment {
   when ts_class.node != null
   let entry parameter_assignment_entry
   when entry.candidate && !any(ts_class.parameter_assignment_catalog, prior => prior.field_write == entry.name || prior.start < entry.start && prior.prior == entry.name)
   warn "This assignment is unnecessary since it is already assigned by a parameter property."
 }
 
-in ts_binary rule no-confusing-non-null-assertion {
+in ts_binary rule es-no-confusing-non-null-assertion {
   when contains(["==", "===", "in", "instanceof"], operator) && re_test(left, /!\s*$/)
   warn if operator == "in" || operator == "instanceof" then "Confusing combination of non-null assertion and `{operator}` operator like `a! {operator} b`, which might be misinterpreted as `!(a {operator} b)`." else "Confusing combination of non-null assertion and equality test like `a! == b`, which looks very similar to `a !== b`."
 }
-in ts_assignment rule no-confusing-non-null-assertion:assign {
+in ts_assignment rule es-no-confusing-non-null-assertion:assign {
   when operator == "=" && re_test(left, /!\s*$/)
   warn "Confusing combination of non-null assertion and assignment like `a! = b`, which looks very similar to `a != b`."
 }
 
-in ts_call rule no-require-imports {
+in ts_call rule es-no-require-imports {
   option allow string[] = [] "module paths (regexes) that may be required"
   option allowAsImport boolean = false "allow `import x = require(...)`"
   when callee == "require" && (callee.resolved == "global" || parent is ts_import_equals)
@@ -90,7 +90,7 @@ in ts_call rule no-require-imports {
   when !any(allow, p => { value { value first([] argument.literal_value).value; nonempty } ?? "\u{0}"; re_test p } && first([] argument.literal_value).type == "string")
   warn "A `require()` style import is forbidden."
 }
-in ts_call rule no-var-requires {
+in ts_call rule es-no-var-requires {
   when callee == "require" && callee.resolved == "global" && parent is (ts_declarator, ts_call, ts_member, ts_index, ts_new, ts_as, ts_type_assertion)
   warn "Require statement not part of import statement."
 }
@@ -112,7 +112,7 @@ fn expression_allowed(shape, short, ternary, tagged, jsx) = {
     else if part.kind == "tagged" then tagged
     else if part.kind == "jsx" then !jsx else true
 }
-in ts_expression_statement rule no-unused-expressions {
+in ts_expression_statement rule es-no-unused-expressions {
   option allowShortCircuit boolean = false "Allow effectful short circuit expressions."
   option allowTernary boolean = false "Allow ternaries with effectful branches."
   option allowTaggedTemplates boolean = false "Allow tagged templates."

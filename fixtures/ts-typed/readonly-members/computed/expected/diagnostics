@@ -1,2 +1,2 @@
-main.ts:33:3-33:28 prefer-readonly#0
-main.ts:38:3-38:14 prefer-readonly#0
+main.ts:33:3-33:28 es-prefer-readonly#0
+main.ts:38:3-38:14 es-prefer-readonly#0

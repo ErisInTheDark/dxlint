@@ -1,6 +1,6 @@
 import .ts
 import .json
-rule list-style {
+rule es-list-style {
   set multiLine { minItems: 99 }
   set overrides { "{}": { singleLine: { spacing: "never" } } }
 }

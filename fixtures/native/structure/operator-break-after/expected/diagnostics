@@ -1,7 +1,7 @@
-a.js:10:3-10:4 operator-linebreak#2
-a.js:12:1-12:2 operator-linebreak#0
-a.js:15:1-15:2 operator-linebreak#2
-a.js:2:3-2:4 operator-linebreak#2
-a.js:4:3-4:5 operator-linebreak#2
-a.js:6:3-6:4 operator-linebreak#2
-a.js:8:3-8:4 operator-linebreak#2
+a.js:10:3-10:4 es-operator-linebreak#2
+a.js:12:1-12:2 es-operator-linebreak#0
+a.js:15:1-15:2 es-operator-linebreak#2
+a.js:2:3-2:4 es-operator-linebreak#2
+a.js:4:3-4:5 es-operator-linebreak#2
+a.js:6:3-6:4 es-operator-linebreak#2
+a.js:8:3-8:4 es-operator-linebreak#2

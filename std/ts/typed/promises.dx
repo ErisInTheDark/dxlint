@@ -15,7 +15,7 @@ in ts_node let promise_boolean_left
     || parent is ts_conditional && not ts_conditional.test)
     && parent.promise_boolean_left == true
 
-in ts_parenthesized.expression, ts_logical.left, ts_logical.right, ts_conditional.test, ts_conditional.consequent, ts_conditional.alternate, ts_if.test, ts_while.test, ts_do_while.test, ts_for.test, ts_unary.argument rule no-misused-promises:conditionals {
+in ts_parenthesized.expression, ts_logical.left, ts_logical.right, ts_conditional.test, ts_conditional.consequent, ts_conditional.alternate, ts_if.test, ts_while.test, ts_do_while.test, ts_for.test, ts_unary.argument rule es-no-misused-promises:conditionals {
   option flagUnions "none" | "strict" | "all" = "none" "Which mixed promise unions to flag"
   when not (ts_parenthesized, ts_logical, ts_conditional, ts_null, ts_boolean, ts_number, ts_bigint, ts_string)
   when !(is ts_unary && node.operator == "!")
@@ -30,7 +30,7 @@ in ts_parenthesized.expression, ts_logical.left, ts_logical.right, ts_conditiona
   warn "Expected non-Promise value in a boolean conditional."
 }
 
-in ts_spread rule no-misused-promises:spreads {
+in ts_spread rule es-no-misused-promises:spreads {
   when parent is ts_object
   when argument could thenable
   report at unparenthesised_node(argument.node)
@@ -126,7 +126,7 @@ fn promise_async_policy(n, names) = {
   }
 }
 
-in ts_call.argument, ts_new.argument, ts_template.expression rule no-misused-promises:void-arguments {
+in ts_call.argument, ts_new.argument, ts_template.expression rule es-no-misused-promises:void-arguments {
   when parent not ts_call || node.index != 0 || !parent.promise_finally_callback
   when promise_void_context(node)
   when !promise_void_overload_accepts(node)
@@ -134,14 +134,14 @@ in ts_call.argument, ts_new.argument, ts_template.expression rule no-misused-pro
   warn "Promise returned in function argument where a void return was expected."
 }
 
-in ts_call.argument rule no-misused-promises:predicates {
+in ts_call.argument rule es-no-misused-promises:predicates {
   when node.index == 0 && condition_array_callback(parent)
   when promise_returns_thenable(promise_return_arms(value_signatures(node)))
   report at unparenthesised_node(node)
   warn "Expected a non-Promise value to be returned."
 }
 
-in ts_declarator.init, ts_parameter.init, ts_assignment.right rule no-misused-promises:void-variables {
+in ts_declarator.init, ts_parameter.init, ts_assignment.right rule es-no-misused-promises:void-variables {
   # An unannotated declarator gives its initializer no expected type.
   when ((!(is ts_declarator.init) || parent.type != null) && promise_void_context(node))
     || promise_dispose_void_context(node)
@@ -149,7 +149,7 @@ in ts_declarator.init, ts_parameter.init, ts_assignment.right rule no-misused-pr
   warn "Promise-returning function provided to variable where a void return was expected."
 }
 
-in ts_property, ts_method, ts_class_property.init rule no-misused-promises:void-properties {
+in ts_property, ts_method, ts_class_property.init rule es-no-misused-promises:void-properties {
   when not ts_method || parent is ts_object
   when not ts_class_property.init || node.parent.type != null
   let promise_source promise_property_source(node)
@@ -158,13 +158,13 @@ in ts_property, ts_method, ts_class_property.init rule no-misused-promises:void-
   warn "Promise-returning function provided to property where a void return was expected."
 }
 
-in ts_return.argument, ts_arrow.body rule no-misused-promises:void-returns {
+in ts_return.argument, ts_arrow.body rule es-no-misused-promises:void-returns {
   when promise_void_context(node)
   report at unparenthesised_node(node)
   warn "Promise-returning function provided to return value where a void return was expected."
 }
 
-in ts_jsx_expression.expression rule no-misused-promises:void-attributes {
+in ts_jsx_expression.expression rule es-no-misused-promises:void-attributes {
   when parent.parent is ts_jsx_attribute
   when promise_void_context(node)
   report at parent.node
@@ -192,7 +192,7 @@ fn promise_inherited_void_targets(n) = {
       && promise_returns_void(promise_return_arms(value_signatures(lookup.member)))
   })
 }
-in ts_method, ts_method_signature, ts_class_property, ts_property_signature rule no-misused-promises:void-inherited-methods {
+in ts_method, ts_method_signature, ts_class_property, ts_property_signature rule es-no-misused-promises:void-inherited-methods {
   when !is_static
   when static_name != null && parent is (ts_class, ts_interface)
   when promise_returns_thenable(promise_return_arms(value_signatures(node)))

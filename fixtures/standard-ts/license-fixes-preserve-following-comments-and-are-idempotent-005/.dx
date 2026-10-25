@@ -1,2 +1,2 @@
 import .ts
-rule header:before { set license "/* Copyright Example */" }
+rule es-header:before { set license "/* Copyright Example */" }

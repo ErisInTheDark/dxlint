@@ -1,5 +1,5 @@
 import .ts
-rule restrict-template-expressions { set allow null }
+rule es-restrict-template-expressions { set allow null }
 
 # Project inputs remain readable, but the original Rust test linted only this main file.
 ignore "lib.example.d.ts"

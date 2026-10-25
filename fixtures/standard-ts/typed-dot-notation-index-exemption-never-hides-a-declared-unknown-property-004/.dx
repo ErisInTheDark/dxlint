@@ -1,2 +1,2 @@
 import .ts
-rule dot-notation { set allowIndexSignaturePropertyAccess true }
+rule es-dot-notation { set allowIndexSignaturePropertyAccess true }

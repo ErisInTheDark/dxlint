@@ -1,4 +1,4 @@
 import .ts
-rule unbound-method {
+rule es-unbound-method {
   set ignoreStatic true
 }

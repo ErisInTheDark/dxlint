@@ -63,18 +63,18 @@ class's first opener is the `<` of `class A<T>`). Every native node knows `space
 that whitespace. Gap `blank_lines` counts physical blank lines; `blank_gaps` counts blank lines between tokens/comments, excluding comment interiors. Spacing rules are one decision per token:
 
 ```dx
-in ts_comma rule comma-spacing:after warn "A space is required after ','." {
+in ts_comma rule es-comma-spacing:after warn "A space is required after ','." {
   when next_token not (closer, ts_comma) && !space_after.line_break && !space_after.spaced
   fix space_after as " "
 }
-in ts_block rule padded-blocks:top warn "Block must not be padded by blank lines." {
+in ts_block rule es-padded-blocks:top warn "Block must not be padded by blank lines." {
   when opener.space_after.blank_lines > 0
 }
 ```
 
 Files get token nodes only when an active rule needs them. A family name
-turns on and configures every variant (`comma-spacing:before`,
-`comma-spacing:after`): `rule comma-spacing`.
+turns on and configures every variant (`es-comma-spacing:before`,
+`es-comma-spacing:after`): `rule es-comma-spacing`.
 
 Comments and lines are pattern layers in `std/ts.dx` (see One tree):
 `ts_line_comment` and `ts_block_comment` (group `ts_comment`) are children of
@@ -99,7 +99,7 @@ Project rules can style opening-tag lines without changing child indentation:
 
 ```dx
 import .ts
-rule indent {
+rule es-indent {
   set mode 2
   indent in ts_jsx_opening by 3
 }
@@ -392,24 +392,24 @@ separate bundles.
 | `.ts/typed/qualifiers` | redundant runtime namespace qualifiers whose unqualified name binds the same declaration, with comment-safe fixes (type qualifiers not yet); imported by `.ts/typed` |
 | `.ts/typed/switches` | literal, boolean, enum and unique-symbol switch exhaustiveness, default policies and trailing-comment exemptions; imported by `.ts/typed`, diagnostic-only |
 | `.ts/typed/type-parameters` | unnecessary formal type parameters in known scalar, array and tuple signature graphs; opaque graphs and inherited classes skipped; imported by `.ts/typed`, diagnostic-only |
-| `.ts/typed/awaitability` | own async syntax (`await`, `for await`, `await using`) and Values decisions for `require-await`'s missing-await check; imported by `.ts/typed` |
+| `.ts/typed/awaitability` | own async syntax (`await`, `for await`, `await using`) and Values decisions for `es-require-await`'s missing-await check; imported by `.ts/typed` |
 | `.ts/typed/unbound-method` | receiver-preserving method extraction, including destructuring and ignoreStatic; imported by `.ts/typed`, diagnostic-only |
-| `.ts/typed/type-arguments` | redundant explicit type arguments (`no-unnecessary-type-arguments`) equal to their defaults, with angle-preserving removal fixes; reduce assertions moved to call type parameters (`prefer-reduce-type-parameter`); imported by `.ts/typed` |
+| `.ts/typed/type-arguments` | redundant explicit type arguments (`es-no-unnecessary-type-arguments`) equal to their defaults, with angle-preserving removal fixes; reduce assertions moved to call type parameters (`es-prefer-reduce-type-parameter`); imported by `.ts/typed` |
 | `.ts/scoping/member-uses` | private-member use policy over lexical names, contextual receivers and declared write targets; imported by `.ts/problems` |
 | `.ts/problems/numeric-precision` | numeric-literal precision policy over generic number formatting; imported by `.ts/problems` |
 | `.ts/typed/strict-void-return` | non-void values flowing into void-returning callback contexts, with `allowReturnAny`; imported by `.ts/typed`, diagnostic-only |
-| `.ts/typed/regexp-exec` | non-global string matching policy and fixes (`prefer-regexp-exec`); imported by `.ts/typed` |
-| `.ts/typed/for-in-arrays` | array-like `for-in` policy (`no-for-in-array`); imported by `.ts/typed` |
-| `.ts/typed/promises` | `no-misused-promises` variants: `conditionals`, `predicates` (array callbacks), `spreads`, `void-arguments`, `void-attributes`, `void-inherited-methods`, `void-properties`, `void-returns`, `void-variables`; imported by `.ts/typed`, diagnostic-only |
+| `.ts/typed/regexp-exec` | non-global string matching policy and fixes (`es-prefer-regexp-exec`); imported by `.ts/typed` |
+| `.ts/typed/for-in-arrays` | array-like `for-in` policy (`es-no-for-in-array`); imported by `.ts/typed` |
+| `.ts/typed/promises` | `es-no-misused-promises` variants: `conditionals`, `predicates` (array callbacks), `spreads`, `void-arguments`, `void-attributes`, `void-inherited-methods`, `void-properties`, `void-returns`, `void-variables`; imported by `.ts/typed`, diagnostic-only |
 | `.ts/typed/errors` | Error ancestry, any/unknown/undefined categories and caught/rejection-binding provenance; imported by `.ts/typed` |
-| `.ts/enums` | enum transfer policy (`no-unsafe-enum-assignment`) over the `type_flow` fact, imported by `.ts` |
+| `.ts/enums` | enum transfer policy (`es-no-unsafe-enum-assignment`) over the `type_flow` fact, imported by `.ts` |
 | `.ts/assertions` | assertion syntax, type-aware assertion and non-null policy, imported by `.ts` and `.ts/style` |
-| `.ts/naming` | name-format policy (`naming-convention` variants), open context groups and shared `naming_failure` helper; imported by `.ts/scoping` |
-| `.ts/deprecation` | declaration documentation policy (`no-deprecated`), imported by `.ts`; diagnostic-only |
+| `.ts/naming` | name-format policy (`es-naming-convention` variants), open context groups and shared `naming_failure` helper; imported by `.ts/scoping` |
+| `.ts/deprecation` | declaration documentation policy (`es-no-deprecated`), imported by `.ts`; diagnostic-only |
 | `.ts/import-no-deprecated` | `import/no-deprecated`: deprecated exports, their import specifiers, uses and namespace members, imported by `.ts/typed`; diagnostic-only |
 | `.ts/type-specifiers` | shared type/value origin matching helpers (`matches_type_specifier`, `type_is_allowed`) |
-| `.ts/methods` | type-aware method policy (`prefer-find`), imported by `.ts/typed`; filter result zero-index/bracket/at access, computed constant methods, sequences and both conditional branches; diagnostic-only |
-| `.ts/selectors` | open `restricted_syntax` group and prohibition rule (`no-restricted-syntax`), imported by `.ts` |
+| `.ts/methods` | type-aware method policy (`es-prefer-find`), imported by `.ts/typed`; filter result zero-index/bracket/at access, computed constant methods, sequences and both conditional branches; diagnostic-only |
+| `.ts/selectors` | open `restricted_syntax` group and prohibition rule (`es-no-restricted-syntax`), imported by `.ts` |
 | `.ts/problems/helpers` | shared problem state and macros (`ts_literal`, `is_global`, `is_real_global`, `is_write`, `problem_expression_value_used`); imported by `.ts/problems` |
 | `.ts/problems/declarations` | writes to bindings, undefined names and unused assignments; imported by `.ts/problems` |
 | `.ts/problems/imports` | import writes, unused and unassigned imports; imported by `.ts/problems` |

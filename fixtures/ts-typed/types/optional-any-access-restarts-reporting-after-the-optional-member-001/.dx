@@ -1,2 +1,2 @@
 import .ts
-rule no-unsafe-member-access { set allowOptionalChaining true }
+rule es-no-unsafe-member-access { set allowOptionalChaining true }

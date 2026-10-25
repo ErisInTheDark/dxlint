@@ -1,2 +1,2 @@
 import .ts
-rule dot-location
+rule es-dot-location

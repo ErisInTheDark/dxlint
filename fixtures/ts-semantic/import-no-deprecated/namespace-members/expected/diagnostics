@@ -1,4 +1,4 @@
-main.ts:3:4-3:7 import-no-deprecated:namespace#0
-main.ts:5:11-5:16 import-no-deprecated:namespace#0
-main.ts:5:4-5:10 import-no-deprecated:namespace#0
-main.ts:6:4-6:10 import-no-deprecated:namespace#0
+main.ts:3:4-3:7 es-import-no-deprecated:namespace#0
+main.ts:5:11-5:16 es-import-no-deprecated:namespace#0
+main.ts:5:4-5:10 es-import-no-deprecated:namespace#0
+main.ts:6:4-6:10 es-import-no-deprecated:namespace#0

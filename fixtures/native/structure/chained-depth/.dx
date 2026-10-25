@@ -1,2 +1,2 @@
 import .ts
-rule newline-per-chained-call { set ignoreChainWithDepth 1 }
+rule es-newline-per-chained-call { set ignoreChainWithDepth 1 }

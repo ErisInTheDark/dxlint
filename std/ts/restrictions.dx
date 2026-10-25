@@ -143,7 +143,7 @@ in ts_identifier {
     parents: restriction_import_parents(restriction_import_source)
   } else null
 }
-in ts_import, ts_export, ts_import_equals rule no-restricted-imports {
+in ts_import, ts_export, ts_import_equals rule es-no-restricted-imports {
   @restriction_import_options
   when len(paths) > 0
   @restriction_import_info
@@ -151,7 +151,7 @@ in ts_import, ts_export, ts_import_equals rule no-restricted-imports {
   when info != null && entry.name == info.source && entry.importNames == null && entry.allowImportNames == null && !(entry.allowTypeImports && info.all_type)
   warn "'{info.source}' import is restricted from being used." @restriction_import_custom(entry)
 }
-in ts_import_specifier, ts_import.default_import, ts_import.namespace, ts_export_specifier, ts_export rule no-restricted-imports:names {
+in ts_import_specifier, ts_import.default_import, ts_import.namespace, ts_export_specifier, ts_export rule es-no-restricted-imports:names {
   @restriction_import_options
   when len(paths) > 0
   @restriction_import_info
@@ -161,7 +161,7 @@ in ts_import_specifier, ts_import.default_import, ts_import.namespace, ts_export
   report at { start: info.offset, end: info.end }
   warn (if info.name == "*" then "* import is invalid because " (if entry.allowImportNames != null then "only " @restriction_import_list(entry.allowImportNames) " from '{info.source}' " @restriction_import_plural(entry.allowImportNames) " allowed." else @restriction_import_list(entry.importNames) " from '{info.source}' " @restriction_import_plural(entry.importNames) " restricted.") else "'{info.name}' import from '{info.source}' is restricted" (if entry.allowImportNames != null then " because only " @restriction_import_list(entry.allowImportNames) " " @restriction_import_plural(entry.allowImportNames) " allowed." else ".")) @restriction_import_custom(entry)
 }
-in ts_import, ts_export, ts_import_equals rule no-restricted-imports:patterns {
+in ts_import, ts_export, ts_import_equals rule es-no-restricted-imports:patterns {
   @restriction_import_options
   when len(patterns) > 0
   @restriction_import_info
@@ -170,7 +170,7 @@ in ts_import, ts_export, ts_import_equals rule no-restricted-imports:patterns {
   when @restriction_import_pattern_matches(entry) && !(entry.allowTypeImports && info.all_type) && entry.importNames == null && entry.allowImportNames == null && entry.importNamePattern == null && entry.allowImportNamePattern == null
   warn "'{info.source}' import is restricted from being used by a pattern." @restriction_import_custom(entry)
 }
-in ts_import_specifier, ts_import.default_import, ts_import.namespace, ts_export_specifier, ts_export rule no-restricted-imports:pattern-names {
+in ts_import_specifier, ts_import.default_import, ts_import.namespace, ts_export_specifier, ts_export rule es-no-restricted-imports:pattern-names {
   @restriction_import_options
   when len(patterns) > 0
   @restriction_import_info
@@ -223,7 +223,7 @@ in ts_number, ts_bigint {
   let restriction_numeric_array_index restriction_numeric_full.context.array_index && js_compare(literal_value, 0) >= 0 && js_compare(literal_value, 4294967295) < 0 && (is ts_bigint || restriction_numeric_value == round(restriction_numeric_value)) && (restriction_numeric_sign != "-" || num(literal_value.value) == 0)
   let no_magic_numbers_checked !(restriction_numeric_full.context.object || restriction_numeric_full.context.radix || restriction_numeric_full.context.jsx)
 }
-in ts_number, ts_bigint rule no-magic-numbers {
+in ts_number, ts_bigint rule es-no-magic-numbers {
   option enforceConst boolean = false "require const for named number declarations"
   option ignore (number | string)[] = [] "numbers and bigint strings to allow"
   let info restriction_numeric_full.context
@@ -286,7 +286,7 @@ fn restriction_sorted_imports(members, insensitive) = {
   option ignoreCase boolean = false "ignore letter case"
   option allowSeparatedGroups boolean = false "reset declaration order after blank lines"
 }
-in ts_import rule sort-imports:declarations {
+in ts_import rule es-sort-imports:declarations {
   @restriction_sort_import_options
   let preceding {
     value ts_program.restriction_declarations
@@ -298,7 +298,7 @@ in ts_import rule sort-imports:declarations {
   when restriction_declaration_syntax != preceding.syntax && sort_imports_rank < preceding.node.sort_imports_rank || restriction_declaration_syntax == preceding.syntax && compare_text(restriction_declaration_local, preceding.local, false, ignoreCase) < 0
   warn if restriction_declaration_syntax != preceding.syntax then "Expected '{restriction_declaration_syntax}' syntax before '{preceding.syntax}' syntax." else "Imports should be sorted alphabetically."
 }
-in ts_import_specifier rule sort-imports:members {
+in ts_import_specifier rule es-sort-imports:members {
   @restriction_sort_import_options
   let unsorted previous != null && compare_text(previous.restriction_declaration_local, restriction_declaration_local, false, ignoreCase) > 0
   let encountered previous.encountered == true || unsorted
@@ -321,11 +321,11 @@ group duplicate_imports_checked ts_import
   when any(ts_program.restriction_declarations, entry => entry.node is duplicate_imports_checked && entry.offset < offset && entry.export == previous_export && trim(entry.module) == module && (!allowSeparateTypeImports || entry.type_only == own.type_only) && restriction_import_mergeable(own, entry))
   warn "'{module}' {if own.export then 'export' else 'import'} is duplicated{if own.export == previous_export then '' else if own.export then ' as import' else ' as export'}."
 }
-in duplicate_imports_checked rule no-duplicate-imports:imports {
+in duplicate_imports_checked rule es-no-duplicate-imports:imports {
   let previous_export false
   @restriction_duplicate_import_body
 }
-in duplicate_imports_checked rule no-duplicate-imports:exports {
+in duplicate_imports_checked rule es-no-duplicate-imports:exports {
   let previous_export true
   @restriction_duplicate_import_body
 }
@@ -341,7 +341,7 @@ fn restriction_sorted_variables(bindings, insensitive) = {
   }
   value restriction_sorted_items(bindings, ordered)
 }
-in ts_declarator rule sort-vars {
+in ts_declarator rule es-sort-vars {
   option ignoreCase boolean = false "ignore letter case"
   let simple_name name is ts_identifier
   let greatest if !simple_name then previous.greatest else if previous.greatest == null || compare_text(name, previous.greatest, false, ignoreCase) >= 0 then name else previous.greatest
@@ -365,7 +365,7 @@ in ts_property, ts_method {
   let restriction_sort_key_fallback key.restriction_sort_key_name
 }
 in ts_object let restriction_sort_key_count count(property)
-in ts_property, ts_method, ts_spread rule sort-keys {
+in ts_property, ts_method, ts_spread rule es-sort-keys {
   option mode "asc" | "desc" = "asc" "key order"
   option caseSensitive boolean = true "compare letter case"
   option natural boolean = false "compare digit sequences numerically"
@@ -386,39 +386,39 @@ in ts_property, ts_method, ts_spread rule sort-keys {
   warn "Expected object keys to be in {if natural then 'natural ' else ''}{if caseSensitive then '' else 'insensitive '}{mode}ending order. '{name}' should be before '{previous.carried}'."
 }
 
-in ts_conditional rule no-ternary warn "Ternary operator used."
+in ts_conditional rule es-no-ternary warn "Ternary operator used."
 
 in ts_conditional let restriction_ternary true
 in ts_parenthesized let restriction_ternary expression.restriction_ternary == true
-in ts_conditional rule no-nested-ternary {
+in ts_conditional rule es-no-nested-ternary {
   when consequent.restriction_ternary == true || alternate.restriction_ternary == true
   warn "Do not nest ternary expressions."
 }
-in ts_continue rule no-continue warn "Unexpected use of continue statement."
+in ts_continue rule es-no-continue warn "Unexpected use of continue statement."
 in ts_parenthesized, ts_unary let restriction_statement_position if parent is ts_parenthesized then parent.restriction_statement_position else parent is ts_expression_statement
 in ts_parenthesized, ts_sequence, ts_update let restriction_for_update if parent is (ts_parenthesized, ts_sequence) then parent.restriction_for_update else is ts_for.update
 in ts_unary let no_void_checked true
-in ts_unary rule no-void {
+in ts_unary rule es-no-void {
   when operator == "void" && no_void_checked
   warn "Expected 'undefined' and instead saw 'void'."
 }
 in ts_update let no_plusplus_checked true
-in ts_update rule no-plusplus {
+in ts_update rule es-no-plusplus {
   when no_plusplus_checked
   warn "Unary operator '{operator}' used."
 }
 in ts_binary, ts_assignment let restriction_bitwise_zero_or operator == "|" && right.literal_value.value == "0"
 in ts_binary, ts_assignment, ts_unary let no_bitwise_checked true
-in ts_binary, ts_assignment rule no-bitwise:binary {
+in ts_binary, ts_assignment rule es-no-bitwise:binary {
   when contains(["^", "|", "&", "<<", ">>", ">>>", "^=", "|=", "&=", "<<=", ">>=", ">>>=", "~"], operator)
   when no_bitwise_checked
   warn "Unexpected use of '{operator}'."
 }
-in ts_unary rule no-bitwise:unary {
+in ts_unary rule es-no-bitwise:unary {
   when operator == "~" && no_bitwise_checked
   warn "Unexpected use of '{operator}'."
 }
-in ts_identifier rule no-undefined {
+in ts_identifier rule es-no-undefined {
   when text == "undefined" && (declaration_kind != null || resolved == "local" || global == "readonly" || global == "writable")
   warn "Unexpected use of undefined."
 }
@@ -432,7 +432,7 @@ in ts_parenthesized {
   let restriction_called_name expression.restriction_called_name
 }
 in ts_member, ts_index let restriction_called_name if object.restriction_window_object == true then static_name else null
-in ts_call rule no-alert {
+in ts_call rule es-no-alert {
   let name callee.restriction_called_name
   when contains(["alert", "confirm", "prompt"], name)
   warn "Unexpected {name}."
@@ -442,16 +442,16 @@ in ts_labeled let restriction_label_entry {name: label, target: restriction_targ
 in ts_statement, ts_case let restriction_label_targets (parent.restriction_label_targets.nonempty ?? []) (if is ts_labeled then [restriction_label_entry] else [])
 in ts_break, ts_continue let restriction_target (find_last(restriction_label_targets, target => target.name == label)).target
 in ts_labeled, ts_break, ts_continue let no_labels_checked true
-in ts_labeled rule no-labels {
+in ts_labeled rule es-no-labels {
   when no_labels_checked
   warn "Unexpected labeled statement."
 }
-in ts_break rule no-labels:break {
+in ts_break rule es-no-labels:break {
   when label != null
   when no_labels_checked
   warn "Unexpected label in break statement."
 }
-in ts_continue rule no-labels:continue {
+in ts_continue rule es-no-labels:continue {
   when label != null
   when no_labels_checked
   warn "Unexpected label in continue statement."
@@ -501,7 +501,7 @@ in ts_parameter {
   let restriction_void_this_parameter name == "this" && type == "void"
   let max_params_counted !restriction_void_this_parameter || node != first(parent.parameter.nodes)
 }
-in restriction_parameter_function rule max-params {
+in restriction_parameter_function rule es-max-params {
   option max int(0..) = 3 "maximum parameters"
   let amount { value parameter.nodes; filter (p) p.max_params_counted.nonempty ?? true; count }
   when amount > max
@@ -518,7 +518,7 @@ in ts_function_like {
   }
   let max_statements_checked true
 }
-in ts_function_like rule max-statements {
+in ts_function_like rule es-max-statements {
   option max int(0..) = 10 "maximum statements"
   option ignoreTopLevelFunctions boolean = false "skip top-level functions unless the file has only one"
   when restriction_subtree_statements > max
@@ -527,7 +527,7 @@ in ts_function_like rule max-statements {
   report at restriction_function_head(node)
   warn "{@restriction_function_name} has too many statements ({restriction_subtree_statements}). Maximum allowed is {max}."
 }
-in ts_function_like rule complexity {
+in ts_function_like rule es-complexity {
   option max int(0..) = 20 "maximum cyclomatic complexity"
   option variant "classic" | "modified" = "classic" "how switches contribute"
   let amount 1 + (if variant == "classic" then restriction_subtree_classic else restriction_subtree_modified)
@@ -535,7 +535,7 @@ in ts_function_like rule complexity {
   report at restriction_function_head(node)
   warn "{@restriction_function_name} has a complexity of {amount}. Maximum allowed is {max}."
 }
-in ts_static_block, ts_class_property.init rule complexity:implicit {
+in ts_static_block, ts_class_property.init rule es-complexity:implicit {
   option max int(0..) = 20 "maximum cyclomatic complexity"
   option variant "classic" | "modified" = "classic" "how switches contribute"
   let amount if is (ts_function, ts_arrow) then 1 else 1 + (if variant == "classic" then restriction_subtree_classic else restriction_subtree_modified)
@@ -545,21 +545,21 @@ in ts_static_block, ts_class_property.init rule complexity:implicit {
 }
 group restriction_depth_control ts_if, ts_switch, ts_try, ts_do_while, ts_while, ts_with, ts_for, ts_for_in, ts_for_of
 in ts_statement, ts_arrow, ts_method, ts_static_block, ts_case let restriction_nesting if is (ts_function_like, ts_static_block) then 0 else (parent.restriction_nesting.nonempty ?? 0) + (if is restriction_depth_control && !(is ts_if && is ts_if.alternate) then 1 else 0)
-in restriction_depth_control rule max-depth {
+in restriction_depth_control rule es-max-depth {
   option max int(0..) = 4 "maximum control-flow nesting"
   when !(is ts_if && is ts_if.alternate)
   when restriction_nesting > max
   report at { start: first_token.start, end: first_token.end }
   warn "Blocks are nested too deeply ({restriction_nesting}). Maximum allowed is {max}."
 }
-in ts_function, ts_arrow rule max-nested-callbacks {
+in ts_function, ts_arrow rule es-max-nested-callbacks {
   option max int(0..) = 10 "maximum callback nesting"
   let amount restriction_callbacks
   when max_nested_callbacks_counted && amount > max
   report at function_warning_site(node)
   warn "Too many nested callbacks ({amount}). Maximum allowed is {max}."
 }
-in ts_program rule max-classes-per-file {
+in ts_program rule es-max-classes-per-file {
   option max int(1..) = 1 "maximum classes"
   option ignoreExpressions boolean = false "count only class declarations"
   let amount if ignoreExpressions then restriction_declared_classes else restriction_classes
@@ -607,7 +607,7 @@ fn restriction_function_head(n) = when {
   n is ts_arrow then n.operator.node
   else then { start: n.offset, end: restriction_open_paren(n) }
 }
-in ts_program rule max-lines {
+in ts_program rule es-max-lines {
   option max int(0..) = 300 "maximum lines"
   option skipComments boolean = false "exclude comment-only lines"
   option skipBlankLines boolean = false "exclude blank lines"
@@ -619,7 +619,7 @@ in ts_program rule max-lines {
   warn "File has too many lines ({amount}). Maximum allowed is {max}."
 }
 in ts_function_like let max_lines_per_function_checked !restriction_iife
-in ts_function_like rule max-lines-per-function {
+in ts_function_like rule es-max-lines-per-function {
   option max int(0..) = 50 "maximum function lines"
   option skipComments boolean = false "exclude comment-only lines"
   option skipBlankLines boolean = false "exclude blank lines"
@@ -660,7 +660,7 @@ in ts_identifier, ts_private_name {
   let restriction_name_property is ts_node.key && (if restriction_name_pattern then !restriction_name_alias || restriction_name_same else parent is ts_property) || restriction_name_assignment
   let restriction_name_length if parent is (ts_declarator, ts_parameter) then is (ts_declarator.name, ts_parameter.name) else if parent is ts_assignment_pattern then is ts_assignment_pattern.left else if restriction_name_pattern then (if is ts_node.key then !restriction_name_alias || restriction_name_same else !restriction_name_same) else if parent is ts_property then is ts_property.key else if parent is ts_import_specifier then is ts_import_specifier.local && (parent.imported.static_name.nonempty ?? parent.imported) != restriction_identifier_name else if parent is ts_import then is (ts_import.default_import, ts_import.namespace) else if parent is (ts_function, ts_arrow, ts_method, ts_class_property, ts_rest, ts_array_pattern) then true else if parent is ts_class then parent.restriction_name_declaration else if parent is ts_try then is ts_try.parameter else if parent is ts_member then restriction_name_assignment else false
 }
-in ts_identifier, ts_private_name rule id-denylist {
+in ts_identifier, ts_private_name rule es-id-denylist {
   option names string[] = [] "restricted identifiers"
   when len(names) > 0 && contains(names, restriction_identifier_name)
   when (!restriction_name_external || is ts_property.key && !restriction_name_pattern) && !restriction_name_attributes && !restriction_name_renamed && !restriction_name_alias
@@ -668,7 +668,7 @@ in ts_identifier, ts_private_name rule id-denylist {
   warn "Identifier '{text}' is restricted."
 }
 in ts_identifier, ts_private_name let id_length_checked true
-in ts_identifier, ts_private_name rule id-length {
+in ts_identifier, ts_private_name rule es-id-length {
   option min int = 2 "minimum identifier length"
   option max int | null = null "maximum identifier length"
   option exceptions string[] = [] "names exempt from length limits"
@@ -693,7 +693,7 @@ in ts_identifier, ts_private_name {
     else if parent is (ts_function, ts_declarator) then "declaration" else "reference"
   let id_match_checked contains(["always", "destructuring", "import", "declaration", "reference"], restriction_name_match_context)
 }
-in ts_identifier, ts_private_name rule id-match {
+in ts_identifier, ts_private_name rule es-id-match {
   option mode regex = "^.+$" "required identifier pattern"
   when !restriction_name_attributes && id_match_checked && !restriction_name_external
   when !re_test(restriction_identifier_name, mode)
@@ -708,7 +708,7 @@ fn restriction_global_entry(g) = if type_of(g) == "str" then {name: g, message: 
   option globalObjects string[] = [] "additional global-object names"
   when len(globals) > 0
 }
-in ts_identifier rule no-restricted-globals {
+in ts_identifier rule es-no-restricted-globals {
   @restriction_global_options
   let matched find_last(globals, g => restriction_global_entry(g).name == text)
   when resolved == "global" && access != "type" && matched != null
@@ -720,7 +720,7 @@ in ts_parenthesized let restriction_global_root expression.restriction_global_ro
 in ts_member, ts_index let restriction_global_root if static_name == object.restriction_global_root then object.restriction_global_root else null
 in ts_member let restriction_global_property_report property.node
 in ts_index let restriction_global_property_report index.offset
-in ts_member, ts_index rule no-restricted-globals:member {
+in ts_member, ts_index rule es-no-restricted-globals:member {
   @restriction_global_options
   let root object.restriction_global_root
   let name static_name
@@ -756,12 +756,12 @@ in ts_object_pattern, ts_object {
   when type_of(property_name) == "str" && matched != null
   warn (if matched.object != null then "'{object_name}.{property_name}' is restricted from being used." (if matched.allowProperties != null then " Only these properties are allowed: {join(matched.allowProperties, ', ')}." else "") else "'{property_name}' is restricted from being used." (if matched.allowObjects != null then " Property '{property_name}' is only allowed on these objects: {join(matched.allowObjects, ', ')}." else "")) (if matched.message != null && matched.message != "" then " " matched.message else "")
 }
-in ts_member, ts_index rule no-restricted-properties {
+in ts_member, ts_index rule es-no-restricted-properties {
   let object_name object.restriction_object_name
   let property_name static_name
   @restriction_property_body
 }
-in ts_pattern_property, ts_property rule no-restricted-properties:patterns {
+in ts_pattern_property, ts_property rule es-no-restricted-properties:patterns {
   let object_name parent.restriction_property_object
   let property_name static_name
   when parent is (ts_object_pattern, ts_object) && parent.restriction_property_pattern
@@ -779,12 +779,12 @@ in ts_identifier, ts_string let restriction_export_form if is ts_export.namespac
 in ts_export, ts_export_specifier, ts_identifier, ts_string let no_restricted_default_export_checked false
 in ts_variable_declaration let restriction_exported_declaration parent is ts_export && parent.kind != "default"
 in ts_declarator let restriction_exported_declaration parent.restriction_exported_declaration == true
-in ts_export rule no-restricted-exports:direct {
+in ts_export rule es-no-restricted-exports:direct {
   @restriction_export_options
   when kind == "default" && no_restricted_default_export_checked
   warn "Exporting 'default' is restricted."
 }
-in ts_identifier rule no-restricted-exports:declarations {
+in ts_identifier rule es-no-restricted-exports:declarations {
   @restriction_export_options
   when len(restrictedNamedExports) > 0 || restrictedNamedExportsPattern != ""
   let export_name text
@@ -792,7 +792,7 @@ in ts_identifier rule no-restricted-exports:declarations {
   when restriction_export_forbidden(export_name, restrictedNamedExports, restrictedNamedExportsPattern)
   warn "'{export_name}' is restricted from being used as an exported name."
 }
-in ts_export_specifier rule no-restricted-exports:names {
+in ts_export_specifier rule es-no-restricted-exports:names {
   @restriction_export_options
   let export_name if exported == null then (if local is ts_string then local.static_name else local) else (if exported is ts_string then exported.static_name else exported)
   let restricted_name restriction_export_forbidden(export_name, restrictedNamedExports, restrictedNamedExportsPattern)
@@ -800,7 +800,7 @@ in ts_export_specifier rule no-restricted-exports:names {
   report at exported.node ?? local.node
   warn if restricted_name then "'{export_name}' is restricted from being used as an exported name." else "Exporting 'default' is restricted."
 }
-in ts_export.namespace rule no-restricted-exports:namespace {
+in ts_export.namespace rule es-no-restricted-exports:namespace {
   @restriction_export_options
   let export_name if is ts_string then static_name else text
   let restricted_name restriction_export_forbidden(export_name, restrictedNamedExports, restrictedNamedExportsPattern)

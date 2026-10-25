@@ -1,2 +1,2 @@
 input.ts:2:25-2:32 alias-root#0 MyArray/ts_type_alias/project
-input.ts:3:17-3:32 prefer-readonly-parameter-types#0
+input.ts:3:17-3:32 es-prefer-readonly-parameter-types#0

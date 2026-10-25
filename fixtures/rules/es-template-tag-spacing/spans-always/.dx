@@ -1,0 +1,2 @@
+import .ts
+rule es-template-tag-spacing { set style "always" }

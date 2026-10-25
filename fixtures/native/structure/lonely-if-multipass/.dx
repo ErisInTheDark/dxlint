@@ -1,2 +1,2 @@
 import .ts
-rule no-lonely-if
+rule es-no-lonely-if

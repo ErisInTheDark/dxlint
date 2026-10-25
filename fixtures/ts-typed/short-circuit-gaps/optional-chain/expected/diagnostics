@@ -1,3 +1,3 @@
-optional-local-typeof.ts:1:70-1:131 prefer-optional-chain#0
-optional-required-object.ts:1:55-1:67 prefer-optional-chain#0
-optional-undefined-object.ts:1:67-1:79 prefer-optional-chain#0
+optional-local-typeof.ts:1:70-1:131 es-prefer-optional-chain#0
+optional-required-object.ts:1:55-1:67 es-prefer-optional-chain#0
+optional-undefined-object.ts:1:67-1:79 es-prefer-optional-chain#0

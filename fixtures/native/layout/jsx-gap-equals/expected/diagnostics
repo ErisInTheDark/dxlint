@@ -1,4 +1,4 @@
-input.tsx:1:15-1:16 jsx-equals-spacing:before#1
-input.tsx:1:17-1:18 jsx-equals-spacing:after#1
-input.tsx:1:26-1:27 jsx-equals-spacing:before#1
-input.tsx:1:28-1:29 jsx-equals-spacing:after#1
+input.tsx:1:15-1:16 es-jsx-equals-spacing:before#1
+input.tsx:1:17-1:18 es-jsx-equals-spacing:after#1
+input.tsx:1:26-1:27 es-jsx-equals-spacing:before#1
+input.tsx:1:28-1:29 es-jsx-equals-spacing:after#1

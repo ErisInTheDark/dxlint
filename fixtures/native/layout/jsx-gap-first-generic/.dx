@@ -1,2 +1,2 @@
 import .ts
-rule jsx-first-prop-new-line { set mode "never" }
+rule es-jsx-first-prop-new-line { set mode "never" }

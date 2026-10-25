@@ -1,3 +1,3 @@
-input.ts:1:11-1:12 consistent-type-definitions:interface#0
-input.ts:2:11-2:12 consistent-type-definitions:interface#0
-input.ts:3:11-3:12 consistent-type-definitions:interface#0
+input.ts:1:11-1:12 es-consistent-type-definitions:interface#0
+input.ts:2:11-2:12 es-consistent-type-definitions:interface#0
+input.ts:3:11-3:12 es-consistent-type-definitions:interface#0

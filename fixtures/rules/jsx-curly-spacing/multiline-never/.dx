@@ -1,2 +1,0 @@
-import .ts
-rule jsx-curly-spacing:* { set options [{ when: "never", allowMultiline: false }] }

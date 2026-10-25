@@ -1,8 +1,8 @@
-main.ts:11:16-11:19 no-duplicate-type-constituents#0
-main.ts:14:24-14:30 no-duplicate-type-constituents#0
-main.ts:17:26-17:39 no-duplicate-type-constituents#0
-main.ts:20:37-20:61 no-duplicate-type-constituents#0
-main.ts:23:24-23:35 no-duplicate-type-constituents#0
-main.ts:2:14-2:15 no-duplicate-type-constituents#0
-main.ts:5:17-5:21 no-duplicate-type-constituents#0
-main.ts:8:17-8:21 no-duplicate-type-constituents#0
+main.ts:11:16-11:19 es-no-duplicate-type-constituents#0
+main.ts:14:24-14:30 es-no-duplicate-type-constituents#0
+main.ts:17:26-17:39 es-no-duplicate-type-constituents#0
+main.ts:20:37-20:61 es-no-duplicate-type-constituents#0
+main.ts:23:24-23:35 es-no-duplicate-type-constituents#0
+main.ts:2:14-2:15 es-no-duplicate-type-constituents#0
+main.ts:5:17-5:21 es-no-duplicate-type-constituents#0
+main.ts:8:17-8:21 es-no-duplicate-type-constituents#0

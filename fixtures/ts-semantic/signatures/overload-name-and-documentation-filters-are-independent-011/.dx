@@ -1,5 +1,5 @@
 import .ts
-rule unified-signatures {
+rule es-unified-signatures {
 set ignoreDifferentlyNamedParameters true
 set ignoreOverloadsWithDifferentJSDoc false
 }

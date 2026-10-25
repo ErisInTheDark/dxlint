@@ -1,2 +1,2 @@
-input.md:1:7-1:9 no-trailing-spaces#0
-input.md:3:5-3:7 no-trailing-spaces#0
+input.md:1:7-1:9 shared-no-trailing-spaces#0
+input.md:3:5-3:7 shared-no-trailing-spaces#0

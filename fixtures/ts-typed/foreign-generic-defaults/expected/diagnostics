@@ -1,4 +1,4 @@
-input.ts:2:9-2:15 no-unnecessary-type-arguments#0
-input.ts:3:6-3:12 no-unnecessary-type-arguments#0
-input.ts:4:16-4:22 no-unnecessary-type-arguments#0
-input.ts:5:16-5:22 no-unnecessary-type-arguments#0
+input.ts:2:9-2:15 es-no-unnecessary-type-arguments#0
+input.ts:3:6-3:12 es-no-unnecessary-type-arguments#0
+input.ts:4:16-4:22 es-no-unnecessary-type-arguments#0
+input.ts:5:16-5:22 es-no-unnecessary-type-arguments#0

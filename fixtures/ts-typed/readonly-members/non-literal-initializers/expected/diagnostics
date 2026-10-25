@@ -1,4 +1,4 @@
-main.ts:11:3-11:15 prefer-readonly#0
-main.ts:24:3-24:15 prefer-readonly#0
-main.ts:35:3-35:15 prefer-readonly#0
-main.ts:4:3-4:15 prefer-readonly#0
+main.ts:11:3-11:15 es-prefer-readonly#0
+main.ts:24:3-24:15 es-prefer-readonly#0
+main.ts:35:3-35:15 es-prefer-readonly#0
+main.ts:4:3-4:15 es-prefer-readonly#0

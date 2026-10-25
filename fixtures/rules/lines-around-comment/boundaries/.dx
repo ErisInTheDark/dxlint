@@ -1,8 +1,0 @@
-import .ts
-rule lines-around-comment:* {
-  set afterBlockComment true
-  set allowBlockStart true
-  set allowBlockEnd true
-  set allowClassStart false
-  set allowClassEnd false
-}

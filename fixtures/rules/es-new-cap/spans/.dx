@@ -1,0 +1,3 @@
+import .ts
+rule es-new-cap
+rule es-new-cap:constructor

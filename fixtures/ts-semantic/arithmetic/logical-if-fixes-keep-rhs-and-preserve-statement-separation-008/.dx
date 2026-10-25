@@ -1,2 +1,2 @@
 import .ts
-rule logical-assignment-operators { set enforceForIfStatements true }
+rule es-logical-assignment-operators { set enforceForIfStatements true }

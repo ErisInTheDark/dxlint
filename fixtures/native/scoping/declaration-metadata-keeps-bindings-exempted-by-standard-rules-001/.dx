@@ -7,4 +7,4 @@ in ts_variable_declaration rule probe {
   report at d.offset
   warn "binding"
 }
-rule no-implicit-globals { set lexicalBindings true }
+rule es-no-implicit-globals { set lexicalBindings true }

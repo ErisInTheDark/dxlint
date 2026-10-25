@@ -1,4 +1,4 @@
 import .ts
-rule no-unnecessary-condition { set allowRuleToRunWithoutStrictNullChecksIKnowWhatIAmDoing true }
+rule es-no-unnecessary-condition { set allowRuleToRunWithoutStrictNullChecksIKnowWhatIAmDoing true }
 override in ts_call let no_unnecessary_condition_truthiness_assertion_checked false
 override in ts_call let no_unnecessary_condition_predicate_checked false

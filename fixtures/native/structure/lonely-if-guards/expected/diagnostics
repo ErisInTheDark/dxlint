@@ -1,6 +1,6 @@
-a.js:10:18-10:32 no-lonely-if#0
-a.js:1:29-1:38 no-lonely-if#0
-a.js:2:18-2:27 no-lonely-if#0
-a.js:3:18-3:31 no-lonely-if#0
-a.js:4:18-4:31 no-lonely-if#0
-a.js:7:18-7:31 no-lonely-if#0
+a.js:10:18-10:32 es-no-lonely-if#0
+a.js:1:29-1:38 es-no-lonely-if#0
+a.js:2:18-2:27 es-no-lonely-if#0
+a.js:3:18-3:31 es-no-lonely-if#0
+a.js:4:18-4:31 es-no-lonely-if#0
+a.js:7:18-7:31 es-no-lonely-if#0

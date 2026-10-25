@@ -1,0 +1,2 @@
+import .ts
+rule es-consistent-type-imports { set prefer "no-type-imports" }

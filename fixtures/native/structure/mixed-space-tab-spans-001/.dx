@@ -1,2 +1,2 @@
 import .ts
-rule no-mixed-spaces-and-tabs
+rule es-no-mixed-spaces-and-tabs

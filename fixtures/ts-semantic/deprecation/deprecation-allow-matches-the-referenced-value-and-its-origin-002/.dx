@@ -1,2 +1,2 @@
 import .ts
-rule no-deprecated { set allow ['old'] }
+rule es-no-deprecated { set allow ['old'] }

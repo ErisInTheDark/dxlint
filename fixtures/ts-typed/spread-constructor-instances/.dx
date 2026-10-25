@@ -1,2 +1,2 @@
 import .ts
-rule no-misused-spread
+rule es-no-misused-spread

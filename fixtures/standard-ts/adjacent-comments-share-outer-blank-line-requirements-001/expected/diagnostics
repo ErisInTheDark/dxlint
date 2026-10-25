@@ -1,2 +1,2 @@
-a.ts:2:1-2:12 lines-around-comment:before#0
-a.ts:2:13-3:14 lines-around-comment:after#1
+a.ts:2:1-2:12 es-lines-around-comment:before#0
+a.ts:2:13-3:14 es-lines-around-comment:after#1

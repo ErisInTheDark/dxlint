@@ -1,0 +1,5 @@
+import .ts
+rule es-indent {
+set mode 2
+indent in ts_jsx_opening by 3
+}

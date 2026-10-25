@@ -1,1 +1,1 @@
-input.ts:1:9-1:13 no-useless-rename:destructuring#0
+input.ts:1:9-1:13 es-no-useless-rename:destructuring#0

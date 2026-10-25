@@ -1,5 +1,5 @@
 import .ts
-rule spaced-comment {
+rule es-spaced-comment {
   set markers ["!", "λ"]
   set exceptions ["="]
   set balanced true

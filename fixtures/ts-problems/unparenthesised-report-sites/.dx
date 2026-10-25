@@ -1,6 +1,6 @@
 import .ts
-rule no-cond-assign
-rule valid-typeof
-rule no-non-null-asserted-optional-chain
-rule no-extraneous-class
-rule no-dynamic-delete
+rule es-no-cond-assign
+rule es-valid-typeof
+rule es-no-non-null-asserted-optional-chain
+rule es-no-extraneous-class
+rule es-no-dynamic-delete

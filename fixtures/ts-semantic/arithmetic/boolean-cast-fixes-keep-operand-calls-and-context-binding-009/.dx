@@ -1,2 +1,2 @@
 import .ts
-rule no-extra-boolean-cast
+rule es-no-extra-boolean-cast

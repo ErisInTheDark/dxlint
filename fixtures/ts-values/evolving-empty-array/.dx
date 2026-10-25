@@ -1,5 +1,5 @@
 import .ts
-rule no-for-in-array
+rule es-no-for-in-array
 
 in ts_declarator rule evolving-element {
   when contains(["element", "mutableElement", "indexedElement", "copiedElement"], name.text)

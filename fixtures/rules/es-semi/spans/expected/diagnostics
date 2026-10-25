@@ -1,0 +1,3 @@
+a.ts:1:12-2:1 es-semi#1
+a.ts:3:11-3:12 es-semi#1
+b.ts:1:12-2:1 es-semi#1

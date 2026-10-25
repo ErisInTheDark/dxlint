@@ -1,2 +1,2 @@
 import .ts
-rule yoda { set exceptRange true }
+rule es-yoda { set exceptRange true }

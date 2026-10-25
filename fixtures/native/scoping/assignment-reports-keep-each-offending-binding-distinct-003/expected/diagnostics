@@ -1,2 +1,2 @@
-a.js:1:49-1:56 no-implicit-globals:readonly#0
-a.js:1:49-1:71 no-implicit-globals:readonly#0
+a.js:1:49-1:56 es-no-implicit-globals:readonly#0
+a.js:1:49-1:71 es-no-implicit-globals:readonly#0

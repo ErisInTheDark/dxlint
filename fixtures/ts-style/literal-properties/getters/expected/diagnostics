@@ -1,4 +1,4 @@
-file.ts:3:12-3:17 class-literal-property-style:getters#0
-file.ts:4:13-4:21 class-literal-property-style:getters#0
-file.ts:5:20-5:28 class-literal-property-style:getters#0
-file.ts:6:19-6:24 class-literal-property-style:getters#0
+file.ts:3:12-3:17 es-class-literal-property-style:getters#0
+file.ts:4:13-4:21 es-class-literal-property-style:getters#0
+file.ts:5:20-5:28 es-class-literal-property-style:getters#0
+file.ts:6:19-6:24 es-class-literal-property-style:getters#0

@@ -1,5 +1,5 @@
-input.ts:12:1-12:8 no-floating-promises#0
-input.ts:13:1-13:7 no-floating-promises#0
-input.ts:14:1-14:12 no-floating-promises:array#0
-input.ts:15:1-15:28 no-floating-promises#0
-input.ts:16:1-16:19 no-floating-promises#0
+input.ts:12:1-12:8 es-no-floating-promises#0
+input.ts:13:1-13:7 es-no-floating-promises#0
+input.ts:14:1-14:12 es-no-floating-promises:array#0
+input.ts:15:1-15:28 es-no-floating-promises#0
+input.ts:16:1-16:19 es-no-floating-promises#0

@@ -1,3 +1,3 @@
-input.ts:5:14-5:46 consistent-indexed-object-style:record#0
-input.ts:6:15-6:55 consistent-indexed-object-style:record#0
-input.ts:7:56-7:78 consistent-indexed-object-style:record#0
+input.ts:5:14-5:46 es-consistent-indexed-object-style:record#0
+input.ts:6:15-6:55 es-consistent-indexed-object-style:record#0
+input.ts:7:56-7:78 es-consistent-indexed-object-style:record#0

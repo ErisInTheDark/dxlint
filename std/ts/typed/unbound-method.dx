@@ -124,7 +124,7 @@ fn unbound_warning(danger) = {
   join ""
 }
 
-in ts_member, ts_index, ts_pattern_property.key, ts_property.key, ts_computed_key.expression rule unbound-method {
+in ts_member, ts_index, ts_pattern_property.key, ts_property.key, ts_computed_key.expression rule es-unbound-method {
   option ignoreStatic boolean = false "Allow extracting static methods"
   let pattern_property if is ts_pattern_property.key then parent.node
     else if is ts_property.key && parent.parent is ts_assignment.left then parent.node

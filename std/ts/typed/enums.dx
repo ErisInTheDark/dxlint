@@ -38,7 +38,7 @@ fn enum_comparison_unsafe(left, right) = {
       || any(right, part => part.enum != null && part.primitive != null && enum_comparison_kind(left, part.primitive))
     )
 }
-in ts_binary, ts_case rule no-unsafe-enum-comparison {
+in ts_binary, ts_case rule es-no-unsafe-enum-comparison {
   when (node is ts_binary && contains(["<", ">", "<=", ">=", "==", "===", "!=", "!=="], node.operator))
     || (node is ts_case && node.test != null)
   let enum_comparison_left enum_comparison_parts(if node is ts_case then parent.discriminant.node else node.left.node)

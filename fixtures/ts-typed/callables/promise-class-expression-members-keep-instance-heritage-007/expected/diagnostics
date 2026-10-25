@@ -1,1 +1,1 @@
-main.ts:1:88-1:105 no-misused-promises:void-inherited-methods#0
+main.ts:1:88-1:105 es-no-misused-promises:void-inherited-methods#0

@@ -1,6 +1,6 @@
-input.ts:1:10-1:27 no-useless-rename:import#0
-input.ts:2:10-2:27 no-useless-rename:export#0
-input.ts:3:26-3:45 no-useless-rename:destructuring#0
-input.ts:3:9-3:24 no-useless-rename:destructuring#0
-input.ts:4:4-4:14 no-useless-rename:destructuring#0
-input.ts:5:4-5:10 no-useless-rename:destructuring#0
+input.ts:1:10-1:27 es-no-useless-rename:import#0
+input.ts:2:10-2:27 es-no-useless-rename:export#0
+input.ts:3:26-3:45 es-no-useless-rename:destructuring#0
+input.ts:3:9-3:24 es-no-useless-rename:destructuring#0
+input.ts:4:4-4:14 es-no-useless-rename:destructuring#0
+input.ts:5:4-5:10 es-no-useless-rename:destructuring#0

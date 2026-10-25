@@ -1,5 +1,0 @@
-import .ts
-
-        rule naming-convention:variable { set formats ["UPPER_CASE"] }
-        rule naming-convention:class { set formats ["camelCase"] }
-        override in ts_identifier let naming_convention_checked !exported

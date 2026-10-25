@@ -1,2 +1,2 @@
 import .ts
-rule jsx-shorthand-boolean
+rule es-jsx-shorthand-boolean

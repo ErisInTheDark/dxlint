@@ -1,4 +1,4 @@
-file.ts:1:27-1:38 member-ordering:class-declaration#1
+file.ts:1:27-1:38 es-member-ordering:class-declaration#1
 file.ts:1:27-1:38 rank-label-probe#0 last
-file.ts:1:39-1:49 member-ordering:class-declaration#1
+file.ts:1:39-1:49 es-member-ordering:class-declaration#1
 file.ts:1:39-1:49 rank-label-probe#0 last

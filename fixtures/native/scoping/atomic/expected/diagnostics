@@ -1,2 +1,2 @@
-compound.mjs:1:33-1:54 require-atomic-updates#1
-property.mjs:1:56-1:73 require-atomic-updates#0
+compound.mjs:1:33-1:54 es-require-atomic-updates#1
+property.mjs:1:56-1:73 es-require-atomic-updates#0

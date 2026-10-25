@@ -1,2 +1,2 @@
 import .ts
-rule unbound-method
+rule es-unbound-method

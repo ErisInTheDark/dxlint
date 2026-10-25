@@ -1,2 +1,2 @@
-a.js:1:18-1:19 implicit-arrow-linebreak#0
-a.js:2:18-2:19 implicit-arrow-linebreak#0
+a.js:1:18-1:19 es-implicit-arrow-linebreak#0
+a.js:2:18-2:19 es-implicit-arrow-linebreak#0

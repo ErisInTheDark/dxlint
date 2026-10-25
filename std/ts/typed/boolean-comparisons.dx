@@ -59,7 +59,7 @@ fn typed_boolean_fix(n, comparison, nullable) = {
   value text: expression_fix_edges(target, wrapped)
   value if !expression_fix_clean(target) then null else {start: target.offset, end: target.end_offset, text: text}
 }
-in ts_binary rule no-unnecessary-boolean-literal-compare {
+in ts_binary rule es-no-unnecessary-boolean-literal-compare {
   option allowComparingNullableBooleansToTrue boolean = true "Allow nullable boolean comparisons with true"
   option allowComparingNullableBooleansToFalse boolean = true "Allow nullable boolean comparisons with false"
   let comparison typed_boolean_comparison(node)
@@ -72,7 +72,7 @@ in ts_binary rule no-unnecessary-boolean-literal-compare {
   let replacement typed_boolean_fix(node, comparison, nullable)
   fix at replacement ?? node if replacement != null as replacement.text
 }
-in ts_program rule no-unnecessary-boolean-literal-compare:strict {
+in ts_program rule es-no-unnecessary-boolean-literal-compare:strict {
   option allowRuleToRunWithoutStrictNullChecksIKnowWhatIAmDoing boolean = false "Run without strict null checks"
   when ts_compiler_option(node, "strictNullChecks") == false && !allowRuleToRunWithoutStrictNullChecksIKnowWhatIAmDoing
   report at {start: 0, end: 0}

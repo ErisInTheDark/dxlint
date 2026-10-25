@@ -67,7 +67,7 @@ in ts_block, ts_static_block, ts_switch, ts_class {
   let layout_padding_single opener.ts_open_brace.line + layout_line_breaks(layout_padding_open_prefix) == closer.ts_close_brace.line - layout_line_breaks(layout_padding_close_suffix)
 }
 
-in ts_block, ts_static_block, ts_switch, ts_class rule padded-blocks:top {
+in ts_block, ts_static_block, ts_switch, ts_class rule es-padded-blocks:top {
   @layout_padding_options
   when opener.ts_open_brace.offset != null
   when layout_padding_content
@@ -84,7 +84,7 @@ in ts_block, ts_static_block, ts_switch, ts_class rule padded-blocks:top {
   fix at { start: padding_start, end: padding_start + (if padding_padded then byte_len(padding_space) else 0) } as if padding_padded then layout_padding_reduced(padding_space) else "\n"
 }
 
-in ts_block, ts_static_block, ts_switch, ts_class rule padded-blocks:bottom {
+in ts_block, ts_static_block, ts_switch, ts_class rule es-padded-blocks:bottom {
   @layout_padding_options
   when closer.ts_close_brace.offset != null
   when layout_padding_content
@@ -151,7 +151,7 @@ fn layout_member_gap_fix(source, start, end, padded) = {
     else if padded then { start: before, end: after, text: "\n" }
     else { start: insertion, end: insertion, text: "\n" }
 }
-in ts_class.member rule lines-between-class-members {
+in ts_class.member rule es-lines-between-class-members {
   option style "always" | "never" = "always" "blank lines between class members"
   option enforce { blankLine: "always" | "never"; prev: "method" | "field" | "*"; next: "method" | "field" | "*" }[] = [] "policy by neighbouring member kinds"
   option exceptAfterSingleLine boolean = false "skip after single-line members"
@@ -180,7 +180,7 @@ in ts_class.member rule lines-between-class-members {
   fix at (edit ?? { start: gap_start, end: gap_end }) if edit != null as edit.text
 }
 
-in ts_open_brace rule space-before-blocks {
+in ts_open_brace rule es-space-before-blocks {
   option style "always" | "never" = "always" "spaces before blocks"
   option functions "always" | "never" | "off" | null = null "function body policy"
   option keywords "always" | "never" | "off" | null = null "statement body policy"
@@ -202,7 +202,7 @@ in ts_open_brace rule space-before-blocks {
   warn if space_before.spaced then "Unexpected space before opening brace." else "Missing space before opening brace."
 }
 
-in ts_open_brace rule block-spacing:after {
+in ts_open_brace rule es-block-spacing:after {
   @layout_block_space_options
   when parent is (ts_block, ts_static_block, ts_switch, ts_enum)
   when space_after.comments || next_token not ts_close_brace
@@ -214,7 +214,7 @@ in ts_open_brace rule block-spacing:after {
   warn if style == "always" then "Requires a space after '{{'." else "Unexpected space(s) after '{{'."
 }
 
-in ts_close_brace rule block-spacing:before {
+in ts_close_brace rule es-block-spacing:before {
   @layout_block_space_options
   when parent is (ts_block, ts_static_block, ts_switch, ts_enum)
   when space_before.comments || previous_token not ts_open_brace
@@ -226,7 +226,7 @@ in ts_close_brace rule block-spacing:before {
   warn if style == "always" then "Requires a space before '}}'." else "Unexpected space(s) before '}}'."
 }
 
-in ts_colon rule switch-colon-spacing:before {
+in ts_colon rule es-switch-colon-spacing:before {
   @layout_switch_colon_options
   when parent is ts_case && previous_token != null
   when !space_before.line_break && before != space_before.spaced
@@ -234,7 +234,7 @@ in ts_colon rule switch-colon-spacing:before {
   warn if before then "Expected space(s) before this colon." else "Unexpected space(s) before this colon."
 }
 
-in ts_colon rule switch-colon-spacing:after {
+in ts_colon rule es-switch-colon-spacing:after {
   @layout_switch_colon_options
   when parent is ts_case && next_token != null && next_token not ts_close_brace
   when !space_after.line_break && after != space_after.spaced
@@ -248,28 +248,28 @@ in ts_colon rule switch-colon-spacing:after {
   when parent is (ts_block, ts_static_block, ts_switch, ts_class)
   when !(parent.layout_brace_excluded.nonempty ?? false)
 }
-in ts_open_brace rule brace-style:open {
+in ts_open_brace rule es-brace-style:open {
   @layout_brace_options
   when previous_token != null
   when if style == "allman" then !space_before.line_break && !(allowSingleLine && parent.layout_brace_single) else space_before.line_break
   fix at { start: if style == "allman" then offset else token_neighbours.before.end, end: offset } if style == "allman" || !space_before.comments as if style == "allman" then "\n" else " "
   warn if style == "allman" then "Opening curly brace appears on the same line as controlling statement." else "Opening curly brace does not appear on the same line as controlling statement."
 }
-in ts_open_brace rule brace-style:body {
+in ts_open_brace rule es-brace-style:body {
   @layout_brace_options
   when next_token not ts_close_brace
   when !space_after.line_break && !(allowSingleLine && parent.layout_brace_single)
   fix at { start: end_offset, end: end_offset } as "\n"
   warn "Statement inside of curly braces should be on next line."
 }
-in ts_close_brace rule brace-style:close {
+in ts_close_brace rule es-brace-style:close {
   @layout_brace_options
   when previous_token not ts_open_brace
   when !space_before.line_break && !(allowSingleLine && parent.layout_brace_single)
   fix at { start: offset, end: offset } as "\n"
   warn "Closing curly brace should be on the same line as opening curly brace or on the line after the previous block."
 }
-in ts_close_brace rule brace-style:keyword {
+in ts_close_brace rule es-brace-style:keyword {
   @layout_brace_options
   when parent.layout_brace_keyword.nonempty ?? false
   when contains(["else", "catch", "finally"], token(node, "after").text)

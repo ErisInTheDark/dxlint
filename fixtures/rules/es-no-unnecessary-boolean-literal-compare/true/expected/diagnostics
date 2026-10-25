@@ -1,0 +1,8 @@
+file.ts:10:6-10:16 es-no-unnecessary-boolean-literal-compare#1
+file.ts:11:14-11:24 es-no-unnecessary-boolean-literal-compare#1
+file.ts:2:5-2:15 es-no-unnecessary-boolean-literal-compare#1
+file.ts:3:1-3:11 es-no-unnecessary-boolean-literal-compare#1
+file.ts:4:1-4:11 es-no-unnecessary-boolean-literal-compare#0
+file.ts:5:3-5:13 es-no-unnecessary-boolean-literal-compare#0
+file.ts:7:14-7:24 es-no-unnecessary-boolean-literal-compare#1
+file.ts:8:24-8:34 es-no-unnecessary-boolean-literal-compare#1

@@ -1,2 +1,0 @@
-import .ts
-rule template-curly-spacing { set mode "always" }

@@ -1,2 +1,2 @@
 import .ts
-rule jsx-newline { set prevent true }
+rule es-jsx-newline { set prevent true }

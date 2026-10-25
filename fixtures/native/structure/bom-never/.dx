@@ -1,2 +1,2 @@
 import .ts
-rule unicode-bom
+rule es-unicode-bom

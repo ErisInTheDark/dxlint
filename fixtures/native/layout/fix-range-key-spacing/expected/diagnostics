@@ -1,3 +1,3 @@
-a.js:2:5-2:8 key-spacing:aligned-before#1
-a.js:2:8-2:12 key-spacing:aligned-after#0
-a.js:3:12-3:14 key-spacing:aligned-after#1
+a.js:2:5-2:8 es-key-spacing:aligned-before#1
+a.js:2:8-2:12 es-key-spacing:aligned-after#0
+a.js:3:12-3:14 es-key-spacing:aligned-after#1

@@ -1,3 +1,3 @@
 import .ts
 language .js { set sourceType 'commonjs' }
-rule no-undef
+rule es-no-undef

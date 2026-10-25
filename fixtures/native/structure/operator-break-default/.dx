@@ -1,2 +1,2 @@
 import .ts
-rule operator-linebreak { set overrides { "*": "ignore" } }
+rule es-operator-linebreak { set overrides { "*": "ignore" } }

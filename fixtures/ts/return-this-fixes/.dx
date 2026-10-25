@@ -1,2 +1,2 @@
 import .ts
-rule prefer-return-this-type
+rule es-prefer-return-this-type

@@ -1,2 +1,2 @@
 import .ts
-rule no-mixed-operators
+rule es-no-mixed-operators

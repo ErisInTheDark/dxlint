@@ -1,2 +1,2 @@
-optional.ts:1:51-1:65 prefer-optional-chain#0
-optional.ts:1:69-1:89 prefer-optional-chain#0
+optional.ts:1:51-1:65 es-prefer-optional-chain#0
+optional.ts:1:69-1:89 es-prefer-optional-chain#0

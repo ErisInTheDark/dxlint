@@ -1,4 +1,4 @@
 import .ts
-rule no-floating-promises
+rule es-no-floating-promises
 ignore "node_modules/**"
 ignore "tsconfig.json"

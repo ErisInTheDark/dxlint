@@ -1,8 +1,8 @@
-a.js:1:2-1:3 space-infix-ops#0
-a.js:2:3-2:4 space-infix-ops#0
-a.js:3:2-3:3 space-infix-ops#0
-a.js:4:2-4:4 space-infix-ops#0
-a.js:5:2-5:4 space-infix-ops#0
-a.js:6:2-6:3 space-infix-ops#0
-a.js:6:4-6:5 space-infix-ops#0
-a.js:7:2-7:3 space-infix-ops#0
+a.js:1:2-1:3 es-space-infix-ops#0
+a.js:2:3-2:4 es-space-infix-ops#0
+a.js:3:2-3:3 es-space-infix-ops#0
+a.js:4:2-4:4 es-space-infix-ops#0
+a.js:5:2-5:4 es-space-infix-ops#0
+a.js:6:2-6:3 es-space-infix-ops#0
+a.js:6:4-6:5 es-space-infix-ops#0
+a.js:7:2-7:3 es-space-infix-ops#0

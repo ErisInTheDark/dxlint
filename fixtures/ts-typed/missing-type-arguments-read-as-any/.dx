@@ -2,4 +2,4 @@ import .ts
 
 # A generic type named without its required arguments is an error type,
 # read as any: it is no thenable, so it may be tested.
-rule no-misused-promises
+rule es-no-misused-promises

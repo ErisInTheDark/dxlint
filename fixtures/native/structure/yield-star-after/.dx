@@ -1,2 +1,2 @@
 import .ts
-rule yield-star-spacing
+rule es-yield-star-spacing

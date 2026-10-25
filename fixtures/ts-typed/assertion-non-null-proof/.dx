@@ -1,5 +1,5 @@
 import .ts
 ignore "tsconfig.json"
 ignore "node_modules/typescript/lib/lib.fixture.d.ts"
-rule no-unnecessary-type-assertion
-rule non-nullable-type-assertion-style
+rule es-no-unnecessary-type-assertion
+rule es-non-nullable-type-assertion-style

@@ -1,3 +1,0 @@
-import .ts
-rule no-restricted-types { set types { Banned: true, "{}": true } }
-rule no-restricted-types warn "{restricted_name}"

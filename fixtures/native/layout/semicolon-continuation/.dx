@@ -1,5 +1,5 @@
 import .ts
-rule semi {
+rule es-semi {
   set mode "never"
   set beforeStatementContinuationChars "never"
 }

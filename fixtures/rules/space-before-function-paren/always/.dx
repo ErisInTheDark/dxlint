@@ -1,2 +1,0 @@
-import .ts
-rule space-before-function-paren

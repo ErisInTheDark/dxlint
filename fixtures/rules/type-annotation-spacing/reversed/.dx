@@ -1,2 +1,0 @@
-import .ts
-rule type-annotation-spacing:* { set before true; set after false }

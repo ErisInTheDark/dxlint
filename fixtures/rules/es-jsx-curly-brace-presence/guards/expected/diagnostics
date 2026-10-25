@@ -1,0 +1,4 @@
+file.tsx:1:25-1:43 es-jsx-curly-brace-presence#1
+file.tsx:1:44-1:60 es-jsx-curly-brace-presence#1
+file.tsx:2:28-3:8 es-jsx-curly-brace-presence#1
+file.tsx:4:26-4:44 es-jsx-curly-brace-presence#0

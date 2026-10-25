@@ -436,7 +436,7 @@ mod tests {
     #[test]
     fn import_takes_a_bare_path() {
         let mut errors = Vec::new();
-        let toks = lex(FileId(0), "import ../a/b-c.dx # x\nimport rules:recommended\nimport \"q\"\nrule no-unassigned-import {}", 0, &mut errors);
+        let toks = lex(FileId(0), "import ../a/b-c.dx # x\nimport rules:recommended\nimport \"q\"\nrule es-no-unassigned-import {}", 0, &mut errors);
         let paths: Vec<&str> = toks.iter().filter(|t| t.kind == Tk::Path).map(|t| &*t.text).collect();
         assert_eq!(paths, vec!["../a/b-c.dx", "rules:recommended"]);
         assert!(toks.iter().any(|t| t.kind == Tk::Str), "quoted paths stay strings");

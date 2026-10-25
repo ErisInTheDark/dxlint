@@ -1,2 +1,2 @@
 import .ts
-rule semi-spacing { set before true; set after false }
+rule es-semi-spacing { set before true; set after false }

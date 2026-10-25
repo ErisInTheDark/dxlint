@@ -1,2 +1,2 @@
-a.ts:1:260-1:266 use-unknown-in-catch-callback-variable#0
-a.ts:1:306-1:312 use-unknown-in-catch-callback-variable#0
+a.ts:1:260-1:266 es-use-unknown-in-catch-callback-variable#0
+a.ts:1:306-1:312 es-use-unknown-in-catch-callback-variable#0

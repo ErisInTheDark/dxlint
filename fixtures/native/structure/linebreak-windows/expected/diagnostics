@@ -1,5 +1,5 @@
-a.js:2:10-3:1 linebreak-style#1
-a.js:3:8-4:1 linebreak-style#1
-a.js:4:16-4:17 linebreak-style#1
-a.js:4:24-5:1 linebreak-style#1
-a.js:4:8-4:9 linebreak-style#1
+a.js:2:10-3:1 shared-linebreak-style#1
+a.js:3:8-4:1 shared-linebreak-style#1
+a.js:4:16-4:17 shared-linebreak-style#1
+a.js:4:24-5:1 shared-linebreak-style#1
+a.js:4:8-4:9 shared-linebreak-style#1

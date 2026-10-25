@@ -184,9 +184,9 @@ fn ordering_alpha_states(states, row, partition, rows, mode, optionality, enable
     }
   }
 }
-@ordering_rule(member-ordering:class-declaration, "class-declaration")
-@ordering_rule(member-ordering:class-expression, "class-expression")
-@ordering_rule(member-ordering:interface, "interface")
-@ordering_rule(member-ordering:type-literal, "type-literal")
+@ordering_rule(es-member-ordering:class-declaration, "class-declaration")
+@ordering_rule(es-member-ordering:class-expression, "class-expression")
+@ordering_rule(es-member-ordering:interface, "interface")
+@ordering_rule(es-member-ordering:type-literal, "type-literal")
 
 }

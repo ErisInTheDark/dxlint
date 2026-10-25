@@ -1,8 +1,8 @@
-a.ts:1:27-1:28 type-generic-spacing#0
-a.ts:1:29-1:30 type-generic-spacing:inner-open#0
-a.ts:1:31-1:32 type-generic-spacing:inner-close#0
-a.ts:2:19-2:30 type-generic-spacing:inner-open#0
-a.ts:2:31-2:43 type-generic-spacing:inner-close#0
-a.ts:2:44-2:45 type-generic-spacing:after#0
-a.ts:6:20-7:3 type-generic-spacing:inner-open#0
-a.ts:7:4-7:5 type-generic-spacing:inner-close#0
+a.ts:1:27-1:28 es-type-generic-spacing#0
+a.ts:1:29-1:30 es-type-generic-spacing:inner-open#0
+a.ts:1:31-1:32 es-type-generic-spacing:inner-close#0
+a.ts:2:19-2:30 es-type-generic-spacing:inner-open#0
+a.ts:2:31-2:43 es-type-generic-spacing:inner-close#0
+a.ts:2:44-2:45 es-type-generic-spacing:after#0
+a.ts:6:20-7:3 es-type-generic-spacing:inner-open#0
+a.ts:7:4-7:5 es-type-generic-spacing:inner-close#0

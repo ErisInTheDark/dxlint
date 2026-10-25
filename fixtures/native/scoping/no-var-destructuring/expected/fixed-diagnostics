@@ -1,6 +1,6 @@
-a.js:4:20-4:23 no-var#0
-a.js:5:19-5:22 no-var#0
-a.js:6:24-6:27 no-var#0
-a.js:6:40-6:43 no-var#0
-a.js:8:28-8:31 no-var#0
-a.js:9:40-9:43 no-var#0
+a.js:4:20-4:23 es-no-var#0
+a.js:5:19-5:22 es-no-var#0
+a.js:6:24-6:27 es-no-var#0
+a.js:6:40-6:43 es-no-var#0
+a.js:8:28-8:31 es-no-var#0
+a.js:9:40-9:43 es-no-var#0

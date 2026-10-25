@@ -1,1 +1,1 @@
-a.ts:1:15-2:9 no-unnecessary-type-assertion#2
+a.ts:1:15-2:9 es-no-unnecessary-type-assertion#2

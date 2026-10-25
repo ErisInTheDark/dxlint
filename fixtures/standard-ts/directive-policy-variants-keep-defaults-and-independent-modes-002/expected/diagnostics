@@ -1,2 +1,2 @@
-file.ts:1:1-1:15 ban-ts-comment:nocheck#0
-file.ts:2:1-2:13 ban-ts-comment:check#0
+file.ts:1:1-1:15 es-ban-ts-comment:nocheck#0
+file.ts:2:1-2:13 es-ban-ts-comment:check#0

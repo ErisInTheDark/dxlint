@@ -26,12 +26,12 @@ in ts_type_reference let restricted_type_shape count(type_argument) > 0
 in ts_type_keyword let restricted_type_shape contains(["bigint", "boolean", "never", "null", "number", "object", "string", "symbol", "undefined", "unknown", "void"], text)
 in ts_tuple_type let restricted_type_shape count(element) == 0
 in ts_type_literal let restricted_type_shape count(member) == 0
-in ts_type_reference, ts_type_keyword, ts_tuple_type, ts_type_literal rule no-restricted-types {
+in ts_type_reference, ts_type_keyword, ts_tuple_type, ts_type_literal rule es-no-restricted-types {
   when restricted_type_shape
   let restricted_name re_replace(text, /\s+/, "")
   @restricted_type_check
 }
-in ts_type_reference.name rule no-restricted-types:name {
+in ts_type_reference.name rule es-no-restricted-types:name {
   let restricted_name re_replace(text, /\s+/, "")
   @restricted_type_check
 }
@@ -74,7 +74,7 @@ fn array_notation_replacement(owner, notation) = {
     else if notation.named && notation.readonly && owner.parent is ts_array_type then "({replacement})"
     else replacement
 }
-in ts_type_reference, ts_array_type rule array-type:mutable {
+in ts_type_reference, ts_array_type rule es-array-type:mutable {
   default option mode ("array" | "array-simple" | "generic") = "array" "Mutable array notation."
   when array_type_notation != null && !array_type_notation.readonly
   when array_notation_forbidden(array_type_notation, mode)
@@ -82,7 +82,7 @@ in ts_type_reference, ts_array_type rule array-type:mutable {
   let replacement array_notation_replacement(node, array_type_notation)
   fix if replacement != null as replacement
 }
-in ts_type_reference, ts_type_operator rule array-type:readonly {
+in ts_type_reference, ts_type_operator rule es-array-type:readonly {
   default option mode ("array" | "array-simple" | "generic") = "array" "Readonly array notation."
   when array_type_notation != null && array_type_notation.readonly
   when array_notation_forbidden(array_type_notation, mode)
@@ -92,13 +92,13 @@ in ts_type_reference, ts_type_operator rule array-type:readonly {
 }
 
 # The global wrapper types (not local types of those names).
-in ts_type_reference rule no-wrapper-object-types {
+in ts_type_reference rule es-no-wrapper-object-types {
   when re_test(name, /^(String|Number|Boolean|Object|Symbol|BigInt)$/) && parent not ts_template_type && name.reference_kind == null
   warn "Prefer using the primitive `{lower(name)}` as a type name, rather than the upper-cased `{name}`."
   fix at name.node if !(is ts_class.implements || is ts_interface.extends) as lower(name)
 }
 
-in ts_non_null rule no-non-null-assertion {
+in ts_non_null rule es-no-non-null-assertion {
   warn "Forbidden non-null assertion."
 }
 in ts_declarator let initialised_declaration_end if init != null || {
@@ -114,12 +114,12 @@ in ts_identifier let binding_assignment_history if declaration == null then null
 in ts_parenthesized forward binding_assignment_history from expression
 in ts_non_null, ts_parenthesized let nullish_left if parent is ts_parenthesized then parent.nullish_left else is ts_logical.left && parent.operator == "??"
 fn assigned_before(history, end) = history == null || history.initialised != null && history.initialised < end || any(history.writes, n => n != null && n < end)
-in ts_non_null rule no-non-null-asserted-nullish-coalescing {
+in ts_non_null rule es-no-non-null-asserted-nullish-coalescing {
   when nullish_left && assigned_before(expression.binding_assignment_history, end_offset)
   warn "The nullish coalescing operator is designed to handle undefined and null - using a non-null assertion is not needed."
 }
 
-in ts_type_parameter rule no-unnecessary-type-constraint {
+in ts_type_parameter rule es-no-unnecessary-type-constraint {
   when constraint == "any" || constraint == "unknown"
   warn "Constraining the generic type `{name}` to `{constraint}` does nothing and is unnecessary."
 }
@@ -139,7 +139,7 @@ in ts_type_keyword {
   let void_type_generic_name { value parent.name.nonempty ?? ""; re_replace /\s+/ "" }
   let no_invalid_void_type_checked !contains(["generic", "generic-other", "default"], void_type_context)
 }
-in ts_type_keyword rule no-invalid-void-type {
+in ts_type_keyword rule es-no-invalid-void-type {
   option allowAsThisParameter boolean = false "Whether a `this` parameter may be `void`."
   option allowInGenericTypeArguments boolean | string[] = true "Whether `void` may be a generic type argument: for every type, or only those listed."
   when text == "void" && void_type_context != "return"
@@ -163,7 +163,7 @@ fn rest_parameter_annotation(n) =
 in ts_array_type let rest_array_argument rest_parameter_annotation(node)
 in ts_type_reference let rest_array_argument contains(["Array", "ReadonlyArray"], name) && rest_parameter_annotation(node)
 in ts_type_keyword let no_explicit_any_checked true
-in ts_type_keyword rule no-explicit-any {
+in ts_type_keyword rule es-no-explicit-any {
   option fixToUnknown boolean = false "Replace explicit any with unknown automatically."
   option ignoreRestArgs boolean = false "Allow any in rest parameter arrays."
   when text == "any"
@@ -180,7 +180,7 @@ in ts_number let delete_numeric_key true
 in ts_parenthesized forward delete_literal_key, delete_numeric_key from expression
 in ts_unary let delete_literal_key operator == "-" && argument.delete_numeric_key == true
 in ts_index, ts_parenthesized let delete_operand if parent is ts_parenthesized then parent.delete_operand else parent is ts_unary && parent.operator == "delete"
-in ts_index rule no-dynamic-delete {
+in ts_index rule es-no-dynamic-delete {
   when delete_operand && index.delete_literal_key != true
   report at unparenthesised_node(index.node)
   warn "Do not delete dynamically computed property keys."
@@ -189,13 +189,13 @@ in ts_index rule no-dynamic-delete {
 in ts_namespace let namespace_is_declared contains([] modifier, "declare")
 in style_tree_node let namespace_declared namespace_is_declared == true || parent.namespace_declared == true
 in ts_namespace let no_namespace_checked !re_test(file, /\.d\.[cm]?ts$/)
-in ts_namespace rule no-namespace {
+in ts_namespace rule es-no-namespace {
   when kind != "global" && name != "global" && !re_test(name, /^["']/)
   when no_namespace_checked
   warn "ES2015 module syntax is preferred over namespaces."
 }
 
-in ts_enum_member rule prefer-enum-initializers {
+in ts_enum_member rule es-prefer-enum-initializers {
   when init == null
   warn "The value of the member '{text}' should be explicitly defined."
 }
@@ -227,7 +227,7 @@ in ts_binary {
 in ts_parenthesized forward enum_literal_value, enum_bitwise_value, enum_bitwise_operand from expression
 in ts_enum_member let enum_literal_value init == null || init.enum_literal_value == true
 in ts_enum_member let enum_bitwise_value init == null || init.enum_bitwise_value == true
-in ts_enum_member.name rule prefer-literal-enum-member {
+in ts_enum_member.name rule es-prefer-literal-enum-member {
   option allowBitwiseExpressions boolean = false "Allow bitwise expressions using literals and enum members."
   when !(if allowBitwiseExpressions then parent.enum_bitwise_value else parent.enum_literal_value)
   warn "Explicit enum value must only be a literal value (string or number){if allowBitwiseExpressions then ' or a bitwise expression' else ''}."
@@ -235,7 +235,7 @@ in ts_enum_member.name rule prefer-literal-enum-member {
 
 in ts_declarator let no_this_alias_checked name is ts_identifier
 in ts_assignment let no_this_alias_checked left is ts_identifier
-in ts_declarator.name rule no-this-alias {
+in ts_declarator.name rule es-no-this-alias {
   option allowDestructuring boolean = true "Allow destructuring, such as `const { props, state } = this`."
   option allowedNames string[] = [] "Names allowed to alias this."
   when parent.init == "this"
@@ -244,7 +244,7 @@ in ts_declarator.name rule no-this-alias {
   report at { start: offset, end: parent.type.end_offset ?? end_offset }
   warn if is ts_identifier then "Unexpected aliasing of 'this' to local variable." else "Unexpected aliasing of members of 'this' to local variables."
 }
-in ts_assignment.left rule no-this-alias:assignment {
+in ts_assignment.left rule es-no-this-alias:assignment {
   option allowDestructuring boolean = true "Allow destructuring, such as `const { props, state } = this`."
   option allowedNames string[] = [] "Names allowed to alias this."
   when parent.right == "this"
@@ -256,7 +256,7 @@ in ts_assignment.left rule no-this-alias:assignment {
 fn property_modifiers(xs) = { value ["public", "protected", "private", "readonly"]; filter (m) contains(xs, m); join " " }
 in ts_parameter, ts_class_property let parameter_modifiers property_modifiers([] modifier)
 in ts_parameter, ts_class_property let parameter_properties_checked true
-in ts_parameter rule parameter-properties {
+in ts_parameter rule es-parameter-properties {
   option prefer ("class-property" | "parameter-property") = "class-property" "Preferred property declaration."
   when parameter_properties_checked
   when prefer == "class-property" && parameter_modifiers != ""
@@ -271,7 +271,7 @@ in ts_method let property_conversion_constructor if key == "constructor" && body
 in ts_class let property_conversion_constructors [] member.property_conversion_constructor
 fn conversion_parameter(parameters, name) = find(parameters, p => p.name == name)
 fn property_conversion_matches(constructors, name, annotation) = any(constructors, c => conversion_parameter(c.parameters, name) != null && conversion_parameter(c.parameters, name).annotation == annotation && contains(c.assignments, name))
-in ts_class_property rule parameter-properties:class {
+in ts_class_property rule es-parameter-properties:class {
   option prefer ("class-property" | "parameter-property") = "class-property" "Preferred property declaration."
   when parameter_properties_checked
   when prefer == "parameter-property" && key is ts_identifier && init == null
@@ -281,7 +281,7 @@ in ts_class_property rule parameter-properties:class {
 
 fn empty_object_message(subject, option) = subject " allows any non-nullish value, including literals like `0` and `\"\"`.\n- If that's what you want, disable this lint rule with an inline comment or configure the '" option "' rule option.\n- If you want a type meaning \"any object\", you probably want `object` instead.\n- If you want a type meaning \"any value\", you probably want `unknown` instead."
 in ts_interface, ts_type_literal let no_empty_object_type_checked true
-in ts_interface.name rule no-empty-object-type:interface {
+in ts_interface.name rule es-no-empty-object-type:interface {
   option allowInterfaces ("always" | "never" | "with-single-extends") = "never" "Whether to allow empty interfaces."
   option allowWithName regex | null = null "Allow matching interface and type alias names."
   when parent.no_empty_object_type_checked
@@ -291,7 +291,7 @@ in ts_interface.name rule no-empty-object-type:interface {
   when !(type_of(allowWithName) == "str" && re_test(text, allowWithName))
   warn if count(parent.extends) == 1 then "An interface declaring no members is equivalent to its supertype." else empty_object_message("An empty interface declaration", "allowInterfaces")
 }
-in ts_type_literal rule no-empty-object-type:object {
+in ts_type_literal rule es-no-empty-object-type:object {
   option allowObjectTypes ("always" | "never") = "never" "Whether to allow empty object type literals."
   option allowWithName regex | null = null "Allow matching interface and type alias names."
   when no_empty_object_type_checked
@@ -369,28 +369,28 @@ fn indexed_notation_replacement(source, owner, info) = {
       then (header) "{header} = {result};"
     }
 }
-in ts_type_literal rule consistent-indexed-object-style {
+in ts_type_literal rule es-consistent-indexed-object-style {
   option mode ("record" | "index-signature") = "record" "Preferred indexed object notation."
   when mode == "record" && indexed_record_eligible
   warn "A record is preferred over an index signature."
   let replacement indexed_notation_replacement(source, node, indexed_conversion)
   fix if replacement != null as replacement
 }
-in ts_interface rule consistent-indexed-object-style:interface {
+in ts_interface rule es-consistent-indexed-object-style:interface {
   option mode ("record" | "index-signature") = "record" "Preferred indexed object notation."
   when mode == "record" && indexed_record_eligible
   warn "A record is preferred over an index signature."
   let replacement indexed_notation_replacement(source, node, indexed_conversion)
   fix if replacement != null as replacement
 }
-in ts_mapped_type rule consistent-indexed-object-style:mapped {
+in ts_mapped_type rule es-consistent-indexed-object-style:mapped {
   option mode ("record" | "index-signature") = "record" "Preferred indexed object notation."
   when mode == "record" && indexed_record_eligible
   warn "A record is preferred over an index signature."
   let replacement indexed_notation_replacement(source, node, indexed_conversion)
   fix if replacement != null as replacement
 }
-in ts_type_reference rule consistent-indexed-object-style:record {
+in ts_type_reference rule es-consistent-indexed-object-style:record {
   option mode ("record" | "index-signature") = "record" "Preferred indexed object notation."
   when mode == "index-signature" && name == "Record" && count(type_argument) == 2
   warn "An index signature is preferred over a record."
@@ -450,14 +450,14 @@ fn type_definition_type(source, n) = {
   ]
   value if global_augmentation || open == null || header_end == null then null else type_definition_edit(source, start, close.end_offset, edits)
 }
-in ts_type_alias.name rule consistent-type-definitions {
+in ts_type_alias.name rule es-consistent-type-definitions {
   option mode ("interface" | "type") = "interface" "Preferred object type definition."
   when mode == "interface" && parent.aliases_type_literal
   warn "Use an `interface` instead of a `type`."
   let edit type_definition_interface(source, parent.node)
   fix at { start: edit.start ?? offset, end: edit.end ?? offset } if edit != null as edit.text
 }
-in ts_interface.name rule consistent-type-definitions:interface {
+in ts_interface.name rule es-consistent-type-definitions:interface {
   option mode ("interface" | "type") = "interface" "Preferred object type definition."
   when mode == "type"
   warn "Use a `type` instead of an `interface`."
@@ -465,7 +465,7 @@ in ts_interface.name rule consistent-type-definitions:interface {
   fix at { start: edit.start ?? offset, end: edit.end ?? offset } if edit != null as edit.text
 }
 
-in ts_namespace rule prefer-namespace-keyword {
+in ts_namespace rule es-prefer-namespace-keyword {
   when kind == "module" && { value name; re_replace /\..*$/ ""; is_identifier }
   warn "Use 'namespace' instead of 'module' to declare custom TypeScript modules."
   fix at { start: kind.offset, end: kind.end_offset } as "namespace"

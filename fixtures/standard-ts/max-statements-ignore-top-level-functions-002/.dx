@@ -1,5 +1,5 @@
 import .ts
-rule max-statements {
+rule es-max-statements {
   set max 1
   set ignoreTopLevelFunctions true
 }

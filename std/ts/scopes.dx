@@ -34,29 +34,29 @@ fn unused_binding_names(context) = when {
     else "'{text}' is {u.action} but {if u.only_type then 'only used as a type' else 'never used'}{if pattern != '' then '. Allowed unused ' names ' must match /' pattern '/u' else ''}."
 }
 
-in ts_identifier rule no-unused-vars:variables {
+in ts_identifier rule es-no-unused-vars:variables {
   @unused_binding_options
   option enableAutofixRemoval { imports?: boolean } = {} "remove unused import bindings"
   @unused_binding_checks("variable", false)
   let removal if enableAutofixRemoval.imports == true && !used_ignored then ts_usage_import_removal(source, node, pattern) else null
   fix at removal if removal != null as ""
 }
-in ts_identifier rule no-unused-vars:parameters {
+in ts_identifier rule es-no-unused-vars:parameters {
   @unused_binding_options
   default option mode enum(all, after-used) = after-used "which unused parameters to check"
   @unused_binding_checks("parameter", mode == "after-used")
 }
-in ts_identifier rule no-unused-vars:caught-errors {
+in ts_identifier rule es-no-unused-vars:caught-errors {
   @unused_binding_options
   @unused_binding_checks("catch", false)
 }
-in ts_identifier rule no-unused-vars:array-elements {
+in ts_identifier rule es-no-unused-vars:array-elements {
   @unused_binding_options
   @unused_binding_checks("array", false)
 }
 
 # `/* global a */` names nothing reads.
-in ts_program rule no-unused-vars:globals {
+in ts_program rule es-no-unused-vars:globals {
   option vars "all" | "local" = "all" "`local`: skip the global scope of scripts"
   when vars == "all"
   each g in unused_globals {

@@ -1,2 +1,2 @@
 import .ts
-rule semi { set omitLastInOneLineClassBody true }
+rule es-semi { set omitLastInOneLineClassBody true }

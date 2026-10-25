@@ -1,3 +1,0 @@
-import .ts
-override in inferrable_annotation let no_inferrable_types_checked false
-rule no-inferrable-types

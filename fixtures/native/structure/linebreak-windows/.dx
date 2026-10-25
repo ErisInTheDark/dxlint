@@ -1,2 +1,2 @@
 import .ts
-rule linebreak-style { set mode "windows" }
+rule shared-linebreak-style { set mode "windows" }

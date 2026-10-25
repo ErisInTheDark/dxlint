@@ -1,2 +1,2 @@
 import .ts
-rule dot-notation
+rule es-dot-notation

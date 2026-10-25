@@ -50,12 +50,12 @@ fn collection_index_zero(v) = v != null && (contains(["string", "bigint"], v.typ
 fn collection_at_number_zero(n) = n != null && (js_compare(n, n) == null || n > -1 && n < 1)
 fn collection_at_zero(v) = v != null && { value v; js_number; collection_at_number_zero }
 
-in ts_index rule prefer-find {
+in ts_index rule es-prefer-find {
   when optional == null && { value index.node; collection_static_value; collection_index_zero } && collection_filter(object.node)
   warn "Prefer .find(...) instead of .filter(...)[0]."
 }
 
-in ts_call rule prefer-find:at {
+in ts_call rule es-prefer-find:at {
   let method unparenthesised_node(callee.node)
   when count(argument) == 1 && method.optional == null && collection_method(method, "at") && {
     value argument.nodes

@@ -1,2 +1,2 @@
 import .ts
-rule explicit-function-return-type
+rule es-explicit-function-return-type

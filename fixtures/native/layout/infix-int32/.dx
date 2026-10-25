@@ -1,2 +1,2 @@
 import .ts
-rule space-infix-ops { set int32Hint true }
+rule es-space-infix-ops { set int32Hint true }

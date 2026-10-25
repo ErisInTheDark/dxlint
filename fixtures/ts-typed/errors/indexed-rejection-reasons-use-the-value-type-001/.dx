@@ -1,2 +1,2 @@
 import .ts
-rule prefer-promise-reject-errors
+rule es-prefer-promise-reject-errors

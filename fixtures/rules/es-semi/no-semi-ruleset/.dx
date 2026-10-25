@@ -1,0 +1,3 @@
+import .ts
+import rules:format
+import rules:es-no-semi

@@ -1,2 +1,2 @@
 import .ts
-rule no-floating-promises { set checkThenables true }
+rule es-no-floating-promises { set checkThenables true }

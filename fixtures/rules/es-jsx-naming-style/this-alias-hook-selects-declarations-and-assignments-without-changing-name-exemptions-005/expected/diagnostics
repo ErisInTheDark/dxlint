@@ -1,0 +1,4 @@
+file.ts:1:26-1:29 es-no-this-alias#1
+file.ts:1:44-1:47 es-no-this-alias#1
+file.ts:1:72-1:75 es-no-this-alias:assignment#1
+file.ts:1:85-1:88 es-no-this-alias:assignment#1

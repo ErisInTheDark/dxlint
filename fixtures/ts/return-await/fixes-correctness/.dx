@@ -1,2 +1,2 @@
 import .ts
-rule return-await { set mode "error-handling-correctness-only" }
+rule es-return-await { set mode "error-handling-correctness-only" }

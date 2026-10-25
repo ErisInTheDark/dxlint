@@ -1,0 +1,5 @@
+a.ts:2:16-2:27 es-naming-convention:import#0
+a.ts:3:21-3:34 es-naming-convention:import#0
+a.ts:4:66-4:79 es-naming-convention:import#0
+a.ts:5:19-5:28 es-naming-convention:interface#0
+a.ts:6:15-6:24 es-naming-convention:class#0

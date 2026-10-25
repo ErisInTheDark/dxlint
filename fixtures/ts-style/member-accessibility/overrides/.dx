@@ -1,5 +1,5 @@
 import .ts
-rule explicit-member-accessibility:* {
+rule es-explicit-member-accessibility:* {
   set accessibility 'off'
   set ignoredMethodNames ['ignored']
   set overrides { properties: 'no-public', methods: 'no-public', accessors: 'explicit', constructors: 'no-public', parameterProperties: 'no-public' }

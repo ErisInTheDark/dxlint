@@ -1,3 +1,3 @@
 import .ts
 rule * off
-rule indent { set mode 4; set array_expression "first" }
+rule es-indent { set mode 4; set array_expression "first" }

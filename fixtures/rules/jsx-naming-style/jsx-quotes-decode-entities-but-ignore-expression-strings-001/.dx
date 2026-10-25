@@ -1,2 +1,0 @@
-import .ts
-rule jsx-quotes { set mode 'prefer-single' }

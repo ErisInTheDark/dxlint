@@ -1,0 +1,8 @@
+import .ts
+rule es-require-await
+
+in ts_array rule array-carrier {
+  when value_has_member(node, "then", { global: "Array", class: "type", path: [] }) != false
+    || value_has_member(node, "then", { global: "ReadonlyArray", class: "type", path: [] }) != false
+  warn "an ordinary array carrier did not prove then absent"
+}

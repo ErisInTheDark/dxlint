@@ -1,2 +1,0 @@
-import .ts
-rule block-spacing { set style "never" }

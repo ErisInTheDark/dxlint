@@ -1,2 +1,2 @@
 import .ts
-rule restrict-template-expressions
+rule es-restrict-template-expressions

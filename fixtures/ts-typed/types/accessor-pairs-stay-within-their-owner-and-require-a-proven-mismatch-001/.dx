@@ -1,2 +1,2 @@
 import .ts
-rule related-getter-setter-pairs
+rule es-related-getter-setter-pairs

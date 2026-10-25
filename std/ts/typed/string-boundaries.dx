@@ -126,7 +126,7 @@ fn string_boundary_replacement(n, info, negative) = {
   value if !expression_fix_clean(n) then null else expression_fix_edges(n, result)
 }
 
-in ts_binary rule prefer-string-starts-ends-with {
+in ts_binary rule es-prefer-string-starts-ends-with {
   option allowSingleElementEquality enum(never, always) = never
   when re_test(operator, /^[!=]==?$/)
   let comparison string_boundary_comparison(left.node, right.node)
@@ -142,7 +142,7 @@ in ts_binary rule prefer-string-starts-ends-with {
   let replacement if safe then string_boundary_replacement(node, info, negative) else null
   fix at node if replacement != null as replacement
 }
-in ts_call rule prefer-string-starts-ends-with:regex {
+in ts_call rule es-prefer-string-starts-ends-with:regex {
   let info string_boundary_regex_call(node, "test")
   when info != null
   warn if info.kind == "end" then "Use the 'String#endsWith' method instead." else "Use 'String#startsWith' method instead."

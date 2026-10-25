@@ -1,2 +1,2 @@
-file.ts:1:55-1:64 prefer-destructuring#0
-file.ts:1:66-1:75 prefer-destructuring#0
+file.ts:1:55-1:64 es-prefer-destructuring#0
+file.ts:1:66-1:75 es-prefer-destructuring#0

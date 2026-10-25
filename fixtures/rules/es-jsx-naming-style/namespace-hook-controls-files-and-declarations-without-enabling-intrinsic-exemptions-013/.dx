@@ -1,0 +1,3 @@
+import .ts
+override in ts_namespace let no_namespace_checked name == "Root"
+rule es-no-namespace

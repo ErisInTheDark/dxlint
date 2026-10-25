@@ -1,0 +1,2 @@
+a.md:1:10-1:12 shared-no-trailing-spaces#0
+a.md:1:12-2:1 shared-linebreak-style#0

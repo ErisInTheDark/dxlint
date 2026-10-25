@@ -1,5 +1,5 @@
 import .ts
-rule no-param-reassign {
+rule es-no-param-reassign {
   set props true
   set ignorePropertyModificationsFor ["a"]
   set ignorePropertyModificationsForRegex ["^allowed$"]

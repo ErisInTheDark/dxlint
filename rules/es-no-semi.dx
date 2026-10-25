@@ -1,0 +1,11 @@
+# rules:es-no-semi: semicolon-free JavaScript and TypeScript, on top of
+# rules:format. Statements end without `;`; a line that would continue the
+# previous statement (`(`, `[`, a template) starts with its guard: `;[1].map(f)`.
+
+rule es-semi {
+  set mode "never"
+  set beforeStatementContinuationChars "always"
+}
+rule es-semi-style {
+  set style "first"
+}

@@ -1,2 +1,2 @@
 import .ts
-rule multiline-ternary { set ignoreJSX true }
+rule es-multiline-ternary { set ignoreJSX true }

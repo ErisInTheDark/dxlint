@@ -1,2 +1,2 @@
 import .ts
-rule member-ordering
+rule es-member-ordering

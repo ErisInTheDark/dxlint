@@ -105,7 +105,7 @@ in ts_node let enclosing_accessor {
   value accessor_function_kind(owner)
 }
 
-in ts_method, ts_method_signature rule accessor-pairs {
+in ts_method, ts_method_signature rule es-accessor-pairs {
   option getWithoutSet boolean = false "require a setter for each getter"
   option setWithoutGet boolean = true "require a getter for each setter"
   option enforceForClassMembers boolean = true "check class accessors"
@@ -117,7 +117,7 @@ in ts_method, ts_method_signature rule accessor-pairs {
   warn "{if accessor_pair.kind == 'set' then 'Getter' else 'Setter'} is not present for {if accessor_pair.scope == 'class' then 'class ' else if accessor_pair.scope == 'type' then 'type ' else ''}{accessor_pair.name}."
 }
 
-in ts_object rule accessor-pairs:descriptor {
+in ts_object rule es-accessor-pairs:descriptor {
   option getWithoutSet boolean = false "require a setter for each getter"
   option setWithoutGet boolean = true "require a getter for each setter"
   when property_descriptor != null
@@ -125,7 +125,7 @@ in ts_object rule accessor-pairs:descriptor {
   warn "{if property_descriptor.set then 'Getter' else 'Setter'} is not present in property descriptor."
 }
 
-in ts_method, ts_method_signature rule grouped-accessor-pairs {
+in ts_method, ts_method_signature rule es-grouped-accessor-pairs {
   option mode ("anyOrder" | "getBeforeSet" | "setBeforeGet") = "anyOrder" "accessor order"
   option enforceForTSTypes boolean = false "check type accessors"
   let group_info accessor_pair.grouping

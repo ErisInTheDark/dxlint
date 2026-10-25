@@ -1,0 +1,2 @@
+import .ts
+rule es-comma-style { set style "first" }

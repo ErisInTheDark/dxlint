@@ -1,5 +1,5 @@
 import .ts
-rule no-misused-spread
+rule es-no-misused-spread
 ignore "node_modules/typescript/lib/lib.fixture.d.ts"
 
 in ts_new rule constructed-instance {

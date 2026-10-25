@@ -1,2 +1,2 @@
 import .ts
-rule no-unsafe-optional-chaining
+rule es-no-unsafe-optional-chaining

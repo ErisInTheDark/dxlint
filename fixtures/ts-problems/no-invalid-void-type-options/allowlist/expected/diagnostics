@@ -1,2 +1,2 @@
-file.ts:2:28-2:32 no-invalid-void-type#0
-file.ts:3:31-3:35 no-invalid-void-type#0
+file.ts:2:28-2:32 es-no-invalid-void-type#0
+file.ts:3:31-3:35 es-no-invalid-void-type#0

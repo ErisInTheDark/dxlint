@@ -1,2 +1,2 @@
-main.ts:1:110-1:124 no-misused-promises:void-arguments#0
-main.ts:1:86-1:102 no-misused-promises:predicates#0
+main.ts:1:110-1:124 es-no-misused-promises:void-arguments#0
+main.ts:1:86-1:102 es-no-misused-promises:predicates#0

@@ -598,7 +598,7 @@ fn cache_replays_results_and_relints_exactly_what_changed() {
 
 #[test]
 fn language_only_changes_invalidate_cached_diagnostics() {
-    let rules = |setting| format!("import .ts\nlanguage .js {{ set globals {{ app: \"{setting}\" }} }}\nrule no-global-assign error\n");
+    let rules = |setting| format!("import .ts\nlanguage .js {{ set globals {{ app: \"{setting}\" }} }}\nrule es-no-global-assign error\n");
     let dir = project("cli-language-cache", &[(".dx", &rules("readonly")), ("a.js", "app = 1;\n")]);
     let run = || {
         let out = dxlint(&dir, &["--jobs", "1", "--format", "jsonl", "a.js"]);
@@ -659,7 +659,7 @@ fn a_broken_config_still_lints_with_what_works() {
 #[test]
 fn examples_find_what_their_comments_promise() {
     let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples");
-    for (dir, expected) in [("js", vec!["todo", "arrow-parens", "strict-equality", "strict-equality", "arrow-parens", "no-console", "no-console"]),
+    for (dir, expected) in [("js", vec!["todo", "es-arrow-parens", "strict-equality", "strict-equality", "es-arrow-parens", "es-no-console", "es-no-console"]),
         ("rust", vec!["sorted-use-lists", "annotation-colon", "expect-lowercase", "annotation-colon"])]
     {
         let out = dxlint(&examples.join(dir), &["--format", "jsonl"]);

@@ -1,3 +1,3 @@
 import .ts
 drop group nullish_coalescing_expression ts_assignment, ts_conditional, ts_if
-rule prefer-nullish-coalescing { set ignoreConditionalTests false }
+rule es-prefer-nullish-coalescing { set ignoreConditionalTests false }

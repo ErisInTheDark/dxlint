@@ -1,2 +1,2 @@
 import .ts
-rule prefer-destructuring { set options [{ object: true }, { enforceForDeclarationWithTypeAnnotation: true }] }
+rule es-prefer-destructuring { set options [{ object: true }, { enforceForDeclarationWithTypeAnnotation: true }] }

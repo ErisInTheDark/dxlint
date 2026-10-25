@@ -1,4 +1,4 @@
-a.ts:17:1-17:26 prefer-string-starts-ends-with#0
-a.ts:18:1-18:13 prefer-string-starts-ends-with#1
-a.ts:19:1-19:23 prefer-string-starts-ends-with#1
-a.ts:46:1-46:27 prefer-string-starts-ends-with#1
+a.ts:17:1-17:26 es-prefer-string-starts-ends-with#0
+a.ts:18:1-18:13 es-prefer-string-starts-ends-with#1
+a.ts:19:1-19:23 es-prefer-string-starts-ends-with#1
+a.ts:46:1-46:27 es-prefer-string-starts-ends-with#1

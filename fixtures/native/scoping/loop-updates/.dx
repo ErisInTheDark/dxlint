@@ -1,2 +1,2 @@
 import .ts
-rule no-unmodified-loop-condition
+rule es-no-unmodified-loop-condition

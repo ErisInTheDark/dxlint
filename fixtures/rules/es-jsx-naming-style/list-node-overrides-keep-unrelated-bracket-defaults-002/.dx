@@ -1,0 +1,7 @@
+import .ts
+import .css
+import .json
+import .markdown
+rule es-list-style { set empty "never"
+          set overrides { ObjectExpression: { empty: "always" } }
+        }

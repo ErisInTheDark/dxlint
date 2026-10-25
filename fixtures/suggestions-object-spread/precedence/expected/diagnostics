@@ -1,6 +1,6 @@
-input.ts:1:11-1:65 prefer-object-spread#1
-input.ts:3:1-3:23 prefer-object-spread#1
-input.ts:5:1-5:23 prefer-object-spread#1
-input.ts:6:1-6:23 prefer-object-spread#1
-input.ts:8:1-8:23 prefer-object-spread#1
-input.ts:9:6-9:28 prefer-object-spread#1
+input.ts:1:11-1:65 es-prefer-object-spread#1
+input.ts:3:1-3:23 es-prefer-object-spread#1
+input.ts:5:1-5:23 es-prefer-object-spread#1
+input.ts:6:1-6:23 es-prefer-object-spread#1
+input.ts:8:1-8:23 es-prefer-object-spread#1
+input.ts:9:6-9:28 es-prefer-object-spread#1

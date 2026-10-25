@@ -1,2 +1,2 @@
 import .ts
-rule prefer-optional-chain
+rule es-prefer-optional-chain

@@ -1,2 +1,2 @@
 import .ts
-rule complexity:implicit { set max 1 }
+rule es-complexity:implicit { set max 1 }

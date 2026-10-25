@@ -1,2 +1,2 @@
 import .ts
-rule prefer-nullish-coalescing { set ignoreNumber true }
+rule es-prefer-nullish-coalescing { set ignoreNumber true }

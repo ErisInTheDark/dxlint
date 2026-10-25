@@ -1,2 +1,2 @@
 import .ts
-rule consistent-indexed-object-style { set mode "index-signature" }
+rule es-consistent-indexed-object-style { set mode "index-signature" }

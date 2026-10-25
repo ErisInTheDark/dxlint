@@ -1,2 +1,2 @@
 import .ts
-rule no-wrapper-object-types
+rule es-no-wrapper-object-types

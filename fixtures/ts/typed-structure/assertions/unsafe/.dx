@@ -1,4 +1,4 @@
 import .ts
-rule no-unsafe-type-assertion
+rule es-no-unsafe-type-assertion
 ignore "tsconfig.json"
 ignore "node_modules/typescript/lib/lib.fixture.d.ts"

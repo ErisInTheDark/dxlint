@@ -1,1 +1,1 @@
-main.ts:1:10-1:26 no-misused-promises:predicates#0
+main.ts:1:10-1:26 es-no-misused-promises:predicates#0

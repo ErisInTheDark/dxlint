@@ -3,7 +3,7 @@
 # line 1, followed by exactly one blank line. Turn each `header:*` part on
 # with the header text, with `\n` line breaks:
 #
-#   rule header:* { set license "/*!\n * Copyright ...\n */" }
+#   rule es-header:* { set license "/*!\n * Copyright ...\n */" }
 
 define {
 
@@ -16,7 +16,7 @@ in ts_program let license_first_comment { value overlapping(ts_comment); first }
 in ts_program let license_header if license_first_comment != null && license_first_comment.offset == byte_len(license_prefix) then license_first_comment else null
 in ts_program let license_suffix_space if license_header == null then "" else { value text; byte_slice license_header.end_offset; re_find /\A\s*/ }
 
-in ts_program rule header:missing warn "Missing license header" {
+in ts_program rule es-header:missing warn "Missing license header" {
   option license string = "" "the license header"
   option skip_files regex = "" "file paths without a header"
   report change
@@ -24,7 +24,7 @@ in ts_program rule header:missing warn "Missing license header" {
   when license_header == null || !license_like(license_header.text)
   fix as license_prefix @license_text @newline @newline { value license_prefix; byte_len: byte_len; value byte_slice(text, byte_len) }
 }
-in ts_program rule header:invalid warn "Invalid license header" {
+in ts_program rule es-header:invalid warn "Invalid license header" {
   option license string = "" "the license header"
   option skip_files regex = "" "file paths without a header"
   when @license_wanted && license_header != null
@@ -32,7 +32,7 @@ in ts_program rule header:invalid warn "Invalid license header" {
   report at { start: license_header.offset, end: license_header.end_offset }
   fix as byte_slice(text, 0, license_header.offset) @license_text byte_slice(text, license_header.end_offset)
 }
-in ts_program rule header:before warn "Superfluous new lines before license header" {
+in ts_program rule es-header:before warn "Superfluous new lines before license header" {
   option license string = "" "the license header"
   option skip_files regex = "" "file paths without a header"
   when @license_wanted && license_header != null && contains(license_prefix, "\n")
@@ -40,7 +40,7 @@ in ts_program rule header:before warn "Superfluous new lines before license head
   report at license_header.offset
   fix as byte_slice(text, license_header.offset)
 }
-in ts_program rule header:after warn "{if re_count(license_suffix_space, /\n/) > 2 then 'Superfluous new lines' else 'Missing new line'} after license header" {
+in ts_program rule es-header:after warn "{if re_count(license_suffix_space, /\n/) > 2 then 'Superfluous new lines' else 'Missing new line'} after license header" {
   option license string = "" "the license header"
   option skip_files regex = "" "file paths without a header"
   when @license_wanted && license_header != null

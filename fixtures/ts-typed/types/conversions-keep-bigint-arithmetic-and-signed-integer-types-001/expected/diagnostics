@@ -1,2 +1,2 @@
-a.ts:1:23-1:25 no-unnecessary-type-conversion#0
-a.ts:1:6-1:12 no-unnecessary-type-conversion#0
+a.ts:1:23-1:25 es-no-unnecessary-type-conversion#0
+a.ts:1:6-1:12 es-no-unnecessary-type-conversion#0

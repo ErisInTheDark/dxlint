@@ -1,4 +1,4 @@
-a.ts:12:1-12:17 promise-function-async#1
-a.ts:15:1-15:16 promise-function-async#1
-a.ts:6:1-6:18 promise-function-async#1
-a.ts:9:1-9:15 promise-function-async#0
+a.ts:12:1-12:17 es-promise-function-async#1
+a.ts:15:1-15:16 es-promise-function-async#1
+a.ts:6:1-6:18 es-promise-function-async#1
+a.ts:9:1-9:15 es-promise-function-async#0

@@ -1,2 +1,2 @@
-file.ts:1:49-1:61 prefer-optional-chain#0
-file.ts:1:65-1:77 prefer-optional-chain#0
+file.ts:1:49-1:61 es-prefer-optional-chain#0
+file.ts:1:65-1:77 es-prefer-optional-chain#0

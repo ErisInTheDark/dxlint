@@ -1,2 +1,2 @@
-a.ts:1:1-1:1 no-useless-default-assignment:strict#0
-a.ts:1:18-1:27 no-useless-default-assignment#1
+a.ts:1:1-1:1 es-no-useless-default-assignment:strict#0
+a.ts:1:18-1:27 es-no-useless-default-assignment#1

@@ -1,2 +1,2 @@
 import .ts
-rule object-shorthand
+rule es-object-shorthand

@@ -1,2 +1,2 @@
 import .ts
-rule dot-notation { set allowPrivateClassPropertyAccess true }
+rule es-dot-notation { set allowPrivateClassPropertyAccess true }

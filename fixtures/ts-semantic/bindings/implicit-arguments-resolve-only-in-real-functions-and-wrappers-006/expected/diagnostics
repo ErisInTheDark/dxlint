@@ -1,2 +1,2 @@
-a.ts:1:1-1:10 no-undef#0
-a.ts:1:39-1:48 no-undef#0
+a.ts:1:1-1:10 es-no-undef#0
+a.ts:1:39-1:48 es-no-undef#0

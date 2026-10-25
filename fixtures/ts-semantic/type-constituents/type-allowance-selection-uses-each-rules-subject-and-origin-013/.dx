@@ -1,5 +1,5 @@
 import .ts
-rule no-misused-spread
+rule es-no-misused-spread
 
 # Project inputs remain readable, but the original Rust test linted only this main file.
 ignore "node_modules/typescript/lib/lib.es5.d.ts"

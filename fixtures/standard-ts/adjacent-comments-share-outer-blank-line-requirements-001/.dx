@@ -1,5 +1,5 @@
 import .ts
-rule lines-around-comment {
+rule es-lines-around-comment {
  set beforeBlockComment true
  set afterBlockComment true
 }

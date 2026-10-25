@@ -1,1 +1,1 @@
-a.ts:1:83-1:84 no-unsafe-enum-assignment:arguments#0
+a.ts:1:83-1:84 es-no-unsafe-enum-assignment:arguments#0

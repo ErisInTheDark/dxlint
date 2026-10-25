@@ -58,7 +58,7 @@ fn suggestion_bind_fix(n) = {
     || !expression_fix_clean(region) then null
     else {start: property_start.start, end: n.end_offset, text: expression_fix_edits(suffix, property_start.start, edits)}
 }
-in ts_call rule no-extra-bind {
+in ts_call rule es-no-extra-bind {
   when count(argument) == 1 && first(argument.nodes) not ts_spread && callee.bind_target != null
   report at callee.bind_target
   warn "The function binding is unnecessary."
@@ -66,13 +66,13 @@ in ts_call rule no-extra-bind {
   fix at replacement ?? node if replacement != null as replacement.text
 }
 
-in ts_identifier rule prefer-rest-params {
+in ts_identifier rule es-prefer-rest-params {
   when text == "arguments" && resolved == "local" && declaration == null && (ts_function != null || ts_method != null)
   when !(parent is ts_member && index == 0)
   warn "Use the rest parameters instead of 'arguments'."
 }
 
-in ts_call rule prefer-spread {
+in ts_call rule es-prefer-spread {
   when callee.called_method_name == "apply" && count(argument) == 2
   let second_argument_node {
     value [] argument.unwrapped_node
@@ -91,7 +91,7 @@ in ts_call rule prefer-spread {
   warn "Use the spread operator instead of '.apply()'."
 }
 
-in ts_parameter rule default-param-last {
+in ts_parameter rule es-default-param-last {
   when parent is (ts_function, ts_arrow, ts_method) && (init != null || optional != null)
   when { value parent.parameter_required; slice (index + 1); any (p) p == true }
   warn "Default parameters should be last."
@@ -122,7 +122,7 @@ fn suggestion_function_style(n) = {
   }
 }
 
-in ts_function, ts_arrow rule func-style {
+in ts_function, ts_arrow rule es-func-style {
   option style ("declaration" | "expression") = "expression" "function syntax policy"
   option allowArrowFunctions boolean = false "allow arrow expressions"
   option allowTypeAnnotation boolean = false "allow annotated function variables"
@@ -135,7 +135,7 @@ in ts_function, ts_arrow rule func-style {
   warn "Expected a function {requested_style}."
 }
 
-in ts_assignment rule no-return-assign {
+in ts_assignment rule es-no-return-assign {
   option mode ("except-parens" | "always") = "except-parens" "assignment return policy"
   let return_info return_assignment_context
   when return_info != null && (mode == "always" || parent not ts_parenthesized)
@@ -189,7 +189,7 @@ fn arrow_body_block_fix(source, n) = {
   value if !expression_fix_retains_comments(body, replacement) then null
     else { start: body.offset, end: body.end_offset, text: replacement }
 }
-in ts_arrow rule arrow-body-style {
+in ts_arrow rule es-arrow-body-style {
   option mode ("always" | "never" | "as-needed") = "as-needed" "arrow body block policy"
   option requireReturnForObjectLiteral boolean = false "require a block for object values"
   when body != null
@@ -221,7 +221,7 @@ fn empty_function_category(n, constructor) = when {
 }
 fn empty_function_decorated(n, constructor) = n is ts_method && !constructor && count(n.decorator.node) > 0
 
-in ts_function, ts_arrow, ts_method rule no-empty-function {
+in ts_function, ts_arrow, ts_method rule es-no-empty-function {
   option allow string[] = [] "function categories that may be empty"
   when body.uncommented_empty_block == true
   let constructor empty_function_constructor(node)
@@ -239,7 +239,7 @@ in ts_function, ts_arrow, ts_method rule no-empty-function {
   warn "Unexpected empty { function_name.nonempty ?? 'function' }."
 }
 
-in ts_call rule no-useless-call {
+in ts_call rule es-no-useless-call {
   let method_name callee.direct_method_name
   when method_name == "call" && count(argument) > 0 || method_name == "apply" && count(argument) == 2 && ({
     value [] argument.unwrapped_node

@@ -1,2 +1,2 @@
 import .ts
-rule no-confusing-arrow { set onlyOneSimpleParam true }
+rule es-no-confusing-arrow { set onlyOneSimpleParam true }

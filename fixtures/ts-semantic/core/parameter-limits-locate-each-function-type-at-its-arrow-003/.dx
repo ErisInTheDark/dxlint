@@ -1,2 +1,2 @@
 import .ts
-rule max-params { set max 1 }
+rule es-max-params { set max 1 }

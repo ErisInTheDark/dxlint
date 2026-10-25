@@ -1,2 +1,2 @@
 import .ts
-rule jsx-closing-tag-location
+rule es-jsx-closing-tag-location

@@ -1,4 +1,0 @@
-import .ts
-override in ts_declarator, ts_assignment let no_this_alias_checked true
-rule no-this-alias { set allowedNames ['self', 'target'] }
-rule no-this-alias

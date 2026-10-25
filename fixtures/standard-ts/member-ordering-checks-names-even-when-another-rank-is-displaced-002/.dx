@@ -1,2 +1,2 @@
 import .ts
-rule member-ordering:class-expression set alphabetically
+rule es-member-ordering:class-expression set alphabetically

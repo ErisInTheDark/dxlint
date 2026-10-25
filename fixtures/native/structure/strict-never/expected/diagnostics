@@ -1,4 +1,4 @@
-a.js:1:1-1:1 strict#0
-a.js:2:1-2:1 strict#0
-a.js:3:20-3:20 strict#0
-a.js:3:34-3:34 strict#0
+a.js:1:1-1:1 es-strict#0
+a.js:2:1-2:1 es-strict#0
+a.js:3:20-3:20 es-strict#0
+a.js:3:34-3:34 es-strict#0

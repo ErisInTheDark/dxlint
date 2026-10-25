@@ -1,2 +1,2 @@
-main.ts:1:131-1:134 restrict-template-expressions#0
-main.ts:1:141-1:147 restrict-template-expressions#0
+main.ts:1:131-1:134 es-restrict-template-expressions#0
+main.ts:1:141-1:147 es-restrict-template-expressions#0

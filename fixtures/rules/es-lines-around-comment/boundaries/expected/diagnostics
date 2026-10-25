@@ -1,0 +1,6 @@
+a.ts:2:3-2:14 es-lines-around-comment:after#1
+a.ts:4:3-4:12 es-lines-around-comment:before#0
+a.ts:7:3-7:14 es-lines-around-comment:after#1
+a.ts:7:3-7:14 es-lines-around-comment:before#0
+a.ts:9:3-9:12 es-lines-around-comment:after#1
+a.ts:9:3-9:12 es-lines-around-comment:before#0

@@ -1,2 +1,2 @@
 import .ts
-rule indent-binary-ops
+rule es-indent-binary-ops

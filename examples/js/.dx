@@ -4,7 +4,7 @@
 import .ts
 
 # Built-in rules are defined but off: turn on the ones you want.
-rule arrow-parens {
+rule es-arrow-parens {
   set style "as-needed"
 }
 
@@ -16,7 +16,7 @@ in ts_binary.operator rule strict-equality warn "use `{text}=` instead of `{text
 
 # console.log anywhere except in scripts/: our own take on the built-in
 # no-console, so it replaces it.
-override in ts_member rule no-console warn "remove `{text}`" {
+override in ts_member rule es-no-console warn "remove `{text}`" {
   when text ~ /console\.(?:log|debug)/
   ignore "scripts/**"
 }

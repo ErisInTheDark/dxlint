@@ -1,2 +1,2 @@
-input.tsx:2:9-2:13 jsx-closing-tag-location#0
-input.tsx:5:4-5:7 jsx-closing-tag-location#1
+input.tsx:2:9-2:13 es-jsx-closing-tag-location#0
+input.tsx:5:4-5:7 es-jsx-closing-tag-location#1

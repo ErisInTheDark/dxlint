@@ -120,7 +120,7 @@ in duplicate_type_constituent {
     value map(selected, part => constituent_candidate(source, part, constituent_parts, constituent_optional_parameter, constituent_emptied))
   }
 
-  rule no-duplicate-type-constituents {
+  rule es-no-duplicate-type-constituents {
     when duplicate_type_constituents_checked
     each part in constituent_candidates {
       when part.previous != null
@@ -129,7 +129,7 @@ in duplicate_type_constituent {
       fix at part.replacement if part.replacement != null && !part.kept as part.replacement.text
     }
   }
-  rule no-duplicate-type-constituents:optional {
+  rule es-no-duplicate-type-constituents:optional {
     when duplicate_type_constituents_checked && constituent_optional_parameter
     each part in constituent_candidates {
       when part.previous == null

@@ -2,7 +2,7 @@
 
 define {
 
-in ts_class.name, ts_interface.name rule no-unsafe-declaration-merging {
+in ts_class.name, ts_interface.name rule es-no-unsafe-declaration-merging {
   when contains(declaration_kinds, "class") && contains(declaration_kinds, "interface")
   warn "Unsafe declaration merging between classes and interfaces."
 }
@@ -33,19 +33,19 @@ fn ts_directive_message(directive, description, mode, minimum, pattern) = (
   when message != null
   warn message
 }
-in ts_comment rule ban-ts-comment:expect-error { @ban_ts_directive("expect-error", require-description) }
-in ts_comment rule ban-ts-comment:ignore { @ban_ts_directive("ignore", deny) }
-in ts_comment rule ban-ts-comment:nocheck { @ban_ts_directive("nocheck", deny) }
-in ts_comment rule ban-ts-comment:check { @ban_ts_directive("check", allow) }
+in ts_comment rule es-ban-ts-comment:expect-error { @ban_ts_directive("expect-error", require-description) }
+in ts_comment rule es-ban-ts-comment:ignore { @ban_ts_directive("ignore", deny) }
+in ts_comment rule es-ban-ts-comment:nocheck { @ban_ts_directive("nocheck", deny) }
+in ts_comment rule es-ban-ts-comment:check { @ban_ts_directive("check", allow) }
 
 # `Function` as a type (not a local type of that name), also `implements
 # Function`.
-in ts_type_reference rule no-unsafe-function-type {
+in ts_type_reference rule es-no-unsafe-function-type {
   when name == "Function" && name.resolved == null && name.reference_kind == null
   warn "The `Function` type accepts any function-like value.\nPrefer explicitly defining any function parameters and return type."
 }
 
-in ts_interface rule no-empty-interface warn "{if count(extends) > 0 then 'An interface declaring no members is equivalent to its supertype.' else 'An empty interface is equivalent to `{{}}`.'}" {
+in ts_interface rule es-no-empty-interface warn "{if count(extends) > 0 then 'An interface declaring no members is equivalent to its supertype.' else 'An empty interface is equivalent to `{{}}`.'}" {
   when count(member) == 0
   # Several supertypes make a useful intersection.
   when count(extends) <= 1

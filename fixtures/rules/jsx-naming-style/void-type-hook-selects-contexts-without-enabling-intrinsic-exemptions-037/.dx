@@ -1,3 +1,0 @@
-import .ts
-override in ts_type_keyword let no_invalid_void_type_checked void_type_context != "this" && !(void_type_context == "generic" && void_type_generic_name == "ns.Promise")
-rule no-invalid-void-type

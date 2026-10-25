@@ -1,3 +1,0 @@
-import .ts
-drop group inferrable_annotation ts_declarator
-rule no-inferrable-types

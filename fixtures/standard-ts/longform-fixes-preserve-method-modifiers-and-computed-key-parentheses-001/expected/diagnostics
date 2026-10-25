@@ -1,2 +1,2 @@
-object.ts:1:12-1:13 object-shorthand#2
-object.ts:1:15-1:21 object-shorthand#0
+object.ts:1:12-1:13 es-object-shorthand#2
+object.ts:1:15-1:21 es-object-shorthand#0

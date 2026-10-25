@@ -1,5 +1,5 @@
 import .ts
-rule restrict-template-expressions { set allow ['URL'] }
+rule es-restrict-template-expressions { set allow ['URL'] }
 
 # Project inputs remain readable, but the original Rust test linted only this main file.
 ignore "lib.example.d.ts"

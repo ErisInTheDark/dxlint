@@ -240,7 +240,7 @@ in ts_function, ts_arrow, ts_method, ts_static_block let indent_body_offset null
 in ts_function let indent_return_type_offset null
 in ts_variable_declaration let indent_declaration_offset null
 
-in ts_line rule indent {
+in ts_line rule es-indent {
   indent reset indent_reset
   option mode int(0..) | "tab" = 4 "spaces per level, or tab"
   option tab_length number(1..) = 4 "spaces per raw-template tab in tab mode"

@@ -1,5 +1,5 @@
 import .ts
-rule no-undef
+rule es-no-undef
 in ts_identifier rule make_global warn "generated declaration" {
   files "seed.d.ts"
   when text == "placeholder"

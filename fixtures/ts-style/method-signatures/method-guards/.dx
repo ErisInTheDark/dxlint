@@ -1,2 +1,2 @@
 import .ts
-rule method-signature-style { set mode "method" }
+rule es-method-signature-style { set mode "method" }

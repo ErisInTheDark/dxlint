@@ -10,12 +10,12 @@ in ts_parenthesized let raw_literal_expression expression.raw_literal_expression
 in ts_literal_type let literal_type_text value
 in ts_as, ts_type_assertion let use_const_assertion type.literal_type_text != null && type.literal_type_text == expression.raw_literal_expression
 in ts_declarator, ts_class_property let use_const_annotation type.literal_type_text != null && type.literal_type_text == init.raw_literal_expression
-in ts_as.type, ts_type_assertion.type rule prefer-as-const {
+in ts_as.type, ts_type_assertion.type rule es-prefer-as-const {
   when parent.use_const_assertion
   warn "Expected a `const` instead of a literal type assertion."
   fix at node as "const"
 }
-in ts_declarator.type, ts_class_property.type rule prefer-as-const:annotation {
+in ts_declarator.type, ts_class_property.type rule es-prefer-as-const:annotation {
   when parent.use_const_annotation
   warn "Expected a `const` assertion instead of a literal type annotation."
 }
@@ -42,7 +42,7 @@ fn assertion_style_as(source, n) = {
 in ts_object let assertion_literal_kind "object"
 in ts_array let assertion_literal_kind "array"
 in ts_parenthesized let assertion_literal_kind expression.assertion_literal_kind
-in ts_as, ts_type_assertion rule consistent-type-assertions {
+in ts_as, ts_type_assertion rule es-consistent-type-assertions {
   option assertionStyle ("as" | "angle-bracket" | "never") = "as" "Preferred assertion syntax."
   when is ts_as && assertionStyle != "as" || is ts_type_assertion && assertionStyle != "angle-bracket"
   when !(assertionStyle == "never" && type == "const")
@@ -56,7 +56,7 @@ in ts_as, ts_type_assertion {
   let preferred_assertion_style if is ts_as then "as" else "angle-bracket"
   let literal_assertion_eligible type != "any" && type != "unknown" && type != "const"
 }
-in ts_as, ts_type_assertion rule consistent-type-assertions:object {
+in ts_as, ts_type_assertion rule es-consistent-type-assertions:object {
   option assertionStyle ("as" | "angle-bracket" | "never") = "as" "Preferred assertion syntax."
   default option mode ("allow" | "allow-as-parameter" | "never") = "allow" "When literal assertions are allowed."
   when literal_assertion_eligible && expression.assertion_literal_kind == "object"
@@ -64,7 +64,7 @@ in ts_as, ts_type_assertion rule consistent-type-assertions:object {
   when mode == "never" || mode == "allow-as-parameter" && !assertion_argument_context
   warn "Always prefer const x: T = {{ ... }}."
 }
-in ts_as, ts_type_assertion rule consistent-type-assertions:array {
+in ts_as, ts_type_assertion rule es-consistent-type-assertions:array {
   option assertionStyle ("as" | "angle-bracket" | "never") = "as" "Preferred assertion syntax."
   default option mode ("allow" | "allow-as-parameter" | "never") = "allow" "When literal assertions are allowed."
   when literal_assertion_eligible && expression.assertion_literal_kind == "array"
@@ -444,7 +444,7 @@ fn assertion_fix(source, n) = {
   value assertion_fix_with_body(source, n, body)
 }
 
-in ts_as, ts_type_assertion rule no-unnecessary-type-assertion {
+in ts_as, ts_type_assertion rule es-no-unnecessary-type-assertion {
   option typesToIgnore string[] = [] "Ignore these written assertion types"
   option checkLiteralConstAssertions boolean = false "Check const assertions on literal values"
   let check assertion_check(node, typesToIgnore, checkLiteralConstAssertions)
@@ -459,7 +459,7 @@ in ts_as, ts_type_assertion rule no-unnecessary-type-assertion {
   fix at edit.target if edit != null as edit.text
 }
 
-in ts_non_null rule no-unnecessary-type-assertion:non-null {
+in ts_non_null rule es-no-unnecessary-type-assertion:non-null {
   let outer assertion_outer(node)
   let assignment outer.parent is ts_assignment && outer.parent.operator == "="
   let target assignment && outer is ts_assignment.left

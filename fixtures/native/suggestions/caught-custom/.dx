@@ -1,2 +1,2 @@
 import .ts
-rule preserve-caught-error { set errorClassNames [{name: 'CustomError', argumentPosition: 0}] }
+rule es-preserve-caught-error { set errorClassNames [{name: 'CustomError', argumentPosition: 0}] }

@@ -1,8 +1,8 @@
-input.ts:10:15-10:33 no-confusing-void-expression#0
-input.ts:11:19-11:42 no-confusing-void-expression#0
-input.ts:12:24-12:50 no-confusing-void-expression#0
+input.ts:10:15-10:33 es-no-confusing-void-expression#0
+input.ts:11:19-11:42 es-no-confusing-void-expression#0
+input.ts:12:24-12:50 es-no-confusing-void-expression#0
 input.ts:16:15-16:24 optional-number-contract#0 Optional call preserves its number and undefined results.
 input.ts:19:24-19:39 optional-number-contract#0 Optional call preserves its number and undefined results.
-input.ts:7:16-7:25 no-confusing-void-expression#0
-input.ts:8:18-8:32 no-confusing-void-expression#0
-input.ts:9:16-9:30 no-confusing-void-expression#0
+input.ts:7:16-7:25 es-no-confusing-void-expression#0
+input.ts:8:18-8:32 es-no-confusing-void-expression#0
+input.ts:9:16-9:30 es-no-confusing-void-expression#0

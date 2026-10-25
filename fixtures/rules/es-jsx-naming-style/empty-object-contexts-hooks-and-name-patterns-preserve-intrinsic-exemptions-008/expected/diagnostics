@@ -1,0 +1,4 @@
+file.ts:1:11-1:25 es-no-empty-object-type:interface#1
+file.ts:1:195-1:197 es-no-empty-object-type:object#0
+file.ts:1:265-1:267 es-no-empty-object-type:object#0
+file.ts:1:39-1:54 es-no-empty-object-type:interface#0

@@ -1,2 +1,2 @@
 import .ts
-rule operator-linebreak { set mode "none" }
+rule es-operator-linebreak { set mode "none" }

@@ -67,7 +67,7 @@ fn void_expression_return_text(n, final) = {
   value if !final && n.parent not ts_block then "{{ " statement " }}" else statement
 }
 
-in ts_await, ts_call, ts_tagged_template rule no-confusing-void-expression {
+in ts_await, ts_call, ts_tagged_template rule es-no-confusing-void-expression {
   option ignoreArrowShorthand boolean = false "Allow concise arrow bodies"
   option ignoreVoidOperator boolean = false "Allow explicit void expressions"
   option ignoreVoidReturningFunctions boolean = false "Allow explicitly or contextually void-returning functions"

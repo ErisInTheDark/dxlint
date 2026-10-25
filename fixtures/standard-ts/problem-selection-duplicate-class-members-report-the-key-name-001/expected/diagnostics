@@ -1,4 +1,4 @@
-file.js:3:3-3:6 no-dupe-class-members#0
-file.js:5:3-5:8 no-dupe-class-members#0
-file.js:7:4-7:9 no-dupe-class-members#0
-file.js:9:3-9:6 no-dupe-class-members#0
+file.js:3:3-3:6 es-no-dupe-class-members#0
+file.js:5:3-5:8 es-no-dupe-class-members#0
+file.js:7:4-7:9 es-no-dupe-class-members#0
+file.js:9:3-9:6 es-no-dupe-class-members#0

@@ -1,2 +1,2 @@
 import .ts
-rule prefer-rest-params
+rule es-prefer-rest-params

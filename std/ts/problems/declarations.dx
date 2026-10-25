@@ -2,44 +2,44 @@
 
 define {
 
-in ts_assignment.name_write_identifiers, ts_update.name_write_identifiers, ts_for_in.name_write_identifiers, ts_for_of.name_write_identifiers, ts_declarator.name_write_identifiers rule no-ex-assign {
+in ts_assignment.name_write_identifiers, ts_update.name_write_identifiers, ts_for_in.name_write_identifiers, ts_for_of.name_write_identifiers, ts_declarator.name_write_identifiers rule es-no-ex-assign {
   when reference_kind == "catch" && @is_write
   warn "Do not assign to the exception parameter."
 }
-in ts_identifier rule no-const-assign {
+in ts_identifier rule es-no-const-assign {
   when (reference_kind == "const" || reference_kind == "using") && @is_write
   warn "'{text}' is constant."
 }
-in ts_identifier rule no-class-assign {
+in ts_identifier rule es-no-class-assign {
   when (reference_kind == "class" || reference_kind == "class_name") && @is_write
   warn "'{text}' is a class."
 }
-in ts_identifier rule no-func-assign {
+in ts_identifier rule es-no-func-assign {
   when (reference_kind == "function" || reference_kind == "function_name") && @is_write
   warn "'{text}' is a function."
 }
 
-in ts_unary rule no-delete-var {
+in ts_unary rule es-no-delete-var {
   when operator == "delete" && is_identifier(argument)
   warn "Variables should not be deleted."
 }
 
 in ts_variable_declaration let declares_loop_variable parent is (ts_for_of, ts_for_in)
 # `let x;` that is read but never written.
-in ts_declarator rule no-unassigned-vars {
+in ts_declarator rule es-no-unassigned-vars {
   when init == null && is_identifier(name) && ts_variable_declaration.kind != "const"
   when name.writes == 0 && name.uses > 0 && name.ambient == false && parent.declares_loop_variable != true
   warn "'{name}' is always 'undefined' because it's never assigned."
 }
 
 # Writes to the built-in globals.
-in ts_assignment.name_write_identifiers, ts_update.name_write_identifiers, ts_for_in.name_write_identifiers, ts_for_of.name_write_identifiers rule no-global-assign {
+in ts_assignment.name_write_identifiers, ts_update.name_write_identifiers, ts_for_in.name_write_identifiers, ts_for_of.name_write_identifiers rule es-no-global-assign {
   option exceptions string[] = [] "read-only globals that may be modified"
   when scope_declaration == null && global == "readonly" && @is_write && !contains(exceptions, identifier_name)
   warn "Read-only global '{text}' should not be modified."
 }
 
-in ts_identifier rule no-undef {
+in ts_identifier rule es-no-undef {
   option typeof boolean = false "also report `typeof x` of an undeclared `x`"
   when resolved == "global" && (global == null || global == "off") && access != "type"
   when typeof || !under_typeof
@@ -56,7 +56,7 @@ in ts_node let problem_assignment_export_read
   || ts_usage_global(ts_usage_binding, scoping_program) && contains(ts_exported_names(scoping_program), identifier_name)
 
 # Disallow variable assignments when the value is not used
-in ts_identifier rule no-useless-assignment {
+in ts_identifier rule es-no-useless-assignment {
   when declaration != null && declaration.exported != true && !problem_in_try
   when name_write_owner != null || is ts_declarator.name && parent.init != null
   when declaration.scoping_binding_execution_scope.id != null && declaration.scoping_binding_execution_scope.id == scoping_execution_scope.id

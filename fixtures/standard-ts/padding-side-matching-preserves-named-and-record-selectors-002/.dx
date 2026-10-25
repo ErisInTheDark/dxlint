@@ -1,3 +1,3 @@
 import .ts
 
-rule padding-line-between-statements { set options [{ blankLine: "always", prev: { selector: "ExpressionStatement", lineMode: "singleline" }, next: "*" }] }
+rule es-padding-line-between-statements { set options [{ blankLine: "always", prev: { selector: "ExpressionStatement", lineMode: "singleline" }, next: "*" }] }

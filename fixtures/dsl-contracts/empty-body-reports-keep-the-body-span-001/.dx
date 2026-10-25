@@ -1,2 +1,2 @@
 import .ts
-rule no-empty
+rule es-no-empty

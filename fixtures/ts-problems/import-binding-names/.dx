@@ -1,5 +1,5 @@
 import .ts
-rule no-import-assign
+rule es-no-import-assign
 
 in ts_call rule import-label {
   when callee.text == "probe"

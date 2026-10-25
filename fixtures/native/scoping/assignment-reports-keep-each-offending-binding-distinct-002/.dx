@@ -1,4 +1,4 @@
 import .ts
 
 language .js { set sourceType "script" }
-rule no-implicit-globals
+rule es-no-implicit-globals

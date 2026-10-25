@@ -10,7 +10,7 @@ fn layout_member_line_end(source, end) = { value byte_slice(source, end); re_tes
 in ts_interface, ts_type_literal let layout_last_member last(member.node)
 in ts_interface, ts_type_literal let layout_members_single position(opener.ts_open_brace.offset).js_line == position(end_offset).js_line
 in ts_interface, ts_type_literal let layout_last_member_inline position(layout_last_member.member_terminal_token.end).js_line == position(end_offset).js_line
-in ts_property_signature, ts_method_signature, ts_call_signature, ts_index_signature rule member-delimiter-style {
+in ts_property_signature, ts_method_signature, ts_call_signature, ts_index_signature rule es-member-delimiter-style {
   option delimiter "semi" | "comma" | "none" | null = null "default separator for legacy configurations"
   option multiline member_separator_options = {} "multiline member separators"
   option singleline member_separator_options = {} "single-line member separators"
@@ -68,7 +68,7 @@ in ts_colon let layout_annotation_optional token(node, "before").text == "?"
   when parent is layout_annotation_owner
   when parent.layout_annotation_start != null && offset < parent.layout_annotation_start
 }
-in ts_colon rule type-annotation-spacing:before {
+in ts_colon rule es-type-annotation-spacing:before {
   @layout_annotation_options
   @layout_annotation_context
   when len(overrides) > 0 || layout_annotation_optional || before || token(node, "before").end != offset
@@ -79,7 +79,7 @@ in ts_colon rule type-annotation-spacing:before {
   warn if annotation_before then "Expected a space before the '{annotation_label}'." else "Unexpected space before the '{annotation_label}'."
   fix at { start: annotation_gap.start, end: if annotation_before then annotation_gap.start else annotation_gap.end } if annotation_before || !annotation_gap.comments as if annotation_before then " " else ""
 }
-in ts_colon rule type-annotation-spacing:after {
+in ts_colon rule es-type-annotation-spacing:after {
   @layout_annotation_options
   @layout_annotation_context
   let annotation_edge token(node, "after")
@@ -90,7 +90,7 @@ in ts_colon rule type-annotation-spacing:after {
   warn if annotation_after then "Expected a space after the '{annotation_label}'." else "Unexpected space after the '{annotation_label}'."
   fix at { start: end_offset, end: if annotation_after then end_offset else space_after.end } if annotation_after || !space_after.comments as if annotation_after then " " else ""
 }
-in ts_colon rule type-annotation-spacing:between {
+in ts_colon rule es-type-annotation-spacing:between {
   @layout_annotation_context
   when layout_annotation_optional
   @layout_annotation_options
@@ -116,7 +116,7 @@ in ts_open_angle, ts_close_angle let layout_generic_edge parent is layout_generi
   when layout_generic_edge
 }
 
-in ts_open_angle rule type-generic-spacing {
+in ts_open_angle rule es-type-generic-spacing {
   @layout_generic_policy
   when parent not (ts_arrow, ts_function_type, ts_call_signature)
   when parent not (ts_function, ts_class) || parent.name != null
@@ -127,7 +127,7 @@ in ts_open_angle rule type-generic-spacing {
   fix at { start: offset - byte_len(generic_space), end: offset } as if before then " " else ""
   warn "Generic spaces mismatch"
 }
-in ts_close_angle rule type-generic-spacing:after {
+in ts_close_angle rule es-type-generic-spacing:after {
   @layout_generic_policy
   when parent is (ts_call, ts_new, ts_tagged_template, ts_call_signature, ts_method_signature, ts_function_type)
   when next_token != null
@@ -137,14 +137,14 @@ in ts_close_angle rule type-generic-spacing:after {
   fix at { start: end_offset, end: end_offset + byte_len(generic_space) } as if after then " " else ""
   warn "Generic spaces mismatch"
 }
-in ts_open_angle rule type-generic-spacing:inner-open {
+in ts_open_angle rule es-type-generic-spacing:inner-open {
   @layout_generic_policy
   when re_test(space_after.text, /\s/) && !re_test(space_after.text, /^[\n\r]/)
   report at { start: end_offset, end: space_after.end }
   fix at { start: end_offset, end: space_after.end } if !space_after.comments as ""
   warn "Generic spaces mismatch"
 }
-in ts_close_angle rule type-generic-spacing:inner-close {
+in ts_close_angle rule es-type-generic-spacing:inner-close {
   @layout_generic_policy
   when re_test(space_before.text, /\s/) && !re_test(space_before.text, /^[\n\r]/)
   report at { start: space_before.start, end: offset }
@@ -154,7 +154,7 @@ in ts_close_angle rule type-generic-spacing:inner-close {
 
 # Named tuple members use `name?: Type`.
 in ts_tuple_member let layout_tuple_prefix !name.space_after.comments && (optional == null || !ts_token_space(source, optional.node, false).comments)
-in ts_colon rule type-named-tuple-spacing:optional {
+in ts_colon rule es-type-named-tuple-spacing:optional {
   when parent is ts_tuple_member && parent.optional != null
   when parent.layout_tuple_prefix
   when space_before.spaced
@@ -162,7 +162,7 @@ in ts_colon rule type-named-tuple-spacing:optional {
   fix space_before as ""
   warn "Unexpected space between '?' and the ':'."
 }
-in ts_tuple_member.name rule type-named-tuple-spacing:before {
+in ts_tuple_member.name rule es-type-named-tuple-spacing:before {
   @ts_token_context
   when parent.layout_tuple_prefix
   when space_after.spaced
@@ -170,7 +170,7 @@ in ts_tuple_member.name rule type-named-tuple-spacing:before {
   fix space_after as ""
   warn "Unexpected space before the ':'."
 }
-in ts_colon rule type-named-tuple-spacing:after {
+in ts_colon rule es-type-named-tuple-spacing:after {
   when parent is ts_tuple_member
   when parent.layout_tuple_prefix
   when { value space_after.text; re_find /^\s*/; len } != 1

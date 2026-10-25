@@ -1,2 +1,2 @@
-a.ts:15:42-15:51 return-await#2
-a.ts:16:76-16:85 return-await#2
+a.ts:15:42-15:51 es-return-await#2
+a.ts:16:76-16:85 es-return-await#2

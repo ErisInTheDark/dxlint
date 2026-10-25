@@ -2,12 +2,12 @@
 
 define {
 
-in ts_member rule no-caller {
+in ts_member rule es-no-caller {
   when object == "arguments" && property ~ /callee|caller/
   warn "Avoid arguments.{property}."
 }
 
-in ts_binary rule no-compare-neg-zero {
+in ts_binary rule es-no-compare-neg-zero {
   when operator ~ /===?|!==?|<=?|>=?/ && (re_test(left, /^-\s*0$/) || re_test(right, /^-\s*0$/))
   warn "Do not use the '{operator}' operator to compare against -0."
 }
@@ -17,14 +17,14 @@ in ts_binary rule no-compare-neg-zero {
 # assignment inside a condition.
 in ts_assignment let is_assignment true
 in ts_parenthesized let wraps_assignment expression.is_assignment == true
-in ts_if.test, ts_while.test, ts_do_while.test, ts_for.test, ts_conditional.test rule no-cond-assign {
+in ts_if.test, ts_while.test, ts_do_while.test, ts_for.test, ts_conditional.test rule es-no-cond-assign {
   option mode "except-parens" | "always" = "except-parens"
   when mode == "except-parens"
   when is ts_assignment || parent is ts_conditional && is ts_parenthesized && wraps_assignment == true
   report at unparenthesised_node(node)
   warn "Expected a conditional expression and instead saw an assignment."
 }
-in ts_assignment rule no-cond-assign:always {
+in ts_assignment rule es-no-cond-assign:always {
   option mode "except-parens" | "always" = "except-parens"
   let where if conditional_ancestor is ts_if then "an 'if' statement" else if conditional_ancestor is ts_while then "a 'while' statement" else if conditional_ancestor is ts_do_while then "a 'do...while' statement" else if conditional_ancestor is ts_for then "a 'for' statement" else "ConditionalExpression"
   when mode == "always" && conditional_ancestor != null
@@ -36,20 +36,20 @@ in ts_identifier let is_nan text == "NaN" && is_real_global
 in ts_member, ts_index let is_nan object == "Number" && object.is_real_global == true && static_name == "NaN"
 in ts_parenthesized let is_nan expression.is_nan == true
 in ts_sequence let is_nan last([] expression.is_nan) == true
-in ts_binary rule use-isnan {
+in ts_binary rule es-use-isnan {
   when operator ~ /(?:[<>]|[!=]=)=?/ && (left.is_nan == true || right.is_nan == true)
   warn "Use the isNaN function to compare with NaN."
 }
 group use_isnan_searches
-in ts_switch rule use-isnan:switch {
+in ts_switch rule es-use-isnan:switch {
   when discriminant.is_nan == true
   warn "'switch(NaN)' can never match a case clause. Use Number.isNaN instead of the switch."
 }
-in ts_case rule use-isnan:case {
+in ts_case rule es-use-isnan:case {
   when test.is_nan == true
   warn "'case NaN' can never match. Use Number.isNaN before the switch."
 }
-in use_isnan_searches rule use-isnan:index-of {
+in use_isnan_searches rule es-use-isnan:index-of {
   when (callee.static_name == "indexOf" || callee.static_name == "lastIndexOf") && count(argument) <= 2 && first([] argument.is_nan) == true
   warn "Array prototype method '{callee.static_name}' cannot find NaN."
 }
@@ -62,7 +62,7 @@ in ts_binary {
   let right_is_typeof right.is_typeof == true
 }
 @macro valid_typeof_names ["symbol", "undefined", "object", "boolean", "number", "string", "function", "bigint"]
-in ts_binary.left, ts_binary.right rule valid-typeof {
+in ts_binary.left, ts_binary.right rule es-valid-typeof {
   option requireStringLiterals boolean = false "compare only with string literals"
   let compared_with_typeof parent.operator ~ /[=!]==?/ && (if is ts_node.left then parent.right_is_typeof else parent.left_is_typeof)
   when compared_with_typeof
@@ -116,7 +116,7 @@ fn problem_self_assignments(a, b) = {
   }
   map (item) unparenthesised_node(item.right)
 }
-in ts_assignment rule no-self-assign {
+in ts_assignment rule es-no-self-assign {
   option props boolean = true
   when contains(["=", "&&=", "||=", "??="], operator)
   each self in map(problem_self_assignments(left.node, right.node), assigned => { node: assigned, name: re_replace(assigned.text, /\s+/, "") }) {
@@ -128,7 +128,7 @@ in ts_assignment rule no-self-assign {
 
 # Comparisons and short circuits whose result cannot change.
 in ts_binary, ts_logical let constant_relation_checked false
-in ts_binary, ts_logical rule no-constant-binary-expression {
+in ts_binary, ts_logical rule es-no-constant-binary-expression {
   let c constant_comparison
   when c != null || constant_relation_checked && constant_relation
   report at if c != null then c.node else node
@@ -141,13 +141,13 @@ in ts_binary, ts_logical rule no-constant-binary-expression {
 
 # `!a in b`: the `!` applies to `a` alone.
 in ts_binary let unsafe_negation_checked contains(["in", "instanceof"], operator)
-in ts_binary.left rule no-unsafe-negation {
+in ts_binary.left rule es-no-unsafe-negation {
   when is ts_unary && re_test(text, /^!/)
   when parent.unsafe_negation_checked
   warn "Unexpected negating the left operand of '{parent.operator}' operator."
 }
 
-in ts_string rule no-template-curly-in-string warn "Unexpected template string expression." {
+in ts_string rule es-no-template-curly-in-string warn "Unexpected template string expression." {
   when text ~ /.*\$\{[^}\r\n]+\}.*/
 }
 

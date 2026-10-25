@@ -1,2 +1,2 @@
-input.ts:1:18-1:19 comma-dangle#0
-input.ts:2:26-2:27 comma-dangle#0
+input.ts:1:18-1:19 es-comma-dangle#0
+input.ts:2:26-2:27 es-comma-dangle#0

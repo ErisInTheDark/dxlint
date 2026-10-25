@@ -1,2 +1,2 @@
-file.ts:1:23-1:33 member-ordering:type-literal#2
-file.ts:1:48-1:60 member-ordering:type-literal#1
+file.ts:1:23-1:33 es-member-ordering:type-literal#2
+file.ts:1:48-1:60 es-member-ordering:type-literal#1

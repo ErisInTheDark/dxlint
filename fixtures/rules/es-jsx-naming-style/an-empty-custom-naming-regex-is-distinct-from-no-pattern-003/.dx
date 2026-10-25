@@ -1,0 +1,7 @@
+import .ts
+
+            rule es-naming-convention:variable {
+                set formats []
+                set customRegex ""
+                set customMatch false
+            }

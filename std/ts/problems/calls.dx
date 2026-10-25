@@ -6,7 +6,7 @@ define {
 in ts_new let promise_constructor callee.is_real_promise == true
 in ts_identifier let is_real_promise @is_global("Promise")
 in ts_parenthesized let promise_executor_slot parent is ts_new && index == 0 && parent.promise_constructor || parent is ts_parenthesized && parent.promise_executor_slot == true
-in ts_arrow, ts_function rule no-async-promise-executor {
+in ts_arrow, ts_function rule es-no-async-promise-executor {
   when contains(modifier, "async")
   when parent is ts_new && index == 0 && parent.promise_constructor || parent is ts_parenthesized && parent.promise_executor_slot == true
   let async_token find(modifier.nodes, modifier => modifier.text == "async")
@@ -14,18 +14,18 @@ in ts_arrow, ts_function rule no-async-promise-executor {
   warn "Promise executor functions should not be async."
 }
 
-in ts_call, ts_new rule no-obj-calls {
+in ts_call, ts_new rule es-no-obj-calls {
   when contains(["Atomics", "JSON", "Math", "Reflect", "Intl", "Temporal"], callee.global_value)
   let called { value callee; re_replace /^[\s(]+|[\s)!]+$/ ""; re_replace /^.*[.\[]\s*['"`]?|['"`]?\s*\]$/ "" }
   warn if called == callee.global_value then "'{called}' is not a function." else "'{called}' is reference to '{callee.global_value}', which is not a function."
 }
-in ts_new rule no-new-native-nonconstructor {
+in ts_new rule es-no-new-native-nonconstructor {
   when (callee == "Symbol" || callee == "BigInt") && callee.is_real_global == true
   warn "`{callee}` cannot be called as a constructor."
 }
 
 # `x.hasOwnProperty(k)` borrows a method the object may not have.
-in ts_member.property, ts_index.index rule no-prototype-builtins {
+in ts_member.property, ts_index.index rule es-no-prototype-builtins {
   when parent.called_member == true && contains(["hasOwnProperty", "isPrototypeOf", "propertyIsEnumerable"], parent.static_name)
   warn "Do not access Object.prototype method '{parent.static_name}' from target object."
 }

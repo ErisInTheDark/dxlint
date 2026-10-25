@@ -9,7 +9,7 @@ in ts_property, ts_pattern_property let computed_exception parent is ts_object &
 in ts_method let computed_exception if parent is ts_class then static_name == (if member_static then "prototype" else "constructor") else parent is ts_object && parent.flow_destructuring_target != true && static_name == "__proto__"
 in ts_class_property let computed_exception static_name == "constructor" || member_static && static_name == "prototype"
 
-in ts_property, ts_pattern_property, ts_method, ts_class_property rule no-useless-computed-key {
+in ts_property, ts_pattern_property, ts_method, ts_class_property rule es-no-useless-computed-key {
   option enforceForClassMembers boolean = true "check class member keys"
   let computed_text key.computed_literal_text
   when computed_text != null && !computed_exception && (parent not ts_class || enforceForClassMembers)

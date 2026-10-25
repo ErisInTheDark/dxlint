@@ -1,4 +1,4 @@
-a.ts:1:205-1:206 no-useless-default-assignment#2
-a.ts:1:340-1:349 no-useless-default-assignment#0
-a.ts:1:381-1:390 no-useless-default-assignment#1
-a.ts:1:83-1:84 no-useless-default-assignment#2
+a.ts:1:205-1:206 es-no-useless-default-assignment#2
+a.ts:1:340-1:349 es-no-useless-default-assignment#0
+a.ts:1:381-1:390 es-no-useless-default-assignment#1
+a.ts:1:83-1:84 es-no-useless-default-assignment#2

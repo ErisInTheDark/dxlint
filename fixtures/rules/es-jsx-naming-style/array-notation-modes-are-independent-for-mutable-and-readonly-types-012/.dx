@@ -1,0 +1,3 @@
+import .ts
+rule es-array-type
+rule es-array-type:mutable set 'generic'

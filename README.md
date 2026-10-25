@@ -6,8 +6,8 @@ A fast linter and fixer for TypeScript, JavaScript, Rust and more. It ships port
 import .ts
 import rules:recommended
 
-rule eqeqeq error
-rule no-floating-promises
+rule es-eqeqeq error
+rule es-no-floating-promises
 ```
 
 ```

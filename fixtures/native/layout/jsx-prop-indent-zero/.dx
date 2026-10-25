@@ -1,2 +1,2 @@
 import .ts
-rule jsx-indent-props { set mode 0 }
+rule es-jsx-indent-props { set mode 0 }

@@ -1,5 +1,5 @@
-input.ts:1:6-1:7 consistent-type-definitions#0
-input.ts:2:6-2:7 consistent-type-definitions#0
-input.ts:3:6-3:7 consistent-type-definitions#0
-input.ts:4:6-4:7 consistent-type-definitions#0
-input.ts:5:6-5:7 consistent-type-definitions#0
+input.ts:1:6-1:7 es-consistent-type-definitions#0
+input.ts:2:6-2:7 es-consistent-type-definitions#0
+input.ts:3:6-3:7 es-consistent-type-definitions#0
+input.ts:4:6-4:7 es-consistent-type-definitions#0
+input.ts:5:6-5:7 es-consistent-type-definitions#0

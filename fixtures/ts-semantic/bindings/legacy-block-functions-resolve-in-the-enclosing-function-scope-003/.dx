@@ -2,5 +2,5 @@ import .ts
 language .js { set sourceType "script"
 set ecmaVersion 2015
 }
-rule no-undef
-rule no-use-before-define
+rule es-no-undef
+rule es-no-use-before-define

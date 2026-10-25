@@ -1,2 +1,2 @@
 import .ts
-rule yoda { set mode "always" }
+rule es-yoda { set mode "always" }

@@ -1,0 +1,3 @@
+import .ts
+rule es-consistent-type-assertions
+rule es-consistent-type-assertions:object set 'allow-as-parameter'

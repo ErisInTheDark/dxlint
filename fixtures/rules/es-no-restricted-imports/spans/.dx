@@ -1,0 +1,6 @@
+import .ts
+rule es-no-restricted-imports
+rule es-no-restricted-imports {
+  set paths [{ name: 'mod', importNames: ['bar'] }, { name: 'fs' }]
+  set patterns [{ group: ['foo'], importNames: ['Foo'] }]
+}

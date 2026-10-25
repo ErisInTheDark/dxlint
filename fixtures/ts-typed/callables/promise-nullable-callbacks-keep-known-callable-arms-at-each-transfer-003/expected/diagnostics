@@ -1,1 +1,1 @@
-main.ts:1:101-1:109 no-misused-promises:void-variables#0
+main.ts:1:101-1:109 es-no-misused-promises:void-variables#0

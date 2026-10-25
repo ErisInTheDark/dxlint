@@ -1,5 +1,5 @@
 import .ts
-rule use-isnan
-rule use-isnan:switch off
-rule use-isnan:case off
+rule es-use-isnan
+rule es-use-isnan:switch off
+rule es-use-isnan:case off
 group use_isnan_searches ts_call

@@ -1,0 +1,2 @@
+file.ts:1:23-1:25 es-no-restricted-types#0 {}
+file.ts:1:8-1:14 es-no-restricted-types:name#0 Banned

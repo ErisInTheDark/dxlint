@@ -1,0 +1,3 @@
+import .ts
+rule es-space-in-parens:after
+rule es-space-in-parens:before

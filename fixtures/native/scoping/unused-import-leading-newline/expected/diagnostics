@@ -1,7 +1,7 @@
-input.ts:2:8-2:15 no-unused-vars:variables#1
-input.ts:3:13-3:18 no-unused-vars:variables#1
-input.ts:4:10-4:15 no-unused-vars:variables#1
-input.ts:5:10-5:15 no-unused-vars:variables#1
-input.ts:5:17-5:23 no-unused-vars:variables#1
-input.ts:6:16-6:21 no-unused-vars:variables#1
-input.ts:6:8-6:12 no-unused-vars:variables#1
+input.ts:2:8-2:15 es-no-unused-vars:variables#1
+input.ts:3:13-3:18 es-no-unused-vars:variables#1
+input.ts:4:10-4:15 es-no-unused-vars:variables#1
+input.ts:5:10-5:15 es-no-unused-vars:variables#1
+input.ts:5:17-5:23 es-no-unused-vars:variables#1
+input.ts:6:16-6:21 es-no-unused-vars:variables#1
+input.ts:6:8-6:12 es-no-unused-vars:variables#1

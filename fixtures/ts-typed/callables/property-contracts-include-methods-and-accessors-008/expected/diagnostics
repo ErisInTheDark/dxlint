@@ -1,1 +1,1 @@
-main.ts:1:11-1:40 no-misused-promises:void-properties#0
+main.ts:1:11-1:40 es-no-misused-promises:void-properties#0

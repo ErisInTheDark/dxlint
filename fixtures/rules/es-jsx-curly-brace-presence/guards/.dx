@@ -1,0 +1,2 @@
+import .ts
+rule es-jsx-curly-brace-presence { set mode "always"; set propElementValues "never" }

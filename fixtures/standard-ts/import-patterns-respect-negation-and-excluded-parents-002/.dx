@@ -1,2 +1,2 @@
 import .ts
-rule no-restricted-imports:patterns { set patterns [{group: ['foo/*', '!foo/bar']}] }
+rule es-no-restricted-imports:patterns { set patterns [{group: ['foo/*', '!foo/bar']}] }

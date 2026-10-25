@@ -1,1 +1,1 @@
-main.ts:1:80-1:88 no-misused-promises:void-arguments#0
+main.ts:1:80-1:88 es-no-misused-promises:void-arguments#0

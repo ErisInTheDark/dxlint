@@ -5,13 +5,13 @@ define {
 in ts_template let static_template count(expression) == 0
 in ts_parenthesized forward static_template from expression
 
-in ts_regex, ts_call, ts_new rule prefer-named-capture-group {
+in ts_regex, ts_call, ts_new rule es-prefer-named-capture-group {
   each capture in regexp_unnamed_captures {
     warn "Capture group '{capture}' should be converted to a named or non-capturing group."
   }
 }
 
-in ts_regex rule no-div-regex {
+in ts_regex rule es-no-div-regex {
   when re_test(text, "^/=")
   fix at { start: offset + 1, end: offset + 2 } as "[=]"
   warn "A regular expression literal can be confused with '/='."
@@ -32,7 +32,7 @@ fn regex_construction_kind(args) =
     else then null
   }
 
-in ts_call, ts_new rule prefer-regex-literals {
+in ts_call, ts_new rule es-prefer-regex-literals {
   option disallowRedundantWrapping boolean = false "disallow constructors wrapping regex literals"
   when callee.global_value == "RegExp"
   let regex_preference regex_construction_kind(argument.nodes)
@@ -44,7 +44,7 @@ in ts_call, ts_new rule prefer-regex-literals {
   }
 }
 
-in ts_regex, ts_call, ts_new rule require-unicode-regexp {
+in ts_regex, ts_call, ts_new rule es-require-unicode-regexp {
   option requireFlag ("u" | "v" | null) = null "require a particular unicode mode"
   let unicode_info regexp_unicode_info
   when unicode_info != null

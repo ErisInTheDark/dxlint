@@ -1,2 +1,2 @@
 import .ts
-rule no-dupe-else-if
+rule es-no-dupe-else-if

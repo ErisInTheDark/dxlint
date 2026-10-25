@@ -1,2 +1,2 @@
-a.js:1:20-1:24 no-eval:member#0
-a.js:1:45-1:49 no-eval:member#0
+a.js:1:20-1:24 es-no-eval:member#0
+a.js:1:45-1:49 es-no-eval:member#0

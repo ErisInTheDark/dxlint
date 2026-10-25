@@ -1,2 +1,2 @@
 import .ts
-rule prefer-reduce-type-parameter
+rule es-prefer-reduce-type-parameter

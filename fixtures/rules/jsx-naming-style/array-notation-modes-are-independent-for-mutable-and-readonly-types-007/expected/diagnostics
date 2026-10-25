@@ -1,4 +1,0 @@
-file.ts:1:130-1:151 array-type:readonly#0
-file.ts:1:193-1:213 array-type:readonly#0
-file.ts:1:31-1:44 array-type:mutable#0
-file.ts:1:56-1:65 array-type:mutable#0

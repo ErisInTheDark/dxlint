@@ -57,7 +57,7 @@ fn boolean_cast_fix(source, n, info) =
     } }
   }
 
-in ts_unary, ts_call rule no-extra-boolean-cast {
+in ts_unary, ts_call rule es-no-extra-boolean-cast {
   option enforceForInnerExpressions boolean = false "check casts nested inside boolean expressions"
   option enforceForLogicalOperands boolean = false "check casts nested inside logical expressions"
   when if is ts_call then node.callee is ts_parenthesized || node.callee is ts_identifier && node.callee.text == "Boolean" else node.operator == "!"
@@ -115,7 +115,7 @@ fn exponentiation_fix(n) =
     value exponentiation_fix_output(n, text)
   }
 
-in ts_call rule prefer-exponentiation-operator {
+in ts_call rule es-prefer-exponentiation-operator {
   when ts_global_method_candidate(node, "pow")
   when global_method_callee == "Math.pow"
   let power_text exponentiation_fix(node)
@@ -255,7 +255,7 @@ fn logical_assignment_fix(source, n, info) = if !expression_fix_clean(n) then nu
     value logical_fix_if(source, n, body, assignment_2, existence)
   }
 
-in ts_assignment, ts_logical, ts_if rule logical-assignment-operators {
+in ts_assignment, ts_logical, ts_if rule es-logical-assignment-operators {
   option mode ("always" | "never") = "always" "logical assignment policy"
   option enforceForIfStatements boolean = false "include conditional assignments"
   when not ts_if || enforceForIfStatements

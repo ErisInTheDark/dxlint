@@ -1,4 +1,4 @@
-input.js:1:2-1:12 no-unsafe-optional-chaining#1
-input.js:2:1-2:11 no-unsafe-optional-chaining#1
-input.js:3:10-3:20 no-unsafe-optional-chaining#1
-input.js:5:2-5:12 no-unsafe-optional-chaining#0
+input.js:1:2-1:12 es-no-unsafe-optional-chaining#1
+input.js:2:1-2:11 es-no-unsafe-optional-chaining#1
+input.js:3:10-3:20 es-no-unsafe-optional-chaining#1
+input.js:5:2-5:12 es-no-unsafe-optional-chaining#0

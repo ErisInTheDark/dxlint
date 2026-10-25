@@ -1,2 +1,0 @@
-import .ts
-rule parameter-properties { set prefer 'class-property' }

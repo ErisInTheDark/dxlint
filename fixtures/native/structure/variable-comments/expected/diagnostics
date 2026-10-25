@@ -1,3 +1,3 @@
-a.js:1:1-1:19 one-var#0
-a.js:2:1-2:21 one-var#0
-a.js:3:1-5:4 one-var#0
+a.js:1:1-1:19 es-one-var#0
+a.js:2:1-2:21 es-one-var#0
+a.js:3:1-5:4 es-one-var#0

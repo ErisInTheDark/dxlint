@@ -1,2 +1,2 @@
-a.ts:1:207-1:212 only-throw-error#1
-a.ts:1:291-1:297 only-throw-error#1
+a.ts:1:207-1:212 es-only-throw-error#1
+a.ts:1:291-1:297 es-only-throw-error#1

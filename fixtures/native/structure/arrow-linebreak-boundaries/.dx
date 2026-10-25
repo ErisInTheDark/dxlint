@@ -1,2 +1,2 @@
 import .ts
-rule implicit-arrow-linebreak
+rule es-implicit-arrow-linebreak

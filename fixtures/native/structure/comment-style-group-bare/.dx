@@ -1,2 +1,2 @@
 import .ts
-rule multiline-comment-style { set mode "bare-block" }
+rule es-multiline-comment-style { set mode "bare-block" }

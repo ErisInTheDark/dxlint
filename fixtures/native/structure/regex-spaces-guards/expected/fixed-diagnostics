@@ -1,2 +1,2 @@
-a.js:1:17-1:33 no-regex-spaces#0
-a.js:2:21-2:46 no-regex-spaces#0
+a.js:1:17-1:33 es-no-regex-spaces#0
+a.js:2:21-2:46 es-no-regex-spaces#0

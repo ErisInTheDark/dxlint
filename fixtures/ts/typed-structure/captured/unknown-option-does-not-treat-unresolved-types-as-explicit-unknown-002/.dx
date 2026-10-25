@@ -1,2 +1,2 @@
 import .ts
-rule no-base-to-string { set checkUnknown true }
+rule es-no-base-to-string { set checkUnknown true }

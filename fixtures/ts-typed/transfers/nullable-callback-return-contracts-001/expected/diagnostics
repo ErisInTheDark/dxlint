@@ -1,2 +1,2 @@
-a.ts:4:14-4:19 no-unsafe-return#1
-a.ts:5:22-5:35 no-unsafe-return#1
+a.ts:4:14-4:19 es-no-unsafe-return#1
+a.ts:5:22-5:35 es-no-unsafe-return#1

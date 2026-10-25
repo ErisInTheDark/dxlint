@@ -244,7 +244,7 @@ fn type_parameter_written_usage(n, references, result, target, returns, queries)
   value if inferred.known then { known: true, uses: (syntax_uses inferred.uses) } else { known: false, uses: [] }
 }
 
-in ts_type_parameter rule no-unnecessary-type-parameters warn "Type parameter {name} is {type_parameter_uses} in the {type_parameter_descriptor} signature." {
+in ts_type_parameter rule es-no-unnecessary-type-parameters warn "Type parameter {name} is {type_parameter_uses} in the {type_parameter_descriptor} signature." {
   let type_parameter_owner parent.node
   when type_parameter_owner is (ts_function, ts_arrow, ts_method, ts_function_type,
     ts_method_signature, ts_call_signature, ts_class)

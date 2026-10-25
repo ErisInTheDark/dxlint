@@ -1,0 +1,14 @@
+file.ts:10:5-10:43 es-prefer-arrow-callback#0
+file.ts:11:22-11:35 es-prefer-arrow-callback#0
+file.ts:11:5-11:39 es-prefer-arrow-callback#0
+file.ts:1:23-1:70 es-prefer-arrow-callback#0
+file.ts:1:77-1:90 es-prefer-arrow-callback#0
+file.ts:2:17-2:30 es-prefer-arrow-callback#0
+file.ts:3:11-3:24 es-prefer-arrow-callback#0
+file.ts:3:27-3:40 es-prefer-arrow-callback#0
+file.ts:4:5-4:25 es-prefer-arrow-callback#0
+file.ts:5:12-5:32 es-prefer-arrow-callback#0
+file.ts:6:5-6:18 es-prefer-arrow-callback#0
+file.ts:7:5-7:18 es-prefer-arrow-callback#0
+file.ts:8:7-8:34 es-prefer-arrow-callback#0
+file.ts:9:5-9:56 es-prefer-arrow-callback#0

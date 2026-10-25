@@ -1,2 +1,2 @@
 import .ts
-rule eqeqeq { set options ["smart"] }
+rule es-eqeqeq { set options ["smart"] }

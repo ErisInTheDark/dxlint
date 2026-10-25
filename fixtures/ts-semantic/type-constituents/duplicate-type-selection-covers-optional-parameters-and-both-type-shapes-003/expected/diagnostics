@@ -1,2 +1,2 @@
-file.ts:1:19-1:25 no-duplicate-type-constituents#0
-file.ts:1:81-1:90 no-duplicate-type-constituents:optional#0
+file.ts:1:19-1:25 es-no-duplicate-type-constituents#0
+file.ts:1:81-1:90 es-no-duplicate-type-constituents:optional#0

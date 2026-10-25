@@ -1,0 +1,5 @@
+file.js:2:20-2:27 es-no-useless-return#0
+file.js:3:26-3:33 es-no-useless-return#0
+file.js:4:23-4:30 es-no-useless-return#0
+file.js:5:28-5:35 es-no-useless-return#0
+file.js:6:33-6:40 es-no-useless-return#0

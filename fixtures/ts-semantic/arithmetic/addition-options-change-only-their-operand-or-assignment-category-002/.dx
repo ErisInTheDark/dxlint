@@ -1,2 +1,2 @@
 import .ts
-rule restrict-plus-operands { set allowBoolean false }
+rule es-restrict-plus-operands { set allowBoolean false }

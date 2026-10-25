@@ -1,6 +1,6 @@
-a.ts:1:106-1:107 no-unnecessary-condition:loop#1
-a.ts:1:134-1:136 no-unnecessary-condition:loop#1
-a.ts:1:148-1:149 no-unnecessary-condition:loop#2
-a.ts:1:184-1:189 no-unnecessary-condition:loop#1
-a.ts:1:76-1:81 no-unnecessary-condition:loop#1
-a.ts:1:93-1:94 no-unnecessary-condition:loop#2
+a.ts:1:106-1:107 es-no-unnecessary-condition:loop#1
+a.ts:1:134-1:136 es-no-unnecessary-condition:loop#1
+a.ts:1:148-1:149 es-no-unnecessary-condition:loop#2
+a.ts:1:184-1:189 es-no-unnecessary-condition:loop#1
+a.ts:1:76-1:81 es-no-unnecessary-condition:loop#1
+a.ts:1:93-1:94 es-no-unnecessary-condition:loop#2

@@ -1,2 +1,2 @@
 import .ts
-rule consistent-generic-constructors { set mode "type-annotation" }
+rule es-consistent-generic-constructors { set mode "type-annotation" }

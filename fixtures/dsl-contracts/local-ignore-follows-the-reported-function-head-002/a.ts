@@ -1,3 +1,3 @@
 async function
-// dxlint-ignore require-await
+// dxlint-ignore es-require-await
 task() { work(); }

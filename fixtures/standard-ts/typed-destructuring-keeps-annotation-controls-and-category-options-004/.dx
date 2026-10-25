@@ -1,2 +1,2 @@
 import .ts
-rule prefer-destructuring { set options [{ array: true }, { enforceForRenamedProperties: true }] }
+rule es-prefer-destructuring { set options [{ array: true }, { enforceForRenamedProperties: true }] }

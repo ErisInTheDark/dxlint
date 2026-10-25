@@ -1,2 +1,2 @@
 import .ts
-rule no-unnecessary-template-expression
+rule es-no-unnecessary-template-expression

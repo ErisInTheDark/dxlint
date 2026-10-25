@@ -1,8 +1,8 @@
-input.ts:10:1-10:17 no-floating-promises#0
-input.ts:11:1-11:16 no-floating-promises#0
-input.ts:12:1-12:21 no-floating-promises#0
-input.ts:13:1-13:21 no-floating-promises#0
-input.ts:14:1-14:21 no-floating-promises#0
-input.ts:15:1-15:21 no-floating-promises#0
-input.ts:16:1-16:18 no-floating-promises#0
-input.ts:9:1-9:16 no-floating-promises#0
+input.ts:10:1-10:17 es-no-floating-promises#0
+input.ts:11:1-11:16 es-no-floating-promises#0
+input.ts:12:1-12:21 es-no-floating-promises#0
+input.ts:13:1-13:21 es-no-floating-promises#0
+input.ts:14:1-14:21 es-no-floating-promises#0
+input.ts:15:1-15:21 es-no-floating-promises#0
+input.ts:16:1-16:18 es-no-floating-promises#0
+input.ts:9:1-9:16 es-no-floating-promises#0

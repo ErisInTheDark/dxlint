@@ -1,2 +1,2 @@
-a.js:3:3-3:4 operator-linebreak#1
-a.js:4:4-4:5 operator-linebreak#1
+a.js:3:3-3:4 es-operator-linebreak#1
+a.js:4:4-4:5 es-operator-linebreak#1

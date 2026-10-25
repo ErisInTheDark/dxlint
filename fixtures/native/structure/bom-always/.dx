@@ -1,2 +1,2 @@
 import .ts
-rule unicode-bom { set mode "always" }
+rule es-unicode-bom { set mode "always" }

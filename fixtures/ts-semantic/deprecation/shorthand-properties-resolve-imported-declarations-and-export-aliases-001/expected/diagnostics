@@ -1,2 +1,2 @@
-main.ts:1:69-1:87 no-deprecated#0
-main.ts:1:98-1:112 no-deprecated#0
+main.ts:1:69-1:87 es-no-deprecated#0
+main.ts:1:98-1:112 es-no-deprecated#0

@@ -1,4 +1,4 @@
 import .ts
-rule indent {
+rule es-indent {
   set mode 2
 }

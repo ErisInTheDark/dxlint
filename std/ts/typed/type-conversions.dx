@@ -72,7 +72,7 @@ fn type_conversion_site(n, start) = {
   value { start: start, end: end }
 }
 
-in ts_call, ts_unary, ts_binary, ts_assignment rule no-unnecessary-type-conversion {
+in ts_call, ts_unary, ts_binary, ts_assignment rule es-no-unnecessary-type-conversion {
   let conversion if is ts_call then conversion_call(node) else conversion_operator(node)
   when conversion != null
   report at type_conversion_site(node, conversion.offset)

@@ -26,12 +26,12 @@ in ts_comment {
   let restriction_comment_previous { value ts_program.restriction_comment_catalog; slice (restriction_comment_index - 1) restriction_comment_index; last }
   let restriction_comment_consecutive restriction_comment_previous != null && { value source; byte_slice restriction_comment_previous.end_offset offset; trim } == ""
 }
-in ts_comment rule no-inline-comments {
+in ts_comment rule es-no-inline-comments {
   option ignorePattern regex = "" "comments to ignore"
   when (restriction_comment_preamble || restriction_comment_postamble) && !restriction_comment_empty_jsx && !@restriction_directive(restriction_comment_body) && !(ignorePattern != "" && re_test(restriction_comment_body, ignorePattern))
   warn "Unexpected comment inline with code."
 }
-in ts_comment rule no-warning-comments {
+in ts_comment rule es-no-warning-comments {
   option terms string[] = ["todo", "fixme", "xxx"] "warning terms"
   option location "start" | "anywhere" = "start" "where warning terms may occur"
   option decoration string(1..1)[] = [] "characters ignored before a starting warning"
@@ -70,7 +70,7 @@ in ts_comment let capitalized_comments_checked true
   fix at edit.target as edit.text
   warn if mode == "always" then "Comments should not begin with a lowercase character." else "Comments should not begin with an uppercase character."
 }
-in ts_line_comment rule capitalized-comments:line { @restriction_capitalized_comment_body }
-in ts_block_comment rule capitalized-comments:block { @restriction_capitalized_comment_body }
+in ts_line_comment rule es-capitalized-comments:line { @restriction_capitalized_comment_body }
+in ts_block_comment rule es-capitalized-comments:block { @restriction_capitalized_comment_body }
 
 }

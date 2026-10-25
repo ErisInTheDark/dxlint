@@ -1,7 +1,7 @@
-input.ts:1:1-1:2 no-extra-semi#0
-input.ts:1:2-1:3 no-extra-semi#0
-input.ts:2:16-2:17 no-extra-semi#0
-input.ts:2:17-2:18 no-extra-semi#0
-input.ts:2:52-2:53 no-extra-semi#0
-input.ts:3:3-3:4 no-extra-semi#0
-input.ts:4:23-4:24 no-extra-semi#0
+input.ts:1:1-1:2 es-no-extra-semi#0
+input.ts:1:2-1:3 es-no-extra-semi#0
+input.ts:2:16-2:17 es-no-extra-semi#0
+input.ts:2:17-2:18 es-no-extra-semi#0
+input.ts:2:52-2:53 es-no-extra-semi#0
+input.ts:3:3-3:4 es-no-extra-semi#0
+input.ts:4:23-4:24 es-no-extra-semi#0

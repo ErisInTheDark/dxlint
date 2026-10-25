@@ -42,18 +42,18 @@ in ts_node let nearest_break_target when {
   else then parent.nearest_break_target
 }
 
-in ts_with rule no-with {
+in ts_with rule es-no-with {
   report at { start: first_token.start, end: first_token.end }
   warn "Unexpected use of 'with' statement."
 }
 
-in ts_case rule default-case-last {
+in ts_case rule es-default-case-last {
   when test == null && index < count(parent.case) - 1
   warn "Default clause should be the last clause."
 }
 
 in ts_switch let empty_switch count(case) == 0
-in ts_block, ts_switch rule no-empty {
+in ts_block, ts_switch rule es-no-empty {
   option allowEmptyCatch boolean = false "allow empty catch blocks"
   when parent not (ts_function_like, ts_static_block)
   when !allowEmptyCatch || not ts_try.handler
@@ -64,7 +64,7 @@ in ts_block, ts_switch rule no-empty {
   warn "Empty {if is ts_switch then 'switch' else 'block'} statement."
 }
 
-in ts_block rule no-lone-blocks {
+in ts_block rule es-no-lone-blocks {
   let nested parent is ts_block
   when nested || parent is ts_program || parent is ts_case && count(parent.body) != 1
   when nested && count(parent.body) == 1 || !any(body.nodes, statement => if statement is ts_variable_declaration then statement.kind != "var" else statement is ts_class || statement is ts_function && statement.scoping_strict_code)
@@ -83,7 +83,7 @@ fn suggestion_lonely_if_fix(source, n) = {
   value if before_gap != "" || after_gap != "" || hazard then null
     else (if body.token_neighbours.before.end == body.offset then " " else "") n.text
 }
-in ts_if rule no-lonely-if {
+in ts_if rule es-no-lonely-if {
   when parent.else_block == true && parent.statement_count == 1
   when !(unmatched_tail && parent.enclosing_else_boundary == true)
   let lonely_if_fix suggestion_lonely_if_fix(source, node)
@@ -91,13 +91,13 @@ in ts_if rule no-lonely-if {
   warn "Unexpected if as the only statement in an else block."
 }
 
-in ts_if, ts_conditional rule no-negated-condition {
+in ts_if, ts_conditional rule es-no-negated-condition {
   when is ts_conditional || alternate != null && alternate not ts_if
   when test.negative_test == true
   warn "Unexpected negated condition."
 }
 
-in ts_switch rule default-case {
+in ts_switch rule es-default-case {
   option commentPattern regex | null = null "comments that allow a missing default"
   when count(case) > 0 && !any(case.nodes, branch => branch.test.node == null)
   let final_comment switch_default_comment
@@ -110,20 +110,20 @@ in ts_switch rule default-case {
   warn "Expected a default case."
 }
 
-in ts_break, ts_continue rule no-extra-label {
+in ts_break, ts_continue rule es-no-extra-label {
   when label != null && label == get(parent.nearest_break_target, "label")
   report at label.node
   fix at { start: first_token.end, end: label.end_offset } if !label.node.space_before.comments as ""
   warn "This label '{label}' is unnecessary."
 }
 
-in ts_await, ts_for_of, ts_variable_declaration rule no-await-in-loop {
+in ts_await, ts_for_of, ts_variable_declaration rule es-no-await-in-loop {
   when is ts_await || asynchronous_iteration == true || async_resource_declaration == true
   when repeated_evaluation
   warn "Unexpected `await` inside a loop."
 }
 
-in ts_for_in rule guard-for-in {
+in ts_for_in rule es-guard-for-in {
   when body != null
   when body not (ts_empty, ts_if) && body.guarded_iteration != true
   warn "The body of a for-in should be wrapped in an if statement to filter unwanted properties from the prototype."
@@ -176,7 +176,7 @@ fn suggestion_else_fix(body, declarations) = {
   value if before_hazard || after_hazard || !suggestion_else_scope_safe(body, destination, declarations) || !expression_fix_retains_comments(owner, replacement) then null
     else {start: owner.offset, end: owner.end_offset, text: replacement}
 }
-in ts_if rule no-else-return {
+in ts_if rule es-no-else-return {
   option allowElseIf boolean = true "allow returning else-if branches"
   when parent is (ts_program, ts_block, ts_case) && consequent.returning_branch == true && alternate != null
   let else_report if allowElseIf then chain_else_offset else alternate.offset
@@ -188,13 +188,13 @@ in ts_if rule no-else-return {
   fix at replacement ?? node if replacement != null as replacement.text
 }
 
-in ts_labeled rule no-label-var {
+in ts_labeled rule es-no-label-var {
   when label_binding
   warn "Found identifier with same name as label."
 }
 
 group unreachable_loop ts_while, ts_do_while, ts_for, ts_for_in, ts_for_of
-in unreachable_loop rule no-unreachable-loop {
+in unreachable_loop rule es-no-unreachable-loop {
   let continued flow_exits(body.node, "continued")
   when reachable(body.node) == true && flow_normal(body.node) == false
   when continued != null && !any(continued, effect => effect.target == node)

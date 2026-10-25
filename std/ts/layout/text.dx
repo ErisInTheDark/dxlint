@@ -27,7 +27,7 @@ in multiple_space_gap {
   let multiple_space_display if multiple_space_right is ts_comment then multiple_space_comment_preview(multiple_space_right) else ts_token_neighbours(source, node).after.text
   let multiple_spaces_checked true
 }
-in multiple_space_gap rule no-multi-spaces {
+in multiple_space_gap rule es-no-multi-spaces {
   option includeTabs boolean = true "include tabs in repeated whitespace"
   when multiple_spaces_checked && { value result: if includeTabs then /[ \t]{2}/ else / {2}/; value re_test(text, result) }
     && {
@@ -66,14 +66,14 @@ fn layout_comment_open_fix(n, body, style, marker) = {
   value spaces: if style == "never" then { value byte_slice(body, marker_size); re_find /^[ \t]+/ } ?? "" else ""
   value { start: start, end: start + byte_len(spaces) }
 }
-in ts_line_comment rule spaced-comment:line {
+in ts_line_comment rule es-spaced-comment:line {
   @layout_comment_policy
   when layout_comment_open_wrong(comment_body, style, comment_marker_pattern, comment_exception_pattern)
   let comment_fix layout_comment_open_fix(node, comment_body, style, comment_marker)
   fix at comment_fix as if style == "always" then " " else ""
   warn layout_comment_open_message(style, exceptions, comment_marker, "//")
 }
-in ts_block_comment rule spaced-comment:block {
+in ts_block_comment rule es-spaced-comment:block {
   @layout_comment_policy
   option balanced boolean = false "require matching closing delimiter spacing"
   let opening_fix layout_comment_open_fix(node, comment_body, style, comment_marker)
@@ -98,7 +98,7 @@ in .js layer layout_blank_lines match layout_blank_run (
   or /(?:\r\n[^\S\r\n]*[\r\n]|\n[^\S\r\n]*[\r\n]|\r\r|\r[^\S\r\n]+[\r\n])(?:[^\S\r\n]*[\r\n])*(?:[^\S\r\n]+\z)?/
   or /(?:\r\n|[\r\n])[^\S\r\n]+\z/
 )
-in layout_blank_run rule no-multiple-empty-lines {
+in layout_blank_run rule es-no-multiple-empty-lines {
   option max int(0..) = 2 "maximum consecutive blank lines"
   option maxEOF int(0..) | null = null "maximum final blank lines"
   option maxBOF int(0..) | null = null "maximum initial blank lines"

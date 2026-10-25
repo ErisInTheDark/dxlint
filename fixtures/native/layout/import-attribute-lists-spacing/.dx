@@ -1,5 +1,5 @@
 import .ts
-rule list-style {
+rule es-list-style {
   set overrides {
     "ImportAttributes": { empty: "always", singleLine: { spacing: "never" } },
     "ImportDeclaration": { empty: "never" },

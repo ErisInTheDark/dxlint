@@ -1,2 +1,2 @@
-input.ts:1:10-1:21 no-useless-rename:import#0
-input.ts:2:10-2:21 no-useless-rename:export#0
+input.ts:1:10-1:21 es-no-useless-rename:import#0
+input.ts:2:10-2:21 es-no-useless-rename:export#0

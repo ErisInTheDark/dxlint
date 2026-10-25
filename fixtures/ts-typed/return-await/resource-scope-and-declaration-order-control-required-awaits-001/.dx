@@ -1,2 +1,2 @@
 import .ts
-rule return-await
+rule es-return-await

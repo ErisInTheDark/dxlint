@@ -1,4 +1,4 @@
 import .ts
 language .js { set sourceType 'script'
 set globalReturn true }
-rule no-undef
+rule es-no-undef

@@ -1,4 +1,4 @@
-input.ts:1:7-1:86 consistent-generic-constructors#1
-input.ts:2:7-5:5 consistent-generic-constructors#1
-input.ts:6:7-6:44 consistent-generic-constructors#1
-input.ts:7:7-7:42 consistent-generic-constructors#1
+input.ts:1:7-1:86 es-consistent-generic-constructors#1
+input.ts:2:7-5:5 es-consistent-generic-constructors#1
+input.ts:6:7-6:44 es-consistent-generic-constructors#1
+input.ts:7:7-7:42 es-consistent-generic-constructors#1

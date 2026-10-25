@@ -1,0 +1,2 @@
+import .ts
+rule es-space-before-function-paren { set named "never"; set anonymous "ignore"; set asyncArrow "never"; set catch "ignore" }

@@ -1,2 +1,2 @@
 import .ts
-rule method-signature-style
+rule es-method-signature-style

@@ -1,2 +1,2 @@
 import .ts
-rule max-len { set options [6, 4] }
+rule es-max-len { set options [6, 4] }

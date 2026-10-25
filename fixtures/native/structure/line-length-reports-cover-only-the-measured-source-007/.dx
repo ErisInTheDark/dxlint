@@ -1,2 +1,2 @@
 import .ts
-rule max-len { set options [{ code: 6, ignoreTrailingComments: true }] }
+rule es-max-len { set options [{ code: 6, ignoreTrailingComments: true }] }

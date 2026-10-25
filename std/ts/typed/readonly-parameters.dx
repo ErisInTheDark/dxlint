@@ -102,7 +102,7 @@ fn readonly_parameter_has_mutable(source, methods, allow) = {
   value any(states, entry => readonly_parameter_step(entry, settings).answer == false)
 }
 
-in ts_parameter rule prefer-readonly-parameter-types {
+in ts_parameter rule es-prefer-readonly-parameter-types {
   option allow (string | type_specifier_file | type_specifier_lib | type_specifier_package)[] = [] "Allowed type names and declaration origins"
   option checkParameterProperties boolean = true "Check constructor parameter properties"
   option ignoreInferredTypes boolean = false "Check only parameters with written types"

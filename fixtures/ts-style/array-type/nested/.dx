@@ -1,2 +1,2 @@
 import .ts
-rule array-type
+rule es-array-type

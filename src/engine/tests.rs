@@ -80,7 +80,7 @@ fn context_blocks_preserve_message_severity() {
 
 #[test]
 fn big_files_report_the_same_when_their_rules_run_in_groups() {
-    let mut l = native_linter("rule semi\nrule comma-spacing\nrule keyword-spacing\nrule no-unused-vars\nrule prefer-const\nrule eqeqeq\nrule indent-binary-ops");
+    let mut l = native_linter("rule es-semi\nrule es-comma-spacing\nrule es-keyword-spacing\nrule es-no-unused-vars\nrule es-prefer-const\nrule es-eqeqeq\nrule es-indent-binary-ops");
     let text = (0..300).map(|i| format!("let a{i} = f(1 ,2)\nif(a{i} == 1){{ return }}\n")).collect::<String>();
     let path = Path::new("/root/big.ts");
     l.split_at = usize::MAX;

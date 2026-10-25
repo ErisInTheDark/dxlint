@@ -1,2 +1,2 @@
 import .ts
-rule multiline-comment-style
+rule es-multiline-comment-style

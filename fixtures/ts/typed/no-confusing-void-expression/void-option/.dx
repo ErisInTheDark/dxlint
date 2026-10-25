@@ -1,2 +1,2 @@
 import .ts
-rule no-confusing-void-expression { set ignoreVoidOperator true }
+rule es-no-confusing-void-expression { set ignoreVoidOperator true }

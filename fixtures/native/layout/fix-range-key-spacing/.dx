@@ -1,4 +1,4 @@
 import .ts
-rule key-spacing {
+rule es-key-spacing {
   set align "colon"
 }

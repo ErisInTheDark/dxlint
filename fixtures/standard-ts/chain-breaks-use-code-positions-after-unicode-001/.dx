@@ -1,2 +1,2 @@
 import .ts
-rule newline-per-chained-call
+rule es-newline-per-chained-call

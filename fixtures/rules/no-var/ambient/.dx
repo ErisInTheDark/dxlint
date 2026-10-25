@@ -1,3 +1,0 @@
-import .ts
-language .js { set sourceType "module" }
-rule no-var

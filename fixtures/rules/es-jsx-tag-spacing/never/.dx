@@ -1,0 +1,2 @@
+import .ts
+rule es-jsx-tag-spacing { set beforeSelfClosing "never"; set beforeClosing "never" }

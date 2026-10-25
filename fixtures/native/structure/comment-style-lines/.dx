@@ -1,2 +1,2 @@
 import .ts
-rule multiline-comment-style { set mode "separate-lines" }
+rule es-multiline-comment-style { set mode "separate-lines" }

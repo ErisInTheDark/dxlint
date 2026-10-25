@@ -1,2 +1,2 @@
 import .ts
-rule no-self-assign
+rule es-no-self-assign

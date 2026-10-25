@@ -8,7 +8,7 @@ in ts_binary let strict_right_reference_key right.reference_key_strict
 in ts_parenthesized forward arithmetic_operator, strict_left_reference_key, strict_right_reference_key from expression
 
 # Comma operators, except loop init/update and explicitly grouped expressions.
-in ts_sequence rule no-sequences {
+in ts_sequence rule es-no-sequences {
   option allowInParentheses boolean = true "allow explicitly parenthesised sequences"
   let enclosed walk(node, current => if current.parent is ts_parenthesized then current.parent.node else null)
   let outside last(enclosed)
@@ -21,13 +21,13 @@ in ts_sequence rule no-sequences {
   warn "Unexpected use of comma operator."
 }
 
-in ts_binary rule no-self-compare {
+in ts_binary rule es-no-self-compare {
   when re_test(operator, /^(?:===?|!==?|>=?|<=?)$/)
   when left != null && right != null && left.unparenthesised_tokens == right.unparenthesised_tokens
   warn "Comparing to itself is potentially pointless."
 }
 
-in ts_binary rule no-eq-null {
+in ts_binary rule es-no-eq-null {
   when (operator == "==" || operator == "!=") && (left == "null" || right == "null")
   warn "Use '===' to compare with null."
 }
@@ -39,7 +39,7 @@ fn concat_endpoint_next(n, right_side) = when {
 }
 fn concat_endpoint(n, right_side) = { value n; walk (current) concat_endpoint_next(current, right_side); last }
 
-in ts_binary rule no-useless-concat {
+in ts_binary rule es-no-useless-concat {
   when operator == "+"
   let left_endpoint concat_endpoint(left.node, true)
   let right_endpoint concat_endpoint(right.node, false)
@@ -67,7 +67,7 @@ fn ternary_fix_boolean(n, consequent, alternate) = {
   }
 }
 
-in ts_conditional rule no-unneeded-ternary {
+in ts_conditional rule es-no-unneeded-ternary {
   let consequent_value consequent.literal_value
   let alternate_value alternate.literal_value
   when consequent_value.type == "boolean" && alternate_value.type == "boolean"
@@ -77,7 +77,7 @@ in ts_conditional rule no-unneeded-ternary {
     && unparenthesised_node(consequent.node) is ts_boolean && unparenthesised_node(alternate.node) is ts_boolean as expression_fix_edges(node, replacement)
 }
 
-in ts_conditional rule no-unneeded-ternary:default-assignment {
+in ts_conditional rule es-no-unneeded-ternary:default-assignment {
   option defaultAssignment boolean = true "allow conditional expressions used as default assignments"
   when !defaultAssignment && (test.unwrapped_node.nonempty ?? test.node) is ts_identifier && (consequent.unwrapped_node.nonempty ?? consequent.node) is ts_identifier && (test.unwrapped_text.nonempty ?? test) == (consequent.unwrapped_text.nonempty ?? consequent)
   warn "Unnecessary use of conditional expression for default assignment."
@@ -162,7 +162,7 @@ fn suggestion_implicit_coercion(source, n) = {
   } else null
 }
 
-in ts_unary, ts_binary, ts_assignment, ts_template rule no-implicit-coercion {
+in ts_unary, ts_binary, ts_assignment, ts_template rule es-no-implicit-coercion {
   option boolean boolean = true "check boolean conversions"
   option number boolean = true "check number conversions"
   option string boolean = true "check string conversions"
@@ -217,7 +217,7 @@ fn assignment_fix_text(source, n, mode, shorthand) = {
     }
   }
 }
-in ts_assignment rule operator-assignment {
+in ts_assignment rule es-operator-assignment {
   option mode ("always" | "never") = "always" "compound arithmetic assignment policy"
   let assigned_key left.reference_key_strict
   let shorthand if operator == "=" && right.arithmetic_operator != null && assigned_key != null && (assigned_key == right.strict_left_reference_key || contains(["*", "&", "^", "|"], right.arithmetic_operator) && assigned_key == right.strict_right_reference_key) then right.arithmetic_operator "=" else null

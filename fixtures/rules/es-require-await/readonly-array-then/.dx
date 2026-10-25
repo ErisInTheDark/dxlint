@@ -1,0 +1,8 @@
+import .ts
+rule es-require-await
+
+in ts_array rule augmented-carrier {
+  when value_has_member(node, "then", { global: "ReadonlyArray", class: "type", path: [] }) != true
+    || !(node could thenable)
+  warn "an augmented readonly array lost its then member"
+}

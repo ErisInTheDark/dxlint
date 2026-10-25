@@ -1,3 +1,3 @@
-lib.fixture.d.ts:1:397-1:407 no-base-to-string#1
-lib.fixture.d.ts:1:414-1:421 no-base-to-string#1
-lib.fixture.d.ts:1:428-1:436 no-base-to-string#1
+lib.fixture.d.ts:1:397-1:407 es-no-base-to-string#1
+lib.fixture.d.ts:1:414-1:421 es-no-base-to-string#1
+lib.fixture.d.ts:1:428-1:436 es-no-base-to-string#1

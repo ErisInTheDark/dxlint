@@ -1,0 +1,2 @@
+import .ts
+rule es-arrow-body-style { set requireReturnForObjectLiteral true }

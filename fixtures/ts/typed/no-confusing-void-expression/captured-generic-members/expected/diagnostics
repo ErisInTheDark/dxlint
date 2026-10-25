@@ -1,4 +1,4 @@
-input.ts:10:11-10:17 no-confusing-void-expression#0
-input.ts:15:43-15:58 no-confusing-void-expression#0
-input.ts:8:11-8:20 no-confusing-void-expression#0
-input.ts:9:11-9:21 no-confusing-void-expression#0
+input.ts:10:11-10:17 es-no-confusing-void-expression#0
+input.ts:15:43-15:58 es-no-confusing-void-expression#0
+input.ts:8:11-8:20 es-no-confusing-void-expression#0
+input.ts:9:11-9:21 es-no-confusing-void-expression#0

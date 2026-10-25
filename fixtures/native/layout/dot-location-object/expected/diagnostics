@@ -1,8 +1,8 @@
-input.tsx:10:2-10:3 dot-location#0
-input.tsx:12:2-12:3 dot-location#0
-input.tsx:14:2-14:3 dot-location#0
-input.tsx:16:2-16:3 dot-location#0
-input.tsx:2:11-2:12 dot-location#0
-input.tsx:4:2-4:4 dot-location#0
-input.tsx:6:2-6:3 dot-location#0
-input.tsx:8:2-8:3 dot-location#0
+input.tsx:10:2-10:3 es-dot-location#0
+input.tsx:12:2-12:3 es-dot-location#0
+input.tsx:14:2-14:3 es-dot-location#0
+input.tsx:16:2-16:3 es-dot-location#0
+input.tsx:2:11-2:12 es-dot-location#0
+input.tsx:4:2-4:4 es-dot-location#0
+input.tsx:6:2-6:3 es-dot-location#0
+input.tsx:8:2-8:3 es-dot-location#0

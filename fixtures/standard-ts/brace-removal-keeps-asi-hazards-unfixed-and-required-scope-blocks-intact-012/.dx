@@ -1,2 +1,2 @@
 import .ts
-rule curly { set mode "multi" }
+rule es-curly { set mode "multi" }

@@ -1,6 +1,6 @@
-a.ts:12:5-12:9 no-unnecessary-condition#1
-a.ts:14:5-14:10 no-unnecessary-condition#1
-a.ts:16:5-16:12 no-unnecessary-condition#2
-a.ts:21:7-21:12 no-unnecessary-condition#2
-a.ts:2:5-2:10 no-unnecessary-condition#2
-a.ts:5:5-5:10 no-unnecessary-condition#2
+a.ts:12:5-12:9 es-no-unnecessary-condition#1
+a.ts:14:5-14:10 es-no-unnecessary-condition#1
+a.ts:16:5-16:12 es-no-unnecessary-condition#2
+a.ts:21:7-21:12 es-no-unnecessary-condition#2
+a.ts:2:5-2:10 es-no-unnecessary-condition#2
+a.ts:5:5-5:10 es-no-unnecessary-condition#2

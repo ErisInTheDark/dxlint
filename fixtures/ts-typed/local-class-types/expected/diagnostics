@@ -1,4 +1,4 @@
-input.ts:11:7-11:26 no-unnecessary-condition#2
-input.ts:12:7-12:17 no-unnecessary-condition#1
-input.ts:13:7-13:24 no-unnecessary-condition#2
-input.ts:17:7-17:25 no-unnecessary-condition#1
+input.ts:11:7-11:26 es-no-unnecessary-condition#2
+input.ts:12:7-12:17 es-no-unnecessary-condition#1
+input.ts:13:7-13:24 es-no-unnecessary-condition#2
+input.ts:17:7-17:25 es-no-unnecessary-condition#1

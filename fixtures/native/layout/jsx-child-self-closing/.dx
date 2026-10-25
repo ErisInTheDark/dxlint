@@ -1,2 +1,2 @@
 import .ts
-rule jsx-self-closing-comp
+rule es-jsx-self-closing-comp

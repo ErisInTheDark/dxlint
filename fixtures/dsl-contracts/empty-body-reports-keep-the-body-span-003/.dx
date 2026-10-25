@@ -1,2 +1,2 @@
 import .ts
-rule arrow-body-style
+rule es-arrow-body-style

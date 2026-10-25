@@ -1,2 +1,2 @@
-a.ts:1:108-1:122 prefer-reduce-type-parameter#0
-a.ts:1:33-1:44 non-nullable-type-assertion-style#0
+a.ts:1:108-1:122 es-prefer-reduce-type-parameter#0
+a.ts:1:33-1:44 es-non-nullable-type-assertion-style#0

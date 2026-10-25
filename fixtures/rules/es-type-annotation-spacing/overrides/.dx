@@ -1,0 +1,4 @@
+import .ts
+rule es-type-annotation-spacing:* {
+  set overrides { variable: "ignore", property: "ignore", parameter: { before: true, after: false }, returnType: { before: true, after: false } }
+}

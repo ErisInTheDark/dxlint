@@ -1,1 +1,1 @@
-file.ts:1:148-1:154 no-misused-promises:spreads#0
+file.ts:1:148-1:154 es-no-misused-promises:spreads#0

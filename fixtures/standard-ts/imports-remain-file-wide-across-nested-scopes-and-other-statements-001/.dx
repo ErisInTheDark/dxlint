@@ -1,2 +1,2 @@
 import .ts
-rule sort-imports
+rule es-sort-imports

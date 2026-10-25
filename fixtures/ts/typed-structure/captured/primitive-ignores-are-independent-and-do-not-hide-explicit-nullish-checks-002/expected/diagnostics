@@ -1,8 +1,8 @@
-a.ts:1:1-1:1 prefer-nullish-coalescing:strict#0
-a.ts:1:162-1:164 prefer-nullish-coalescing#3
-a.ts:1:173-1:175 prefer-nullish-coalescing#3
-a.ts:1:181-1:183 prefer-nullish-coalescing#3
-a.ts:1:190-1:192 prefer-nullish-coalescing#3
-a.ts:1:198-1:200 prefer-nullish-coalescing#3
-a.ts:1:206-1:208 prefer-nullish-coalescing#3
-a.ts:1:213-1:236 prefer-nullish-coalescing#0
+a.ts:1:1-1:1 es-prefer-nullish-coalescing:strict#0
+a.ts:1:162-1:164 es-prefer-nullish-coalescing#3
+a.ts:1:173-1:175 es-prefer-nullish-coalescing#3
+a.ts:1:181-1:183 es-prefer-nullish-coalescing#3
+a.ts:1:190-1:192 es-prefer-nullish-coalescing#3
+a.ts:1:198-1:200 es-prefer-nullish-coalescing#3
+a.ts:1:206-1:208 es-prefer-nullish-coalescing#3
+a.ts:1:213-1:236 es-prefer-nullish-coalescing#0

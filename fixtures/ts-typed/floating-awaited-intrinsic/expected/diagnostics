@@ -1,2 +1,2 @@
-input.ts:11:3-11:16 no-floating-promises:array#0
-input.ts:9:3-9:15 no-floating-promises:array#0
+input.ts:11:3-11:16 es-no-floating-promises:array#0
+input.ts:9:3-9:15 es-no-floating-promises:array#0

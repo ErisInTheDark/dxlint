@@ -1,4 +1,4 @@
 import .ts
 rule * off
 ignore "**/tsconfig.json"
-rule return-await { set mode "always" }
+rule es-return-await { set mode "always" }

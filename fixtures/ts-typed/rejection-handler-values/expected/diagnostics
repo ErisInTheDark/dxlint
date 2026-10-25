@@ -1,7 +1,7 @@
-input.ts:11:16-11:37 use-unknown-in-catch-callback-variable#0
-input.ts:13:22-13:27 use-unknown-in-catch-callback-variable#0
-input.ts:14:25-14:35 use-unknown-in-catch-callback-variable#0
-input.ts:22:18-22:28 use-unknown-in-catch-callback-variable#0
-input.ts:26:16-26:72 use-unknown-in-catch-callback-variable#0
-input.ts:27:16-27:97 use-unknown-in-catch-callback-variable#0
-input.ts:9:15-9:20 use-unknown-in-catch-callback-variable#0
+input.ts:11:16-11:37 es-use-unknown-in-catch-callback-variable#0
+input.ts:13:22-13:27 es-use-unknown-in-catch-callback-variable#0
+input.ts:14:25-14:35 es-use-unknown-in-catch-callback-variable#0
+input.ts:22:18-22:28 es-use-unknown-in-catch-callback-variable#0
+input.ts:26:16-26:72 es-use-unknown-in-catch-callback-variable#0
+input.ts:27:16-27:97 es-use-unknown-in-catch-callback-variable#0
+input.ts:9:15-9:20 es-use-unknown-in-catch-callback-variable#0

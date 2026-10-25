@@ -1,2 +1,2 @@
 import .ts
-rule no-regex-spaces
+rule es-no-regex-spaces

@@ -55,14 +55,14 @@ fn generated_empty_type(n) = {
     && value_children(arm.handle, true, []) == []
     && value_signatures(arm.handle) == [[]] && value_constructors(arm.handle) == [[]])
 }
-in ts_type_reference, ts_intersection rule no-generated-empty-object-type {
+in ts_type_reference, ts_intersection rule es-no-generated-empty-object-type {
   when node is ts_intersection || count(type_argument.nodes) > 0
     && last(walk(node, item => if item.parent is ts_parenthesized_type then item.parent.node else null)).parent not ts_intersection
   when generated_empty_type(node)
   warn "This type resolves to `{{}}`, the empty object type. This was likely not intentional."
 }
 
-in ts_function, ts_arrow, ts_method rule require-await {
+in ts_function, ts_arrow, ts_method rule es-require-await {
   when missing_await != null
   report at ts_await_warning_site(node)
   warn missing_await.name " has no 'await' expression."
@@ -84,7 +84,7 @@ fn promise_function_async_edit(n) = {
   value separator: if before.end == anchor.offset then expression_fix_separator(before.text, "async") else ""
   value { start: anchor.offset, text: separator "async " }
 }
-in promise_function_async_function rule promise-function-async {
+in promise_function_async_function rule es-promise-function-async {
   option allowAny boolean = true "Allow any and unknown return types"
   option allowedPromiseNames string[] = [] "Additional promise type names"
   when body != null && !contains([] modifier, "async")
@@ -102,7 +102,7 @@ in promise_function_async_function rule promise-function-async {
 }
 
 in ts_node let only_throw_error_checked true
-in ts_throw.argument rule only-throw-error {
+in ts_throw.argument rule es-only-throw-error {
   option allow (string | type_specifier_file | type_specifier_lib | type_specifier_package)[] = [] "Additional allowed thrown types"
   option allowRethrowing boolean = true "Allow rethrowing catch and Promise rejection parameters"
   option allowThrowingAny boolean = true "Allow any values"
@@ -140,7 +140,7 @@ fn rejection_reason_known(n) = value_parts(n) != null || unparenthesised_node(n)
   || unparenthesised_node(n) is ts_assignment && contains(["-=", "*=", "/=", "%=", "**=", "<<=", ">>=", ">>>=", "|=", "&=", "^="],
     unparenthesised_node(n).operator)
 in ts_call let prefer_promise_reject_errors_checked true
-in ts_call rule prefer-promise-reject-errors {
+in ts_call rule es-prefer-promise-reject-errors {
   option allowEmptyReject boolean = false "Allow rejection without a reason"
   option allow (string | type_specifier_file | type_specifier_lib | type_specifier_package)[] = [] "Additional allowed rejection types"
   option allowThrowingAny boolean = false "Allow any values"
@@ -248,7 +248,7 @@ in ts_binary, ts_assignment let stringification_subjects
   else if contains(["+", "+="], operator) && ts_value_string_like(right.node) == true && left not ts_private_name then [{node: unparenthesised_node(left.node), join: false}]
   else []
 in ts_template let stringification_subjects if parent is ts_tagged_template then [] else map(expression.nodes, n => {node: unparenthesised_node(n), join: false})
-in ts_call, ts_binary, ts_assignment, ts_template rule no-base-to-string {
+in ts_call, ts_binary, ts_assignment, ts_template rule es-no-base-to-string {
   option ignoredTypeNames string[] = ["Error", "RegExp", "URL", "URLSearchParams"] "Types whose string conversion is permitted"
   option checkUnknown boolean = false "Check explicit unknown and unconstrained type parameters"
   let findings map(stringification_subjects, subject => {
@@ -314,22 +314,22 @@ in ts_parenthesized {
   let eval_string expression.eval_string
 }
 in ts_call, ts_new let eval_timer (contains(["setTimeout", "setInterval", "execScript"], callee.eval_name) || callee.eval_name == "setImmediate" && re_test(file, /\.[cm]?tsx?$/)) && callee.eval_timer_global == true
-in ts_call.argument, ts_new.argument rule no-implied-eval {
+in ts_call.argument, ts_new.argument rule es-no-implied-eval {
   when index == 0 && parent.eval_timer == true && re_test(file, /\.[cm]?tsx?$/) && eval_callback != true
   warn "Implied eval. Consider passing a function."
 }
 in ts_call {
-  rule no-implied-eval:core {
+  rule es-no-implied-eval:core {
     when eval_timer && callee.eval_name != "execScript" && !re_test(file, /\.[cm]?tsx?$/) && first([] argument.eval_string) == true
     warn "Implied eval. Consider passing a function instead of a string."
   }
-  rule no-implied-eval:exec {
+  rule es-no-implied-eval:exec {
     when eval_timer && callee.eval_name == "execScript" && !re_test(file, /\.[cm]?tsx?$/) && first([] argument.eval_string) == true
     warn "Implied eval. Do not use execScript()."
   }
 }
 in ts_call, ts_new {
-  rule no-implied-eval:function {
+  rule es-no-implied-eval:function {
     when callee.eval_name == "Function" && re_test(file, /\.[cm]?tsx?$/) && callee.eval_constructor
     when callee.eval_identifier == true || callee.eval_timer_global == true
     warn "Implied eval. Do not use the Function constructor to create functions."
@@ -341,28 +341,28 @@ fn unsafe_assignment_sender(transfer) = if transfer.error then "error typed" els
 fn unsafe_this_note() = "\nYou can try to fix this by turning on the `noImplicitThis` compiler option, or adding a `this` parameter to the function."
 
 in ts_call, ts_new, ts_tagged_template {
-  rule no-unsafe-argument {
+  rule es-no-unsafe-argument {
     each unsafe_arg in argument_value_transfers ?? [] {
       when unsafe_arg.mode == "argument"
       report at unsafe_arg.site
       warn "Unsafe argument of type " unsafe_argument_sender(unsafe_arg) " assigned to a parameter of type `{unsafe_arg.receiver}`."
     }
   }
-  rule no-unsafe-argument:spread {
+  rule es-no-unsafe-argument:spread {
     each unsafe_arg in argument_value_transfers ?? [] {
       when unsafe_arg.mode == "spread"
       report at unsafe_arg.site
       warn "Unsafe spread of an " unsafe_argument_sender(unsafe_arg) " type."
     }
   }
-  rule no-unsafe-argument:array {
+  rule es-no-unsafe-argument:array {
     each unsafe_arg in argument_value_transfers ?? [] {
       when unsafe_arg.mode == "array"
       report at unsafe_arg.site
       warn "Unsafe spread of an " unsafe_argument_sender(unsafe_arg) " array type."
     }
   }
-  rule no-unsafe-argument:tuple {
+  rule es-no-unsafe-argument:tuple {
     each unsafe_arg in argument_value_transfers ?? [] {
       when unsafe_arg.mode == "tuple"
       report at unsafe_arg.site
@@ -372,7 +372,7 @@ in ts_call, ts_new, ts_tagged_template {
 }
 
 in ts_declarator, ts_parameter, ts_class_property, ts_assignment, ts_assignment_pattern, ts_property, ts_spread, ts_jsx_attribute {
-  rule no-unsafe-assignment {
+  rule es-no-unsafe-assignment {
     each unsafe_assigned in assignment_value_transfers {
       when unsafe_assigned.mode == "any"
       report at unsafe_assigned.site
@@ -380,35 +380,35 @@ in ts_declarator, ts_parameter, ts_class_property, ts_assignment, ts_assignment_
         else then "Unsafe assignment of an " unsafe_assignment_sender(unsafe_assigned) " value." }
     }
   }
-  rule no-unsafe-assignment:generic {
+  rule es-no-unsafe-assignment:generic {
     each unsafe_assigned in assignment_value_transfers {
       when unsafe_assigned.mode == "generic"
       report at unsafe_assigned.site
       warn "Unsafe assignment of type " unsafe_assignment_sender(unsafe_assigned) " to a variable of type `{unsafe_assigned.receiver}`."
     }
   }
-  rule no-unsafe-assignment:array {
+  rule es-no-unsafe-assignment:array {
     each unsafe_assigned in assignment_value_transfers {
       when unsafe_assigned.mode == "array"
       report at unsafe_assigned.site
       warn "Unsafe array destructuring of an " unsafe_assignment_sender(unsafe_assigned) " array value."
     }
   }
-  rule no-unsafe-assignment:tuple {
+  rule es-no-unsafe-assignment:tuple {
     each unsafe_assigned in assignment_value_transfers {
       when unsafe_assigned.mode == "tuple"
       report at unsafe_assigned.site
       warn "Unsafe array destructuring of a tuple element with an " unsafe_assignment_sender(unsafe_assigned) " value."
     }
   }
-  rule no-unsafe-assignment:object {
+  rule es-no-unsafe-assignment:object {
     each unsafe_assigned in assignment_value_transfers {
       when unsafe_assigned.mode == "object"
       report at unsafe_assigned.site
       warn "Unsafe object destructuring of a property with an " unsafe_assignment_sender(unsafe_assigned) " value."
     }
   }
-  rule no-unsafe-assignment:spread {
+  rule es-no-unsafe-assignment:spread {
     each unsafe_assigned in assignment_value_transfers {
       when unsafe_assigned.mode == "spread"
       report at unsafe_assigned.site
@@ -419,12 +419,12 @@ in ts_declarator, ts_parameter, ts_class_property, ts_assignment, ts_assignment_
 
 fn unsafe_return_sender(transfer) = if transfer.error then "error" else if transfer.mode == "array" then "`any[]`" else if transfer.mode == "promise" then "`Promise<any>`" else "`any`"
 
-in ts_return, ts_arrow.body rule no-unsafe-return {
+in ts_return, ts_arrow.body rule es-no-unsafe-return {
   when return_value_transfer != null && return_value_transfer.mode != "generic"
   warn when { return_value_transfer.this_any then "Unsafe return of a value of type `{unsafe_return_sender(return_value_transfer)}`. `this` is typed as `any`." unsafe_this_note()
     else then "Unsafe return of a value of type " unsafe_return_sender(return_value_transfer) "." }
 }
-in ts_return, ts_arrow.body rule no-unsafe-return:assignment {
+in ts_return, ts_arrow.body rule es-no-unsafe-return:assignment {
   when return_value_transfer != null && return_value_transfer.mode == "generic"
   warn "Unsafe return of type `{return_value_transfer.sender}` from function with return type `{return_value_transfer.receiver}`."
 }
@@ -436,41 +436,41 @@ fn non_null_style_fix(source, n) = {
   value replacement: expression_fix_wrap(body.text, wrapped) "!"
   value if !expression_fix_retains_comments(n, replacement) then null else assertion_fix_output(n, replacement)
 }
-in ts_as, ts_type_assertion rule non-nullable-type-assertion-style {
+in ts_as, ts_type_assertion rule es-non-nullable-type-assertion-style {
   when type.text != "const" && assertion_non_null_style(node) == true
   warn "Use a ! assertion to more succinctly remove null and undefined from the type."
   let edit non_null_style_fix(source, node)
   fix at edit.target if edit != null as edit.text
 }
-in ts_method.return_type, ts_method_signature.return_type rule related-getter-setter-pairs {
+in ts_method.return_type, ts_method_signature.return_type rule es-related-getter-setter-pairs {
   when typed_accessor_type_mismatch(node)
   warn "`get()` type should be assignable to its equivalent `set()` type."
 }
 # `await` of something that is not a promise; promise aggregators of arrays
 # of non-promises.
-in ts_await rule await-thenable {
+in ts_await rule es-await-thenable {
   when ts_value_nonthenable(argument.node) == true
   warn "Unexpected `await` of a non-Promise (non-\"Thenable\") value."
 }
 in ts_member, ts_index let promise_aggregate_member contains(["all", "allSettled", "race", "any"], static_name) && object.global_value == "Promise"
 in ts_call let is_promise_aggregator callee.promise_aggregate_member == true
 in ts_array let is_promise_aggregator_argument parent.is_promise_aggregator == true
-in ts_array.element rule await-thenable:aggregate {
+in ts_array.element rule es-await-thenable:aggregate {
   when not ts_hole && parent.is_promise_aggregator_argument
     && (if is ts_spread then ts_await_nonawaitable_iterable(argument.node) else ts_value_nonthenable(node) == true)
   warn "Unexpected iterable of non-Promise (non-\"Thenable\") values passed to promise aggregator."
 }
-in ts_call.argument rule await-thenable:iterable {
+in ts_call.argument rule es-await-thenable:iterable {
   when parent.is_promise_aggregator == true && not ts_array && ts_await_nonawaitable_iterable(node)
   warn "Unexpected iterable of non-Promise (non-\"Thenable\") values passed to promise aggregator."
 }
-in ts_for_of rule await-thenable:for-of {
+in ts_for_of rule es-await-thenable:for-of {
   report at { start: offset, end: last(overlapping(ts_close_paren, right.end_offset, body.offset)).end_offset }
   when contains([] modifier, "await")
     && value_has_member(right.node, {global: "Symbol", class: "value", path: ["asyncIterator"]}, null) == false
   warn "Unexpected `for await...of` of a value that is not async iterable."
 }
-in ts_declarator.init rule await-thenable:using {
+in ts_declarator.init rule es-await-thenable:using {
   when starts_with(parent.parent.kind.text, "await")
     && value_has_member(node, {global: "Symbol", class: "value", path: ["asyncDispose"]}, null) == false
   warn "Unexpected `await using` of a value that is not async disposable."
@@ -479,7 +479,7 @@ in ts_declarator.init rule await-thenable:using {
 # ---- template interpolation ----------------------------------------------------
 in ts_template let tagged_template parent is ts_tagged_template
 in ts_node let restrict_template_expressions_type_checks template_type_checks
-in ts_template.expression rule restrict-template-expressions {
+in ts_template.expression rule es-restrict-template-expressions {
   option allowAny boolean = true "Allow any values"
   option allowArray boolean = false "Allow arrays whose elements can be interpolated"
   option allowBoolean boolean = true "Allow booleans"
@@ -500,7 +500,7 @@ in ts_template.expression rule restrict-template-expressions {
 fn typed_unary_type(n) = if (n is ts_template) && count(n.expression.nodes) == 0
   then ts_value_string(slice(first(n.quasi.nodes).text, 1, -1)) else ts_value_print_type(n)
 
-in ts_unary rule no-unsafe-unary-minus {
+in ts_unary rule es-no-unsafe-unary-minus {
   when operator == "-" && !ts_value_opaque(argument.node)
     && !any(["any", "number", "bigint", "enum"], trait => ts_value_has_trait(argument.node, trait) == true)
   let operand_type value_constituents(argument.node)
@@ -512,12 +512,12 @@ in ts_member, ts_index let object_array_type ts_value_array_like(object.node)
 in ts_parenthesized let object_array_type expression.object_array_type
 in ts_member, ts_index let array_literal_object object is ts_array
 in ts_parenthesized let array_literal_object expression.array_literal_object
-in ts_unary rule no-array-delete {
+in ts_unary rule es-no-array-delete {
   when operator == "delete" && (argument.array_literal_object == true || argument.object_array_type == true)
   warn "Using the `delete` operator with an array expression is unsafe."
 }
 
-in ts_assignment_pattern, ts_parameter rule no-useless-default-assignment {
+in ts_assignment_pattern, ts_parameter rule es-no-useless-default-assignment {
   when typed_default_assignment != null
   report at { start: typed_default_assignment.offset, end: typed_default_assignment.end }
   warn when {
@@ -526,14 +526,14 @@ in ts_assignment_pattern, ts_parameter rule no-useless-default-assignment {
     else then "Default value is useless because the {typed_default_assignment.owner} is not optional."
   }
 }
-in ts_program rule no-useless-default-assignment:strict {
+in ts_program rule es-no-useless-default-assignment:strict {
   option allowRuleToRunWithoutStrictNullChecksIKnowWhatIAmDoing boolean = false "Run without strict null checks"
   when ts_compiler_option(node, "strictNullChecks") == false && !allowRuleToRunWithoutStrictNullChecksIKnowWhatIAmDoing
   report at { start: 0, end: 0 }
   warn "This rule requires the `strictNullChecks` compiler option to be turned on to function correctly."
 }
 
-in ts_as, ts_type_assertion rule no-unsafe-type-assertion {
+in ts_as, ts_type_assertion rule es-no-unsafe-type-assertion {
   when type.text != "const"
   let operand value_constituents(expression.node)
   let annotation value_constituents(type.node)
@@ -547,7 +547,7 @@ in ts_as, ts_type_assertion rule no-unsafe-type-assertion {
 }
 
 in ts_member let object_string_array_type ts_value_string_array(object.node)
-in ts_call rule require-array-sort-compare {
+in ts_call rule es-require-array-sort-compare {
   option ignoreStringArrays boolean = true "Ignore arrays whose elements are all strings"
   when count(argument) == 0 && re_test(callee, /\??\.\s*(sort|toSorted)$/)
   when callee.object_array_type == true && (!ignoreStringArrays || callee.object_string_array_type != true)
@@ -555,7 +555,7 @@ in ts_call rule require-array-sort-compare {
 }
 
 
-in ts_unary rule no-meaningless-void-operator {
+in ts_unary rule es-no-meaningless-void-operator {
   option checkNever boolean = false "Also check calls returning never"
   when operator == "void" && argument != "0"
   let underlying {

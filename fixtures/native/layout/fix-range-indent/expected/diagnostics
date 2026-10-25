@@ -1,3 +1,3 @@
-a.js:2:1-2:19 indent#0
-a.js:3:1-3:5 indent#0
-a.js:4:1-4:3 indent#0
+a.js:2:1-2:19 es-indent#0
+a.js:3:1-3:5 es-indent#0
+a.js:4:1-4:3 es-indent#0

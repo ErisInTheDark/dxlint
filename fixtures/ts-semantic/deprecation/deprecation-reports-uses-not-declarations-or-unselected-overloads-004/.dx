@@ -1,2 +1,2 @@
 import .ts
-rule no-deprecated
+rule es-no-deprecated

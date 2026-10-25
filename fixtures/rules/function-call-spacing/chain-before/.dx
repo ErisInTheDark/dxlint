@@ -1,2 +1,0 @@
-import .ts
-rule function-call-spacing { set mode "always"; set chain_before true; set chain_after false }

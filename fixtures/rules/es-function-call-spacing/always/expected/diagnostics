@@ -1,0 +1,5 @@
+a.ts:1:2-1:2 es-function-call-spacing#2
+a.ts:2:8-2:8 es-function-call-spacing#2
+a.ts:3:7-3:7 es-function-call-spacing#2
+a.ts:4:10-4:10 es-function-call-spacing#2
+a.ts:5:2-5:4 es-function-call-spacing#2

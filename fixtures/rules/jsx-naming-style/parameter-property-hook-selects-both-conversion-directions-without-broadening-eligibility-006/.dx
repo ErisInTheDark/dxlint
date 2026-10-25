@@ -1,3 +1,0 @@
-import .ts
-override in ts_parameter, ts_class_property let parameter_properties_checked node is ts_parameter
-rule parameter-properties { set prefer 'class-property' }

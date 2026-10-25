@@ -1,2 +1,2 @@
 import .ts
-rule prefer-template
+rule es-prefer-template

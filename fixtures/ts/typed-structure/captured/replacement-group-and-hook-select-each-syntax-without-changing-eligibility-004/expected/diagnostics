@@ -1,2 +1,2 @@
-a.ts:1:1-1:1 prefer-nullish-coalescing:strict#0
-a.ts:1:64-1:78 prefer-nullish-coalescing#1
+a.ts:1:1-1:1 es-prefer-nullish-coalescing:strict#0
+a.ts:1:64-1:78 es-prefer-nullish-coalescing#1

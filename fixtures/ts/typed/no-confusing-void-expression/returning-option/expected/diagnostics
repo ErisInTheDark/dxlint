@@ -1,5 +1,5 @@
-a.ts:12:32-12:35 no-confusing-void-expression#1
-a.ts:13:31-13:34 no-confusing-void-expression#1
-a.ts:14:52-14:55 no-confusing-void-expression#2
-a.ts:5:27-5:30 no-confusing-void-expression#2
-a.ts:6:15-6:18 no-confusing-void-expression#0
+a.ts:12:32-12:35 es-no-confusing-void-expression#1
+a.ts:13:31-13:34 es-no-confusing-void-expression#1
+a.ts:14:52-14:55 es-no-confusing-void-expression#2
+a.ts:5:27-5:30 es-no-confusing-void-expression#2
+a.ts:6:15-6:18 es-no-confusing-void-expression#0

@@ -1,4 +1,4 @@
 import .ts
 # Deliberately differ from typescript-eslint 8.71: inherit Set<B>'s element B, not Child<A, B>'s first argument A.
-rule await-thenable:aggregate
-rule await-thenable:iterable
+rule es-await-thenable:aggregate
+rule es-await-thenable:iterable

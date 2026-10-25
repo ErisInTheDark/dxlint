@@ -1,2 +1,2 @@
 import .ts
-rule func-names { set mode "as-needed" }
+rule es-func-names { set mode "as-needed" }

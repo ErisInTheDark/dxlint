@@ -1,2 +1,2 @@
 import .ts
-rule capitalized-comments { set mode "never" }
+rule es-capitalized-comments { set mode "never" }

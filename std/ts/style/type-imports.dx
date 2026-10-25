@@ -136,7 +136,7 @@ fn import_policy_fix(source, n, style, preference) =
     value if count(edits) == 0 || !expression_fix_retains_comments(owner, text) then null else { target: { start: start, end: end }, text: text }
   }
 
-in ts_import rule consistent-type-imports {
+in ts_import rule es-consistent-type-imports {
   option disallowTypeAnnotations boolean = true "Disallow import() type annotations."
   option fixStyle ("inline-type-imports" | "separate-type-imports") = "separate-type-imports" "Preferred fix style."
   option prefer ("type-imports" | "no-type-imports") = "type-imports" "Preferred import kind."
@@ -146,7 +146,7 @@ in ts_import rule consistent-type-imports {
   warn if prefer == "no-type-imports" then "Use an `import` instead of an `import type`." else if !contains(import_uses, "value") && !contains(import_uses, "unused") then "All imports in the declaration are only used as types. Use `import type`." else "Imports {word_list(type_only_names)} are only used as type."
   fix at import_fix.target if import_fix != null as import_fix.text
 }
-in ts_import_specifier rule consistent-type-imports:inline {
+in ts_import_specifier rule es-consistent-type-imports:inline {
   option disallowTypeAnnotations boolean = true "Disallow import() type annotations."
   option fixStyle ("inline-type-imports" | "separate-type-imports") = "separate-type-imports" "Preferred fix style."
   option prefer ("type-imports" | "no-type-imports") = "type-imports" "Preferred import kind."
@@ -155,7 +155,7 @@ in ts_import_specifier rule consistent-type-imports:inline {
   warn "Use an `import` instead of an `import type`."
   fix at { start: edit.start, end: edit.end } as ""
 }
-in ts_import_type rule consistent-type-imports:annotation {
+in ts_import_type rule es-consistent-type-imports:annotation {
   option disallowTypeAnnotations boolean = true "Disallow import() type annotations."
   option fixStyle ("inline-type-imports" | "separate-type-imports") = "separate-type-imports" "Preferred fix style."
   option prefer ("type-imports" | "no-type-imports") = "type-imports" "Preferred import kind."

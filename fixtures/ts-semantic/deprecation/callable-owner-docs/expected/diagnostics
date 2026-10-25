@@ -1,6 +1,6 @@
-main.ts:15:9-15:12 no-deprecated#0
-main.ts:18:5-18:8 no-deprecated#0
-main.ts:23:1-23:11 no-deprecated#0
-main.ts:32:15-32:16 no-deprecated#0
-main.ts:39:8-39:12 no-deprecated#0
-main.ts:7:11-7:14 no-deprecated#0
+main.ts:15:9-15:12 es-no-deprecated#0
+main.ts:18:5-18:8 es-no-deprecated#0
+main.ts:23:1-23:11 es-no-deprecated#0
+main.ts:32:15-32:16 es-no-deprecated#0
+main.ts:39:8-39:12 es-no-deprecated#0
+main.ts:7:11-7:14 es-no-deprecated#0

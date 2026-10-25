@@ -1,5 +1,5 @@
-lib.fixture.d.ts:1:202-1:219 no-generated-empty-object-type#0
-lib.fixture.d.ts:1:237-1:259 no-generated-empty-object-type#0
-lib.fixture.d.ts:1:286-1:333 no-generated-empty-object-type#0
-lib.fixture.d.ts:1:596-1:616 no-generated-empty-object-type#0
-lib.fixture.d.ts:1:633-1:658 no-generated-empty-object-type#0
+lib.fixture.d.ts:1:202-1:219 es-no-generated-empty-object-type#0
+lib.fixture.d.ts:1:237-1:259 es-no-generated-empty-object-type#0
+lib.fixture.d.ts:1:286-1:333 es-no-generated-empty-object-type#0
+lib.fixture.d.ts:1:596-1:616 es-no-generated-empty-object-type#0
+lib.fixture.d.ts:1:633-1:658 es-no-generated-empty-object-type#0

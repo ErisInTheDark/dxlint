@@ -1,3 +1,0 @@
-import .ts
-override in ts_class let no_extraneous_class_checked false
-rule no-extraneous-class

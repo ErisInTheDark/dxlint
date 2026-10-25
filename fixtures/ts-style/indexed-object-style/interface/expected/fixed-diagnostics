@@ -1,2 +1,2 @@
-input.ts:4:1-4:61 consistent-indexed-object-style:interface#0
-input.ts:5:16-5:61 consistent-indexed-object-style:interface#0
+input.ts:4:1-4:61 es-consistent-indexed-object-style:interface#0
+input.ts:5:16-5:61 es-consistent-indexed-object-style:interface#0

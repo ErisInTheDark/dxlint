@@ -1,6 +1,6 @@
-a.js:1:17-1:19 newline-per-chained-call#0
-a.js:1:21-1:23 newline-per-chained-call#0
-a.js:2:14-2:19 newline-per-chained-call#0
-a.js:2:21-2:26 newline-per-chained-call#0
-a.js:3:12-3:19 newline-per-chained-call#0
-a.js:3:21-3:24 newline-per-chained-call#0
+a.js:1:17-1:19 es-newline-per-chained-call#0
+a.js:1:21-1:23 es-newline-per-chained-call#0
+a.js:2:14-2:19 es-newline-per-chained-call#0
+a.js:2:21-2:26 es-newline-per-chained-call#0
+a.js:3:12-3:19 es-newline-per-chained-call#0
+a.js:3:21-3:24 es-newline-per-chained-call#0

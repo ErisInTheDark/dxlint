@@ -1,8 +1,0 @@
-a.ts:11:25-11:35 naming-convention:enum-member#0
-a.ts:12:18-12:29 naming-convention:function#0
-a.ts:3:13-3:25 naming-convention:object-property#0
-a.ts:4:13-4:23 naming-convention:object-method#0
-a.ts:7:15-7:24 naming-convention:class#0
-a.ts:8:13-8:25 naming-convention:class-property#0
-a.ts:9:13-9:23 naming-convention:class-method#0
-a.ts:9:24-9:44 naming-convention:parameter#0

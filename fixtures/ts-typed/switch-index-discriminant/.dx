@@ -1,2 +1,2 @@
 import .ts
-rule switch-exhaustiveness-check
+rule es-switch-exhaustiveness-check

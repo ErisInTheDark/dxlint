@@ -1,2 +1,2 @@
 import .ts
-rule no-unsafe-argument
+rule es-no-unsafe-argument

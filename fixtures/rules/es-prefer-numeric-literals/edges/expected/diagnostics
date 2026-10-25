@@ -1,0 +1,5 @@
+file.js:1:22-1:48 es-prefer-numeric-literals#0
+file.js:2:16-2:33 es-prefer-numeric-literals#0
+file.js:3:16-3:33 es-prefer-numeric-literals#0
+file.js:4:27-4:51 es-prefer-numeric-literals#0
+file.js:5:15-5:32 es-prefer-numeric-literals#0

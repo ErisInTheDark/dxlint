@@ -1,2 +1,2 @@
 import .ts
-rule class-literal-property-style
+rule es-class-literal-property-style

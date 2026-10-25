@@ -1,2 +1,2 @@
 import .ts
-rule no-base-to-string { set ignoredTypeNames ['Structural', 'Generic', 'ClassAlias'] }
+rule es-no-base-to-string { set ignoredTypeNames ['Structural', 'Generic', 'ClassAlias'] }

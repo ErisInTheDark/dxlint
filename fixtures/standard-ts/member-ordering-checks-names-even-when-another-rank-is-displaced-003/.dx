@@ -1,2 +1,2 @@
 import .ts
-rule member-ordering:interface set alphabetically
+rule es-member-ordering:interface set alphabetically

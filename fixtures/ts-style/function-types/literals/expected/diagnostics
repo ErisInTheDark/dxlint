@@ -1,7 +1,7 @@
-input.ts:1:15-1:15 prefer-function-type#1
-input.ts:2:19-2:19 prefer-function-type#1
-input.ts:2:47-2:47 prefer-function-type#1
-input.ts:3:17-3:17 prefer-function-type#1
-input.ts:4:17-4:17 prefer-function-type#1
-input.ts:5:12-5:12 prefer-function-type#1
-input.ts:6:13-6:13 prefer-function-type#1
+input.ts:1:15-1:15 es-prefer-function-type#1
+input.ts:2:19-2:19 es-prefer-function-type#1
+input.ts:2:47-2:47 es-prefer-function-type#1
+input.ts:3:17-3:17 es-prefer-function-type#1
+input.ts:4:17-4:17 es-prefer-function-type#1
+input.ts:5:12-5:12 es-prefer-function-type#1
+input.ts:6:13-6:13 es-prefer-function-type#1

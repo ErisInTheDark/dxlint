@@ -1,0 +1,8 @@
+import .ts
+import .css
+import .json
+import .markdown
+rule shared-no-trailing-spaces {
+ set skipBlankLines true
+ set ignoreComments true
+}

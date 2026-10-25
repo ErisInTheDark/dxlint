@@ -1,2 +1,2 @@
-main.ts:22:22-22:60 prefer-readonly:parameter#0
-main.ts:31:5-31:43 prefer-readonly:parameter#0
+main.ts:22:22-22:60 es-prefer-readonly:parameter#0
+main.ts:31:5-31:43 es-prefer-readonly:parameter#0

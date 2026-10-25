@@ -111,7 +111,7 @@ mod tests {
         let mut linter = with_rules(r#"language .js {
           set sourceType "commonjs"
           set globals { app: "readonly" }
-        }"#, "rule no-global-assign\nin ts_program rule wrapper { when source_environment.root_function\nwarn \"wrapped\" }");
+        }"#, "rule es-no-global-assign\nin ts_program rule wrapper { when source_environment.root_function\nwarn \"wrapped\" }");
         let source = "app = 1;";
         linter.set_rule_jobs(1);
         let serial = linter.lint(Path::new("/root/a.js"), source);
@@ -136,7 +136,7 @@ language .js {
   files "legacy/**"
   set ecmaVersion 3
 }
-"#, "rule no-unused-expressions");
+"#, "rule es-no-unused-expressions");
         let json = linter.grammar.lang("json").expect("JSON language");
         let edition = linter.language_options.values(json, Path::new("legacy/a.json"))
             .filter(|(name, _)| *name == "ecmaVersion").last().map(|(_, value)| value);

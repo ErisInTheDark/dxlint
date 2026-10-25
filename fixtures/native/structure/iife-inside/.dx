@@ -1,5 +1,5 @@
 import .ts
-rule wrap-iife {
+rule es-wrap-iife {
   set mode "inside"
   set functionPrototypeMethods true
 }

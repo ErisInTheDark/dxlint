@@ -1,1 +1,1 @@
-input.ts:1:26-1:31 no-unnecessary-type-parameters#0
+input.ts:1:26-1:31 es-no-unnecessary-type-parameters#0

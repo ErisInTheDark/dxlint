@@ -1,2 +1,2 @@
 import .ts
-rule yield-star-spacing { set mode "before" }
+rule es-yield-star-spacing { set mode "before" }

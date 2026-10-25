@@ -1,2 +1,2 @@
 import .ts
-rule no-shadow { set builtinGlobals true }
+rule es-no-shadow { set builtinGlobals true }

@@ -1,2 +1,2 @@
 import .ts
-rule logical-assignment-operators
+rule es-logical-assignment-operators

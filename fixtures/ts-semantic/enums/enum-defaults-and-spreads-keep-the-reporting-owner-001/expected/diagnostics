@@ -1,4 +1,4 @@
-a.ts:1:196-1:206 no-unsafe-enum-assignment:element#0
-a.ts:1:261-1:300 no-unsafe-enum-assignment#2
-a.ts:1:57-1:73 no-unsafe-enum-assignment#2
-a.ts:1:88-1:97 no-unsafe-enum-assignment#2
+a.ts:1:196-1:206 es-no-unsafe-enum-assignment:element#0
+a.ts:1:261-1:300 es-no-unsafe-enum-assignment#2
+a.ts:1:57-1:73 es-no-unsafe-enum-assignment#2
+a.ts:1:88-1:97 es-no-unsafe-enum-assignment#2

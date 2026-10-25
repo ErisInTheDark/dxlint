@@ -1,4 +1,4 @@
-a.js:1:16-1:21 implicit-arrow-linebreak#1
-a.js:2:16-2:23 implicit-arrow-linebreak#1
-a.js:3:27-3:28 implicit-arrow-linebreak#1
-a.js:4:16-5:9 implicit-arrow-linebreak#1
+a.js:1:16-1:21 es-implicit-arrow-linebreak#1
+a.js:2:16-2:23 es-implicit-arrow-linebreak#1
+a.js:3:27-3:28 es-implicit-arrow-linebreak#1
+a.js:4:16-5:9 es-implicit-arrow-linebreak#1

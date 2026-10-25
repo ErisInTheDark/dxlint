@@ -21,7 +21,7 @@ fn problem_counter_wrong(update, counter, wrong) = {
   }
   value name is ts_identifier && count(changes) == 1 && problem_update_direction(first(changes)) == wrong
 }
-in ts_for rule for-direction {
+in ts_for rule es-for-direction {
   let comparison unparenthesised_node(test.node)
   when comparison is ts_binary && update != null
   when contains(["<", "<=", ">", ">="], comparison.operator)
@@ -33,7 +33,7 @@ in ts_for rule for-direction {
 }
 
 # `if (true)`, `while (1)`, `do ... while (false)`, `false ? a : b`.
-in ts_if.test, ts_conditional.test rule no-constant-condition {
+in ts_if.test, ts_conditional.test rule es-no-constant-condition {
   when constant_truthiness
   warn "Unexpected constant condition."
 }
@@ -44,7 +44,7 @@ fn problem_loop_yields(loop) = {
     && !(loop is ts_for && loop.init != null && event.site.offset >= loop.init.offset && event.site.end_offset <= loop.init.end_offset))
 }
 in ts_while, ts_do_while, ts_for let constant_loop_condition_checked !(is ts_while && re_test(test, /^[(\s]*true[)\s]*$/))
-in ts_while.test, ts_do_while.test, ts_for.test rule no-constant-condition:loop {
+in ts_while.test, ts_do_while.test, ts_for.test rule es-no-constant-condition:loop {
   when constant_truthiness && parent.constant_loop_condition_checked && !problem_loop_yields(parent.node)
   warn "Unexpected constant condition."
 }
@@ -81,14 +81,14 @@ fn problem_duplicate_condition(branch) = {
   value problem_condition_covered(condition, previous) || condition is ts_logical && condition.operator == "&&"
     && any(problem_condition_parts(condition, "&&"), part => problem_condition_covered(part, previous))
 }
-in ts_if.test rule no-dupe-else-if {
+in ts_if.test rule es-no-dupe-else-if {
   when problem_duplicate_condition(parent.node)
   report at unparenthesised_node(node)
   warn "This branch can never execute. Its condition is a duplicate or covered by previous conditions in the if-else-if chain."
 }
 
 in ts_case let problem_case_tokens if test != null then unparenthesised_node(test.node).token_texts else null
-in ts_case rule no-duplicate-case {
+in ts_case rule es-no-duplicate-case {
   when problem_case_tokens != null
   when { value parent.case.problem_case_tokens; slice 0 index; contains problem_case_tokens }
   warn "Duplicate case label."
@@ -103,7 +103,7 @@ fn problem_finally_exit(jump) = {
     || jump is ts_break && jump.label == null && ancestor is ts_switch)
   value boundary is ts_try.finalizer
 }
-in ts_return, ts_throw, ts_break, ts_continue rule no-unsafe-finally {
+in ts_return, ts_throw, ts_break, ts_continue rule es-no-unsafe-finally {
   when problem_finally_exit(node)
   warn "Unsafe usage of {if is ts_return then 'ReturnStatement' else if is ts_throw then 'ThrowStatement' else if is ts_break then 'BreakStatement' else 'ContinueStatement'}."
 }
@@ -118,7 +118,7 @@ fn problem_jump_label(jump) = {
 }
 in problem_label_jump let problem_label_target if label != null then problem_jump_label(node) else null
 in ts_labeled let problem_label_used { value descendants(problem_label_jump); any (jump) jump.problem_label_target.offset == offset }
-in ts_labeled.label rule no-unused-labels {
+in ts_labeled.label rule es-no-unused-labels {
   when !parent.problem_label_used
   let label_body parent.body.node
   let label_context problem_label_context(parent.parent)
@@ -132,7 +132,7 @@ in ts_labeled.label rule no-unused-labels {
   warn "'{text}:' is defined but never used."
 }
 
-in ts_function, ts_method rule require-yield {
+in ts_function, ts_method rule es-require-yield {
   let declared_yields flow_declared_effects(body.node, "yielded")
   when contains(modifier, "*") && declared_yields != null && count(declared_yields) == 0 && !{ value body.nonempty ?? ""; re_test /^\{\s*\}$/ }
   report at function_head_site(node)
@@ -179,13 +179,13 @@ in ts_program let problem_unreachable_runs {
   value statements: { value descendants(code_path_statement); filter (statement) problem_unreachable_statement(statement) }
   value problem_unreachable_ranges(statements, false)
 }
-in ts_program rule no-unreachable {
+in ts_program rule es-no-unreachable {
   each statement in problem_unreachable_runs {
     report at statement
     warn "Unreachable code."
   }
 }
-in ts_class rule no-unreachable:derived {
+in ts_class rule es-no-unreachable:derived {
   when extends != null && problem_never_constructed(node)
   let statements filter(member.nodes, property => {
     value modifiers: [] property.modifier
@@ -197,13 +197,13 @@ in ts_class rule no-unreachable:derived {
   }
 }
 
-in ts_method, ts_function, ts_arrow rule getter-return {
+in ts_method, ts_function, ts_arrow rule es-getter-return {
   option allowImplicit boolean = false "a bare `return;` counts as returning"
   when accessor == "get" && flow_normal(body.node) == true
   report at function_head_site(node)
   warn if count(scoping_own_returns) == 0 || !allowImplicit && all(scoping_own_returns, returned => returned.argument == null) then "Expected to return a value in {function_name}." else "Expected {function_name} to always return a value."
 }
-in ts_return rule getter-return:bare {
+in ts_return rule es-getter-return:bare {
   option allowImplicit boolean = false "a bare `return;` counts as returning"
   when argument == null && !allowImplicit && enclosing_accessor == "get"
   warn "Expected to return a value in {enclosing_function_name}."
@@ -229,7 +229,7 @@ in ts_case let case_comment_source
   if case_comment_in_block_text != null then case_comment_block_source else gap_before.nonempty ?? ""
 in ts_case let case_comment @last_comment(case_comment_source)
 in ts_case let case_comment_offset offset - len(gap_before.nonempty ?? "") - (if case_comment_in_block_text != null then len(previous_sibling) else 0) + len(case_comment_source) - len(case_comment.nonempty ?? "")
-in ts_case rule no-fallthrough {
+in ts_case rule es-no-fallthrough {
   option allowEmptyCase boolean = false "allow empty cases separated by blank lines"
   option commentPattern regex | null = null "comments that allow falling through (default: /falls?\\s?through/i)"
   option reportUnusedFallthroughComment boolean = false "report such comments where nothing falls through"
@@ -243,7 +243,7 @@ in ts_case rule no-fallthrough {
   when !allowing
   warn "Expected a 'break' statement before '{if test == null then 'default' else 'case'}'."
 }
-in ts_case rule no-fallthrough:unused-comment {
+in ts_case rule es-no-fallthrough:unused-comment {
   option reportUnusedFallthroughComment boolean = false "report such comments where nothing falls through"
   option commentPattern regex | null = null "comments that allow falling through (default: /falls?\\s?through/i)"
   let comment_body { value case_comment.nonempty ?? ""; re_replace /^\/[*\/]|\*\/$/ ""; trim }

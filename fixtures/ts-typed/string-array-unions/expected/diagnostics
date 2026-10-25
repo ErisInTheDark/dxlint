@@ -1,2 +1,2 @@
-input.ts:10:1-10:19 require-array-sort-compare#0
-input.ts:4:1-4:13 require-array-sort-compare#0
+input.ts:10:1-10:19 es-require-array-sort-compare#0
+input.ts:4:1-4:13 es-require-array-sort-compare#0

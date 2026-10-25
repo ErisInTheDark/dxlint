@@ -1,2 +1,2 @@
 import .ts
-rule preserve-caught-error { set requireCatchParameter true }
+rule es-preserve-caught-error { set requireCatchParameter true }

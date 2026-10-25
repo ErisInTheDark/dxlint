@@ -1,2 +1,2 @@
 import .ts
-rule list-style { set singleLine { spacing: "always" }; set overrides { "()": "off" } }
+rule es-list-style { set singleLine { spacing: "always" }; set overrides { "()": "off" } }

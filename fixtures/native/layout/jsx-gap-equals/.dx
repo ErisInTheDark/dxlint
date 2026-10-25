@@ -1,2 +1,2 @@
 import .ts
-rule jsx-equals-spacing
+rule es-jsx-equals-spacing

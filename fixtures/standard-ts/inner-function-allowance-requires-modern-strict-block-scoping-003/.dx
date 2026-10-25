@@ -2,6 +2,6 @@ import .ts
 language .js { set sourceType "script"
 set ecmaVersion 2015
 }
-rule no-inner-declarations { set mode "both"
+rule es-no-inner-declarations { set mode "both"
 set blockScopedFunctions "allow"
 }

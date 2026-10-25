@@ -1,10 +1,10 @@
 import .ts
 import .ts/typed/switches
-rule switch-exhaustiveness-check {
+rule es-switch-exhaustiveness-check {
   files "**/a.ts"
   set allowDefaultCaseForExhaustiveSwitch false
   set considerDefaultExhaustiveForUnions true
   set requireDefaultForNonUnion true
   set defaultCaseCommentPattern "^intentional$"
 }
-rule default-case { files "**/default.ts" }
+rule es-default-case { files "**/default.ts" }

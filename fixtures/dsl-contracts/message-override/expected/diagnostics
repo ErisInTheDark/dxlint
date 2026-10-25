@@ -1,2 +1,2 @@
-input.ts:1:16-1:19 no-var#0 local:var
-input.ts:1:35-1:44 no-cond-assign#0
+input.ts:1:16-1:19 es-no-var#0 local:var
+input.ts:1:35-1:44 es-no-cond-assign#0

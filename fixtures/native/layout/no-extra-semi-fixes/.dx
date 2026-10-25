@@ -1,2 +1,2 @@
 import .ts
-rule no-extra-semi
+rule es-no-extra-semi

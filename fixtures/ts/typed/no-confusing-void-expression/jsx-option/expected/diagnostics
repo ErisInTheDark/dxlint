@@ -1,2 +1,2 @@
-a.tsx:7:45-7:48 no-confusing-void-expression#1
-a.tsx:8:44-8:47 no-confusing-void-expression#1
+a.tsx:7:45-7:48 es-no-confusing-void-expression#1
+a.tsx:8:44-8:47 es-no-confusing-void-expression#1

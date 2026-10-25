@@ -1,2 +1,2 @@
 import .ts
-rule no-div-regex
+rule es-no-div-regex
