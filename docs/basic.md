@@ -130,15 +130,17 @@ Write these in any comment:
 
 `eslint-disable` comments are not read.
 
-## One project, one config
+## Nested configs
 
-A run uses one config: the nearest `.dx` above the directory you run dxlint in. For rules that differ by folder, use `files` and `ignore` inside the rule blocks. A config can build on another by importing it:
+Each file is linted by the nearest `.dx` at or above it, in the CLI and in the editor. A nested config replaces its parents for the files below it; import the parent to build on it:
 
 ```dx
 import ../.dx
 
 rule no-console off
 ```
+
+When `dxlint` walks into a folder that has its own `.dx`, it skips that folder and says so. Name the folder (`dxlint . packages/app`) to lint it too, with its own config. `-c` lints every named path with that one config. For rules that only differ by folder, `files` and `ignore` inside a rule block do the job without a second config.
 
 ## Language settings
 

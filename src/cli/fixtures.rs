@@ -178,7 +178,8 @@ fn difference(expected: &str, actual: &str) -> String {
 fn scenario(output: &mut Output<'_>, root: &Path, bless: bool) -> Result<Vec<String>, String> {
     let project = load_from_with(output, &root.join(".dx"), &Disk, true).map_err(|_| "configuration failed".to_string())?;
     if !project.config_ok { return Err("configuration failed".into()); }
-    let mut files = super::lint::walker(&[root.to_path_buf()], 1, &["actual", "expected"]).build()
+    let outputs = |entry: &ignore::DirEntry| !matches!(entry.file_name().to_str(), Some("actual" | "expected"));
+    let mut files = super::lint::walker(&[root.to_path_buf()], 1, outputs).build()
         .map(|entry| entry.map_err(|e| e.to_string())).collect::<Result<Vec<_>, _>>()?.into_iter()
         .filter(|entry| entry.file_type().is_some_and(|kind| kind.is_file()))
         .map(|entry| entry.into_path())
@@ -242,7 +243,34 @@ fn scenario(output: &mut Output<'_>, root: &Path, bless: bool) -> Result<Vec<Str
     result
 }
 
-pub(super) fn run(output: &mut Output<'_>, paths: &[PathBuf], bless: bool) -> u8 {
+/// One scenario's verdict and everything it printed.
+struct Checked {
+    passed: bool,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
+fn check(cwd: &Path, root: &Path, bless: bool) -> Checked {
+    let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+    let mut output = Output { cwd, stdout: &mut stdout, stderr: &mut stderr };
+    let name = root.strip_prefix(cwd).unwrap_or(root).display();
+    let passed = match scenario(&mut output, root, bless) {
+        Ok(differences) if differences.is_empty() => {
+            output.out(format_args!("ok {name}"));
+            true
+        }
+        result => {
+            let differences = match result { Ok(differences) => differences, Err(error) => vec![error] };
+            output.err(format_args!("FAIL {name}\n{}", differences.join("\n")));
+            false
+        }
+    };
+    Checked { passed, stdout, stderr }
+}
+
+/// Scenarios run on `jobs` threads (each keeps its own library parse) and
+/// report in path order.
+pub(super) fn run(output: &mut Output<'_>, paths: &[PathBuf], bless: bool, jobs: usize) -> u8 {
     let paths = if paths.is_empty() { vec![PathBuf::from("fixtures")] } else { paths.to_vec() };
     let mut found = BTreeSet::new();
     let mut failures = 0;
@@ -253,18 +281,27 @@ pub(super) fn run(output: &mut Output<'_>, paths: &[PathBuf], bless: bool) -> u8
         }
     }
     if found.is_empty() { output.err(format_args!("no fixture scenarios found")); return 1; }
-    for root in &found {
-        let name = root.strip_prefix(output.cwd).unwrap_or(root).display();
-        match scenario(output, root, bless) {
-            Ok(differences) if differences.is_empty() => output.out(format_args!("ok {name}")),
-            result => {
-                failures += 1;
-                let differences = match result { Ok(differences) => differences, Err(error) => vec![error] };
-                output.err(format_args!("FAIL {name}\n{}", differences.join("\n")));
-            }
+    let roots: Vec<PathBuf> = found.into_iter().collect();
+    let cwd = output.cwd;
+    let (tx, rx) = std::sync::mpsc::channel();
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    std::thread::scope(|s| {
+        for _ in 0..jobs.clamp(1, roots.len()) {
+            let (tx, roots, next) = (tx.clone(), &roots, &next);
+            std::thread::Builder::new().stack_size(crate::engine::WORKER_STACK).spawn_scoped(s, move || loop {
+                let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let Some(root) = roots.get(index) else { break };
+                if tx.send((index, check(cwd, root, bless))).is_err() { break; }
+            }).expect("fixture worker thread");
         }
-    }
-    output.out(format_args!("{} scenarios, {failures} failed", found.len()));
+        drop(tx);
+        for checked in super::lint::in_order(rx) {
+            failures += usize::from(!checked.passed);
+            let _ = output.stdout.write_all(&checked.stdout);
+            let _ = output.stderr.write_all(&checked.stderr);
+        }
+    });
+    output.out(format_args!("{} scenarios, {failures} failed", roots.len()));
     u8::from(failures > 0)
 }
 
@@ -372,14 +409,14 @@ mod tests {
         fs::remove_file(bad.join("expected/diagnostics")).unwrap();
         let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
         let mut output = Output { cwd: &project.0, stdout: &mut stdout, stderr: &mut stderr };
-        assert_eq!(run(&mut output, &[], false), 1);
+        assert_eq!(run(&mut output, &[], false, 2), 1);
         assert!(good.join("actual/diagnostics").is_file());
         fs::write(bad.join("expected/diagnostics"), "").unwrap();
-        assert_eq!(run(&mut output, &[], false), 0);
+        assert_eq!(run(&mut output, &[], false, 1), 0);
         fs::remove_file(good.join("expected/diagnostics")).unwrap();
-        assert_eq!(run(&mut output, &[PathBuf::from("fixtures/bad")], false), 0);
-        assert_eq!(run(&mut output, &[], false), 1);
+        assert_eq!(run(&mut output, &[PathBuf::from("fixtures/bad")], false, 1), 0);
+        assert_eq!(run(&mut output, &[], false, 2), 1);
         fs::create_dir(project.0.join("empty")).unwrap();
-        assert_eq!(run(&mut output, &[PathBuf::from("empty")], false), 1);
+        assert_eq!(run(&mut output, &[PathBuf::from("empty")], false, 1), 1);
     }
 }

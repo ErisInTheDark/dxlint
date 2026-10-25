@@ -30,6 +30,11 @@ pub fn error(output: &mut Output<'_>, msg: &str) {
     output.err(format_args!("{red}error{red:#}{BOLD}: {msg}{BOLD:#}"));
 }
 
+pub fn note(output: &mut Output<'_>, msg: &str) {
+    let cyan = color(AnsiColor::Cyan);
+    output.err(format_args!("{cyan}note{cyan:#}: {msg}"));
+}
+
 /// A source line with a `^^^` underline under `start..end` (clamped to the line).
 fn snippet(out: &mut String, text: &str, lines: &LineIndex, start: usize, end: usize, style: Style) {
     let line = lines.line_of(start);

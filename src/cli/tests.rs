@@ -687,6 +687,40 @@ fn nested_configs_import_their_parent() {
     assert!(stdout(&out).contains("\"severity\":\"error\""), "{}", stdout(&out));
 }
 
+const NESTED: &str = "import ../.dx\nrule no-shout error\n";
+
+#[test]
+fn named_files_use_their_nearest_config() {
+    let dir = project("cli-nearest", &[(".dx", RULES), ("sub/.dx", NESTED), ("sub/a.t", "LOUD\n"), ("b.t", "LOUD\n")]);
+    let out = dxlint(&dir, &["--format", "jsonl", "sub/a.t", "b.t"]);
+    let lines = stdout(&out);
+    assert_eq!(out.code, 1, "{lines}");
+    assert!(lines.lines().any(|l| l.contains("\"file\":\"sub/a.t\"") && l.contains("\"severity\":\"error\"")), "{lines}");
+    assert!(lines.lines().any(|l| l.contains("\"file\":\"b.t\"") && l.contains("\"severity\":\"warn\"")), "{lines}");
+}
+
+#[test]
+fn walks_skip_nested_projects_and_say_so() {
+    let dir = project("cli-nested-skip", &[(".dx", RULES), ("sub/.dx", NESTED), ("sub/a.t", "LOUD\n"), ("b.t", "quiet\n")]);
+    let out = dxlint(&dir, &["--format", "jsonl"]);
+    assert_eq!(out.code, 0, "{}", stdout(&out));
+    assert!(stdout(&out).is_empty(), "{}", stdout(&out));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("skipped sub"), "{}", String::from_utf8_lossy(&out.stderr));
+    let named = dxlint(&dir, &["--format", "jsonl", ".", "sub"]);
+    assert_eq!(named.code, 1, "{}", stdout(&named));
+    assert!(stdout(&named).contains("\"severity\":\"error\""), "{}", stdout(&named));
+    assert!(!String::from_utf8_lossy(&named.stderr).contains("skipped"), "{}", String::from_utf8_lossy(&named.stderr));
+}
+
+#[test]
+fn ignored_nested_projects_are_skipped_quietly() {
+    let root = format!("{RULES}\nignore \"sub\"\n");
+    let dir = project("cli-nested-ignored", &[(".dx", root.as_str()), ("sub/.dx", NESTED), ("sub/a.t", "LOUD\n")]);
+    let out = dxlint(&dir, &["--format", "jsonl"]);
+    assert_eq!(out.code, 0, "{}", stdout(&out));
+    assert!(!String::from_utf8_lossy(&out.stderr).contains("skipped"), "{}", String::from_utf8_lossy(&out.stderr));
+}
+
 #[test]
 fn foreign_language_rules_explain_the_required_import() {
     let dir = project("cli-hint", &[(".dx", "import .ts\nrule rs-indent\n"), ("a.ts", "if (x = 1) {}\nvar y = 1;\n")]);

@@ -9,6 +9,7 @@ use serde::Serialize;
 
 use super::{load_for_lint, render, ConfigArg, Format, LintArgs, Output, Project, Sources};
 use crate::config::ast::Severity;
+use crate::config::source::normalize_path;
 use crate::engine::cache::{self, Cache};
 use crate::engine::{apply_fixes, Diagnostic, Edit, Linter, LintRun};
 use crate::line_index::LineIndex;
@@ -117,11 +118,27 @@ fn watch(linter: &Linter, profile: &crate::engine::Profile, every: std::time::Du
     }
 }
 
-pub(super) fn walker(roots: &[PathBuf], jobs: usize, exclude: &'static [&'static str]) -> WalkBuilder {
+/// Items tagged with their place in a sequence, released in that order as
+/// soon as each one's predecessors are.
+pub(super) fn in_order<T>(tagged: impl IntoIterator<Item = (usize, T)>) -> impl Iterator<Item = T> {
+    let mut tagged = tagged.into_iter();
+    let mut waiting = std::collections::BTreeMap::new();
+    let mut due = 0;
+    std::iter::from_fn(move || loop {
+        if let Some(item) = waiting.remove(&due) {
+            due += 1;
+            return Some(item);
+        }
+        let (index, item) = tagged.next()?;
+        waiting.insert(index, item);
+    })
+}
+
+/// Walks `roots`, leaving out `.git` and every entry `keep` refuses.
+pub(super) fn walker(roots: &[PathBuf], jobs: usize, keep: impl Fn(&ignore::DirEntry) -> bool + Send + Sync + 'static) -> WalkBuilder {
     let mut walker = WalkBuilder::new(&roots[0]);
     for root in &roots[1..] { walker.add(root); }
-    walker.hidden(false).threads(jobs).filter_entry(move |entry|
-        entry.file_name() != ".git" && !exclude.iter().any(|name| entry.file_name() == *name));
+    walker.hidden(false).threads(jobs).filter_entry(move |entry| entry.file_name() != ".git" && keep(entry));
     walker
 }
 
@@ -166,7 +183,6 @@ fn lint_file(linter: &Linter, run: &LintRun<'_>, cache: Option<&Cache>, path: &P
 }
 
 pub(super) fn run(output: &mut Output<'_>, args: LintArgs, config: &ConfigArg, sources: Option<&Sources>) -> u8 {
-    crate::config::build_one_config();
     let mut stdout = std::io::BufWriter::with_capacity(1 << 16, &mut *output.stdout);
     let mut buffered = Output { cwd: output.cwd, stdout: &mut stdout, stderr: &mut *output.stderr };
     let code = lint(&mut buffered, args, config, sources);
@@ -174,17 +190,140 @@ pub(super) fn run(output: &mut Output<'_>, args: LintArgs, config: &ConfigArg, s
     code
 }
 
-fn lint(output: &mut Output<'_>, args: LintArgs, config: &ConfigArg, sources: Option<&Sources>) -> u8 {
-    let started = Instant::now();
-    let mut project = match load_for_lint(output, config) {
-        Ok(project) => project,
-        Err(code) => return code,
-    };
-    prepared(output, args, &mut project, sources, started)
+/// What a run found, summed over every config it linted with.
+struct Tally {
+    errors: usize,
+    warnings: usize,
+    other: usize,
+    fixable: usize,
+    fixed: usize,
+    files: usize,
+    failed: bool,
+    config_ok: bool,
 }
 
+impl Tally {
+    fn new() -> Self {
+        Tally { errors: 0, warnings: 0, other: 0, fixable: 0, fixed: 0, files: 0, failed: false, config_ok: true }
+    }
+
+    /// The summary line, and the exit code: a broken config still lints
+    /// with what built, but never passes.
+    fn finish(&self, output: &mut Output<'_>, format: Format) -> u8 {
+        if format == Format::Human {
+            if self.fixed > 0 {
+                output.out(format_args!("fixed {} problem{}", self.fixed, if self.fixed == 1 { "" } else { "s" }));
+            }
+            render::summary(output, self.errors, self.warnings, self.other, self.fixable, self.files);
+        }
+        let _ = output.stdout.flush();
+        if !self.config_ok {
+            2
+        } else if self.failed || self.errors > 0 {
+            1
+        } else {
+            0
+        }
+    }
+}
+
+/// Which files one config lints.
+struct Scope<'a> {
+    roots: Vec<PathBuf>,
+    /// Every path named on the command line: nested projects inside them
+    /// are linted by their own config, so skipping them says nothing.
+    named: &'a [PathBuf],
+    /// The whole project, so the cache forgets files that are gone.
+    whole: bool,
+}
+
+/// Each named path is linted with its nearest `.dx` (or `--config`), so a
+/// file gets the same config as in the editor. `None` roots: the whole
+/// project of the current directory's config.
+fn configs(output: &mut Output<'_>, paths: &[PathBuf], arg: &ConfigArg) -> Result<Vec<(PathBuf, Option<Vec<PathBuf>>)>, u8> {
+    let explicit = arg.config.as_ref().map(|p| normalize_path(&output.cwd.join(p)));
+    if paths.is_empty() {
+        return match explicit.or_else(|| crate::config::find(output.cwd)) {
+            Some(config) => Ok(vec![(config, None)]),
+            None => {
+                render::error(output, &crate::config::not_found_message());
+                Err(2)
+            }
+        };
+    }
+    let mut by_config: std::collections::BTreeMap<PathBuf, Vec<PathBuf>> = std::collections::BTreeMap::new();
+    for path in paths {
+        let full = normalize_path(&output.cwd.join(path));
+        let dir = if full.is_dir() { full.as_path() } else { full.parent().unwrap_or(&full) };
+        let Some(config) = explicit.clone().or_else(|| crate::config::find(dir)) else {
+            render::error(output, &format!("{}: {}", path.display(), crate::config::not_found_message()));
+            return Err(2);
+        };
+        by_config.entry(config).or_default().push(full);
+    }
+    Ok(by_config.into_iter().map(|(config, roots)| (config, Some(roots))).collect())
+}
+
+fn lint(output: &mut Output<'_>, args: LintArgs, config: &ConfigArg, sources: Option<&Sources>) -> u8 {
+    let started = Instant::now();
+    if sources.is_some() {
+        crate::config::build_one_config();
+        let mut project = match load_for_lint(output, config) {
+            Ok(project) => project,
+            Err(code) => return code,
+        };
+        return prepared(output, args, &mut project, sources, started);
+    }
+    let configs = match configs(output, &args.paths, config) {
+        Ok(configs) => configs,
+        Err(code) => return code,
+    };
+    if configs.len() == 1 {
+        crate::config::build_one_config();
+    }
+    let named: Vec<PathBuf> = args.paths.iter().map(|p| normalize_path(&output.cwd.join(p))).collect();
+    let mut tally = Tally::new();
+    for (path, roots) in configs {
+        let mut project = match super::load_from_with(output, &path, &crate::config::source::Disk, true) {
+            Ok(project) => project,
+            Err(_) => {
+                tally.config_ok = false;
+                continue;
+            }
+        };
+        let whole = roots.is_none();
+        let roots = roots.unwrap_or_else(|| vec![project.linter.root.clone()]);
+        lint_project(output, &args, &mut project, None, Scope { roots, named: &named, whole }, started, &mut tally);
+    }
+    tally.finish(output, args.format)
+}
+
+/// One built project over its own root (conformance's packed sources).
 pub(super) fn prepared(output: &mut Output<'_>, args: LintArgs, project: &mut Project, sources: Option<&Sources>, started: Instant) -> u8 {
+    let mut tally = Tally::new();
+    let roots = vec![project.linter.root.clone()];
+    lint_project(output, &args, project, sources, Scope { roots, named: &[], whole: true }, started, &mut tally);
+    tally.finish(output, args.format)
+}
+
+/// The folders a walk skipped for their own `.dx` that nobody named and the
+/// config does not ignore.
+fn skipped_note(output: &mut Output<'_>, linter: &Linter, skipped: Vec<PathBuf>, named: &[PathBuf]) {
+    let mut shown: Vec<String> = skipped.into_iter()
+        .filter(|dir| !linter.is_ignored(dir) && !named.iter().any(|path| path.starts_with(dir)))
+        .map(|dir| display(&dir, output.cwd))
+        .collect();
+    if shown.is_empty() {
+        return;
+    }
+    shown.sort();
+    let (has, them) = if shown.len() == 1 { ("has", "it") } else { ("each has", "them") };
+    render::note(output, &format!("skipped {} ({has} its own .dx; name {them} to lint {them} too)", shown.join(", ")));
+}
+
+fn lint_project(output: &mut Output<'_>, args: &LintArgs, project: &mut Project, sources: Option<&Sources>, scope: Scope<'_>, started: Instant, tally: &mut Tally) {
     let Project { linter, config_ok, load_time, lex_time, build_time, build_phases, .. } = project;
+    tally.config_ok &= *config_ok;
     if args.profile {
         linter.enable_profile();
     }
@@ -195,33 +334,39 @@ pub(super) fn prepared(output: &mut Output<'_>, args: LintArgs, project: &mut Pr
     // budget gives other results than cached ones.
     let cache = (!args.no_cache && !args.profile && !args.fix_preview && args.semantic_budget.is_none()).then(|| Cache::open(&linter));
     let cwd = output.cwd;
-    let roots: Vec<PathBuf> = if args.paths.is_empty() { vec![linter.root.clone()] } else { args.paths.iter().map(|p| cwd.join(p)).collect() };
+    let Scope { roots, named, whole } = scope;
     let jobs = args.jobs.map_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get()), |n| n.get());
 
     let packed = sources.map(|sources| sources.files.iter().filter(|(_, path)| linter.wants(path)).cloned().collect::<Vec<_>>());
 
-    let (tx, rx) = mpsc::channel::<Msg>();
+    // Workers send each file's result with its place in the queue; results
+    // are reported in queue order, so output never depends on timing.
+    let (tx, rx) = mpsc::channel::<(usize, Msg)>();
     let fix = args.fix;
     let format = args.format;
     let mut fired = crate::fx_hash::FxHashMap::<String, u64>::default();
-    let mut errors = 0;
-    let mut warnings = 0;
-    let mut other = 0;
-    let mut fixable = 0;
-    let mut fixed_total = 0;
     let mut files = 0usize;
     let mut bytes = 0usize;
-    let mut failed = false;
+    let skipped = std::sync::Arc::new(std::sync::Mutex::new(Vec::<PathBuf>::new()));
 
     std::thread::scope(|s| {
         let linter = &mut *linter;
         let cache = cache.as_ref();
         let explicit: Vec<PathBuf> = roots.iter().filter(|r| r.is_file()).cloned().collect();
+        let skipping = skipped.clone();
         s.spawn(move || {
             let mut queue = if let Some(queue) = packed {
                 queue
             } else {
-                let walker = walker(&roots, jobs, &[]);
+                // A folder with its own `.dx` below a root is another project.
+                let walker = walker(&roots, jobs, move |entry| {
+                    let nested = entry.depth() > 0 && entry.file_type().is_some_and(|t| t.is_dir())
+                        && entry.path().join(crate::config::CONFIG_NAME).is_file();
+                    if nested {
+                        skipping.lock().expect("skipped folders").push(entry.path().to_path_buf());
+                    }
+                    !nested
+                });
                 // Walk first, then lint the biggest files first: a big file found
                 // late would otherwise be the tail every other thread waits on.
                 let found: std::sync::Mutex<Vec<(u64, PathBuf)>> = std::sync::Mutex::default();
@@ -266,8 +411,10 @@ pub(super) fn prepared(output: &mut Output<'_>, args: LintArgs, project: &mut Pr
                     let run = &run;
                     std::thread::Builder::new().stack_size(crate::engine::WORKER_STACK).spawn_scoped(w, move || {
                         let _pool = crate::alloc::own_pool();
-                        while let Some((_, path)) = queue.get(next.fetch_add(1, std::sync::atomic::Ordering::Relaxed)) {
-                            if tx.send(lint_file(linter, run, cache, path, fix)).is_err() {
+                        loop {
+                            let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            let Some((_, path)) = queue.get(index) else { break };
+                            if tx.send((index, lint_file(linter, run, cache, path, fix))).is_err() {
                                 break;
                             }
                             crate::alloc::trim();
@@ -280,26 +427,26 @@ pub(super) fn prepared(output: &mut Output<'_>, args: LintArgs, project: &mut Pr
         });
 
         let mut results: Vec<FileResult> = Vec::new();
-        for msg in rx {
+        for msg in in_order(rx) {
             match msg {
                 Msg::Error(path, e) => {
                     render::error(output, &format!("{}: {e}", display(&path, cwd)));
-                    failed = true;
+                    tally.failed = true;
                 }
                 Msg::File(r) => {
                     files += 1;
                     bytes += r.text.len();
-                    fixed_total += r.fixed;
+                    tally.fixed += r.fixed;
                     for d in &r.diags {
                         if args.profile && format == Format::Jsonl && d.message_index.is_some() {
                             *fired.entry(d.rule.clone()).or_default() += 1;
                         }
                         match d.severity {
-                            Severity::Error => errors += 1,
-                            Severity::Warn => warnings += 1,
-                            _ => other += 1,
+                            Severity::Error => tally.errors += 1,
+                            Severity::Warn => tally.warnings += 1,
+                            _ => tally.other += 1,
                         }
-                        fixable += usize::from(d.fix.is_some());
+                        tally.fixable += usize::from(d.fix.is_some());
                     }
                     match format {
                         Format::Jsonl => {
@@ -328,20 +475,15 @@ pub(super) fn prepared(output: &mut Output<'_>, args: LintArgs, project: &mut Pr
         }
     });
 
-    if format == Format::Human {
-        if fixed_total > 0 {
-            output.out(format_args!("fixed {fixed_total} problem{}", if fixed_total == 1 { "" } else { "s" }));
-        }
-        render::summary(output, errors, warnings, other, fixable, files);
-    }
-    let _ = output.stdout.flush();
+    tally.files += files;
+    let skipped = std::mem::take(&mut *skipped.lock().expect("skipped folders"));
+    skipped_note(output, linter, skipped, named);
     if args.profile {
-        super::info::profile(output, &linter, format, &fired);
+        super::info::profile(output, linter, format, &fired);
     }
     let cached = cache.as_ref().map_or(0, Cache::hits);
     if let Some(cache) = cache {
-        // A run over the whole project forgets files that are gone.
-        if let Err(e) = cache.save(sources.is_none() && args.paths.is_empty()) {
+        if let Err(e) = cache.save(whole && sources.is_none()) {
             render::error(output, &format!("cannot write {}: {e}", cache::FILE_NAME));
         }
     }
@@ -369,20 +511,18 @@ pub(super) fn prepared(output: &mut Output<'_>, args: LintArgs, project: &mut Pr
             output.err(format_args!("  heap at peak {:.1} MiB by owner: {}", mib(peak as isize), rows.join(", ")));
         }
     }
-    // A broken config still lints with what built, but never passes.
-    if !*config_ok {
-        2
-    } else if failed || errors > 0 {
-        1
-    } else {
-        0
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::engine::{Edit, Fix};
+
+    #[test]
+    fn results_report_in_queue_order_whatever_order_they_finish_in() {
+        let finished = [(2, "c"), (0, "a"), (3, "d"), (1, "b")];
+        assert_eq!(in_order(finished).collect::<Vec<_>>(), ["a", "b", "c", "d"]);
+    }
 
     #[test]
     fn json_preserves_every_edit_of_an_atomic_fix() {

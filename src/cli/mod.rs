@@ -125,7 +125,7 @@ pub struct Cli {
 
 #[derive(clap::Args, Clone)]
 pub struct ConfigArg {
-    /// Config file (default: the nearest `.dx` above the current directory)
+    /// Config file for every path (default: each path's nearest `.dx`)
     #[arg(short, long, global = true)]
     pub config: Option<PathBuf>,
 }
@@ -181,6 +181,9 @@ enum Command {
         /// Replace expected outputs with the current results
         #[arg(long)]
         bless: bool,
+        /// Scenarios checked at once
+        #[arg(long, default_value_t = std::num::NonZeroUsize::MIN)]
+        jobs: std::num::NonZeroUsize,
     },
     /// Check the configuration without linting anything
     Check,
@@ -290,7 +293,7 @@ where
     };
     let config = &cli.config;
     match cli.command {
-        Some(Command::Fixtures { paths, bless }) => fixtures::run(&mut output, &paths, bless),
+        Some(Command::Fixtures { paths, bless, jobs }) => fixtures::run(&mut output, &paths, bless, jobs.get()),
         None => lint::run(&mut output, cli.lint, config, sources.as_ref()),
         Some(Command::Check) => match load(&mut output, config) {
             Ok(Project { config_ok: true, .. }) => {
