@@ -3,7 +3,7 @@
 define {
 
 # ---- comments --------------------------------------------------------------------
-fn tslint_comment_edit(source, n) = {
+fn linter_comment_edit(source, n) = {
   value line_start: position(n.offset).js_line_start
   value prefix: byte_slice(source, line_start, n.offset)
   value tail: n.after
@@ -24,12 +24,20 @@ fn tslint_comment_edit(source, n) = {
       text: if re_test(prefix, /\S$/) && re_test(tail, /^\S/) && !re_test(tail, /^[;,)}\]]/) then " " else ""
     }
 }
-in ts_comment rule es-ban-tslint-comment {
+# Patterns read the whole comment, `//` or `/* */` included: ESLint takes its
+# config comments (`/* eslint ... */`, `/* global x */`) from block comments only.
+in ts_comment rule es-ban-linter-comment {
+  option formats { name: string; pattern: regex }[] = [
+    { name: "tslint", pattern: /^(?:\/\/|\/\*)\s*tslint:(?:enable|disable)(?:-(?:line|next-line))?(?::|\s|\*\/|$)/ },
+    { name: "eslint", pattern: /^(?:\/\/|\/\*)\s*eslint-(?:disable|enable)(?:-(?:line|next-line))?(?:\s|\*\/|$)/ },
+    { name: "eslint", pattern: /^\/\*\s*(?:eslint|eslint-env|globals?|exported)(?:\s|\*\/)/ }
+  ] "linter comments to report: a name for the message and a pattern over the whole comment"
+  let format first(filter(formats, format => re_test(text, format.pattern)))
+  when format != null
   let content re_replace(text, /^\/\/|^\/\*|\*\/$/, "")
   let normalised re_replace(content, /^\s+|\s+$/, "")
-  when re_test(content, /^\s*tslint:(enable|disable)(?:-(line|next-line))?(:|\s|$)/)
-  let edit tslint_comment_edit(source, node)
-  warn "tslint comment detected: \"{if node is ts_line_comment then '// ' normalised else '/* ' normalised ' */'}\""
+  let edit linter_comment_edit(source, node)
+  warn "{format.name} comment detected: \"{if node is ts_line_comment then '// ' normalised else '/* ' normalised ' */'}\""
   fix at edit if edit != null as edit.text
 }
 

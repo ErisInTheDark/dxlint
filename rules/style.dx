@@ -3,7 +3,7 @@
 
 rule es-adjacent-overload-signatures
 rule es-array-type*
-rule es-ban-tslint-comment
+rule es-ban-linter-comment
 rule es-class-literal-property-style
 rule es-consistent-generic-constructors
 rule es-consistent-indexed-object-style*

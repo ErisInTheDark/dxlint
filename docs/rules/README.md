@@ -20,8 +20,8 @@ Pages are adapted from the documentation of [ESLint](https://eslint.org/docs/lat
 | [es-arrow-parens](es-arrow-parens.md) | Enforces consistent parentheses around arrow parameters. |  | autofix |  | 93.6% |
 | [es-arrow-spacing](es-arrow-spacing.md) | Controls spaces before and after an arrow function's `=>`. |  | autofix | formatting | 100% |
 | [es-await-thenable](es-await-thenable.md) | Reports awaiting values that are not promises or other thenables. | yes |  | bugs | 97.7% |
+| [es-ban-linter-comment](es-ban-linter-comment.md) | Reports comments meant for another linter: TSLint and ESLint enable/disable directives and ESLint config comments. |  | autofix | style | 100% |
 | [es-ban-ts-comment](es-ban-ts-comment.md) | Controls TypeScript directive comments that suppress or enable compiler checks. |  |  | type-safety | 100% |
-| [es-ban-tslint-comment](es-ban-tslint-comment.md) | Reports obsolete TSLint enable and disable comments. |  | autofix | style | 100% |
 | [es-block-scoped-var](es-block-scoped-var.md) | Reports `var` bindings used outside the block where they were declared. |  |  |  | 100% |
 | [es-block-spacing](es-block-spacing.md) | Controls spaces immediately inside block braces when the next or previous token is on the same line. |  | autofix | formatting | 100% |
 | [es-brace-style](es-brace-style.md) | Enforces consistent block brace placement. |  | autofix | formatting | 100% |

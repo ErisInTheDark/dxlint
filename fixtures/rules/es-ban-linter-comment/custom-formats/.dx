@@ -1,0 +1,4 @@
+import .ts
+rule es-ban-linter-comment {
+  set formats [{ name: "jshint", pattern: /^\/\*\s*jshint\s/ }]
+}
