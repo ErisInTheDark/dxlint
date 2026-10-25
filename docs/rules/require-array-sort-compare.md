@@ -8,7 +8,7 @@ Requires a comparison function for array `sort` and `toSorted` calls. Without on
 | Needs types | yes |
 | Fix | none |
 | Rulesets | none |
-| Parity | 36 / 37 corpus cases |
+| Parity | 37 / 37 corpus cases |
 
 ## Enable
 
@@ -43,9 +43,5 @@ rule require-array-sort-compare {
   set ignoreStringArrays false
 }
 ```
-
-## Differences from upstream
-
-- A type parameter constrained to the generic spelling `Array<string>` can be reported despite `ignoreStringArrays` (`T extends string[]` is not).
 
 Adapted from the [typescript-eslint](https://typescript-eslint.io/rules/require-array-sort-compare) documentation (MIT).

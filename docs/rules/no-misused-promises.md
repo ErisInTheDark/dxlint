@@ -8,7 +8,7 @@ Reports promises used where a boolean, ordinary object, or synchronous callback 
 | Needs types | yes |
 | Fix | none |
 | Rulesets | `rules:types` |
-| Parity | 236 / 248 corpus cases |
+| Parity | 239 / 248 corpus cases |
 
 ## Enable
 
@@ -70,7 +70,7 @@ rule no-misused-promises:conditionals {
 - Upstream's `checksConditionals`, `checksSpreads`, and `checksVoidReturn` switches are separate dxlint variants, not object options.
 - Callable union and intersection targets can lose the expected callback signature.
 - Spreading callback arrays or tuples into rest parameters can miss async callbacks, for example `consume(...callbacks)`.
-- Explicit generic call arguments do not always reach the expected callback type.
+- `typeof f<T>` of a variable holding a generic function (`declare const f: <T>(fn: T) => T`) does not instantiate it, so the expected callback type can be missed.
 - An inherited method reached through `typeof` a class-expression binding names the class differently in the diagnostic.
 - Assigning an object with an async `[Symbol.dispose]` method to a synchronous disposable type can be missed.
 - With `flagUnions "strict"`, awaited array and tuple types are not always recognised as matching their non-promise union members.

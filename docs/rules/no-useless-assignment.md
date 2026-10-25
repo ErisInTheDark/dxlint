@@ -43,6 +43,6 @@ function run() {
 ## Differences from upstream
 
 - dxlint does not run ESLint plugins or their `markVariableAsUsed` hooks; four corpus cases require them.
-- A read inside `finally` is not always carried through every incoming control-flow path, which can produce a false unused-assignment report.
+- A value overwritten on every route into `finally` is reported, even when a `catch` could throw before its own write. Upstream keeps such values (`let outcome = "unknown"` before `try { ...; outcome = "success" } catch { outcome = "exception" } finally { use(outcome) }`); dxlint reports the initial value because nothing can read it.
 
 Adapted from the [ESLint](https://eslint.org/docs/latest/rules/no-useless-assignment) documentation (MIT).

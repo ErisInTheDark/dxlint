@@ -22,7 +22,7 @@ warn: Promises must be awaited, end with a call to .catch, end with a call to .t
 ## Why
 
 - **Fast.** On a 2,000-file TypeScript codebase, on one core, a full run takes under half as long as ESLint, a cached run a fifth, in under a third of the memory.
-- **Your ESLint rules.** 99.3% of ESLint's and typescript-eslint's own rule test cases give the same result. Type-aware rules read your `tsconfig.json` without running TypeScript.
+- **Your ESLint rules.** 99.4% of ESLint's and typescript-eslint's own rule test cases give the same result. Type-aware rules read your `tsconfig.json` without running TypeScript.
 - **A cache you can trust.** `.dxcache` records everything a file's result depended on, other files included, so an edit re-checks exactly the files it affects.
 - **Rules are code you own.** Built-in rules are `.dx` files: override one, write your own in a few lines, or describe a whole new language.
 

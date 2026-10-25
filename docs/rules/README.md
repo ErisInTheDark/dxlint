@@ -4,7 +4,7 @@ Every rule dxlint ships, 433 in all. Turn one on with `rule <name>` after import
 
 - **Types**: the rule reads type information (from your `tsconfig.json`; TypeScript itself never runs).
 - **Fix**: `autofix` rules are fixed by `dxlint --fix` and by the editor's quick fixes.
-- **Parity**: the share of the upstream rule's own test cases where dxlint gives the same result. 335 of the 391 measured rules match every case; 43,320 of 43,622 cases match overall. Each page lists its known differences.
+- **Parity**: the share of the upstream rule's own test cases where dxlint gives the same result. 337 of the 391 measured rules match every case; 43,352 of 43,622 cases match overall. Each page lists its known differences.
 
 Pages are adapted from the documentation of [ESLint](https://eslint.org/docs/latest/rules/), [typescript-eslint](https://typescript-eslint.io/rules/), [ESLint Stylistic](https://eslint.style/rules) and [eslint-plugin-import](https://github.com/import-js/eslint-plugin-import), all MIT licensed.
 
@@ -147,7 +147,7 @@ Pages are adapted from the documentation of [ESLint](https://eslint.org/docs/lat
 | [no-control-regex](no-control-regex.md) | Reports raw ASCII control characters and hexadecimal or Unicode escapes for them in regular expressions. |  |  | 100% |
 | [no-debugger](no-debugger.md) | Reports `debugger` statements. |  |  | 100% |
 | [no-delete-var](no-delete-var.md) | Reports use of `delete` on a variable. |  |  | 100% |
-| [no-deprecated](no-deprecated.md) | Reports references to symbols marked with a JSDoc `@deprecated` tag. | yes |  | 83.5% |
+| [no-deprecated](no-deprecated.md) | Reports references to symbols marked with a JSDoc `@deprecated` tag. | yes |  | 92.5% |
 | [no-div-regex](no-div-regex.md) | Reports regular expression literals starting with `=`. |  | autofix | 100% |
 | [no-dupe-args](no-dupe-args.md) | Reports repeated parameter names in function declarations and expressions. |  |  | 100% |
 | [no-dupe-class-members](no-dupe-class-members.md) | Reports class members with the same name when one would overwrite another. |  |  | 100% |
@@ -208,7 +208,7 @@ Pages are adapted from the documentation of [ESLint](https://eslint.org/docs/lat
 | [no-meaningless-void-operator](no-meaningless-void-operator.md) | Reports `void` when it does not discard a useful call result. | yes | autofix | 95.3% |
 | [no-misleading-character-class](no-misleading-character-class.md) | Reports character classes that split a visible Unicode character into separate parts. |  |  | 100% |
 | [no-misused-new](no-misused-new.md) | Reports constructor-like declarations in the wrong place: a class method named `new`, an interface constructing itself, or an interface/type member named `constructor`. |  |  | 100% |
-| [no-misused-promises](no-misused-promises.md) | Reports promises used where a boolean, ordinary object, or synchronous callback is expected. | yes |  | 95.2% |
+| [no-misused-promises](no-misused-promises.md) | Reports promises used where a boolean, ordinary object, or synchronous callback is expected. | yes |  | 96.4% |
 | [no-misused-spread](no-misused-spread.md) | Reports spreads whose types suggest a likely mistake, such as promises, functions, maps, arrays, or class instances copied into objects. | yes |  | 99.3% |
 | [no-mixed-enums](no-mixed-enums.md) | Reports enums containing both numeric and string members. | yes |  | 100% |
 | [no-mixed-operators](no-mixed-operators.md) | Requires parentheses around mixtures of operators in the same configured group. |  |  | 100% |
@@ -331,7 +331,7 @@ Pages are adapted from the documentation of [ESLint](https://eslint.org/docs/lat
 | [object-shorthand](object-shorthand.md) | Controls shorthand properties and methods in object literals. |  | autofix | 100% |
 | [one-var-declaration-per-line](one-var-declaration-per-line.md) | Reports variable declarators that should start on separate lines. |  | autofix | 100% |
 | [one-var](one-var.md) | Controls whether variable declarations are combined or separated within a scope. |  | autofix | 100% |
-| [only-throw-error](only-throw-error.md) | Reports thrown values whose types are not `Error` objects or allowed exceptions. | yes |  | 96.6% |
+| [only-throw-error](only-throw-error.md) | Reports thrown values whose types are not `Error` objects or allowed exceptions. | yes |  | 97.8% |
 | [operator-assignment](operator-assignment.md) | Requires or forbids compound arithmetic and bitwise assignments such as `+=`. |  | autofix | 100% |
 | [operator-linebreak](operator-linebreak.md) | Controls which side of an operator a line break appears on. |  | autofix | 100% |
 | [padded-blocks](padded-blocks.md) | Controls blank lines just inside blocks, classes and switches. |  | autofix | 100% |
@@ -372,14 +372,14 @@ Pages are adapted from the documentation of [ESLint](https://eslint.org/docs/lat
 | [quotes](quotes.md) | Enforces one string delimiter style: double quotes by default. |  | autofix | 100% |
 | [radix](radix.md) | Requires an explicit radix for `parseInt` and rejects invalid radix values. |  |  | 100% |
 | [related-getter-setter-pairs](related-getter-setter-pairs.md) | Requires a getter's return type to be assignable to the corresponding setter's parameter type. | yes |  | 100% |
-| [require-array-sort-compare](require-array-sort-compare.md) | Requires a comparison function for array `sort` and `toSorted` calls. | yes |  | 97.3% |
+| [require-array-sort-compare](require-array-sort-compare.md) | Requires a comparison function for array `sort` and `toSorted` calls. | yes |  | 100% |
 | [require-atomic-updates](require-atomic-updates.md) | Reports updates that read a shared value before `await` or `yield` and write it afterwards. |  |  | 100% |
 | [require-await](require-await.md) | Reports async functions that neither await work nor return promises. | yes |  | 100% |
 | [require-unicode-regexp](require-unicode-regexp.md) | Requires regular expressions to use Unicode mode with a `u` or `v` flag. |  |  | 100% |
 | [require-yield](require-yield.md) | Reports nonempty generator functions that never yield a value. |  |  | 100% |
 | [rest-spread-spacing](rest-spread-spacing.md) | Checks spacing between `...` and a rest or spread expression. |  | autofix | 100% |
 | [restrict-plus-operands](restrict-plus-operands.md) | Checks the types used with `+` and `+=` to catch accidental coercion and incompatible addition. | yes |  | 100% |
-| [restrict-template-expressions](restrict-template-expressions.md) | Checks values interpolated into template strings to avoid surprising text such as `[object Object]`. | yes |  | 97.7% |
+| [restrict-template-expressions](restrict-template-expressions.md) | Checks values interpolated into template strings to avoid surprising text such as `[object Object]`. | yes |  | 100% |
 | [return-await](return-await.md) | Checks whether promises returned from async functions should be awaited. | yes | autofix | 100% |
 | [rs-array-spacing](rs-array-spacing.md) | Requires spaces just inside nonempty single-line Rust array literals. |  | autofix |  |
 | [rs-attribute-spacing](rs-attribute-spacing.md) | Removes whitespace between an attribute's `#` or `#!` and its opening bracket. |  | autofix |  |
@@ -419,7 +419,7 @@ Pages are adapted from the documentation of [ESLint](https://eslint.org/docs/lat
 | [space-unary-ops](space-unary-ops.md) | Controls spaces beside unary operators. |  | autofix | 100% |
 | [spaced-comment](spaced-comment.md) | Controls whitespace after line and block comment openers. |  | autofix | 99.0% |
 | [strict-boolean-expressions](strict-boolean-expressions.md) | Reports unsafe types in boolean conditions, logical negations, assertion arguments and array predicates. | yes |  | 98.2% |
-| [strict-void-return](strict-void-return.md) | Reports value-returning functions used where a void-returning callback is expected. | yes |  | 96.4% |
+| [strict-void-return](strict-void-return.md) | Reports value-returning functions used where a void-returning callback is expected. | yes |  | 96.8% |
 | [strict](strict.md) | Requires or disallows `"use strict"` directives. |  | autofix | 99.2% |
 | [switch-colon-spacing](switch-colon-spacing.md) | Controls spaces around `case` and `default` colons when the adjacent tokens are on the same line. |  | autofix | 100% |
 | [switch-exhaustiveness-check](switch-exhaustiveness-check.md) | Reports missing cases when switching over a union of literal types or an enum. | yes |  | 100% |

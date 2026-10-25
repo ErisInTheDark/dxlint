@@ -8,7 +8,7 @@ Reports value-returning functions used where a void-returning callback is expect
 | Needs types | yes |
 | Fix | none |
 | Rulesets | none |
-| Parity | 213 / 221 corpus cases |
+| Parity | 214 / 221 corpus cases |
 
 ## Enable
 
@@ -45,7 +45,6 @@ rule strict-void-return {
 
 ## Differences from upstream
 
-- Explicit generic callback targets can be missed, such as `foo<() => void>(async () => ({}))`.
 - Return types of constrained callable type parameters can be missed, such as a callback constrained to `() => number`.
 - Contextual callback types on the right of `??=`, `||=` and `&&=` can differ from upstream.
 - Very large numeric property names can fail to match their equivalent string keys, affecting callback target lookup.

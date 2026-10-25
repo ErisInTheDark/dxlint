@@ -8,7 +8,7 @@ Reports thrown values whose types are not `Error` objects or allowed exceptions.
 | Needs types | yes |
 | Fix | none |
 | Rulesets | none |
-| Parity | 86 / 89 corpus cases |
+| Parity | 87 / 89 corpus cases |
 
 ## Enable
 
@@ -53,8 +53,7 @@ rule only-throw-error {
 ## Differences from upstream
 
 - A class with an unresolved base may incorrectly be accepted even when it does not inherit from `Error`.
-- Allowed types imported from packages may lose their origin through a factory call and be reported.
-- An awaited `Error`, such as `throw await Promise.resolve(new Error())`, may lose its `Error` identity and be reported.
+- A package-scoped `allow` entry does not match a type declared in an ambient `declare module "name"` block of your own project, so values of that type are reported.
 - Upstream extends ESLint's `no-throw-literal` rule with type information.
 
 Adapted from the [typescript-eslint](https://typescript-eslint.io/rules/only-throw-error) documentation (MIT).

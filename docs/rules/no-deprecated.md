@@ -8,7 +8,7 @@ Reports references to symbols marked with a JSDoc `@deprecated` tag. Use the rep
 | Needs types | yes |
 | Fix | none |
 | Rulesets | `rules:types` |
-| Parity | 222 / 266 corpus cases |
+| Parity | 246 / 266 corpus cases |
 
 ## Enable
 
@@ -57,7 +57,7 @@ Source-aware entries use `from: "file"`, `from: "lib"` or `from: "package"` and 
 - Deprecated base constructors can go unreported at `super()` calls.
 - Computed numeric property names reached through aliases can lose the deprecated declaration.
 - Some Node.js declaration references and overloads are not resolved completely, so deprecated APIs can be missed.
-- Imported symbols and re-export aliases can lose their original deprecation tags.
+- Names destructured from a namespace import (`const { X } = ns`) and re-exports (`export { X } from "./m"`) do not read the publishing module's export-specifier tags.
 - Node16 dynamic imports of CommonJS modules can expose a different namespace shape, losing deprecation tags on nested default exports.
 
 Adapted from the [typescript-eslint](https://typescript-eslint.io/rules/no-deprecated) documentation (MIT).
