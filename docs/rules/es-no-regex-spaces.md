@@ -7,7 +7,7 @@ Reports consecutive literal spaces in regular expressions. A counted repetition 
 | Upstream | [`es-no-regex-spaces`](https://eslint.org/docs/latest/rules/no-regex-spaces) |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | `rules:recommended`, `rules:suspicious` |
+| Rulesets | `rules:suspicious`, `rules:recommended` |
 | Parity | 73 / 73 corpus cases |
 
 ## Enable

@@ -7,7 +7,7 @@ Reports names declared more than once in the same scope. TypeScript overloads an
 | Upstream | [`@typescript-eslint/no-redeclare`](https://typescript-eslint.io/rules/no-redeclare) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | none |
+| Rulesets | `rules:bugs` (error), `rules:recommended` |
 | Parity | 126 / 127 corpus cases |
 
 ## Enable

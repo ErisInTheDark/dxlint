@@ -7,7 +7,7 @@ Reports nonempty generator functions that never yield a value. A plain function 
 | Upstream | [`es-require-yield`](https://eslint.org/docs/latest/rules/require-yield) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | `rules:recommended`, `rules:suspicious` |
+| Rulesets | `rules:suspicious`, `rules:recommended` |
 | Parity | 15 / 15 corpus cases |
 
 ## Enable

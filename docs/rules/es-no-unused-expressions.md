@@ -7,7 +7,7 @@ Reports expression statements whose values are discarded without a useful effect
 | Upstream | [`@typescript-eslint/no-unused-expressions`](https://typescript-eslint.io/rules/no-unused-expressions) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | `rules:recommended`, `rules:suspicious` |
+| Rulesets | `rules:suspicious`, `rules:recommended` |
 | Parity | 162 / 162 corpus cases |
 
 ## Enable

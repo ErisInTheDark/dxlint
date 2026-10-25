@@ -7,7 +7,7 @@ Controls spaces inside computed property brackets, such as `object[key]` and `{ 
 | Upstream | [`@stylistic/computed-property-spacing`](https://eslint.style/rules/computed-property-spacing) |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | `rules:format` |
+| Rulesets | `rules:formatting` |
 | Parity | 136 / 136 corpus cases |
 
 ## Enable

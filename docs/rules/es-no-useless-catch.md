@@ -7,7 +7,7 @@ Reports catch clauses that only rethrow the same error. Removing such a catch le
 | Upstream | [`es-no-useless-catch`](https://eslint.org/docs/latest/rules/no-useless-catch) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | `rules:recommended`, `rules:suspicious` |
+| Rulesets | `rules:suspicious`, `rules:recommended` |
 | Parity | 16 / 16 corpus cases |
 
 ## Enable

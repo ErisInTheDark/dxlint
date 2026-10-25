@@ -7,7 +7,7 @@ Reports assignments whose stored values are never read later. Unlike `es-no-unus
 | Upstream | [`es-no-useless-assignment`](https://eslint.org/docs/latest/rules/no-useless-assignment) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | `rules:correctness`, `rules:recommended` |
+| Rulesets | `rules:suspicious`, `rules:recommended` |
 | Parity | 116 / 121 corpus cases |
 
 ## Enable

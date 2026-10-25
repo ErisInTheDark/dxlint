@@ -7,7 +7,7 @@ Requires or disallows spaces before block-opening braces. By default, function, 
 | Upstream | [`@stylistic/space-before-blocks`](https://eslint.style/rules/space-before-blocks) |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | `rules:format` |
+| Rulesets | `rules:formatting` |
 | Parity | 187 / 187 corpus cases |
 
 ## Enable

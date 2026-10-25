@@ -7,7 +7,7 @@ Reports assignments of `any` to variables and properties. Also checks destructur
 | Upstream | [`@typescript-eslint/no-unsafe-assignment`](https://typescript-eslint.io/rules/no-unsafe-assignment) |
 | Needs types | yes |
 | Fix | none |
-| Rulesets | none |
+| Rulesets | `rules:type-safety`, `rules:recommended` |
 | Parity | 92 / 92 corpus cases |
 
 ## Enable

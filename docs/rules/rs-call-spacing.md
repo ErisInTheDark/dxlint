@@ -6,7 +6,7 @@ Forbids spaces before call parentheses and index brackets. Function declarations
 | --- | --- |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | none |
+| Rulesets | `rules:formatting` |
 
 ## Enable
 

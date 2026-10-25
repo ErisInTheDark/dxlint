@@ -7,7 +7,7 @@ Reports thrown expressions that cannot be error objects. Throwing an `Error` pre
 | Upstream | [`es-no-throw-literal`](https://eslint.org/docs/latest/rules/no-throw-literal) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | `rules:suspicious` |
+| Rulesets | `rules:suspicious`, `rules:recommended` |
 | Parity | 42 / 42 corpus cases |
 
 ## Enable

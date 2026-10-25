@@ -6,7 +6,7 @@ Reports misaligned JSDoc blocks. Each interior `*` and the closing `*/` should s
 | --- | --- |
 | Needs types | no |
 | Fix | none |
-| Rulesets | `rules:format` |
+| Rulesets | `rules:formatting` |
 
 ## Enable
 

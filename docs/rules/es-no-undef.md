@@ -7,7 +7,7 @@ Reports references to names that have not been declared. This catches misspellin
 | Upstream | [`es-no-undef`](https://eslint.org/docs/latest/rules/no-undef) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | none |
+| Rulesets | `rules:bugs` (error), `rules:recommended` |
 | Parity | 103 / 103 corpus cases |
 
 ## Enable

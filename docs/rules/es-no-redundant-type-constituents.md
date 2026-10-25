@@ -7,7 +7,7 @@ Reports union and intersection members that add no useful type information. For 
 | Upstream | [`@typescript-eslint/no-redundant-type-constituents`](https://typescript-eslint.io/rules/no-redundant-type-constituents) |
 | Needs types | yes |
 | Fix | none |
-| Rulesets | none |
+| Rulesets | `rules:suspicious`, `rules:recommended` |
 | Parity | 104 / 104 corpus cases |
 
 ## Enable

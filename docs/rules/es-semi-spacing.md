@@ -7,7 +7,7 @@ Controls spaces before and after semicolons. By default, semicolons have no spac
 | Upstream | [`@stylistic/semi-spacing`](https://eslint.style/rules/semi-spacing) |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | `rules:format` |
+| Rulesets | `rules:formatting` |
 | Parity | 83 / 83 corpus cases |
 
 ## Enable

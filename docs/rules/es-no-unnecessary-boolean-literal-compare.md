@@ -7,7 +7,7 @@ Reports equality comparisons between booleans and `true` or `false`. Use the boo
 | Upstream | [`@typescript-eslint/no-unnecessary-boolean-literal-compare`](https://typescript-eslint.io/rules/no-unnecessary-boolean-literal-compare) |
 | Needs types | yes |
 | Fix | autofix |
-| Rulesets | `rules:types` |
+| Rulesets | `rules:style` |
 | Parity | 70 / 72 corpus cases |
 
 ## Enable

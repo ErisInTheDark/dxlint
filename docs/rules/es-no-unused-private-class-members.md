@@ -7,7 +7,7 @@ Reports private fields and methods whose values are never read, and private acce
 | Upstream | [`@typescript-eslint/no-unused-private-class-members`](https://typescript-eslint.io/rules/no-unused-private-class-members) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | `rules:correctness`, `rules:recommended` |
+| Rulesets | `rules:suspicious`, `rules:recommended` |
 | Parity | 160 / 160 corpus cases |
 
 ## Enable

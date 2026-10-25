@@ -7,7 +7,7 @@ Use either interfaces or type aliases consistently for object shapes. Other alia
 | Upstream | [`@typescript-eslint/consistent-type-definitions`](https://typescript-eslint.io/rules/consistent-type-definitions) |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | `rules:conventions` |
+| Rulesets | `rules:style` |
 | Parity | 33 / 33 corpus cases |
 
 ## Enable

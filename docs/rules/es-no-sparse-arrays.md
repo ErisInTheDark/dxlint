@@ -7,7 +7,7 @@ Reports holes in array literals, often caused by an accidental extra comma. A tr
 | Upstream | [`es-no-sparse-arrays`](https://eslint.org/docs/latest/rules/no-sparse-arrays) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | `rules:correctness`, `rules:recommended` |
+| Rulesets | `rules:bugs` (error), `rules:recommended` |
 | Parity | 6 / 6 corpus cases |
 
 ## Enable

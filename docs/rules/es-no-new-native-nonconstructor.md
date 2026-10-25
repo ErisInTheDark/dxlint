@@ -7,7 +7,7 @@ Reports `new Symbol` and `new BigInt`. These built-in functions must be called w
 | Upstream | [`es-no-new-native-nonconstructor`](https://eslint.org/docs/latest/rules/no-new-native-nonconstructor) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | none |
+| Rulesets | `rules:bugs` (error), `rules:recommended` |
 | Parity | 14 / 14 corpus cases |
 
 ## Enable

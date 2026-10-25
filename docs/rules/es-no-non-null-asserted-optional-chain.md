@@ -7,7 +7,7 @@ Reports non-null assertions applied to optional-chain results. Optional chaining
 | Upstream | [`@typescript-eslint/no-non-null-asserted-optional-chain`](https://typescript-eslint.io/rules/no-non-null-asserted-optional-chain) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | none |
+| Rulesets | `rules:bugs` (error), `rules:recommended` |
 | Parity | 23 / 23 corpus cases |
 
 ## Enable

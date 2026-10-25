@@ -7,7 +7,7 @@ Reports empty classes, constructor-only classes and classes used only as static 
 | Upstream | [`@typescript-eslint/no-extraneous-class`](https://typescript-eslint.io/rules/no-extraneous-class) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | `rules:conventions` |
+| Rulesets | `rules:style` |
 | Parity | 28 / 28 corpus cases |
 
 ## Enable

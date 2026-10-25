@@ -7,7 +7,7 @@ Reports use of `delete` on a variable. `delete` removes object properties, not l
 | Upstream | [`es-no-delete-var`](https://eslint.org/docs/latest/rules/no-delete-var) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | `rules:recommended`, `rules:suspicious` |
+| Rulesets | `rules:suspicious`, `rules:recommended` |
 | Parity | 2 / 2 corpus cases |
 
 ## Enable

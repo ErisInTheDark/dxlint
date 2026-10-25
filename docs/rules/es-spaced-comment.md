@@ -7,7 +7,7 @@ Controls whitespace after line and block comment openers. The default requires a
 | Upstream | [`@stylistic/spaced-comment`](https://eslint.style/rules/spaced-comment) |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | `rules:format` |
+| Rulesets | `rules:formatting` |
 | Parity | 100 / 101 corpus cases |
 
 ## Enable

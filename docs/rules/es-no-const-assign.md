@@ -7,7 +7,7 @@ Reports writes to constant bindings. Reassigning a `const` variable throws at ru
 | Upstream | [`es-no-const-assign`](https://eslint.org/docs/latest/rules/no-const-assign) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | none |
+| Rulesets | `rules:bugs` (error), `rules:recommended` |
 | Parity | 33 / 33 corpus cases |
 
 ## Enable

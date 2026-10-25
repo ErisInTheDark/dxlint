@@ -6,7 +6,7 @@ Forbids spaces just inside Rust index brackets. Array literal spacing is handled
 | --- | --- |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | none |
+| Rulesets | `rules:formatting` |
 
 ## Enable
 

@@ -7,7 +7,7 @@ Reports inconsistent separators between interface and type literal members. Mult
 | Upstream | [`@stylistic/member-delimiter-style`](https://eslint.style/rules/member-delimiter-style) |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | `rules:format` |
+| Rulesets | `rules:formatting` |
 | Parity | 160 / 160 corpus cases |
 
 ## Enable

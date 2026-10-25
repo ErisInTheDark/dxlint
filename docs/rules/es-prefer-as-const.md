@@ -7,7 +7,7 @@ Reports repeated literal types that can be expressed with a const assertion. `as
 | Upstream | [`@typescript-eslint/prefer-as-const`](https://typescript-eslint.io/rules/prefer-as-const) |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | none |
+| Rulesets | `rules:style` |
 | Parity | 46 / 46 corpus cases |
 
 ## Enable

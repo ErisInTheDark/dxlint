@@ -1,5 +1,5 @@
-# rules:conventions: one consistent way to write things. Turns on every such
-# rule of the imported languages, at its defaults.
+# rules:style: one consistent, modern way to write things. On as warnings;
+# not part of rules:recommended. No rule is in two rulesets.
 
 rule es-adjacent-overload-signatures
 rule es-array-type*
@@ -14,21 +14,35 @@ rule es-eqeqeq
 rule es-explicit-function-return-type*
 rule es-explicit-member-accessibility*
 rule es-explicit-module-boundary-types*
+rule es-no-array-constructor
 rule es-no-confusing-non-null-assertion*
 rule es-no-console
+rule es-no-duplicate-type-constituents
 rule es-no-extraneous-class
 rule es-no-inferrable-types*
+rule es-no-namespace
+rule es-no-this-alias
 rule es-no-unassigned-import
 rule es-no-undef-init
+rule es-no-unnecessary-boolean-literal-compare
+rule es-no-unnecessary-template-expression
+rule es-no-unnecessary-type-arguments
+rule es-no-unnecessary-type-constraint
 rule es-no-useless-constructor
 rule es-no-var
 rule es-no-var-requires
+rule es-prefer-as-const
 rule es-prefer-const
+rule es-prefer-find*
 rule es-prefer-function-type
+rule es-prefer-includes
 rule es-prefer-namespace-keyword
 rule es-prefer-object-spread
+rule es-prefer-optional-chain
+rule es-prefer-readonly*
 rule es-prefer-rest-params
 rule es-prefer-spread
+rule es-prefer-string-starts-ends-with*
 rule es-prefer-template
 rule es-radix
 rule es-triple-slash-reference

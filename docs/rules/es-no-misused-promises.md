@@ -7,7 +7,7 @@ Reports promises used where a boolean, ordinary object, or synchronous callback 
 | Upstream | [`@typescript-eslint/no-misused-promises`](https://typescript-eslint.io/rules/no-misused-promises) |
 | Needs types | yes |
 | Fix | none |
-| Rulesets | `rules:types` |
+| Rulesets | `rules:bugs` (error), `rules:recommended` |
 | Parity | 239 / 248 corpus cases |
 
 ## Enable

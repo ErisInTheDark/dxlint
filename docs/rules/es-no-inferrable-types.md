@@ -7,7 +7,7 @@ Reports type annotations already clear from an initial or default value. Removin
 | Upstream | [`@typescript-eslint/no-inferrable-types`](https://typescript-eslint.io/rules/no-inferrable-types) |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | `rules:conventions` |
+| Rulesets | `rules:style` |
 | Parity | 99 / 99 corpus cases |
 
 ## Enable

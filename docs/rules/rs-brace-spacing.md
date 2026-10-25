@@ -6,7 +6,7 @@ Requires spacing before opening braces and inside single-line braces. Empty sing
 | --- | --- |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | none |
+| Rulesets | `rules:formatting` |
 
 ## Enable
 

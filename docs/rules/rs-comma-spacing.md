@@ -6,7 +6,7 @@ Forbids spaces before commas and requires whitespace after a comma followed by a
 | --- | --- |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | none |
+| Rulesets | `rules:formatting` |
 
 ## Enable
 

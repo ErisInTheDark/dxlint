@@ -7,7 +7,7 @@ Reports bindings that replace restricted names such as `NaN`, `Infinity`, `undef
 | Upstream | [`es-no-shadow-restricted-names`](https://eslint.org/docs/latest/rules/no-shadow-restricted-names) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | `rules:recommended`, `rules:suspicious` |
+| Rulesets | `rules:suspicious`, `rules:recommended` |
 | Parity | 44 / 44 corpus cases |
 
 ## Enable

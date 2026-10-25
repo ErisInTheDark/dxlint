@@ -7,7 +7,7 @@ Reports obsolete TSLint enable and disable comments. Remove these once TSLint no
 | Upstream | [`@typescript-eslint/ban-tslint-comment`](https://typescript-eslint.io/rules/ban-tslint-comment) |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | `rules:conventions` |
+| Rulesets | `rules:style` |
 | Parity | 13 / 13 corpus cases |
 
 ## Enable

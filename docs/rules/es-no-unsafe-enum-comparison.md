@@ -7,7 +7,7 @@ Reports comparisons between enum values and values without a shared enum type, i
 | Upstream | [`@typescript-eslint/no-unsafe-enum-comparison`](https://typescript-eslint.io/rules/no-unsafe-enum-comparison) |
 | Needs types | yes |
 | Fix | none |
-| Rulesets | none |
+| Rulesets | `rules:type-safety`, `rules:recommended` |
 | Parity | 85 / 85 corpus cases |
 
 ## Enable

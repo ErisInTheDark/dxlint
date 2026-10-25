@@ -7,7 +7,7 @@ Reports comparisons with `NaN`, including `Number.NaN`. Equality never matches `
 | Upstream | [`es-use-isnan`](https://eslint.org/docs/latest/rules/use-isnan) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | `rules:correctness`, `rules:recommended` |
+| Rulesets | `rules:bugs` (error), `rules:recommended` |
 | Parity | 234 / 234 corpus cases |
 
 ## Enable

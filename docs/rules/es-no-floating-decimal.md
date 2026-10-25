@@ -7,7 +7,7 @@ Requires digits on both sides of a decimal point. This makes number literals eas
 | Upstream | [`@stylistic/no-floating-decimal`](https://eslint.style/rules/no-floating-decimal) |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | `rules:format` |
+| Rulesets | `rules:formatting` |
 | Parity | 8 / 8 corpus cases |
 
 ## Enable

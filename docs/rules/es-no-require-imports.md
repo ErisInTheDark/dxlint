@@ -7,7 +7,7 @@ Reports CommonJS `require()` imports in favour of ES module syntax. This also co
 | Upstream | [`@typescript-eslint/no-require-imports`](https://typescript-eslint.io/rules/no-require-imports) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | `rules:recommended`, `rules:suspicious` |
+| Rulesets | `rules:suspicious`, `rules:recommended` |
 | Parity | 46 / 46 corpus cases |
 
 ## Enable

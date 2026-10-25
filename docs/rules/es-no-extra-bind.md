@@ -7,7 +7,7 @@ Reports `.bind()` calls that do not change the function's behaviour. Binding an 
 | Upstream | [`es-no-extra-bind`](https://eslint.org/docs/latest/rules/no-extra-bind) |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | `rules:suspicious` |
+| Rulesets | `rules:suspicious`, `rules:recommended` |
 | Parity | 49 / 49 corpus cases |
 
 ## Enable

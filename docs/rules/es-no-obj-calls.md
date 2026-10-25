@@ -7,7 +7,7 @@ Reports calls and constructor calls to built-in objects that are not functions, 
 | Upstream | [`es-no-obj-calls`](https://eslint.org/docs/latest/rules/no-obj-calls) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | none |
+| Rulesets | `rules:bugs` (error), `rules:recommended` |
 | Parity | 128 / 128 corpus cases |
 
 ## Enable

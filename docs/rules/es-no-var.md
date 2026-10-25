@@ -7,7 +7,7 @@ Reports `var` declarations. Use `let` or `const` to make block scope explicit an
 | Upstream | [`es-no-var`](https://eslint.org/docs/latest/rules/no-var) |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | `rules:conventions` |
+| Rulesets | `rules:style` |
 | Parity | 76 / 76 corpus cases |
 
 ## Enable

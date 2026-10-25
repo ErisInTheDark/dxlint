@@ -7,7 +7,7 @@ Reports empty class static blocks. Remove the block or add a comment explaining 
 | Upstream | [`es-no-empty-static-block`](https://eslint.org/docs/latest/rules/no-empty-static-block) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | `rules:recommended`, `rules:suspicious` |
+| Rulesets | `rules:suspicious`, `rules:recommended` |
 | Parity | 10 / 10 corpus cases |
 
 ## Enable

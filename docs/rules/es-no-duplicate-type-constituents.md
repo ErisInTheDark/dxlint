@@ -7,7 +7,7 @@ Reports repeated types in unions and intersections, including aliases that resol
 | Upstream | [`@typescript-eslint/no-duplicate-type-constituents`](https://typescript-eslint.io/rules/no-duplicate-type-constituents) |
 | Needs types | yes |
 | Fix | autofix |
-| Rulesets | none |
+| Rulesets | `rules:style` |
 | Parity | 82 / 82 corpus cases |
 
 ## Enable

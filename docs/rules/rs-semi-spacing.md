@@ -6,7 +6,7 @@ Disallows horizontal whitespace before Rust semicolons. The fix removes that whi
 | --- | --- |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | none |
+| Rulesets | `rules:formatting` |
 
 ## Enable
 

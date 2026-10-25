@@ -7,7 +7,7 @@ Reports `return`, `throw`, `break`, and `continue` statements that leave a `fina
 | Upstream | [`es-no-unsafe-finally`](https://eslint.org/docs/latest/rules/no-unsafe-finally) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | `rules:correctness`, `rules:recommended` |
+| Rulesets | `rules:bugs` (error), `rules:recommended` |
 | Parity | 30 / 30 corpus cases |
 
 ## Enable

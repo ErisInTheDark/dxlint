@@ -7,7 +7,7 @@ Reports escapes that do not change a string, template literal, or regular expres
 | Upstream | [`es-no-useless-escape`](https://eslint.org/docs/latest/rules/no-useless-escape) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | `rules:recommended`, `rules:suspicious` |
+| Rulesets | `rules:suspicious`, `rules:recommended` |
 | Parity | 288 / 288 corpus cases |
 
 ## Enable

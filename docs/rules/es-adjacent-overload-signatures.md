@@ -7,7 +7,7 @@ Requires overload signatures for the same function or method to be next to each 
 | Upstream | [`@typescript-eslint/adjacent-overload-signatures`](https://typescript-eslint.io/rules/adjacent-overload-signatures) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | `rules:conventions` |
+| Rulesets | `rules:style` |
 | Parity | 67 / 67 corpus cases |
 
 ## Enable

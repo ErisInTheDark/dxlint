@@ -7,7 +7,7 @@ Reports legacy octal number literals such as `071`. Their leading zero is easy t
 | Upstream | [`es-no-octal`](https://eslint.org/docs/latest/rules/no-octal) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | `rules:recommended`, `rules:suspicious` |
+| Rulesets | `rules:suspicious`, `rules:recommended` |
 | Parity | 17 / 17 corpus cases |
 
 ## Enable

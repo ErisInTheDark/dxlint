@@ -7,7 +7,7 @@ Enforces consistent block brace placement. The default uses one true brace style
 | Upstream | [`@stylistic/brace-style`](https://eslint.style/rules/brace-style) |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | `rules:format` |
+| Rulesets | `rules:formatting` |
 | Parity | 180 / 180 corpus cases |
 
 ## Enable

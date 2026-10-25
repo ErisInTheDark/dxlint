@@ -7,7 +7,7 @@ Enforces one notation for TypeScript array types: `T[]` or `Array<T>`. Mutable a
 | Upstream | [`@typescript-eslint/array-type`](https://typescript-eslint.io/rules/array-type) |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | `rules:conventions` |
+| Rulesets | `rules:style` |
 | Parity | 193 / 193 corpus cases |
 
 ## Enable

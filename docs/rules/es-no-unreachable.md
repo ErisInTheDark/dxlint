@@ -7,7 +7,7 @@ Reports code that cannot run after an unconditional exit. Also reports instance 
 | Upstream | [`es-no-unreachable`](https://eslint.org/docs/latest/rules/no-unreachable) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | none |
+| Rulesets | `rules:bugs` (error), `rules:recommended` |
 | Parity | 70 / 70 corpus cases |
 
 ## Enable

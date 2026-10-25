@@ -7,7 +7,7 @@ Reports the built-in `Function` type, which accepts functions without checking t
 | Upstream | [`@typescript-eslint/no-unsafe-function-type`](https://typescript-eslint.io/rules/no-unsafe-function-type) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | `rules:recommended`, `rules:suspicious` |
+| Rulesets | `rules:type-safety`, `rules:recommended` |
 | Parity | 8 / 8 corpus cases |
 
 ## Enable

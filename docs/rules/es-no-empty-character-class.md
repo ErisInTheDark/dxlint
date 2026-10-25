@@ -7,7 +7,7 @@ Reports empty character classes in regular expression literals. An empty class m
 | Upstream | [`es-no-empty-character-class`](https://eslint.org/docs/latest/rules/no-empty-character-class) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | `rules:correctness`, `rules:recommended` |
+| Rulesets | `rules:bugs` (error), `rules:recommended` |
 | Parity | 42 / 42 corpus cases |
 
 ## Enable

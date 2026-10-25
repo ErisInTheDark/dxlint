@@ -7,7 +7,7 @@ Reports `with` statements. They make name lookup depend on an object's propertie
 | Upstream | [`es-no-with`](https://eslint.org/docs/latest/rules/no-with) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | `rules:suspicious` |
+| Rulesets | `rules:suspicious`, `rules:recommended` |
 | Parity | 2 / 2 corpus cases |
 
 ## Enable

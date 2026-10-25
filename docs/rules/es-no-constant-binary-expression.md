@@ -7,7 +7,7 @@ Reports comparisons whose result is fixed and logical expressions that always or
 | Upstream | [`es-no-constant-binary-expression`](https://eslint.org/docs/latest/rules/no-constant-binary-expression) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | none |
+| Rulesets | `rules:bugs` (error), `rules:recommended` |
 | Parity | 313 / 313 corpus cases |
 
 ## Enable

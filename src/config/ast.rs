@@ -563,6 +563,8 @@ pub struct RuleConfig {
     /// languages that may not be imported, and a glob may have lost its
     /// rules to a later `drop`.
     pub soft: bool,
+    /// `severity <level>`: only rules already on at this point; turns none on.
+    pub on_only: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

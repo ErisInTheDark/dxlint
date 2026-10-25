@@ -7,7 +7,7 @@ Reports `for-in` loops over arrays. These loops skip holes, produce string keys,
 | Upstream | [`@typescript-eslint/no-for-in-array`](https://typescript-eslint.io/rules/no-for-in-array) |
 | Needs types | yes |
 | Fix | none |
-| Rulesets | `rules:types` |
+| Rulesets | `rules:bugs` (error), `rules:recommended` |
 | Parity | 24 / 24 corpus cases |
 
 ## Enable

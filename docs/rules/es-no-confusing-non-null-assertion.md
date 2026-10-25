@@ -7,7 +7,7 @@ Reports non-null assertions next to assignment, equality, `in` or `instanceof` o
 | Upstream | [`@typescript-eslint/no-confusing-non-null-assertion`](https://typescript-eslint.io/rules/no-confusing-non-null-assertion) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | `rules:conventions` |
+| Rulesets | `rules:style` |
 | Parity | 19 / 19 corpus cases |
 
 ## Enable

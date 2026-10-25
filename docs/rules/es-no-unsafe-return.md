@@ -7,7 +7,7 @@ Reports unsafe `any` return values, including arrays and promises. It also check
 | Upstream | [`@typescript-eslint/no-unsafe-return`](https://typescript-eslint.io/rules/no-unsafe-return) |
 | Needs types | yes |
 | Fix | none |
-| Rulesets | none |
+| Rulesets | `rules:type-safety`, `rules:recommended` |
 | Parity | 61 / 62 corpus cases |
 
 ## Enable

@@ -6,7 +6,7 @@ Requires spaces just inside nonempty single-line Rust array literals. Empty arra
 | --- | --- |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | none |
+| Rulesets | `rules:formatting` |
 
 ## Enable
 

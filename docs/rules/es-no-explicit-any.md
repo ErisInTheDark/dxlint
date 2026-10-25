@@ -7,7 +7,7 @@ Reports explicit `any` types, which bypass type checking. Prefer a precise type,
 | Upstream | [`@typescript-eslint/no-explicit-any`](https://typescript-eslint.io/rules/no-explicit-any) |
 | Needs types | no |
 | Fix | autofix (with `fixToUnknown`) |
-| Rulesets | none |
+| Rulesets | `rules:type-safety`, `rules:recommended` |
 | Parity | 134 / 134 corpus cases |
 
 ## Enable

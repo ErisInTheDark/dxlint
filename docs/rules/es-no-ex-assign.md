@@ -7,7 +7,7 @@ Reports assignments to a caught exception parameter. Overwriting it loses the or
 | Upstream | [`es-no-ex-assign`](https://eslint.org/docs/latest/rules/no-ex-assign) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | `rules:correctness`, `rules:recommended` |
+| Rulesets | `rules:bugs` (error), `rules:recommended` |
 | Parity | 8 / 8 corpus cases |
 
 ## Enable

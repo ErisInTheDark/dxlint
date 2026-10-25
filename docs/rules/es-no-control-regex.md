@@ -7,7 +7,7 @@ Reports raw ASCII control characters and hexadecimal or Unicode escapes for them
 | Upstream | [`es-no-control-regex`](https://eslint.org/docs/latest/rules/no-control-regex) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | `rules:correctness`, `rules:recommended` |
+| Rulesets | `rules:suspicious`, `rules:recommended` |
 | Parity | 49 / 49 corpus cases |
 
 ## Enable

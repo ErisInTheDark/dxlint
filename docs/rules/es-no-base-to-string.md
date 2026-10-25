@@ -7,7 +7,7 @@ Reports string conversions that use an object's unhelpful default representation
 | Upstream | [`@typescript-eslint/no-base-to-string`](https://typescript-eslint.io/rules/no-base-to-string) |
 | Needs types | yes |
 | Fix | none |
-| Rulesets | none |
+| Rulesets | `rules:bugs` (error), `rules:recommended` |
 | Parity | 312 / 317 corpus cases |
 
 ## Enable

@@ -6,7 +6,7 @@ Adds missing spaces around Rust binary operators, assignment operators and arrow
 | --- | --- |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | none |
+| Rulesets | `rules:formatting` |
 
 ## Enable
 

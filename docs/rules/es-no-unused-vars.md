@@ -7,7 +7,7 @@ Reports bindings that are declared or assigned but never usefully read. This inc
 | Upstream | [`@typescript-eslint/no-unused-vars`](https://typescript-eslint.io/rules/no-unused-vars) |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | `rules:correctness`, `rules:recommended` |
+| Rulesets | `rules:suspicious`, `rules:recommended` |
 | Parity | 1039 / 1049 corpus cases |
 
 ## Enable

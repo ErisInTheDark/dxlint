@@ -7,7 +7,7 @@ Reports array constructor calls that can use array literals instead. Single-argu
 | Upstream | [`@typescript-eslint/no-array-constructor`](https://typescript-eslint.io/rules/no-array-constructor) |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | none |
+| Rulesets | `rules:style` |
 | Parity | 111 / 111 corpus cases |
 
 ## Enable

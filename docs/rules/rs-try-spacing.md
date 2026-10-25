@@ -6,7 +6,7 @@ Disallows horizontal whitespace before Rust's `?` operator. Keep error propagati
 | --- | --- |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | none |
+| Rulesets | `rules:formatting` |
 
 ## Enable
 

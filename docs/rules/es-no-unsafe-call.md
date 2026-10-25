@@ -7,7 +7,7 @@ Reports calls through values typed as `any` or the unsafe `Function` type. These
 | Upstream | [`@typescript-eslint/no-unsafe-call`](https://typescript-eslint.io/rules/no-unsafe-call) |
 | Needs types | yes |
 | Fix | none |
-| Rulesets | none |
+| Rulesets | `rules:type-safety`, `rules:recommended` |
 | Parity | 38 / 39 corpus cases |
 
 ## Enable

@@ -7,7 +7,7 @@ Reports deleting an array element. `delete` leaves a hole without changing the a
 | Upstream | [`@typescript-eslint/no-array-delete`](https://typescript-eslint.io/rules/no-array-delete) |
 | Needs types | yes |
 | Fix | none |
-| Rulesets | none |
+| Rulesets | `rules:bugs` (error), `rules:recommended` |
 | Parity | 31 / 31 corpus cases |
 
 ## Enable

@@ -7,7 +7,7 @@ Reports conditions whose truthiness cannot change. Such conditions can hide unre
 | Upstream | [`es-no-constant-condition`](https://eslint.org/docs/latest/rules/no-constant-condition) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | `rules:correctness`, `rules:recommended` |
+| Rulesets | `rules:suspicious`, `rules:recommended` |
 | Parity | 307 / 307 corpus cases |
 
 ## Enable

@@ -1,3 +1,5 @@
+a.ts:1:1-1:1 es-no-unnecessary-boolean-literal-compare:strict#0
+a.ts:1:12-1:14 es-no-empty#0
 a.ts:1:5-1:10 es-no-cond-assign#0
 a.ts:1:5-1:10 es-no-constant-condition#0
 a.ts:2:5-2:6 es-no-unused-vars:variables#1

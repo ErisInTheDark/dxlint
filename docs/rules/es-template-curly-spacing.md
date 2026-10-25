@@ -7,7 +7,7 @@ Controls spaces inside template substitutions. By default, `${` and `}` stay att
 | Upstream | [`@stylistic/template-curly-spacing`](https://eslint.style/rules/template-curly-spacing) |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | `rules:format` |
+| Rulesets | `rules:formatting` |
 | Parity | 57 / 57 corpus cases |
 
 ## Enable

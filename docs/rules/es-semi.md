@@ -7,7 +7,7 @@ Enforces consistent statement-ending semicolons. The default requires semicolons
 | Upstream | [`@stylistic/semi`](https://eslint.style/rules/semi) |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | `rules:format` |
+| Rulesets | `rules:es-no-semi`, `rules:formatting` |
 | Parity | 312 / 313 corpus cases |
 
 ## Enable

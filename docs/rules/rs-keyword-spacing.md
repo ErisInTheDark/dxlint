@@ -6,7 +6,7 @@ Requires whitespace after Rust keywords before expressions, and before `else`, `
 | --- | --- |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | none |
+| Rulesets | `rules:formatting` |
 
 ## Enable
 

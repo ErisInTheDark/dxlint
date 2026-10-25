@@ -7,7 +7,7 @@ Reports variables that are read but never assigned a value. Such variables alway
 | Upstream | [`es-no-unassigned-vars`](https://eslint.org/docs/latest/rules/no-unassigned-vars) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | none |
+| Rulesets | `rules:bugs` (error), `rules:recommended` |
 | Parity | 23 / 23 corpus cases |
 
 ## Enable

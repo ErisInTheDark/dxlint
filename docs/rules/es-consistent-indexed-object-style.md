@@ -7,7 +7,7 @@ Enforces one form for dictionary-like types: `Record` or an index signature. By 
 | Upstream | [`@typescript-eslint/consistent-indexed-object-style`](https://typescript-eslint.io/rules/consistent-indexed-object-style) |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | `rules:conventions` |
+| Rulesets | `rules:style` |
 | Parity | 110 / 112 corpus cases |
 
 ## Enable

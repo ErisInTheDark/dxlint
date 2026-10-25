@@ -7,7 +7,7 @@ Reports references to symbols marked with a JSDoc `@deprecated` tag. Use the rep
 | Upstream | [`@typescript-eslint/no-deprecated`](https://typescript-eslint.io/rules/no-deprecated) |
 | Needs types | yes |
 | Fix | none |
-| Rulesets | `rules:types` |
+| Rulesets | `rules:suspicious`, `rules:recommended` |
 | Parity | 246 / 266 corpus cases |
 
 ## Enable

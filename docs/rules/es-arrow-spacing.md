@@ -7,7 +7,7 @@ Controls spaces before and after an arrow function's `=>`. By default, both side
 | Upstream | [`@stylistic/arrow-spacing`](https://eslint.style/rules/arrow-spacing) |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | `rules:format` |
+| Rulesets | `rules:formatting` |
 | Parity | 48 / 48 corpus cases |
 
 ## Enable

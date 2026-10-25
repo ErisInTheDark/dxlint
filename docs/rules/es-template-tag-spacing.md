@@ -7,7 +7,7 @@ Controls whitespace between a template tag and its template literal. By default,
 | Upstream | [`@stylistic/template-tag-spacing`](https://eslint.style/rules/template-tag-spacing) |
 | Needs types | no |
 | Fix | autofix (except comment-separated tags) |
-| Rulesets | `rules:format` |
+| Rulesets | `rules:formatting` |
 | Parity | 63 / 63 corpus cases |
 
 ## Enable

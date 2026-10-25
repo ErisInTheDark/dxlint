@@ -7,7 +7,7 @@ Reports interfaces and object type literals containing only one call signature w
 | Upstream | [`@typescript-eslint/prefer-function-type`](https://typescript-eslint.io/rules/prefer-function-type) |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | `rules:conventions` |
+| Rulesets | `rules:style` |
 | Parity | 23 / 23 corpus cases |
 
 ## Enable

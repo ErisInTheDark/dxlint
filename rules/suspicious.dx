@@ -1,31 +1,52 @@
-# rules:suspicious: code that is likely a mistake, or does nothing. Turns on
-# every such rule of the imported languages, at its defaults.
+# rules:suspicious: likely a mistake, or code that does nothing. On as
+# warnings. Part of rules:recommended; no rule is in two rulesets.
 
 rule es-no-caller
+rule es-no-case-declarations
+rule es-no-cond-assign
+rule es-no-constant-condition*
+rule es-no-control-regex
+rule es-no-debugger
 rule es-no-delete-var
+rule es-no-deprecated
+rule es-no-empty
 rule es-no-empty-interface
+rule es-no-empty-pattern*
 rule es-no-empty-static-block
 rule es-no-eval*
 rule es-no-extra-bind
 rule es-no-extra-boolean-cast*
+rule es-no-extra-non-null-assertion
+rule es-no-fallthrough
 rule es-no-global-assign
+rule es-no-implied-eval
+rule es-no-irregular-whitespace
 rule es-no-misused-new*
 rule es-no-new-func
 rule es-no-new-wrappers
 rule es-no-nonoctal-decimal-escape
 rule es-no-octal
+rule es-no-prototype-builtins
+rule es-no-redundant-type-constituents
 rule es-no-regex-spaces*
 rule es-no-require-imports
 rule es-no-sequences
 rule es-no-shadow-restricted-names
 rule es-no-template-curly-in-string
 rule es-no-throw-literal
-rule es-no-unsafe-function-type
+rule es-no-unnecessary-type-assertion
 rule es-no-unused-expressions
 rule es-no-unused-imports
 rule es-no-unused-labels
+rule es-no-unused-private-class-members
+rule es-no-unused-vars*
+rule es-no-useless-assignment
+rule es-no-useless-backreference*
 rule es-no-useless-catch*
 rule es-no-useless-escape*
 rule es-no-with
-rule es-no-wrapper-object-types
+rule es-only-throw-error
+rule es-prefer-promise-reject-errors
+rule es-preserve-caught-error
+rule es-require-await
 rule es-require-yield

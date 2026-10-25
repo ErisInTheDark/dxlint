@@ -7,7 +7,7 @@ Reports generic type parameters constrained to `any` or `unknown`. These constra
 | Upstream | [`@typescript-eslint/no-unnecessary-type-constraint`](https://typescript-eslint.io/rules/no-unnecessary-type-constraint) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | none |
+| Rulesets | `rules:style` |
 | Parity | 34 / 34 corpus cases |
 
 ## Enable

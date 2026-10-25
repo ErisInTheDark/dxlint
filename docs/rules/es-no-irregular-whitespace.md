@@ -7,7 +7,7 @@ Reports unusual whitespace characters that are easy to overlook or confuse with 
 | Upstream | [`es-no-irregular-whitespace`](https://eslint.org/docs/latest/rules/no-irregular-whitespace) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | `rules:correctness`, `rules:recommended` |
+| Rulesets | `rules:suspicious`, `rules:recommended` |
 | Parity | 280 / 280 corpus cases |
 
 ## Enable

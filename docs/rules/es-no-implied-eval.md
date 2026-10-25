@@ -7,7 +7,7 @@ Reports code evaluated from strings by timers, `execScript`, or the `Function` c
 | Upstream | [`@typescript-eslint/no-implied-eval`](https://typescript-eslint.io/rules/no-implied-eval) |
 | Needs types | yes |
 | Fix | none |
-| Rulesets | none |
+| Rulesets | `rules:suspicious`, `rules:recommended` |
 | Parity | 245 / 245 corpus cases |
 
 ## Enable

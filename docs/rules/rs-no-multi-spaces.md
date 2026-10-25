@@ -6,7 +6,7 @@ Replaces runs of two or more horizontal whitespace characters between Rust code 
 | --- | --- |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | none |
+| Rulesets | `rules:formatting` |
 
 ## Enable
 

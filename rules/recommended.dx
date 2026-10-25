@@ -1,51 +1,6 @@
-# rules:recommended: the rules eslint and typescript-eslint recommend
-# without type information, as far as dxlint has them.
+# rules:recommended: dxlint's recommendation: definite bugs as errors, likely
+# mistakes and type-safety leaks as warnings. Exactly these three rulesets.
 
-rule es-constructor-super
-rule es-for-direction
-rule es-no-async-promise-executor
-rule es-no-compare-neg-zero
-rule es-no-cond-assign
-rule es-no-constant-condition*
-rule es-no-control-regex
-rule es-no-debugger
-rule es-no-delete-var
-rule es-no-dupe-else-if
-rule es-no-duplicate-case
-rule es-no-empty-character-class
-rule es-no-empty-pattern*
-rule es-no-empty-static-block
-rule es-no-ex-assign
-rule es-no-extra-boolean-cast*
-rule es-no-fallthrough
-rule es-no-global-assign
-rule es-no-invalid-regexp
-rule es-no-irregular-whitespace
-rule es-no-loss-of-precision
-rule es-no-misleading-character-class*
-rule es-no-misused-new*
-rule es-no-nonoctal-decimal-escape
-rule es-no-octal
-rule es-no-regex-spaces*
-rule es-no-require-imports
-rule es-no-self-assign
-rule es-no-shadow-restricted-names
-rule es-no-sparse-arrays
-rule es-no-unexpected-multiline*
-rule es-no-unsafe-finally*
-rule es-no-unsafe-function-type
-rule es-no-unsafe-optional-chaining*
-rule es-no-unused-expressions
-rule es-no-unused-labels
-rule es-no-unused-private-class-members
-rule es-no-unused-vars*
-rule es-no-useless-assignment
-rule es-no-useless-backreference*
-rule es-no-useless-catch*
-rule es-no-useless-escape*
-rule es-no-wrapper-object-types
-rule es-prefer-namespace-keyword
-rule es-require-yield
-rule es-triple-slash-reference
-rule es-use-isnan
-rule es-valid-typeof
+import rules:bugs
+import rules:suspicious
+import rules:type-safety

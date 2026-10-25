@@ -7,7 +7,7 @@ Reports empty blocks and empty `switch` statements. A comment inside the block c
 | Upstream | [`es-no-empty`](https://eslint.org/docs/latest/rules/no-empty) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | none |
+| Rulesets | `rules:suspicious`, `rules:recommended` |
 | Parity | 35 / 35 corpus cases |
 
 ## Enable

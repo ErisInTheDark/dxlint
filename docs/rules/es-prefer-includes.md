@@ -7,7 +7,7 @@ Reports membership checks written as `indexOf` comparisons or simple regular exp
 | Upstream | [`@typescript-eslint/prefer-includes`](https://typescript-eslint.io/rules/prefer-includes) |
 | Needs types | yes |
 | Fix | autofix |
-| Rulesets | `rules:types` |
+| Rulesets | `rules:style` |
 | Parity | 41 / 42 corpus cases |
 
 ## Enable

@@ -7,7 +7,7 @@ Reports direct calls to `hasOwnProperty`, `isPrototypeOf` and `propertyIsEnumera
 | Upstream | [`es-no-prototype-builtins`](https://eslint.org/docs/latest/rules/no-prototype-builtins) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | none |
+| Rulesets | `rules:suspicious`, `rules:recommended` |
 | Parity | 47 / 47 corpus cases |
 
 ## Enable

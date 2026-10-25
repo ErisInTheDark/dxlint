@@ -7,7 +7,7 @@ Reports `${...}` placeholders inside ordinary quoted strings. These strings do n
 | Upstream | [`es-no-template-curly-in-string`](https://eslint.org/docs/latest/rules/no-template-curly-in-string) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | `rules:suspicious` |
+| Rulesets | `rules:suspicious`, `rules:recommended` |
 | Parity | 22 / 22 corpus cases |
 
 ## Enable

@@ -7,7 +7,7 @@ Controls spaces around TypeScript type annotation punctuation. The default disal
 | Upstream | [`@stylistic/type-annotation-spacing`](https://eslint.style/rules/type-annotation-spacing) |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | `rules:format` |
+| Rulesets | `rules:formatting` |
 | Parity | 325 / 325 corpus cases |
 
 ## Enable

@@ -7,7 +7,7 @@ Checks values interpolated into template strings to avoid surprising text such a
 | Upstream | [`@typescript-eslint/restrict-template-expressions`](https://typescript-eslint.io/rules/restrict-template-expressions) |
 | Needs types | yes |
 | Fix | none |
-| Rulesets | `rules:types` |
+| Rulesets | `rules:type-safety`, `rules:recommended` |
 | Parity | 86 / 86 corpus cases |
 
 ## Enable

@@ -7,7 +7,7 @@ Requires spaces around infix operators, assignments and conditional-expression p
 | Upstream | [`@stylistic/space-infix-ops`](https://eslint.style/rules/space-infix-ops) |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | `rules:format` |
+| Rulesets | `rules:formatting` |
 | Parity | 273 / 273 corpus cases |
 
 ## Enable

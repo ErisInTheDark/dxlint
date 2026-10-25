@@ -7,7 +7,7 @@ Reports async functions passed as `Promise` executors. Errors thrown by an async
 | Upstream | [`es-no-async-promise-executor`](https://eslint.org/docs/latest/rules/no-async-promise-executor) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | `rules:correctness`, `rules:recommended` |
+| Rulesets | `rules:bugs` (error), `rules:recommended` |
 | Parity | 11 / 11 corpus cases |
 
 ## Enable

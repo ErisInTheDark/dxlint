@@ -7,7 +7,7 @@ Reports promise expressions whose rejection is not handled. Await or return the 
 | Upstream | [`@typescript-eslint/no-floating-promises`](https://typescript-eslint.io/rules/no-floating-promises) |
 | Needs types | yes |
 | Fix | none |
-| Rulesets | `rules:types` |
+| Rulesets | `rules:bugs` (error), `rules:recommended` |
 | Parity | 167 / 181 corpus cases |
 
 ## Enable

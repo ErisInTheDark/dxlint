@@ -7,7 +7,7 @@ Require explicit visibility on class members, or forbid redundant `public` modif
 | Upstream | [`@typescript-eslint/explicit-member-accessibility`](https://typescript-eslint.io/rules/explicit-member-accessibility) |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | `rules:conventions` |
+| Rulesets | `rules:style` |
 | Parity | 63 / 63 corpus cases |
 
 ## Enable

@@ -7,7 +7,7 @@ Reports non-null assertions that add nothing, such as repeated `!` assertions. A
 | Upstream | [`@typescript-eslint/no-extra-non-null-assertion`](https://typescript-eslint.io/rules/no-extra-non-null-assertion) |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | none |
+| Rulesets | `rules:suspicious`, `rules:recommended` |
 | Parity | 13 / 13 corpus cases |
 
 ## Enable

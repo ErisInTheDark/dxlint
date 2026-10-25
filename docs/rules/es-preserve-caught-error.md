@@ -7,7 +7,7 @@ Requires new errors thrown inside a catch block to preserve the caught error as 
 | Upstream | [`es-preserve-caught-error`](https://eslint.org/docs/latest/rules/preserve-caught-error) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | none |
+| Rulesets | `rules:suspicious`, `rules:recommended` |
 | Parity | 81 / 81 corpus cases |
 
 ## Enable

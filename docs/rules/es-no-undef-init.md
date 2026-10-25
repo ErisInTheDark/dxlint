@@ -7,7 +7,7 @@ Reports `let` and `var` declarations explicitly initialised to `undefined`. An u
 | Upstream | [`es-no-undef-init`](https://eslint.org/docs/latest/rules/no-undef-init) |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | `rules:conventions` |
+| Rulesets | `rules:style` |
 | Parity | 28 / 28 corpus cases |
 
 ## Enable

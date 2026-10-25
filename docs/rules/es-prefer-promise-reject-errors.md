@@ -7,7 +7,7 @@ Requires Promise rejection reasons to be errors. Error objects retain stack info
 | Upstream | [`@typescript-eslint/prefer-promise-reject-errors`](https://typescript-eslint.io/rules/prefer-promise-reject-errors) |
 | Needs types | yes |
 | Fix | none |
-| Rulesets | none |
+| Rulesets | `rules:suspicious`, `rules:recommended` |
 | Parity | 236 / 236 corpus cases |
 
 ## Enable

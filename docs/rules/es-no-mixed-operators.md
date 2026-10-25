@@ -7,7 +7,7 @@ Requires parentheses around mixtures of operators in the same configured group. 
 | Upstream | [`@stylistic/no-mixed-operators`](https://eslint.style/rules/no-mixed-operators) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | `rules:format` |
+| Rulesets | `rules:formatting` |
 | Parity | 40 / 40 corpus cases |
 
 ## Enable

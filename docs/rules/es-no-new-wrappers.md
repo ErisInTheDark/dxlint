@@ -7,7 +7,7 @@ Reports `new String`, `new Number`, and `new Boolean`. Wrapper objects behave di
 | Upstream | [`es-no-new-wrappers`](https://eslint.org/docs/latest/rules/no-new-wrappers) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | `rules:suspicious` |
+| Rulesets | `rules:suspicious`, `rules:recommended` |
 | Parity | 11 / 11 corpus cases |
 
 ## Enable

@@ -7,7 +7,7 @@ Reports awaiting values that are not promises or other thenables. It also checks
 | Upstream | [`@typescript-eslint/await-thenable`](https://typescript-eslint.io/rules/await-thenable) |
 | Needs types | yes |
 | Fix | none |
-| Rulesets | `rules:types` |
+| Rulesets | `rules:bugs` (error), `rules:recommended` |
 | Parity | 129 / 132 corpus cases |
 
 ## Enable

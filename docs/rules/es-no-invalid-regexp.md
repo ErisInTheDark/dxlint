@@ -7,7 +7,7 @@ Reports invalid patterns and flags passed to `RegExp`. Unlike invalid regex lite
 | Upstream | [`es-no-invalid-regexp`](https://eslint.org/docs/latest/rules/no-invalid-regexp) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | `rules:correctness`, `rules:recommended` |
+| Rulesets | `rules:bugs` (error), `rules:recommended` |
 | Parity | 112 / 112 corpus cases |
 
 ## Enable

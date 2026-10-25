@@ -7,7 +7,7 @@ Require a final newline in non-empty files, or forbid final newlines. This does 
 | Upstream | [`@stylistic/eol-last`](https://eslint.style/rules/eol-last) |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | `rules:format` |
+| Rulesets | `rules:formatting` |
 | Parity | 40 / 44 corpus cases |
 
 ## Enable

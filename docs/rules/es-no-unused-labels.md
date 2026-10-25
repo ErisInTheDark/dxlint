@@ -7,7 +7,7 @@ Reports labels that no `break` or `continue` refers to. Removing unused labels m
 | Upstream | [`es-no-unused-labels`](https://eslint.org/docs/latest/rules/no-unused-labels) |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | `rules:recommended`, `rules:suspicious` |
+| Rulesets | `rules:suspicious`, `rules:recommended` |
 | Parity | 35 / 35 corpus cases |
 
 ## Enable

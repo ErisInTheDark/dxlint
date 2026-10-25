@@ -6,7 +6,7 @@ Removes horizontal whitespace around Rust path separators (`::`). Attribute cont
 | --- | --- |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | none |
+| Rulesets | `rules:formatting` |
 
 ## Enable
 

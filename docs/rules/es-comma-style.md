@@ -7,7 +7,7 @@ Controls whether a comma belongs at the end of its item line or the start of the
 | Upstream | [`@stylistic/comma-style`](https://eslint.style/rules/comma-style) |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | `rules:format` |
+| Rulesets | `rules:formatting` |
 | Parity | 140 / 140 corpus cases |
 
 ## Enable

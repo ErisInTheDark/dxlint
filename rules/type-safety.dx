@@ -1,0 +1,18 @@
+# rules:type-safety: code that switches type checking off or lets `any` and
+# loose types leak. On as warnings. Part of rules:recommended; no rule is in
+# two rulesets.
+
+rule es-ban-ts-comment
+rule es-no-empty-object-type
+rule es-no-explicit-any
+rule es-no-unsafe-argument
+rule es-no-unsafe-assignment
+rule es-no-unsafe-call
+rule es-no-unsafe-enum-comparison
+rule es-no-unsafe-function-type
+rule es-no-unsafe-member-access
+rule es-no-unsafe-return
+rule es-no-unsafe-unary-minus
+rule es-no-wrapper-object-types
+rule es-restrict-plus-operands*
+rule es-restrict-template-expressions

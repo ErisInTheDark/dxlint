@@ -7,7 +7,7 @@ Reports TypeScript namespaces and old-style named modules in ordinary source fil
 | Upstream | [`@typescript-eslint/no-namespace`](https://typescript-eslint.io/rules/no-namespace) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | none |
+| Rulesets | `rules:style` |
 | Parity | 43 / 43 corpus cases |
 
 ## Enable

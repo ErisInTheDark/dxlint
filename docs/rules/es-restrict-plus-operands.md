@@ -7,7 +7,7 @@ Checks the types used with `+` and `+=` to catch accidental coercion and incompa
 | Upstream | [`@typescript-eslint/restrict-plus-operands`](https://typescript-eslint.io/rules/restrict-plus-operands) |
 | Needs types | yes |
 | Fix | none |
-| Rulesets | `rules:types` |
+| Rulesets | `rules:type-safety`, `rules:recommended` |
 | Parity | 119 / 119 corpus cases |
 
 ## Enable

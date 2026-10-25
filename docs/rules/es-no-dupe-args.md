@@ -7,7 +7,7 @@ Reports repeated parameter names in function declarations and expressions. A lat
 | Upstream | [`es-no-dupe-args`](https://eslint.org/docs/latest/rules/no-dupe-args) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | none |
+| Rulesets | `rules:bugs` (error), `rules:recommended` |
 | Parity | 13 / 13 corpus cases |
 
 ## Enable

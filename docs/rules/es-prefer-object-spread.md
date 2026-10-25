@@ -7,7 +7,7 @@ Reports `Object.assign` calls whose first argument is an object literal. Object 
 | Upstream | [`es-prefer-object-spread`](https://eslint.org/docs/latest/rules/prefer-object-spread) |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | `rules:conventions` |
+| Rulesets | `rules:style` |
 | Parity | 108 / 109 corpus cases |
 
 ## Enable

@@ -7,7 +7,7 @@ Controls blank lines just inside blocks, classes and switches. By default, non-e
 | Upstream | [`@stylistic/padded-blocks`](https://eslint.style/rules/padded-blocks) |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | `rules:format` |
+| Rulesets | none |
 | Parity | 167 / 167 corpus cases |
 
 ## Enable

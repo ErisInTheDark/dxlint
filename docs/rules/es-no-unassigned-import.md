@@ -7,7 +7,7 @@ Reports imports without imported bindings. These imports run a module only for s
 | Upstream | [`import/no-unassigned-import`](https://github.com/import-js/eslint-plugin-import/blob/main/docs/rules/no-unassigned-import.md) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | `rules:conventions` |
+| Rulesets | `rules:style` |
 
 ## Enable
 

@@ -6,7 +6,7 @@ Requires one item per line in Rust `use` lists containing paths, globs or nested
 | --- | --- |
 | Needs types | no |
 | Fix | none |
-| Rulesets | none |
+| Rulesets | `rules:formatting` |
 
 ## Enable
 

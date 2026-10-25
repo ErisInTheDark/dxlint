@@ -6,7 +6,7 @@ Forbids horizontal whitespace just inside nonempty Rust parentheses. It does not
 | --- | --- |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | none |
+| Rulesets | `rules:formatting` |
 
 ## Enable
 

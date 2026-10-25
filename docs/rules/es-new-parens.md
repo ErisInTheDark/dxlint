@@ -7,7 +7,7 @@ Reports missing or unwanted empty parentheses in constructor calls. Calls with a
 | Upstream | [`@stylistic/new-parens`](https://eslint.style/rules/new-parens) |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | `rules:format` |
+| Rulesets | `rules:formatting` |
 | Parity | 42 / 42 corpus cases |
 
 ## Enable

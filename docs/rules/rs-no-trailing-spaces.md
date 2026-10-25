@@ -6,7 +6,7 @@ Removes horizontal whitespace at the ends of Rust code lines and on otherwise bl
 | --- | --- |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | none |
+| Rulesets | `rules:formatting` |
 
 ## Enable
 

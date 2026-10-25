@@ -7,7 +7,7 @@ Reports boolean conversions in places that already convert their value to a bool
 | Upstream | [`es-no-extra-boolean-cast`](https://eslint.org/docs/latest/rules/no-extra-boolean-cast) |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | `rules:recommended`, `rules:suspicious` |
+| Rulesets | `rules:suspicious`, `rules:recommended` |
 | Parity | 499 / 499 corpus cases |
 
 ## Enable

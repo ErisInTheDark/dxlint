@@ -275,10 +275,18 @@ rule es-no-misused-promises:conditionals { set flagUnions "strict" }
 - In the block, `set option value` sets an option; `when`, `let`, `files`
   and `ignore` add to the rule; `fix as` and `report` replace its own.
 - Inline `set value` sets the rule's default option; severity and `set` may appear in either order. A family name sets each variant's default option. Without a declared default option, inline `set` is an error; block `set name value` still works for any option.
-- These lines may come before or after the definition; they apply in order.
+- These lines may come before or after the definition; they apply in order,
+  imported ones where their `import` sits, so a later `set` wins. A bare
+  `rule name` resets no option and keeps the severity of a rule already on;
+  after `rule name off` it turns on at the default severity again. A file
+  imported twice is read once: the second `import` adds nothing.
   A name nothing defines is an error with a suggestion, and says which
   language import defines it (`rule rs-indent` → "comes with `import .rs`").
   Rulesets skip rules of languages you did not import.
+- `severity <level>` (`hint`, `info`, `warn` or `error`) sets every rule on
+  at that point to `level`; rules that are off stay off, and lines below
+  can change any rule again. `import rules:recommended` then `severity warn`
+  makes its errors warnings.
 - **Option values** must fit the option's [type](#option-types). A mismatch
   says where: ``option `config` of `es-padding-line-between-statements`:
   `[1].blankLine` must be "any" | "never" | "always", got "sometimes"``.
@@ -723,15 +731,17 @@ and `shared-final-newline`.
 
 A language's rules live in topic files it imports itself (`.rs/format`, for example): internal building blocks, not separate bundles. See the [TypeScript module reference](ts.md#modules) for `.ts` and its topic files.
 
+Rulesets are `rule` lines in `rules/<name>.dx`; no rule is in two of them, and lines naming rules of languages not imported are skipped.
+
 | ruleset | turns on |
 |---|---|
-| `rules:correctness` | code that is almost certainly wrong (`es-no-cond-assign`, `es-use-isnan`, `es-valid-typeof`, ...) |
-| `rules:suspicious` | likely mistakes, or code that does nothing (`es-no-fallthrough`, `es-no-self-assign`, ...) |
-| `rules:conventions` | one consistent way to write things (`es-prefer-const`, `es-eqeqeq`, ...) |
-| `rules:format` | layout and spacing, as eslint's and @stylistic's defaults lay code out, and the `rs-*` rules |
-| `rules:es-no-semi` | semicolon-free JavaScript/TypeScript on top of `rules:format`: guard `;` at the start of lines beginning with `(`, `[` or a template |
-| `rules:types` | rules that read declared types (`es-no-floating-promises`, ...) |
-| `rules:recommended` | what eslint and typescript-eslint recommend without type information |
+| `rules:bugs` | code that is wrong: it throws, never runs, or cannot do what it says; as errors |
+| `rules:suspicious` | likely mistakes, or code that does nothing |
+| `rules:type-safety` | code that switches type checking off or lets `any` leak |
+| `rules:style` | one consistent, modern way to write things |
+| `rules:formatting` | layout and spacing, as eslint's and @stylistic's defaults lay code out, and the `rs-*` rules |
+| `rules:es-no-semi` | semicolon-free JavaScript/TypeScript on top of `rules:formatting`: guard `;` at the start of lines beginning with `(`, `[` or a template |
+| `rules:recommended` | `import rules:bugs`, `rules:suspicious` and `rules:type-safety` |
 
 A `.dx` file is a config file: `import ../.dx` builds on the config
 of the directory above.
@@ -795,6 +805,7 @@ in rs_function.name rule fn-snake-case warn "function names are snake_case" fix 
 | `indent [in] A, B.field [by n]` | rule clause: the indentation structure that rule measures, see [Layers](#layers) |
 | `in A rule name ...` | define a rule checking `A`'s nodes (and turn it on), see [Rules](#rules) |
 | `rule name [severity ["message"]] [set value] [{ ... }]` | turn an existing rule on, off, or configure it, see [Turning rules on](#turning-rules-on-and-configuring-them) |
+| `severity <level>` | every rule on at this point gets `level`, see [Turning rules on](#turning-rules-on-and-configuring-them) |
 | `define { items }` | items inside define; their rules stay off until turned on |
 | `in A let name expr` | an attribute computed for `A`'s nodes, see [Attributes](#attributes) |
 | `in A forward x, y from field` | `A`'s nodes pass attributes `x` and `y` up from a field, see [Attributes](#attributes) |

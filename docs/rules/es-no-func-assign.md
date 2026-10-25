@@ -7,7 +7,7 @@ Reports writes to function declaration names. Use a variable holding a function 
 | Upstream | [`es-no-func-assign`](https://eslint.org/docs/latest/rules/no-func-assign) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | none |
+| Rulesets | `rules:bugs` (error), `rules:recommended` |
 | Parity | 15 / 15 corpus cases |
 
 ## Enable

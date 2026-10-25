@@ -7,7 +7,7 @@ Controls spacing before function parameter lists. By default, a space is require
 | Upstream | [`@stylistic/space-before-function-paren`](https://eslint.style/rules/space-before-function-paren) |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | `rules:format` |
+| Rulesets | `rules:formatting` |
 | Parity | 111 / 112 corpus cases |
 
 ## Enable

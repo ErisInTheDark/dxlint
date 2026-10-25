@@ -7,7 +7,7 @@ Reports filtering an array just to take its first matching element. `find()` ret
 | Upstream | [`@typescript-eslint/prefer-find`](https://typescript-eslint.io/rules/prefer-find) |
 | Needs types | yes |
 | Fix | none |
-| Rulesets | `rules:types` |
+| Rulesets | `rules:style` |
 | Parity | 47 / 47 corpus cases |
 
 ## Enable

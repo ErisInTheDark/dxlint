@@ -7,7 +7,7 @@ Reports lexical declarations directly inside `case` or `default` clauses. Wrap a
 | Upstream | [`es-no-case-declarations`](https://eslint.org/docs/latest/rules/no-case-declarations) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | none |
+| Rulesets | `rules:suspicious`, `rules:recommended` |
 | Parity | 19 / 19 corpus cases |
 
 ## Enable

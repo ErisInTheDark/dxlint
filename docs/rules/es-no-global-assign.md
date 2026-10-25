@@ -7,7 +7,7 @@ Reports assignments to read-only globals. Overwriting built-in names can break u
 | Upstream | [`es-no-global-assign`](https://eslint.org/docs/latest/rules/no-global-assign) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | `rules:recommended`, `rules:suspicious` |
+| Rulesets | `rules:suspicious`, `rules:recommended` |
 | Parity | 18 / 18 corpus cases |
 
 ## Enable

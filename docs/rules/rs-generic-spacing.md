@@ -6,7 +6,7 @@ Removes spaces immediately after a generic argument or parameter list's opening 
 | --- | --- |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | none |
+| Rulesets | `rules:formatting` |
 
 ## Enable
 

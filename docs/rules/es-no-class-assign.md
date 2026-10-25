@@ -7,7 +7,7 @@ Reports assignments to class declaration bindings. Replacing a class name usuall
 | Upstream | [`es-no-class-assign`](https://eslint.org/docs/latest/rules/no-class-assign) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | none |
+| Rulesets | `rules:bugs` (error), `rules:recommended` |
 | Parity | 18 / 18 corpus cases |
 
 ## Enable

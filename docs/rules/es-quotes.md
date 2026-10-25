@@ -7,7 +7,7 @@ Enforces one string delimiter style: double quotes by default. Templates with in
 | Upstream | [`@stylistic/quotes`](https://eslint.style/rules/quotes) |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | `rules:format` |
+| Rulesets | `rules:formatting` |
 | Parity | 172 / 172 corpus cases |
 
 ## Enable

@@ -588,6 +588,9 @@ fn configure(config: &mut crate::config::ast::Config, errors: &mut Vec<ConfigErr
             let family = format!("{}:", pattern.text);
             matching.extend((0..config.rules.len()).filter(|&i| config.rules[i].name.text.starts_with(&family)));
         }
+        if c.on_only {
+            matching.retain(|&i| config.rules[i].enabled());
+        }
         if matching.is_empty() {
             if c.soft {
                 continue;

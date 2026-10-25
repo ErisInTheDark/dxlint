@@ -7,7 +7,7 @@ Reports async functions that neither await work nor return promises. Removing an
 | Upstream | [`@typescript-eslint/require-await`](https://typescript-eslint.io/rules/require-await) |
 | Needs types | yes |
 | Fix | none |
-| Rulesets | none |
+| Rulesets | `rules:suspicious`, `rules:recommended` |
 | Parity | 128 / 128 corpus cases |
 
 ## Enable

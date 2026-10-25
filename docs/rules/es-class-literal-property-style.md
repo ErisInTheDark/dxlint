@@ -7,7 +7,7 @@ Enforces one way to expose constant literal values on classes: readonly fields o
 | Upstream | [`@typescript-eslint/class-literal-property-style`](https://typescript-eslint.io/rules/class-literal-property-style) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | `rules:conventions` |
+| Rulesets | `rules:style` |
 | Parity | 53 / 53 corpus cases |
 
 ## Enable

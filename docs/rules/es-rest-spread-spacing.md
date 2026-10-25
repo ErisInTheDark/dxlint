@@ -7,7 +7,7 @@ Checks spacing between `...` and a rest or spread expression. By default, no whi
 | Upstream | [`@stylistic/rest-spread-spacing`](https://eslint.style/rules/rest-spread-spacing) |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | `rules:format` |
+| Rulesets | `rules:formatting` |
 | Parity | 88 / 88 corpus cases |
 
 ## Enable

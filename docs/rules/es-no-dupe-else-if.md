@@ -7,7 +7,7 @@ Reports conditions already covered by earlier branches in an `if` / `else if` ch
 | Upstream | [`es-no-dupe-else-if`](https://eslint.org/docs/latest/rules/no-dupe-else-if) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | `rules:correctness`, `rules:recommended` |
+| Rulesets | `rules:bugs` (error), `rules:recommended` |
 | Parity | 89 / 89 corpus cases |
 
 ## Enable

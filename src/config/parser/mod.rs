@@ -367,6 +367,7 @@ impl<'a> Parser<'a> {
             (Tk::Ident, "native") => self.native(),
             (Tk::Ident, "set") => self.old_set(),
             (Tk::Ident, "ignore") => self.ignore(),
+            (Tk::Ident, "severity") if ctx.is_none() => self.severity_item(),
             (Tk::Ident, "drop") => self.drop_item(),
             (Tk::Ident, "override") => self.override_item(ctx),
             (Tk::Ident, "define") => self.define_block(),
@@ -1881,7 +1882,27 @@ impl<'a> Parser<'a> {
         // Built-in rulesets name rules of every language; only the imported
         // ones exist.
         let soft = self.sources.get(kw.span.file).name.starts_with("rules/");
-        self.config.configs.push(RuleConfig { patch, options, value, soft });
+        self.config.configs.push(RuleConfig { patch, options, value, soft, on_only: false });
+    }
+
+    /// `severity <level>`: every rule on at this point gets `level`; rules
+    /// that are off stay off, and later lines can change it again.
+    fn severity_item(&mut self) {
+        let kw = self.bump().expect("peeked");
+        self.skip(false, true);
+        let level = self.ts.peek_raw(0).filter(|t| t.kind == Tk::Ident).and_then(|t| Severity::parse(&t.text));
+        let Some(level) = level.filter(|level| *level != Severity::Off) else {
+            let mut error = ConfigError::new(kw.span, "expected `severity hint`, `info`, `warn` or `error`");
+            if self.ts.peek_raw(0).is_some_and(|t| t.is_ident("off")) {
+                error = error.note("`rule * off` turns every rule off");
+            }
+            self.errors.push(error);
+            return;
+        };
+        let word = self.ts.next_raw().expect("peeked");
+        let mut patch = RuleDef::new(Name { text: "*".into(), span: kw.span.to(word.span) }, Vec::new());
+        patch.severity = Some(level);
+        self.config.configs.push(RuleConfig { patch, options: Vec::new(), value: None, soft: true, on_only: true });
     }
 
     /// `define { ... }`: rules inside are defined but stay off until a

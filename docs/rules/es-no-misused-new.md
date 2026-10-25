@@ -7,7 +7,7 @@ Reports constructor-like declarations in the wrong place: a class method named `
 | Upstream | [`@typescript-eslint/no-misused-new`](https://typescript-eslint.io/rules/no-misused-new) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | `rules:recommended`, `rules:suspicious` |
+| Rulesets | `rules:suspicious`, `rules:recommended` |
 | Parity | 19 / 19 corpus cases |
 
 ## Enable

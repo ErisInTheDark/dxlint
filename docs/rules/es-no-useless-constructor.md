@@ -7,7 +7,7 @@ Reports constructors that add nothing to a class's default construction behaviou
 | Upstream | [`@typescript-eslint/no-useless-constructor`](https://typescript-eslint.io/rules/no-useless-constructor) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | `rules:conventions` |
+| Rulesets | `rules:style` |
 | Parity | 99 / 99 corpus cases |
 
 ## Enable

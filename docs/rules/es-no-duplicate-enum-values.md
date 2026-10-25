@@ -7,7 +7,7 @@ Reports enum members explicitly assigned the same literal value. Unique values m
 | Upstream | [`@typescript-eslint/no-duplicate-enum-values`](https://typescript-eslint.io/rules/no-duplicate-enum-values) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | none |
+| Rulesets | `rules:bugs` (error), `rules:recommended` |
 | Parity | 40 / 40 corpus cases |
 
 ## Enable

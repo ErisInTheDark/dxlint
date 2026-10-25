@@ -7,7 +7,7 @@ Limits runs of blank lines to reduce unnecessary scrolling. Separate limits can 
 | Upstream | [`@stylistic/no-multiple-empty-lines`](https://eslint.style/rules/no-multiple-empty-lines) |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | `rules:format` |
+| Rulesets | `rules:formatting` |
 | Parity | 45 / 45 corpus cases |
 
 ## Enable

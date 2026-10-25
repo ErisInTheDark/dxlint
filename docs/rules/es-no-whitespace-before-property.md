@@ -7,7 +7,7 @@ Reports spaces around a property-access dot or before a computed-property bracke
 | Upstream | [`@stylistic/no-whitespace-before-property`](https://eslint.style/rules/no-whitespace-before-property) |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | `rules:format` |
+| Rulesets | `rules:formatting` |
 | Parity | 201 / 201 corpus cases |
 
 ## Enable

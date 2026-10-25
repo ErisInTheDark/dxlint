@@ -7,7 +7,7 @@ Reports methods extracted from their object without binding their receiver. Call
 | Upstream | [`@typescript-eslint/unbound-method`](https://typescript-eslint.io/rules/unbound-method) |
 | Needs types | yes |
 | Fix | none |
-| Rulesets | `rules:types` |
+| Rulesets | `rules:bugs` (error), `rules:recommended` |
 | Parity | 215 / 218 corpus cases |
 
 ## Enable

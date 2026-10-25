@@ -7,7 +7,7 @@ Reports `require()` calls used to obtain a module value outside an import declar
 | Upstream | [`@typescript-eslint/no-var-requires`](https://typescript-eslint.io/rules/no-var-requires) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | `rules:conventions` |
+| Rulesets | `rules:style` |
 
 ## Enable
 

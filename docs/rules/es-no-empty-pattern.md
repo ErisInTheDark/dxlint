@@ -7,7 +7,7 @@ Reports empty destructuring patterns. They do not bind any variables and can be 
 | Upstream | [`es-no-empty-pattern`](https://eslint.org/docs/latest/rules/no-empty-pattern) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | `rules:correctness`, `rules:recommended` |
+| Rulesets | `rules:suspicious`, `rules:recommended` |
 | Parity | 31 / 31 corpus cases |
 
 ## Enable

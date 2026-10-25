@@ -7,7 +7,7 @@ Reports inconsistent spaces around property colons. It can also align keys or va
 | Upstream | [`@stylistic/key-spacing`](https://eslint.style/rules/key-spacing) |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | `rules:format` |
+| Rulesets | `rules:formatting` |
 | Parity | 282 / 282 corpus cases |
 
 ## Enable

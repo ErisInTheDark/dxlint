@@ -7,7 +7,7 @@ Reports repeated spaces between code tokens, rather than indentation or spaces i
 | Upstream | [`@stylistic/no-multi-spaces`](https://eslint.style/rules/no-multi-spaces) |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | `rules:format` |
+| Rulesets | `rules:formatting` |
 | Parity | 153 / 153 corpus cases |
 
 ## Enable

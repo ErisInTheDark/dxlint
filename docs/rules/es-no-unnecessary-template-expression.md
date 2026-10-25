@@ -7,7 +7,7 @@ Reports template substitutions that can be incorporated into the surrounding tex
 | Upstream | [`@typescript-eslint/no-unnecessary-template-expression`](https://typescript-eslint.io/rules/no-unnecessary-template-expression) |
 | Needs types | yes |
 | Fix | autofix |
-| Rulesets | `rules:types` |
+| Rulesets | `rules:style` |
 | Parity | 184 / 184 corpus cases |
 
 ## Enable

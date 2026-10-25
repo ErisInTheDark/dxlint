@@ -7,7 +7,7 @@ Reports optional chains used where an `undefined` result would cause an error. P
 | Upstream | [`es-no-unsafe-optional-chaining`](https://eslint.org/docs/latest/rules/no-unsafe-optional-chaining) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | `rules:correctness`, `rules:recommended` |
+| Rulesets | `rules:bugs` (error), `rules:recommended` |
 | Parity | 62 / 62 corpus cases |
 
 ## Enable

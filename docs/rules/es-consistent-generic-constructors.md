@@ -7,7 +7,7 @@ Enforces one location for generic arguments when constructing a value: the type 
 | Upstream | [`@typescript-eslint/consistent-generic-constructors`](https://typescript-eslint.io/rules/consistent-generic-constructors) |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | `rules:conventions` |
+| Rulesets | `rules:style` |
 | Parity | 81 / 81 corpus cases |
 
 ## Enable

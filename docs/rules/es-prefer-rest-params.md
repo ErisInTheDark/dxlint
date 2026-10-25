@@ -7,7 +7,7 @@ Reports use of the implicit `arguments` object. Rest parameters name the argumen
 | Upstream | [`es-prefer-rest-params`](https://eslint.org/docs/latest/rules/prefer-rest-params) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | `rules:conventions` |
+| Rulesets | `rules:style` |
 | Parity | 11 / 11 corpus cases |
 
 ## Enable

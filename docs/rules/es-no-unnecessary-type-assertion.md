@@ -7,7 +7,7 @@ Reports assertions that do not change an expression's type. This includes redund
 | Upstream | [`@typescript-eslint/no-unnecessary-type-assertion`](https://typescript-eslint.io/rules/no-unnecessary-type-assertion) |
 | Needs types | yes |
 | Fix | autofix |
-| Rulesets | none |
+| Rulesets | `rules:suspicious`, `rules:recommended` |
 | Parity | 247 / 263 corpus cases |
 
 ## Enable

@@ -100,6 +100,7 @@ const KEYWORDS: &[(&str, &str)] = &[
     ("skip", "`skip narrowing, selection`: trade type precision for speed; reads keep their declared value (`narrowing`), conditional types are unknown (`selection`)"),
     ("import", "`import .ts` (a built-in language, its rules defined but off), `import rules:recommended` (a built-in ruleset), `import some/path` (a file, relative to this one): pasted here, once"),
     ("ignore", "`ignore \"glob\" ...`: never lint these files"),
+    ("severity", "`severity warn` (or `hint`, `info`, `error`): every rule on at this point gets that severity; rules that are off stay off, and lines below can change it again"),
     ("native", "`native ts`: the TypeScript parser's node kinds as `ts_*` layers"),
     ("lang", "`lang name \"*.ext\" ...`: a language, whose root layer is `.name`"),
     ("language", "`language .name { option name type = default; set name value; files \"glob\"; ignore \"glob\" }`: declared options and ordered file-scoped source settings"),

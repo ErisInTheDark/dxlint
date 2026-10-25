@@ -6,7 +6,7 @@ Removes whitespace between an attribute's `#` or `#!` and its opening bracket. A
 | --- | --- |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | none |
+| Rulesets | `rules:formatting` |
 
 ## Enable
 

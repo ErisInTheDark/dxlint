@@ -7,7 +7,7 @@ Requires private members to be `readonly` when they are not reassigned outside t
 | Upstream | [`@typescript-eslint/prefer-readonly`](https://typescript-eslint.io/rules/prefer-readonly) |
 | Needs types | yes |
 | Fix | autofix |
-| Rulesets | `rules:types` |
+| Rulesets | `rules:style` |
 | Parity | 162 / 162 corpus cases |
 
 ## Enable

@@ -7,7 +7,7 @@ Reports unary `-` applied to values that are not numeric. Negating a string or o
 | Upstream | [`@typescript-eslint/no-unsafe-unary-minus`](https://typescript-eslint.io/rules/no-unsafe-unary-minus) |
 | Needs types | yes |
 | Fix | none |
-| Rulesets | `rules:types` |
+| Rulesets | `rules:type-safety`, `rules:recommended` |
 | Parity | 23 / 23 corpus cases |
 
 ## Enable

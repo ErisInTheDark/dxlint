@@ -7,7 +7,7 @@ Reports empty interfaces and `{}` type literals. In TypeScript, `{}` accepts any
 | Upstream | [`@typescript-eslint/no-empty-object-type`](https://typescript-eslint.io/rules/no-empty-object-type) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | none |
+| Rulesets | `rules:type-safety`, `rules:recommended` |
 | Parity | 42 / 42 corpus cases |
 
 ## Enable

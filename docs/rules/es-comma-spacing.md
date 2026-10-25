@@ -7,7 +7,7 @@ Enforces spaces around commas. By default, commas have no space before them and 
 | Upstream | [`@stylistic/comma-spacing`](https://eslint.style/rules/comma-spacing) |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | `rules:format` |
+| Rulesets | `rules:formatting` |
 | Parity | 185 / 187 corpus cases |
 
 ## Enable

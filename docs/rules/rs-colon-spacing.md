@@ -6,7 +6,7 @@ Forbids spaces before a colon and requires whitespace after it. Path separators 
 | --- | --- |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | none |
+| Rulesets | `rules:formatting` |
 
 ## Enable
 

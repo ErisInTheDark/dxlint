@@ -7,7 +7,7 @@ Reports variables used to alias `this`. Arrow functions can retain `this` withou
 | Upstream | [`@typescript-eslint/no-this-alias`](https://typescript-eslint.io/rules/no-this-alias) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | none |
+| Rulesets | `rules:style` |
 | Parity | 10 / 10 corpus cases |
 
 ## Enable

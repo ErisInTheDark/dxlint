@@ -7,7 +7,7 @@ Prefer strict equality operators so comparisons do not silently coerce values. O
 | Upstream | [`es-eqeqeq`](https://eslint.org/docs/latest/rules/eqeqeq) |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | `rules:conventions` |
+| Rulesets | `rules:style` |
 | Parity | 77 / 77 corpus cases |
 
 ## Enable

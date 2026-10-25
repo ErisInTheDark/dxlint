@@ -7,7 +7,7 @@ Controls TypeScript directive comments that suppress or enable compiler checks. 
 | Upstream | [`@typescript-eslint/ban-ts-comment`](https://typescript-eslint.io/rules/ban-ts-comment) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | none |
+| Rulesets | `rules:type-safety`, `rules:recommended` |
 | Parity | 114 / 114 corpus cases |
 
 ## Enable

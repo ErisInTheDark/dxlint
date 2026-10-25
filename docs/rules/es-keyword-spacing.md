@@ -7,7 +7,7 @@ Reports missing or unwanted spaces around keywords. Per-keyword overrides let yo
 | Upstream | [`@stylistic/keyword-spacing`](https://eslint.style/rules/keyword-spacing) |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | `rules:format` |
+| Rulesets | `rules:formatting` |
 | Parity | 1177 / 1177 corpus cases |
 
 ## Enable

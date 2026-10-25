@@ -7,7 +7,7 @@ Requires `namespace` rather than the older `module` keyword for TypeScript names
 | Upstream | [`@typescript-eslint/prefer-namespace-keyword`](https://typescript-eslint.io/rules/prefer-namespace-keyword) |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | `rules:conventions`, `rules:recommended` |
+| Rulesets | `rules:style` |
 | Parity | 8 / 8 corpus cases |
 
 ## Enable

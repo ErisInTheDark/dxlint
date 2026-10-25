@@ -6,7 +6,7 @@ Checks block and continuation indentation in Rust. Block contents sit one level 
 | --- | --- |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | none |
+| Rulesets | `rules:formatting` |
 
 ## Enable
 

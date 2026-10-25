@@ -7,7 +7,7 @@ Reports comparisons against `-0`. Equality operators do not distinguish positive
 | Upstream | [`es-no-compare-neg-zero`](https://eslint.org/docs/latest/rules/no-compare-neg-zero) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | `rules:correctness`, `rules:recommended` |
+| Rulesets | `rules:bugs` (error), `rules:recommended` |
 | Parity | 50 / 50 corpus cases |
 
 ## Enable

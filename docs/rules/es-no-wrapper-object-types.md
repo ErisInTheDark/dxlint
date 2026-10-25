@@ -7,7 +7,7 @@ Reports global wrapper types such as `String`, `Number` and `Boolean`. Lowercase
 | Upstream | [`@typescript-eslint/no-wrapper-object-types`](https://typescript-eslint.io/rules/no-wrapper-object-types) |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | `rules:recommended`, `rules:suspicious` |
+| Rulesets | `rules:type-safety`, `rules:recommended` |
 | Parity | 58 / 58 corpus cases |
 
 ## Enable

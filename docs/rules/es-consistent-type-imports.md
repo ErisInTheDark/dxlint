@@ -7,7 +7,7 @@ Use explicit type imports for names used only as types. The opposite policy can 
 | Upstream | [`@typescript-eslint/consistent-type-imports`](https://typescript-eslint.io/rules/consistent-type-imports) |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | `rules:conventions` |
+| Rulesets | `rules:style` |
 | Parity | 381 / 381 corpus cases |
 
 ## Enable

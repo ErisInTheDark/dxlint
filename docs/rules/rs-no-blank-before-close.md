@@ -6,7 +6,7 @@ Removes blank lines immediately before a closing brace or square bracket. Attrib
 | --- | --- |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | none |
+| Rulesets | `rules:formatting` |
 
 ## Enable
 

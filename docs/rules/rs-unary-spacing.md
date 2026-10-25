@@ -6,7 +6,7 @@ Disallows horizontal whitespace after Rust unary operators and reference markers
 | --- | --- |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | none |
+| Rulesets | `rules:formatting` |
 
 ## Enable
 

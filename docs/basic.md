@@ -47,19 +47,27 @@ Every language also brings the text rules `shared-trailing-whitespace`, `shared-
 
 ## Rulesets
 
-A ruleset turns on a category of rules at their default severity. Rulesets skip rules of languages you did not import.
+A ruleset turns on one kind of rule. No rule is in two rulesets, and rulesets skip rules of languages you did not import. Type-aware rules sit beside the others: dxlint reads types without running TypeScript.
 
-| ruleset | turns on |
-| --- | --- |
-| `rules:recommended` | what ESLint and typescript-eslint recommend without type information |
-| `rules:correctness` | code that is almost certainly wrong (`es-no-cond-assign`, `es-use-isnan`, `es-valid-typeof`, ...) |
-| `rules:suspicious` | likely mistakes, or code that does nothing (`es-no-fallthrough`, `es-no-self-assign`, ...) |
-| `rules:conventions` | one consistent way to write things (`es-prefer-const`, `es-eqeqeq`, ...) |
-| `rules:format` | layout and spacing, as ESLint Stylistic's defaults lay code out, and the `rs-*` Rust rules |
-| `rules:es-no-semi` | after `rules:format`: no statement semicolons, with a guard `;` starting lines that begin with `(`, `[` or a template (`;[1, 2].forEach(f)`) |
-| `rules:types` | rules that use type information (`es-no-floating-promises`, ...) |
+| ruleset | turns on | as |
+| --- | --- | --- |
+| `rules:recommended` | `rules:bugs`, `rules:suspicious` and `rules:type-safety` together | |
+| `rules:bugs` | code that is wrong: it throws, never runs, or cannot do what it says (`es-no-dupe-keys`, `es-no-undef`, `es-no-floating-promises`, ...) | error |
+| `rules:suspicious` | likely mistakes, or code that does nothing (`es-no-unused-vars`, `es-no-fallthrough`, `es-no-empty`, ...) | warn |
+| `rules:type-safety` | code that switches type checking off or lets `any` leak (`es-no-explicit-any`, `es-ban-ts-comment`, `es-no-unsafe-*`, ...) | warn |
+| `rules:style` | one consistent, modern way to write things (`es-prefer-const`, `es-eqeqeq`, `es-prefer-optional-chain`, ...) | warn |
+| `rules:formatting` | layout and spacing, as ESLint Stylistic's defaults lay code out, and the `rs-*` Rust rules | warn |
+| `rules:es-no-semi` | after `rules:formatting`: no statement semicolons, with a guard `;` starting lines that begin with `(`, `[` or a template (`;[1, 2].forEach(f)`) | |
 
-Anything a ruleset turned on can be turned off again with `rule <name> off`.
+Each rule's page and [the rule list](rules/README.md) say which ruleset turns it on. Anything a ruleset turned on can be turned off again with `rule <name> off`, and `severity warn` sets every rule on above it to `warn` (or `hint`, `info`, `error`):
+
+```dx
+import rules:recommended
+severity warn                        # bugs warn too
+rule es-no-floating-promises error   # except this one
+```
+
+Rulesets and your own `rule` lines apply top to bottom, so when two of them set the same option, the later one wins: put your own settings after your imports. Turning a rule on again (`rule es-semi`) keeps the options and severity it already has. Importing the same ruleset a second time does nothing.
 
 ## Configuring rules
 

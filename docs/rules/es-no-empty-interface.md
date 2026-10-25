@@ -7,7 +7,7 @@ Reports interfaces with no members and at most one supertype. With no supertype,
 | Upstream | [`@typescript-eslint/no-empty-interface`](https://typescript-eslint.io/rules/no-empty-interface) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | `rules:suspicious` |
+| Rulesets | `rules:suspicious`, `rules:recommended` |
 
 ## Enable
 

@@ -7,7 +7,7 @@ Controls TypeScript triple-slash references, preferring imports where possible. 
 | Upstream | [`@typescript-eslint/triple-slash-reference`](https://typescript-eslint.io/rules/triple-slash-reference) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | `rules:conventions`, `rules:recommended` |
+| Rulesets | `rules:style` |
 | Parity | 21 / 21 corpus cases |
 
 ## Enable

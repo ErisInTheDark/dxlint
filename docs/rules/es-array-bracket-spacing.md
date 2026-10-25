@@ -7,7 +7,7 @@ Enforces spaces inside array brackets, including destructuring patterns. By defa
 | Upstream | [`@stylistic/array-bracket-spacing`](https://eslint.style/rules/array-bracket-spacing) |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | `rules:format` |
+| Rulesets | `rules:formatting` |
 
 ## Enable
 

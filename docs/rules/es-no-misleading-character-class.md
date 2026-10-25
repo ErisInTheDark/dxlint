@@ -7,7 +7,7 @@ Reports character classes that split a visible Unicode character into separate p
 | Upstream | [`es-no-misleading-character-class`](https://eslint.org/docs/latest/rules/no-misleading-character-class) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | `rules:correctness`, `rules:recommended` |
+| Rulesets | `rules:bugs` (error), `rules:recommended` |
 | Parity | 186 / 186 corpus cases |
 
 ## Enable

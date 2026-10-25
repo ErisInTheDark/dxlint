@@ -7,7 +7,7 @@ Reports comparisons between `typeof` results and invalid type names. Valid names
 | Upstream | [`es-valid-typeof`](https://eslint.org/docs/latest/rules/valid-typeof) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | `rules:correctness`, `rules:recommended` |
+| Rulesets | `rules:bugs` (error), `rules:recommended` |
 | Parity | 54 / 54 corpus cases |
 
 ## Enable

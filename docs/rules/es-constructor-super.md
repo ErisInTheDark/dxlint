@@ -7,7 +7,7 @@ Require valid `super()` calls in constructors. Derived constructors must initial
 | Upstream | [`es-constructor-super`](https://eslint.org/docs/latest/rules/constructor-super) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | `rules:correctness`, `rules:recommended` |
+| Rulesets | `rules:bugs` (error), `rules:recommended` |
 | Parity | 82 / 82 corpus cases |
 
 ## Enable

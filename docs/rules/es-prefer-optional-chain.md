@@ -7,7 +7,7 @@ Reports repeated nullish guards that can use optional chaining. `?.` keeps prope
 | Upstream | [`@typescript-eslint/prefer-optional-chain`](https://typescript-eslint.io/rules/prefer-optional-chain) |
 | Needs types | yes |
 | Fix | autofix |
-| Rulesets | `rules:types` |
+| Rulesets | `rules:style` |
 | Parity | 1091 / 1104 corpus cases |
 
 ## Enable

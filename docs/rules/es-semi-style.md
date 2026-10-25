@@ -7,7 +7,7 @@ Controls which line holds a semicolon separating statements. By default, semicol
 | Upstream | [`@stylistic/semi-style`](https://eslint.style/rules/semi-style) |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | none |
+| Rulesets | `rules:es-no-semi` |
 | Parity | 85 / 85 corpus cases |
 
 ## Enable

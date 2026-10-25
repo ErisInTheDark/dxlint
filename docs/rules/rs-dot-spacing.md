@@ -6,7 +6,7 @@ Removes horizontal whitespace around dots used for Rust field and method access.
 | --- | --- |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | none |
+| Rulesets | `rules:formatting` |
 
 ## Enable
 

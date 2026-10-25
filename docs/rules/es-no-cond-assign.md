@@ -7,7 +7,7 @@ Reports assignments used as conditions where a comparison may have been intended
 | Upstream | [`es-no-cond-assign`](https://eslint.org/docs/latest/rules/no-cond-assign) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | `rules:correctness`, `rules:recommended` |
+| Rulesets | `rules:suspicious`, `rules:recommended` |
 | Parity | 45 / 45 corpus cases |
 
 ## Enable

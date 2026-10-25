@@ -7,7 +7,7 @@ Reports property access on `any` values and computed keys typed as `any`. Such a
 | Upstream | [`@typescript-eslint/no-unsafe-member-access`](https://typescript-eslint.io/rules/no-unsafe-member-access) |
 | Needs types | yes |
 | Fix | none |
-| Rulesets | none |
+| Rulesets | `rules:type-safety`, `rules:recommended` |
 | Parity | 35 / 36 corpus cases |
 
 ## Enable

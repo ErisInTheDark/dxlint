@@ -391,6 +391,28 @@ fn rule_activation_restores_definition_severity() {
 }
 
 #[test]
+fn severity_lines_set_rules_on_above_and_leave_off_rules_and_later_lines() {
+    let l = linter(r#"
+        define {
+          in .t match a /a/ { rule first error "a" }
+          in .t match b /b/ { rule second error "b" }
+          in .t match c /c/ { rule off_one error "c" }
+          in .t match d /d/ { rule later error "d" }
+        }
+        rule first
+        rule second hint
+        severity warn
+        rule second error
+        rule later
+    "#);
+    let diags = lint(&l, "abcd");
+    let got: Vec<(&str, Severity)> = diags.iter().map(|d| (d.rule.as_str(), d.severity)).collect();
+    assert_eq!(got, vec![("first", Severity::Warn), ("second", Severity::Error), ("later", Severity::Error)]);
+    let errs = errors("severity off\nseverity loud\n");
+    assert_eq!(errs.len(), 2, "{errs:?}");
+}
+
+#[test]
 fn early_rule_settings_and_partial_rulesets_compile() {
     let l = linter(r#"
         rule late error
@@ -400,7 +422,7 @@ fn early_rule_settings_and_partial_rulesets_compile() {
     "#);
     assert_eq!(lint(&l, "x")[0].severity, Severity::Error);
     // A built-in ruleset names rules of languages not imported.
-    let src = format!("{LANG}\nimport rules:format\n");
+    let src = format!("{LANG}\nimport rules:formatting\n");
     let built = build(config::load_text("test.dx", &src, &Disk), PathBuf::from("/root"));
     assert!(built.errors.is_empty(), "{:#?}", built.errors);
 }
@@ -589,10 +611,33 @@ fn all_std_rules_and_rulesets_compile_without_inert_targets() {
     let built = build(config::load_text("test.dx", src, &Disk), PathBuf::from("/root"));
     assert!(built.errors.is_empty(), "{}", located(&built));
     // Every built-in rule and ruleset compiles when turned on.
-    let all = format!("{src}\nimport rules:correctness\nimport rules:suspicious\nimport rules:conventions\nimport rules:format\nimport rules:types\nimport rules:recommended\nrule *\n");
+    let rulesets: Vec<&str> = config::std_lib::rulesets().collect();
+    assert!(!rulesets.is_empty());
+    let imports: String = rulesets.iter().map(|name| format!("import rules:{name}\n")).collect();
+    let all = format!("{src}\n{imports}rule *\n");
     let built = build(config::load_text("test.dx", &all, &Disk), PathBuf::from("/root"));
     assert!(built.errors.is_empty(), "{}", located(&built));
     let l = built.linter.unwrap();
+    // Every ruleset line names a rule (rulesets skip absent ones silently),
+    // and no rule is in two rulesets; `es-no-semi` reconfigures `formatting`.
+    let names: Vec<&str> = l.rules.iter().map(|rule| rule.name.as_str()).chain(l.inert.iter().map(|rule| rule.name.as_str())).collect();
+    let mut owners: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
+    for set in rulesets {
+        let text = config::std_lib::ruleset(set).expect("listed ruleset");
+        for pattern in text.lines().filter_map(|line| line.strip_prefix("rule ")).filter_map(|rest| rest.split_whitespace().next()) {
+            let family = format!("{pattern}:");
+            let matched: Vec<&str> = names.iter().copied()
+                .filter(|name| crate::path_globs::wildcard(pattern, name) || !pattern.contains(['*', ':']) && name.starts_with(&family))
+                .collect();
+            assert!(!matched.is_empty(), "rules:{set}: `rule {pattern}` names no rule");
+            if set == "es-no-semi" { continue }
+            for name in matched {
+                if let Some(other) = owners.insert(name, set) {
+                    assert_eq!(other, set, "{name} is in rules:{other} and rules:{set}");
+                }
+            }
+        }
+    }
     for rule in &l.inert {
         for target in rule.target_text.split(',') {
             assert!(l.grammar.group(target.trim()).is_some_and(|members| members.is_empty()), "{}: unexpected inert target {target}", rule.name);

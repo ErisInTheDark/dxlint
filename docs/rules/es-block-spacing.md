@@ -7,7 +7,7 @@ Controls spaces immediately inside block braces when the next or previous token 
 | Upstream | [`@stylistic/block-spacing`](https://eslint.style/rules/block-spacing) |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | `rules:format` |
+| Rulesets | `rules:formatting` |
 | Parity | 101 / 101 corpus cases |
 
 ## Enable

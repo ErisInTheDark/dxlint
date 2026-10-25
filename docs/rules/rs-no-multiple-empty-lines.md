@@ -6,7 +6,7 @@ Limits consecutive blank lines in Rust code to one. A blank line may contain spa
 | --- | --- |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | none |
+| Rulesets | `rules:formatting` |
 
 ## Enable
 

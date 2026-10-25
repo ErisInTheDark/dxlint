@@ -7,7 +7,7 @@ Require argument and return types on exported functions and public methods of ex
 | Upstream | [`@typescript-eslint/explicit-module-boundary-types`](https://typescript-eslint.io/rules/explicit-module-boundary-types) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | `rules:conventions` |
+| Rulesets | `rules:style` |
 | Parity | 154 / 154 corpus cases |
 
 ## Enable

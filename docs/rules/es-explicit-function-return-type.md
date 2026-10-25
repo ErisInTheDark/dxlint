@@ -7,7 +7,7 @@ Require return type annotations on functions and methods. These annotations make
 | Upstream | [`@typescript-eslint/explicit-function-return-type`](https://typescript-eslint.io/rules/explicit-function-return-type) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | `rules:conventions` |
+| Rulesets | `rules:style` |
 | Parity | 138 / 138 corpus cases |
 
 ## Enable

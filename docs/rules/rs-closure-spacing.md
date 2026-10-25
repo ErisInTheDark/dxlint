@@ -6,7 +6,7 @@ Keeps closure parameters tight against their pipes and requires whitespace befor
 | --- | --- |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | none |
+| Rulesets | `rules:formatting` |
 
 ## Enable
 

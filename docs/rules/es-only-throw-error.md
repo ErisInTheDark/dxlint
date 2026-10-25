@@ -7,7 +7,7 @@ Reports thrown values whose types are not `Error` objects or allowed exceptions.
 | Upstream | [`@typescript-eslint/only-throw-error`](https://typescript-eslint.io/rules/only-throw-error) |
 | Needs types | yes |
 | Fix | none |
-| Rulesets | none |
+| Rulesets | `rules:suspicious`, `rules:recommended` |
 | Parity | 87 / 89 corpus cases |
 
 ## Enable

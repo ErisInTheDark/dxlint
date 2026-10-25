@@ -6,7 +6,7 @@ Requires a space between a function declaration's name and its parameter list. I
 | --- | --- |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | none |
+| Rulesets | `rules:formatting` |
 
 ## Enable
 

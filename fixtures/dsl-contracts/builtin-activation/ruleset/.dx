@@ -1,4 +1,4 @@
 import .ts
-import rules:correctness
-import rules:conventions
+import rules:suspicious
+import rules:style
 rule es-no-var off

@@ -7,7 +7,7 @@ Reports comma operators that hide multiple operations in one expression. Loop in
 | Upstream | [`es-no-sequences`](https://eslint.org/docs/latest/rules/no-sequences) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | `rules:suspicious` |
+| Rulesets | `rules:suspicious`, `rules:recommended` |
 | Parity | 42 / 42 corpus cases |
 
 ## Enable

@@ -7,7 +7,7 @@ Reports merging a class and interface with the same name. An interface can claim
 | Upstream | [`@typescript-eslint/no-unsafe-declaration-merging`](https://typescript-eslint.io/rules/no-unsafe-declaration-merging) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | none |
+| Rulesets | `rules:bugs` (error), `rules:recommended` |
 | Parity | 11 / 11 corpus cases |
 
 ## Enable

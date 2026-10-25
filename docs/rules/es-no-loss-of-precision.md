@@ -7,7 +7,7 @@ Reports number literals whose written precision is lost when represented as a Ja
 | Upstream | [`es-no-loss-of-precision`](https://eslint.org/docs/latest/rules/no-loss-of-precision) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | `rules:correctness`, `rules:recommended` |
+| Rulesets | `rules:bugs` (error), `rules:recommended` |
 | Parity | 141 / 141 corpus cases |
 
 ## Enable

@@ -7,7 +7,7 @@ Reports `debugger` statements. Remove them from shipped code and use debugger br
 | Upstream | [`es-no-debugger`](https://eslint.org/docs/latest/rules/no-debugger) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | `rules:correctness`, `rules:recommended` |
+| Rulesets | `rules:suspicious`, `rules:recommended` |
 | Parity | 2 / 2 corpus cases |
 
 ## Enable

@@ -7,7 +7,7 @@ Reports class members with the same name when one would overwrite another. TypeS
 | Upstream | [`@typescript-eslint/no-dupe-class-members`](https://typescript-eslint.io/rules/no-dupe-class-members) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | none |
+| Rulesets | `rules:bugs` (error), `rules:recommended` |
 | Parity | 99 / 99 corpus cases |
 
 ## Enable

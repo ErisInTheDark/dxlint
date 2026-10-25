@@ -7,7 +7,7 @@ Keeps spacing around the star in delegated `yield*` expressions consistent. By d
 | Upstream | [`@stylistic/yield-star-spacing`](https://eslint.style/rules/yield-star-spacing) |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | `rules:format` |
+| Rulesets | `rules:formatting` |
 | Parity | 48 / 48 corpus cases |
 
 ## Enable

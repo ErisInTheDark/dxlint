@@ -7,7 +7,7 @@ Reports explicit type arguments equal to the declared default. Omitting a redund
 | Upstream | [`@typescript-eslint/no-unnecessary-type-arguments`](https://typescript-eslint.io/rules/no-unnecessary-type-arguments) |
 | Needs types | yes |
 | Fix | autofix |
-| Rulesets | `rules:types` |
+| Rulesets | `rules:style` |
 | Parity | 71 / 71 corpus cases |
 
 ## Enable

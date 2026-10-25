@@ -7,7 +7,7 @@ Reports values returned from setters, where the caller cannot use them. A bare `
 | Upstream | [`es-no-setter-return`](https://eslint.org/docs/latest/rules/no-setter-return) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | none |
+| Rulesets | `rules:bugs` (error), `rules:recommended` |
 | Parity | 164 / 164 corpus cases |
 
 ## Enable

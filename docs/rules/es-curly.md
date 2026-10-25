@@ -7,7 +7,7 @@ Require a consistent brace policy for conditional and loop bodies. The default r
 | Upstream | [`es-curly`](https://eslint.org/docs/latest/rules/curly) |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | `rules:conventions` |
+| Rulesets | `rules:style` |
 | Parity | 218 / 218 corpus cases |
 
 ## Enable

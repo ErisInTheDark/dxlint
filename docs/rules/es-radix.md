@@ -7,7 +7,7 @@ Requires an explicit radix for `parseInt` and rejects invalid radix values. Nami
 | Upstream | [`radix`](https://eslint.org/docs/latest/rules/radix) |
 | Needs types | no |
 | Fix | none |
-| Rulesets | `rules:conventions` |
+| Rulesets | `rules:style` |
 | Parity | 91 / 91 corpus cases |
 
 ## Enable

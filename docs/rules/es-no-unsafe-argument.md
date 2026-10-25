@@ -7,7 +7,7 @@ Reports `any` values passed to typed parameters. Also checks unsafe array and tu
 | Upstream | [`@typescript-eslint/no-unsafe-argument`](https://typescript-eslint.io/rules/no-unsafe-argument) |
 | Needs types | yes |
 | Fix | none |
-| Rulesets | none |
+| Rulesets | `rules:type-safety`, `rules:recommended` |
 | Parity | 36 / 45 corpus cases |
 
 ## Enable

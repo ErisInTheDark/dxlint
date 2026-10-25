@@ -6,7 +6,7 @@ Requires nonempty Rust files to end with one line break and removes extra blank 
 | --- | --- |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | none |
+| Rulesets | `rules:formatting` |
 
 ## Enable
 

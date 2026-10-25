@@ -7,7 +7,7 @@ Reports string boundary checks that can use `startsWith` or `endsWith`. These me
 | Upstream | [`@typescript-eslint/prefer-string-starts-ends-with`](https://typescript-eslint.io/rules/prefer-string-starts-ends-with) |
 | Needs types | yes |
 | Fix | autofix |
-| Rulesets | `rules:types` |
+| Rulesets | `rules:style` |
 | Parity | 133 / 133 corpus cases |
 
 ## Enable

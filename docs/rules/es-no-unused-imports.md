@@ -6,7 +6,7 @@ Reports imported names that are never used. It checks default, namespace, named,
 | --- | --- |
 | Needs types | no |
 | Fix | none |
-| Rulesets | `rules:suspicious` |
+| Rulesets | `rules:suspicious`, `rules:recommended` |
 
 ## Enable
 

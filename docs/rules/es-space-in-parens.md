@@ -7,7 +7,7 @@ Controls spaces immediately inside parentheses. The default removes spaces; exce
 | Upstream | [`@stylistic/space-in-parens`](https://eslint.style/rules/space-in-parens) |
 | Needs types | no |
 | Fix | autofix |
-| Rulesets | `rules:format` |
+| Rulesets | `rules:formatting` |
 | Parity | 139 / 139 corpus cases |
 
 ## Enable
