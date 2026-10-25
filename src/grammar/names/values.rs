@@ -553,6 +553,22 @@ impl Values<'_> {
         self.quantify(value, traits, true, true)
     }
 
+    /// Whether some leaf of an intersection row declares a trait exclusive
+    /// with `trait_id`, so the row can't fit `trait_id` (`T & object` is
+    /// never `null`, whatever an open `T` may be).
+    pub(crate) fn row_excludes(&self, row: &[Leaf], trait_id: u16) -> Known<bool> {
+        for group in &self.tables.exclusive {
+            if group & (1 << trait_id) == 0 { continue }
+            for other in (0..64u16).filter(|&other| other != trait_id && group & (1 << other) != 0) {
+                for &leaf in row {
+                    if !self.question.budget.step() { return Known::Unknown }
+                    if self.declared_trait(leaf, other) == Known::Yes(true) { return Known::Yes(true) }
+                }
+            }
+        }
+        Known::Yes(false)
+    }
+
     fn quantify(&self, value: &NodeValue, traits: u64, every: bool, declared: bool) -> Known<bool> {
         let NodeValue::Alternatives(alternatives) = value else { return Known::Unknown };
         let mut unknown = false;

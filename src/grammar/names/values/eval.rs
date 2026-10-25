@@ -555,6 +555,10 @@ impl<'a, 'world> Run<'a, 'world> {
                         break;
                     }
                     Known::Yes(false) => {}
+                    // An open part (a type parameter) can't settle it; a
+                    // part exclusive with the trait (its constraint) does.
+                    Known::Unknown if alternative.len() > 1
+                        && self.values.row_excludes(alternative, bit.trailing_zeros() as u16) == Known::Yes(true) => {}
                     Known::Unknown => excluded = Known::Unknown,
                 }
             }
