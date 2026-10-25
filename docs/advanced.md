@@ -333,7 +333,7 @@ Write these inside any comment:
 | `f(a, b)` | function call |
 | `a b` | join: values side by side join as text (`text "="`), or as lists if either is one (`[a] [b]`) |
 | `!a` `-a` `a * b` `a % b` `a + b` `a - b` | arithmetic (`text * n` repeats text) |
-| `== != < <= > >=` | comparisons (numbers compare numerically, even as text) |
+| `== != < <= > >=` | comparisons (numbers compare numerically, even as text; only null equals null, so a missing value is not `""`) |
 | `a && b`, `a \|\| b` | logic, short-circuiting |
 | `a ?? b` | lazy fallback for `null` only |
 | `value ~ pattern-item` | does the whole value match? (`text ~ /[a-z_]+/`, `text ~ snake`) |
@@ -1086,7 +1086,10 @@ Pattern children inside a native node fill the gaps between its other children. 
 that cost the most interpreter steps and the rules that cost the most time.
 Matchers that compile to a DFA never show up there; slow ones are usually
 nullable, use fields, or have no leading literal or lookaround to tell dxlint
-where they can start.
+where they can start. Counters are summed over files and threads. With
+`--format jsonl` the profile follows the diagnostics as records with a `kind`
+(`rule-profile`, `file-profile`, `attribute-profile`, ...); diagnostics have
+no `kind`.
 
 CLI linting skips compilation of off-rule bodies, unreachable functions and library attributes, and does not build tooling symbols. Layers only off rules need are not parsed.
 

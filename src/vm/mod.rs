@@ -156,9 +156,8 @@ impl V {
             (V::Bool(a), V::Bool(b)) => a == b,
             (V::Num(a), V::Num(b)) => a == b,
             (V::Num(a), text) | (text, V::Num(a)) => text.text(tree, source).is_some_and(|s| s.trim().parse::<f64>().is_ok_and(|b| b == a)),
-            // A node is present even when its text is empty (an array hole).
-            (V::Null, V::Node(_)) | (V::Node(_), V::Null) => false,
-            (V::Null, text) | (text, V::Null) => text.text(tree, source).is_some_and(str::is_empty),
+            // Only null is null: an empty string or node (an array hole) is present.
+            (V::Null, _) | (_, V::Null) => false,
             (a, b) => match (a.text(tree, source), b.text(tree, source)) {
                 (Some(a), Some(b)) => a == b,
                 _ => false,

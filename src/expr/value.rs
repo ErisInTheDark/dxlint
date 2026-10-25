@@ -275,7 +275,6 @@ impl<'s> Value<'s> {
             (Value::Node(..), Value::Null) | (Value::Null, Value::Node(..)) => false,
             (Value::Node(_, s), v) | (v, Value::Node(_, s)) => Value::Str(Text::Borrowed(s)).loose_eq(v),
             (Value::Num(a), Value::Str(s)) | (Value::Str(s), Value::Num(a)) => s.trim().parse::<f64>().is_ok_and(|b| b == *a),
-            (Value::Null, Value::Str(s)) | (Value::Str(s), Value::Null) => s.is_empty(),
             (Value::Str(a), Value::Str(b)) => a == b,
             (Value::List(a), Value::List(b)) => a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| x.loose_eq(y)),
             (Value::Record(a), Value::Record(b)) => {
