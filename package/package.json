@@ -1,6 +1,6 @@
 {
   "name": "@inthedark/dxlint",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Fast linter and fixer for TypeScript, JavaScript, Rust and more, with ESLint-compatible rules written in .dx",
   "license": "MIT",
   "repository": {
@@ -9,15 +9,26 @@
     "directory": "package"
   },
   "homepage": "https://github.com/ErisInTheDark/dxlint#readme",
-  "keywords": ["lint", "linter", "eslint", "typescript", "formatter"],
+  "keywords": [
+    "lint",
+    "linter",
+    "eslint",
+    "typescript",
+    "formatter"
+  ],
   "publishConfig": {
     "access": "public"
   },
   "engines": {
     "node": ">=18"
   },
-  "os": ["win32", "linux"],
-  "cpu": ["x64"],
+  "os": [
+    "win32",
+    "linux"
+  ],
+  "cpu": [
+    "x64"
+  ],
   "bin": {
     "dxlint": "bin/dxlint"
   },
