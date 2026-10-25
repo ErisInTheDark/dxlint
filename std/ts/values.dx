@@ -154,7 +154,7 @@ fn ts_value_string_array(n) = {
     value parts: filter(arm.parts, part => !contains(part.traits, "parameter"))
     value empty: any(parts, part => part.product_known && part.product != null && count(part.product.elements) == 0)
     value element: value_constituents(value_lookup(arm.handle, 0).member)
-    value count(parts) == 1 && (empty || element != null && count(element) > 0
+    value (count(parts) == 1 && empty) || (element != null && count(element) > 0
       && all(element, item => any(item, part => contains(part.traits, "string"))))
   })
 }
@@ -415,7 +415,14 @@ in ts_declarator {
   let ts_value_iteration_pattern name is (ts_array_pattern, ts_object_pattern) && parent is ts_for_of.left && parent.parent.modifier == null
   let ts_value_unique_symbol ts_value_unique_symbol_binding(node)
   let ts_value_evolving_array name is ts_identifier && type == null && init is ts_array && count(init.element.nodes) == 0
-  when ts_value_evolving_array {
+  # Read before any member use, an evolving `[]` is `any[]`; later pushes
+  # evolve it, which no recipe follows yet.
+  let ts_value_evolving_any ts_value_evolving_array && !any(name.references, reference => reference is (ts_member.object, ts_index.object))
+  when ts_value_evolving_any {
+    unwraps product ts_array of init using trait any repeated values ts_value_array_element
+    widens product ts_array of init using trait any repeated values ts_value_array_element
+  }
+  when ts_value_evolving_array && !ts_value_evolving_any {
     unwraps product ts_array of init using trait unknown repeated values ts_value_array_element
     widens product ts_array of init using trait unknown repeated values ts_value_array_element
   }

@@ -1,0 +1,4 @@
+import .ts
+rule restrict-template-expressions {
+  set allowArray true
+}
