@@ -4,7 +4,8 @@
 //   --publish --version <x.y.z>            pack, then npm publish that tarball, after checking the committed version
 // The library (std/, rules/), README.md and LICENSE are copied in from the
 // repository root for the pack and removed afterwards; the binaries in
-// package/bin are committed (scripts/build-binaries.mjs). The tarball's
+// package/bin are committed (scripts/build-binaries.mjs) and must match
+// package/source.sha256, or packing stops (scripts/binary-sources.mjs). The tarball's
 // executables are marked 0755 in the tarball itself, so a pack on any host
 // (Windows has no executable bit) ships the same package.
 import fs from "node:fs";
@@ -12,6 +13,7 @@ import path from "node:path";
 import zlib from "node:zlib";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { checkStamp } from "./binary-sources.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const packageDir = path.join(root, "package");
@@ -48,6 +50,7 @@ function withLibrary(run) {
   for (const binary of binaries) {
     if (!fs.existsSync(path.join(packageDir, "bin", binary))) throw new Error(`package/bin/${binary} is missing; run npm run build:binaries.`);
   }
+  checkStamp();
   try {
     for (const name of copied) {
       fs.cpSync(path.join(root, name), path.join(packageDir, name), { recursive: true });

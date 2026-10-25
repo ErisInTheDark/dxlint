@@ -6,6 +6,7 @@ Rust linter; rules in `.dx` (docs/advanced.md). Binary `dxlint`.
 
 - test: `cargo test` (stable Rust owners only: VM, parser, patterns/DFA, cache/reads, type APIs, CLI/LSP; rule behaviour lives in fixtures)
 - rule fixtures: `dxlint fixtures [paths...] [--bless]` (default `fixtures/`)
+- package binaries: `npm run build:binaries`; any change to `src/` or Cargo files ships with it in the same batch (publishing refuses binaries whose `package/source.sha256` stamp is stale)
 - self-lint: `cargo run --release --` (uses `.dx`); must stay clean
 - perf check: `dxlint --stats --no-cache <big file>`; compare before/after engine changes
 - CPU profile (Windows, no admin): env `DXLINT_SAMPLE=<report>` on a build with debug line tables; `DXLINT_SAMPLE_CALLERS=a;>b` adds callers of `a`, callees of `b`. Budget steps are not time: profile before trusting them
