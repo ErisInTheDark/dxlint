@@ -292,13 +292,15 @@ fn ts_value_nonthenable(n) = {
     value if parts == null || len(parts) == 0 || !shape.known then null else !shape.thenable
   }
 }
+# Read from certain traits: `always any` stays unknown for an open type
+# parameter, which would leave its intersections without a value.
+fn ts_value_dynamic_part(item) = {
+  value parts: value_constituents(item)
+  value parts != null && len(parts) > 0 && all(parts, arm => any(arm, part => contains(part.traits, "any")))
+}
 fn ts_value_intersection_parts(types) = {
   value never: filter(types, item => { value parts: value_constituents(item); value parts != null && len(parts) == 0 })
-  value dynamic: filter(types, item => {
-    value parts: value_constituents(item)
-    value parts != null && len(parts) > 0
-      && all(parts, arm => any(arm, part => contains(part.traits, "any")))
-  })
+  value dynamic: filter(types, item => ts_value_dynamic_part(item))
   value if len(never) > 0 then never else if len(dynamic) > 0 then dynamic else types
 }
 
@@ -339,11 +341,18 @@ in ts_string {
   identity js_string(text)
 }
 in ts_template {
+  # An element access types its template key as a template literal type:
+  # literal holes make it one literal key (`foo[`ba${"zz"}`]` reads `bazz`).
+  let ts_value_template_key if is ts_index.index && count(expression.nodes) > 0 then ts_value_template_text(node) else null
   when !(is ts_tagged_template.quasi) {
     fits string
     widens (trait string, truthy) | (trait string, falsy)
     fits falsy when count(expression.nodes) == 0 && text == "``"
     fits truthy when count(expression.nodes) == 0 && text != "``"
+    when type_of(ts_value_template_key) == "str" {
+      fits literal
+      identity ts_value_template_key
+    }
   }
   when is ts_tagged_template.quasi { unwraps instance "TemplateStringsArray" }
 }
@@ -436,6 +445,20 @@ in ts_declarator {
   }
   when !(name is (ts_identifier, ts_array_pattern, ts_object_pattern)) { unwraps unknown }
 }
+in ts_rest let ts_value_implicit_any false
+# No annotation, default or contextual type: TS's implicit `any`. Whether a
+# function expression has a contextual type is read from where it stands:
+# asking for its expected value would re-enter call selection.
+fn ts_value_uncontextual(f) = {
+  value holder: if f is ts_method then f.parent.node else f
+  value at: last(walk(holder, item => if item.parent is ts_parenthesized then item.parent.node else null))
+  value at.parent is (ts_expression_statement, ts_program, ts_block, ts_export)
+    || at is ts_declarator.init && at.parent.type == null
+}
+in ts_parameter let ts_value_implicit_any type == null && init == null && name is ts_identifier && (
+  parent is (ts_method_signature, ts_function_type, ts_call_signature)
+  || parent is ts_method && parent.parent not ts_object
+  || parent is (ts_arrow, ts_function, ts_method) && (count(parent.type_parameter.nodes) > 0 || ts_value_uncontextual(parent.node)))
 in ts_parameter, ts_rest {
   let ts_value_pattern_rest node is ts_rest && parent is (ts_array_pattern, ts_object_pattern)
   when !ts_value_pattern_rest { pack ts_tuple }
@@ -446,11 +469,12 @@ in ts_parameter, ts_rest {
   # contextual type re-enters call selection after every budget cut.
   let ts_value_contextual_parameter (parent is (ts_arrow, ts_function) || parent is ts_method && parent.parent is ts_object)
     && (name is ts_identifier || name is ts_rest) && count(parent.type_parameter.nodes) == 0
-  when parent not ts_tuple_type && ts_value_contextual_parameter && !ts_value_pattern_rest {
+  when parent not ts_tuple_type && ts_value_implicit_any { fits any open }
+  when parent not ts_tuple_type && ts_value_contextual_parameter && !ts_value_pattern_rest && !ts_value_implicit_any {
     when optional != null { unwraps (type ?? expected ?? unknown) | trait undefined, nullable, falsy, nonthenable }
     when optional == null { unwraps type ?? expected ?? init.widened ?? unknown }
   }
-  when parent not ts_tuple_type && !ts_value_contextual_parameter && !ts_value_pattern_rest {
+  when parent not ts_tuple_type && !ts_value_contextual_parameter && !ts_value_pattern_rest && !ts_value_implicit_any {
     when optional != null { unwraps (type ?? unknown) | trait undefined, nullable, falsy, nonthenable }
     when optional == null { unwraps type ?? init.widened ?? unknown }
   }
@@ -930,7 +954,7 @@ in ts_type_parameter {
 in ts_union { unwraps ...type }
 in ts_intersection {
   let ts_value_intersection ts_value_intersection_parts(type.nodes)
-  let ts_value_dynamic_intersection any(ts_value_intersection, item => item always any)
+  let ts_value_dynamic_intersection any(ts_value_intersection, item => ts_value_dynamic_part(item))
   when ts_value_dynamic_intersection { unwraps &...ts_value_intersection }
   when !ts_value_dynamic_intersection {
     fits intersection
@@ -1083,6 +1107,24 @@ fn ts_value_intrinsic_text(name, text) = if name == "Uppercase" then upper(text)
     value if utf16_len(head) > 1 then text
       else (if name == "Capitalize" then upper(head) else lower(head)) slice(text, 1)
   }
+fn ts_value_template_piece(quasi) = {
+  value raw: quasi.text
+  value end: if ends_with(raw, "${{") then len(raw) - 2 else len(raw) - 1
+  value js_string_parts("`" slice(raw, 1, end) "`").text
+}
+fn ts_value_template_hole(n) = {
+  value arms: value_parts(n)
+  value parts: if count(arms ?? []) == 1 then first(arms).parts else []
+  value part: if count(parts) == 1 then first(parts) else null
+  value if part.identity_known && part.identity.kind == "value" && contains(["str", "num"], type_of(part.identity.value))
+    then "" part.identity.value else null
+}
+fn ts_value_template_text(n) = {
+  value pieces: map(n.quasi.nodes, quasi => ts_value_template_piece(quasi))
+  value holes: map(n.expression.nodes, hole => ts_value_template_hole(hole))
+  value if any(holes, hole => hole == null) then null
+    else first(pieces) join(map(zip(holes, slice(pieces, 1)), pair => first(pair) get(pair, 1)), "")
+}
 fn ts_value_intrinsic_literal(n) = {
   value arms: value_parts(n)
   value parts: if count(arms ?? []) == 1 then first(arms).parts else []
