@@ -195,7 +195,9 @@ pub(super) fn constrained_arguments(at: Leaf, through: Option<Leaf>, formals: &[
         if dynamic_fits(&bound, argument, values) { continue }
         match values.calls().accepts(&bound, argument) {
             Known::Yes(true) => {}
-            Known::Unknown if locked[position] => return Known::Unknown,
+            // A written argument TypeScript instantiates with whatever its
+            // bound says: an unprovable one keeps the call.
+            Known::Unknown if locked[position] => {}
             Known::Yes(false) if locked[position] => return Known::Yes(None),
             // An inferred argument its constraint doesn't (provably) accept
             // falls back to the constraint, as TypeScript does: the call

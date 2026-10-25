@@ -933,6 +933,8 @@ in ts_type_reference {
   when !ts_value_unresolved_type && !ts_value_missing_arguments && name not ts_qualified_name { unwraps &...name.definition }
 }
 in ts_type_query {
+  # `typeof f<T>` instantiates `f`'s own type parameters.
+  arguments type_argument
   when name is ts_qualified_name { unwraps name }
   when name not ts_qualified_name { unwraps name.definition }
 }
