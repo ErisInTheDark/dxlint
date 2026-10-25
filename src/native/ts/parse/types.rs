@@ -515,23 +515,27 @@ impl<'s> Parser<'s> {
         Ok(self.finish(Kind::CallSig, start, kids))
     }
 
-    /// `[key: string]: T` (modifiers already in `kids`).
+    /// `[key: string]: T` (modifiers already in `kids`). Several parameters
+    /// are a type error, not a syntax error.
     pub(super) fn index_sig(&mut self, start: u32, mut kids: Kids) -> PResult<u32> {
         self.expect("[")?;
-        let pstart = self.start();
-        if self.tok.tok != Tok::Ident {
-            return self.fail("expected an index signature parameter");
+        loop {
+            let pstart = self.start();
+            if self.tok.tok != Tok::Ident {
+                return self.fail("expected an index signature parameter");
+            }
+            let name = self.leaf(Kind::Ident);
+            let optional = if self.is("?") { Some(self.token_text()) } else { None };
+            self.expect(":")?;
+            let t = self.type_()?;
+            let mut p = Kids::default();
+            p.add(Field::Name, name);
+            p.opt(Field::Optional, optional);
+            p.add(Field::Type, t);
+            let param = self.finish(Kind::Param, pstart, p);
+            kids.add(Field::Param, param);
+            if !self.eat(",") || self.is("]") { break; }
         }
-        let name = self.leaf(Kind::Ident);
-        let optional = if self.is("?") { Some(self.token_text()) } else { None };
-        self.expect(":")?;
-        let t = self.type_()?;
-        let mut p = Kids::default();
-        p.add(Field::Name, name);
-        p.opt(Field::Optional, optional);
-        p.add(Field::Type, t);
-        let param = self.finish(Kind::Param, pstart, p);
-        kids.add(Field::Param, param);
         self.expect("]")?;
         if self.eat(":") {
             let t = self.type_()?;

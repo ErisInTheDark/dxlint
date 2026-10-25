@@ -141,6 +141,14 @@ fn declarations_and_types() {
 }
 
 #[test]
+fn index_signatures_take_several_parameters() {
+    let parsed = parse("type T = { [a: string, b: number]: string };", false).unwrap();
+    let signature = parsed.nodes.iter().find(|node| node.matcher == Kind::IndexSig as u32).expect("index signature");
+    let parameters = signature.children.iter().filter(|edge| parsed.nodes[edge.node as usize].matcher == Kind::Param as u32).count();
+    assert_eq!(parameters, 2);
+}
+
+#[test]
 fn tokens_rules_point_at() {
     // `catch` and `=>` are where eslint reports; `new X!(a)` keeps its args.
     assert_eq!(dump("try {} catch (e) {}"), "try(block={} kind=catch parameter=e handler={})");
