@@ -178,7 +178,13 @@ fn promise_inherited_void_targets(n) = {
     value headers: value_constructors(owner.extends.node)
     value map(flat_map(headers ?? [], arm => arm), header => {heritage: owner.extends.node, value: header.result})
   } else []
-  value targets: map(declared, heritage => {heritage: heritage, value: heritage}) constructed
+  # An interface extending a constructor type (`typeof C`) is checked
+  # against the instances it constructs too, as TypeScript ESLint does.
+  value instances: if owner is ts_interface then flat_map(owner.extends.nodes, heritage => {
+    value headers: value_constructors(heritage)
+    value map(flat_map(headers ?? [], arm => arm), header => {heritage: heritage, value: header.result})
+  }) else []
+  value targets: map(declared, heritage => {heritage: heritage, value: heritage}) constructed instances
   value filter(targets, target => target.value != null && {
     value lookup: value_lookup(target.value, n.static_name)
     value lookup.member != null && any(lookup.alternatives, alternative => alternative.matched
