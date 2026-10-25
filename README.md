@@ -21,7 +21,7 @@ warn: Promises must be awaited, end with a call to .catch, end with a call to .t
 
 ## Why
 
-- **Fast.** On a 2,000-file TypeScript codebase, on one core, a full run takes under half as long as ESLint, a cached run a fifth, in under a third of the memory.
+- **Fast.** On a 2,000-file TypeScript codebase, on one core, a full run takes under half as long as ESLint, a cached run a fifth, in about a third of the memory.
 - **Your ESLint rules.** 99.4% of ESLint's and typescript-eslint's own rule test cases give the same result. Type-aware rules read your `tsconfig.json` without running TypeScript.
 - **A cache you can trust.** `.dxcache` records everything a file's result depended on, other files included, so an edit re-checks exactly the files it affects.
 - **Rules are code you own.** Built-in rules are `.dx` files: override one, write your own in a few lines, or describe a whole new language.
@@ -78,7 +78,7 @@ One core (`--jobs 1`, both pinned to the same core, wall time, measured in one s
 | --- | --- | --- |
 | first run | 164 s | 72 s |
 | cached run, nothing changed | 4.4 s | 0.8 s |
-| peak memory | 2.0 GB | 0.6 GB |
+| peak memory (working set) | 2.0 GB | 0.7 GB |
 
 Note: This isn't a fair comparison because [eslint --cache doesn't work with typescript-eslint](https://typescript-eslint.io/troubleshooting/faqs/eslint/?utm_source=chatgpt.com#can-i-use-eslints---cache-with-typescript-eslint).
 
