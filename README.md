@@ -1,6 +1,6 @@
 # dxlint
 
-A fast linter and fixer for TypeScript, JavaScript, Rust and more. It ships ports of 400+ ESLint, typescript-eslint and ESLint Stylistic rules, the type-aware ones included, and every rule is written in a small language, `.dx`, that you can read, change or extend.
+let you and your agents own your linter
 
 ```dx
 import .ts
@@ -19,20 +19,20 @@ warn: Promises must be awaited, end with a call to .catch, end with a call to .t
   |   ^^^^^^^^^^^^^^^^^^^^^^
 ```
 
-## Why
+## another linter? ugh...
 
-- **Over 200× faster.** ESLint can't cache type-aware rules, so it re-checks every file on every run; dxlint only re-checks what changed. Even from scratch, it takes under half the time and about a third of the memory.
-- **Your ESLint rules.** 99.4% of ESLint's and typescript-eslint's own rule test cases give the same result. Type-aware rules read your `tsconfig.json` without running TypeScript.
-- **A cache you can trust.** `.dxcache` records everything a file's result depended on, other files included, so an edit re-checks exactly the files it affects.
-- **Rules are code you own.** Built-in rules are `.dx` files: override one, write your own in a few lines, or describe a whole new language.
+- **it's over 200× faster than eslint+typescript-eslint.** because apples to apples requires eslint *without* its caching enabled, and dxlint's cache is intrinsic. (even without that, it's also twice as fast and significantly less memory hungry)
+- **and it has almost perfect eslint parity.** 99.4% of eslint's and typescript-eslint's test cases give the same result. type-aware rules read your `tsconfig.json` *without running typescript*
+- **everything is overrideable, you own it all.** built-in rules are `.dx` files: override them, tweak them, write your own, or describe a whole new language
+- **plus a high quality vscode extension too!** extremely fast, with diagnostics, with a proper `.dx` lsp
 
-## Getting started
+## getting started
 
 ```sh
 npm install --save-dev @inthedark/dxlint
 ```
 
-Put a `.dx` at your project root:
+put a `.dx` at your project root:
 
 ```dx
 import .ts
@@ -48,13 +48,15 @@ ignore "dist" "src/generated/**"
 | `dxlint rules` | list every rule with its options |
 | `dxlint describe <name>` | explain a rule, option or anything else in the config |
 
-Exit code 1 means errors were found, 2 means the config is broken. Add `.dxcache` to `.gitignore`.
+exit code 1 means errors were found, 2 means the config is broken.&nbsp;
 
-Next: [docs/basic.md](docs/basic.md) and [the rule list](docs/rules/README.md).
+don't forget to add `.dxcache` to `.gitignore`!!!
 
-## The language
+for more on the basics: [docs/basic.md](docs/basic.md) and [the rule list](docs/rules/README.md).
 
-A rule is a few lines of `.dx`: where to look, when it is wrong, and optionally the fix.
+## the language
+
+a rule is a few lines of `.dx`: where to look, when it is wrong, and optionally the fix
 
 ```dx
 import .ts
@@ -66,13 +68,9 @@ in ts_call.callee rule no-alert-calls error "use the notification service instea
 
 [docs/advanced.md](docs/advanced.md) covers the whole language, from rules over the built-in syntax trees to defining your own languages. [docs/ts.md](docs/ts.md) covers what the TypeScript library understands: scopes, modules, types and narrowing.
 
-## Editors
+## performance
 
-`dxlint lsp` is a language server: diagnostics as you type, quick fixes, fix-all, and for `.dx` files hover, go to definition, references, completion and an outline. The VS Code extension is in [editors/vscode](editors/vscode).
-
-## Performance
-
-One core (`--jobs 1`, both pinned to the same core, wall time, measured in one session), wayward (2,094 TypeScript files, its full ESLint config ported, type-aware rules included):
+one core (`--jobs 1`, both pinned to the same core, wall time, measured in one session), on a project with 2,094 .ts files, its complex custom eslint config ported, type-aware rules included:
 
 | | ESLint | dxlint |
 | --- | --- | --- |
@@ -80,6 +78,6 @@ One core (`--jobs 1`, both pinned to the same core, wall time, measured in one s
 | cached run, nothing changed | 4.4 s | 0.8 s |
 | peak memory (working set) | 2.0 GB | 0.7 GB |
 
-Note: This isn't a fair comparison because [eslint --cache doesn't work with typescript-eslint](https://typescript-eslint.io/troubleshooting/faqs/eslint/?utm_source=chatgpt.com#can-i-use-eslints---cache-with-typescript-eslint).
+and remember: this isn't a fair comparison because [eslint --cache doesn't work with typescript-eslint](https://typescript-eslint.io/troubleshooting/faqs/eslint/?utm_source=chatgpt.com#can-i-use-eslints---cache-with-typescript-eslint)!&nbsp;
 
-By default dxlint uses every core.
+also note that by default dxlint uses every core, and is significantly better at that than eslint+typescript-eslint due to no reliance on typescript itself
