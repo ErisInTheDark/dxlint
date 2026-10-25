@@ -1008,7 +1008,7 @@ in ts_conditional_type {
     value if bare is ts_type_reference && count(bare.type_argument.nodes) == 0 && bare.name is ts_identifier
       then find(map(name_binding(bare.name.node).declarations, declaration => declaration.parent.node), item => item is ts_type_parameter) else null
   }
-  let ts_value_conditional_dynamic check always any
+  let ts_value_conditional_dynamic ts_value_has_trait(check.node, "any") == true || check always any
   when ts_value_conditional_formal != null {
     when ts_value_conditional_dynamic { unwraps select check against extends then consequent else alternate distribute ts_value_conditional_formal dynamic both }
     when !ts_value_conditional_dynamic { unwraps select check against extends then consequent else alternate distribute ts_value_conditional_formal }
