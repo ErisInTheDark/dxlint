@@ -33,7 +33,7 @@ in rs_code match rs_unwrap /\.unwrap\(\)/ {
   rule no-unwrap {
     when rs_test_module == null
     warn "`.unwrap()` outside tests; use `?` or `.expect(\"why\")`"
-    ignore "tests.rs" "tests/**"
+    ignore "tests.rs" "*_tests.rs" "tests/**"
   }
 }
 
@@ -56,8 +56,12 @@ in rs_code match rs_front_end_path /\bnative::(?:ts\b|\{)/ {
   }
 }
 
+# Foreign functions keep the name their library exports.
+in .rust, braces match rs_extern_block /\bextern[ \t]+"[^"]*"\s*/ body:braces
 in rs_code match rs_function /\bfn[ \t]+/ name:identifier
-in rs_function.name rule fn-snake-case warn "function names are snake_case" fix as snake_case(text)
+in rs_function.name rule fn-snake-case warn "function names are snake_case" fix as snake_case(text) {
+  when rs_extern_block == null
+}
 
 in rs_line_comment, rs_block_comment match todo_note /\b(?:TODO|FIXME|XXX)\b/ {
   rule todo-comment info "{text} left in a comment"
