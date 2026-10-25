@@ -790,10 +790,13 @@ in ts_member {
   let ts_value_member_key ts_value_key(property.node)
   let ts_value_member_nullish in_optional_chain == true && object could nullable
     || ts_value_optional_member(node, ts_value_member_key)
-  when object always any { unwraps object }
-  when !(object always any) {
-    when !ts_value_member_nullish { unwraps (object \ nullable, undefined).[ts_value_member_key] }
-    when ts_value_member_nullish { unwraps (object \ nullable, undefined).[ts_value_member_key] | trait undefined, nullable, falsy, nonthenable }
+  # `always any` stays open for a type parameter; one whose parts are
+  # certainly not `any` (its constraint's) reads its members.
+  let ts_value_member_any if ts_value_has_trait(object.node, "any") == false then false else object always any
+  when ts_value_member_any { unwraps object }
+  when !ts_value_member_any {
+    when !ts_value_member_nullish { unwraps (object \ null, undefined).[ts_value_member_key] }
+    when ts_value_member_nullish { unwraps (object \ null, undefined).[ts_value_member_key] | trait undefined, nullable, falsy, nonthenable }
   }
 }
 fn ts_value_unchecked_index(n) = {
