@@ -718,11 +718,22 @@ impl Values<'_> {
             let Some(names) = self.world.names(node.file) else { return Known::Unknown };
             let Some(tree) = self.world.tree(node.file) else { return Known::Unknown };
             let Some(text) = self.world.text(node.file) else { return Known::Unknown };
-            for scope in names.index(tree, text, &|text| self.world.name_key(node.file, text)).opened(node.node) {
-                if !self.question.budget.step() { return Known::Unknown }
-                if names.scopes[scope as usize].classes & classes == 0 { continue }
-                let leaf = Leaf { target: Target::Scope(ScopeRef { file: node.file, scope }), frame: site.frame };
-                if !leaves.contains(&leaf) { leaves.push(leaf) }
+            let index = names.index(tree, text, &|text| self.world.name_key(node.file, text));
+            let opened = |declared: u32| index.opened(declared).filter(|&scope| names.scopes[scope as usize].classes & classes != 0);
+            // A declaration that opens none of these scopes reads the
+            // declarations merged into it: a namespace declared after its
+            // type alias or interface.
+            let owner = |name: u32| names.declared.get(&name).map_or(name, |&(_, owner, ..)| owner);
+            let mut owners = vec![node.node];
+            if opened(node.node).next().is_none() {
+                owners.extend(names.merged.iter().filter(|&(_, &first)| owner(first) == node.node).map(|(&later, _)| owner(later)));
+            }
+            for declared in owners {
+                for scope in opened(declared) {
+                    if !self.question.budget.step() { return Known::Unknown }
+                    let leaf = Leaf { target: Target::Scope(ScopeRef { file: node.file, scope }), frame: site.frame };
+                    if !leaves.contains(&leaf) { leaves.push(leaf) }
+                }
             }
         }
         Known::Yes(leaves)
