@@ -1,7 +1,7 @@
 {
   "name": "@inthedark/dxlint",
   "version": "0.1.2",
-  "description": "Fast linter and fixer for TypeScript, JavaScript, Rust and more, with ESLint-compatible rules written in .dx",
+  "description": "let you and your agents own your linter",
   "license": "MIT",
   "repository": {
     "type": "git",

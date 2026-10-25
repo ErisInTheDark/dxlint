@@ -1,7 +1,7 @@
 {
   "name": "dxlint",
   "displayName": "dxlint",
-  "description": "dxlint diagnostics, fixes and formatting as you type, plus language support for .dx rule files",
+  "description": "let you and your agents own your linter",
   "version": "0.1.1",
   "publisher": "ErisInTheDark",
   "license": "MIT",
