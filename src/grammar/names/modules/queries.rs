@@ -190,8 +190,10 @@ impl<'a> Queries<'a> {
             loop {
                 self.spend()?;
                 let node = NodeRef { file: name.file, node: at };
-                let kind = self.semantic.tables.kinds.get(tree.nodes.get(at as usize).ok_or(())?.matcher as usize).ok_or(())?;
-                for item in &kind.modules.items {
+                // Raw text nodes carry no kind items: walk on to their owner.
+                let items = self.semantic.tables.kinds.get(tree.nodes.get(at as usize).ok_or(())?.matcher as usize)
+                    .map_or(&[][..], |kind| &kind.modules.items[..]);
+                for item in items {
                     let Action::Resolves { classes, asks, binding, module, imported } = &item.action else { continue };
                     if !self.holds(node, item.when)? { continue }
                     let bindings = self.operand(node, *binding)?;
@@ -1043,6 +1045,21 @@ mod tests {
         assert_eq!(semantic.modules().namespace_members(ScopeRef { file: 0, scope: 0 }, "X", 1), Known::Yes(Some(vec![target(0)])));
         assert_eq!(semantic.modules().export_names(ScopeRef { file: 0, scope: 0 }), Known::Yes(vec!["X".into()]));
         assert_eq!(semantic.modules().global(0, "X", 1), Known::Yes(vec![target(0), target(1)]));
+    }
+
+    #[test]
+    fn definitions_walk_past_raw_text_nodes() {
+        let mut files = Files::new();
+        files.trees[0] = Tree::from_native(vec![
+            Node { matcher: 0, start: 0, end: 3, children: vec![Edge { label: 0, node: 1 }, Edge { label: 0, node: 2 }] },
+            Node { matcher: 1, start: 0, end: 1, children: Vec::new() },
+            Node { matcher: crate::grammar::parse::TEXT, start: 2, end: 3, children: Vec::new() },
+        ], 0);
+        files.names[0].declared.insert(2, (0, 0, 1, true));
+        let tables = tables(false);
+        let question = QueryContext::default();
+        let semantic = Semantic::new(&files, &tables, &question);
+        assert_eq!(semantic.modules().definition(NodeRef { file: 0, node: 2 }, 1), Known::Yes(None));
     }
 
     #[test]
