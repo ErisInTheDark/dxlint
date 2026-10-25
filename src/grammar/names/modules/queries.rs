@@ -982,7 +982,7 @@ mod tests {
             let answer = semantic.modules().global(0, "X", 1);
             while semantic.question.budget.step() {}
             answer
-        }), expected);
+        }), Known::Unknown);
         assert_eq!(session.run(&files, &tables, |semantic| semantic.modules().global(0, "X", 1)), expected);
         assert_eq!(files.condition_queries.get(), 2);
         files.condition = Known::Yes(false);

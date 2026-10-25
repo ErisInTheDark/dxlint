@@ -107,6 +107,8 @@ impl Session {
             }
             semantic.effects.rollback();
             semantic.defects.borrow_mut().clear();
+            // Whatever was half built when the budget ran out is not an answer.
+            return Known::Unknown;
         }
         answer
     }
@@ -514,6 +516,28 @@ mod tests {
         world.revision.set(2);
         assert_eq!(session.run(&world, &linter.grammar.names, |semantic| semantic.values().fits(at, trait_id)), Known::Yes(true));
         assert_eq!(world.conditions.get(), before + 2);
+    }
+
+    #[test]
+    fn root_questions_cut_short_answer_unknown_whatever_they_built() {
+        let linter = crate::engine::tests::linter("");
+        let tree = crate::grammar::Tree::parse_with(&linter.grammar, 0, "()", None, None);
+        let world = CountingWorld { grammar: &linter.grammar, tree: &tree, conditions: Cell::new(0), cut: Cell::new(0), revision: Cell::new(0), profile: None };
+        let session = Session::default();
+        assert_eq!(session.run(&world, &linter.grammar.names, |semantic| {
+            while semantic.question.budget.step() {}
+            Known::Yes(0)
+        }), Known::Unknown);
+        assert_eq!(session.run(&world, &linter.grammar.names, |semantic| {
+            let mut guards = Vec::new();
+            while let Some(guard) = semantic.question.budget.nest() { guards.push(guard); }
+            drop(guards);
+            Known::Yes(0)
+        }), Known::Unknown);
+        assert_eq!(session.run(&world, &linter.grammar.names, |semantic| {
+            assert!(semantic.question.budget.step());
+            Known::Yes(0)
+        }), Known::Yes(0));
     }
 
     #[test]

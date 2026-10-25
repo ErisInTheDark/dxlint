@@ -412,12 +412,12 @@ mod tests {
             role_classes(semantic, at, &args)
         }), Known::Unknown);
         assert_eq!(session.run(&world, &tables, |semantic| role_classes(semantic, at, &args)), expected_classes);
-        for _ in 0..2 {
+        for exhaust in [true, false, false] {
             assert_eq!(session.run(&world, &tables, |semantic| {
                 let frame = semantic.question.bind(FrameId::ROOT, NodeRef::here(0), Some(at), None);
-                while semantic.question.budget.step() {}
+                if exhaust { while semantic.question.budget.step() {} }
                 role_classes(semantic, Leaf { frame, ..at }, &args)
-            }), expected_classes);
+            }), if exhaust { Known::Unknown } else { expected_classes.clone() });
         }
     }
 

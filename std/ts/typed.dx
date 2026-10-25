@@ -107,7 +107,7 @@ in ts_throw.argument rule only-throw-error {
   option allowRethrowing boolean = true "Allow rethrowing catch and Promise rejection parameters"
   option allowThrowingAny boolean = true "Allow any values"
   option allowThrowingUnknown boolean = true "Allow unknown values"
-  when ts_error_value.kind != "error"
+  when ts_error_value.kind != null && ts_error_value.kind != "error"
   when !allowRethrowing || !ts_error_value.rethrown
   when !allowThrowingAny || ts_error_value.kind != "any"
   when !allowThrowingUnknown || ts_error_value.kind != "unknown"
