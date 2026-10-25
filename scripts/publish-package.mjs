@@ -1,12 +1,15 @@
 // Prepares and publishes the npm package in package/.
 //   --prepare-version [--version <x.y.z>]  bump (or set) package/package.json's version; prints it
 //   --pack                                 npm pack into package/
-//   --publish --version <x.y.z>            npm publish, after checking the committed version
+//   --publish --version <x.y.z>            pack, then npm publish that tarball, after checking the committed version
 // The library (std/, rules/), README.md and LICENSE are copied in from the
 // repository root for the pack and removed afterwards; the binaries in
-// package/bin are committed (scripts/build-binaries.mjs).
+// package/bin are committed (scripts/build-binaries.mjs). The tarball's
+// executables are marked 0755 in the tarball itself, so a pack on any host
+// (Windows has no executable bit) ships the same package.
 import fs from "node:fs";
 import path from "node:path";
+import zlib from "node:zlib";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
@@ -15,6 +18,9 @@ const packageDir = path.join(root, "package");
 const manifestPath = path.join(packageDir, "package.json");
 const copied = ["std", "rules", "README.md", "LICENSE"];
 const binaries = ["dxlint-win32-x64.exe", "dxlint-linux-x64"];
+// Tarball entries that must be executable: the launcher and the Linux binary.
+const executables = ["package/bin/dxlint", "package/bin/dxlint-linux-x64"];
+const BLOCK = 512;
 
 function stableVersion(value) {
   const match = typeof value === "string" && /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.exec(value);
@@ -42,9 +48,6 @@ function withLibrary(run) {
   for (const binary of binaries) {
     if (!fs.existsSync(path.join(packageDir, "bin", binary))) throw new Error(`package/bin/${binary} is missing; run npm run build:binaries.`);
   }
-  // npm keeps the file mode in the tarball; git checkouts on Windows can drop it.
-  fs.chmodSync(path.join(packageDir, "bin", "dxlint-linux-x64"), 0o755);
-  fs.chmodSync(path.join(packageDir, "bin", "dxlint"), 0o755);
   try {
     for (const name of copied) {
       fs.cpSync(path.join(root, name), path.join(packageDir, name), { recursive: true });
@@ -53,6 +56,46 @@ function withLibrary(run) {
   } finally {
     for (const name of copied) fs.rmSync(path.join(packageDir, name), { recursive: true, force: true });
   }
+}
+
+// Sets the mode of `names` to 0755 in the gzipped tar at `file` (ustar
+// headers, with pax `path` records for long names).
+function markExecutable(file, names) {
+  const tar = zlib.gunzipSync(fs.readFileSync(file));
+  const marked = new Set();
+  let paxPath = null;
+  for (let at = 0; at + BLOCK <= tar.length;) {
+    const header = tar.subarray(at, at + BLOCK);
+    if (header.every(byte => byte === 0)) break;
+    const field = (start, length) => header.subarray(start, start + length).toString("latin1").replace(/\0[\s\S]*$/, "");
+    const size = parseInt(field(124, 12).trim() || "0", 8);
+    const type = field(156, 1);
+    const prefix = field(345, 155);
+    const name = paxPath ?? (prefix ? `${prefix}/${field(0, 100)}` : field(0, 100));
+    paxPath = null;
+    if (type === "x") {
+      paxPath = /(?:^|\n)\d+ path=([^\n]*)\n/.exec(tar.subarray(at + BLOCK, at + BLOCK + size).toString("utf8"))?.[1] ?? null;
+    } else if (names.includes(name)) {
+      header.write("0000755\0", 100, 8, "latin1");
+      header.fill(" ", 148, 156, "latin1");
+      const sum = header.reduce((total, byte) => total + byte, 0);
+      header.write(`${sum.toString(8).padStart(6, "0")}\0 `, 148, 8, "latin1");
+      marked.add(name);
+    }
+    at += BLOCK + Math.ceil(size / BLOCK) * BLOCK;
+  }
+  const missing = names.filter(name => !marked.has(name));
+  if (missing.length) throw new Error(`${path.basename(file)} has no ${missing.join(", ")}`);
+  fs.writeFileSync(file, zlib.gzipSync(tar, { level: 9 }));
+}
+
+// npm pack into package/, with executables marked; returns the tarball path.
+function pack() {
+  const { name, version } = readManifest();
+  const file = path.join(packageDir, `${name.replace(/^@/, "").replace("/", "-")}-${version}.tgz`);
+  withLibrary(() => npm(["pack", "--pack-destination", packageDir]));
+  markExecutable(file, executables);
+  return file;
 }
 
 function npm(args) {
@@ -69,11 +112,16 @@ function main(args) {
   if (mode === "--prepare-version") {
     process.stdout.write(`${prepareVersion(value)}\n`);
   } else if (mode === "--pack") {
-    withLibrary(() => npm(["pack", "--pack-destination", packageDir]));
+    pack();
   } else if (mode === "--publish") {
     const committed = readManifest().version;
     if (!value || committed !== value) throw new Error(`Expected version ${value}, package/package.json has ${committed}.`);
-    withLibrary(() => npm(["publish"]));
+    const file = pack();
+    try {
+      npm(["publish", file]);
+    } finally {
+      fs.rmSync(file, { force: true });
+    }
   } else {
     throw new Error("usage: see the header of scripts/publish-package.mjs");
   }
