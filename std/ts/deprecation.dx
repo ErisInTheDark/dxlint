@@ -52,11 +52,24 @@ fn import_deprecation_doc(n, site) = {
     doc => doc != null))
 }
 fn import_remote_sites(n, sites) = filter(sites ?? [], site => import_remote_site(n, site))
+# `export { /** @deprecated */ X }`: the specifier carries the documentation,
+# not `X`'s declaration. Found among the statements of the declaring file.
+fn import_specifier_docs(n, site, name) = {
+  value root: last(walk([site], current => site_parent(n, current)))
+  value exports: filter(site_field(n, root, "body") ?? [], statement => statement.kind == "ts_export")
+  value specifiers: flat_map(exports, statement => site_field(n, statement, "specifier") ?? [])
+  value named: filter(specifiers, specifier => {
+    value exported: first(site_field(n, specifier, "exported") ?? []) ?? first(site_field(n, specifier, "local") ?? [])
+    value exported != null && site_text(n, exported).text == name
+  })
+  value map(named, specifier => deprecation_leading_doc(site_text(n, specifier).leading))
+}
 fn import_deprecation_tag(n) = {
   value values: import_remote_sites(n, name_definitions(n, "value"))
   value types: if count(values) > 0 then [] else import_remote_sites(n, name_definitions(n, "type"))
   value sites: if count(values) > 0 then values else types
-  value deprecation_first(map(reverse(sites), site => import_deprecation_doc(n, site)))
+  value imported: name_binding(n).node.imported_name ?? n.text
+  value deprecation_first(flat_map(reverse(sites), site => [import_deprecation_doc(n, site)] import_specifier_docs(n, site, imported)))
 }
 fn deprecation_local_doc(n) = {
   value owner: find(walk([] n.declaration, current =>
@@ -133,7 +146,12 @@ fn deprecation_reason(n) = {
   value signatures: if call != null && selection != null && !selection.uncertain && count(selection.selected) == 1
     then selection.selected else []
   value docs: map(unique([] signatures owners), site => deprecation_doc(subject, site))
-  value own: deprecation_first([deprecation_local_doc(subject)] docs)
+  # A namespace import's member: the module's export specifiers may carry
+  # the tag (`imported.X` with `export { /** @deprecated */ X }`).
+  value namespace: subject is ts_member && subject.object is ts_identifier
+    && name_binding(subject.object.node).node is ts_import.namespace
+  value published: if namespace then flat_map(members, site => import_specifier_docs(subject, site, deprecation_symbols(subject).name)) else []
+  value own: deprecation_first([deprecation_local_doc(subject)] docs published)
   # A name bound by an import is deprecated where its module publishes it.
   value imported: if own == null && subject is ts_identifier && name_binding(subject).node.deprecation_import == true
     then import_deprecation_tag(subject) else null
