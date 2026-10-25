@@ -1,0 +1,12 @@
+import .ts
+rule * off
+ignore "**/tsconfig.json"
+
+in ts_expression_statement.expression rule product-allowance {
+  let entry if starts_with(text, "allowed") then "SafeArray" else "Element"
+  let actual type_value_allowed([{from: "file", name: entry}], node)
+  let expected if starts_with(text, "pending") then null else starts_with(text, "allowed")
+  when actual != expected
+  warn "Outer array and tuple allowances must not inherit element aliases."
+}
+rule product-allowance

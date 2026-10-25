@@ -1,0 +1,8 @@
+import .ts
+
+in ts_new rule constructor-constraints {
+  let member value_lookup(node, "buses").member
+  report at parent.name.node
+  info "{ value_parts(node) != null }/{ count(call_binding(node).choices) }/{ value_has_member(member, 0, null) }/{ value_has_member(member, 1, null) }"
+}
+rule constructor-constraints

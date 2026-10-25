@@ -1,0 +1,2 @@
+input.ts:3:11-3:15 switch-exhaustiveness-check#0
+input.ts:9:11-9:16 switch-exhaustiveness-check#0

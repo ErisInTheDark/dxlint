@@ -1,0 +1,26 @@
+import .ts
+
+fn template_assignment_string(source) = {
+  value alternatives: value_alternatives(source)
+  value parts: value_constituents(source)
+  value alternatives != null && count(alternatives) > 0
+    && parts != null && count(parts) > 0
+    && all(parts, arm => any(arm, part => contains(part.traits, "string")))
+}
+in ts_type_alias, ts_declarator rule template-type-value-contract {
+  let valid if node.name.text == "impossible" then value_alternatives(node) == []
+    else template_assignment_string(node)
+  when valid != true
+  report at node.name.node
+  warn "Template types and bindings must stay inhabited strings; explicit never stays empty."
+}
+in ts_assignment rule template-assignment-contract {
+  when node.operator == "="
+  let left template_assignment_string(node.left.node)
+  let right template_assignment_string(node.right.node)
+  let result template_assignment_string(node)
+  when left != true || right != true || result != true
+  warn "Template assignment must stay inhabited: left={left}, right={right}, result={result}."
+}
+rule template-type-value-contract
+rule template-assignment-contract

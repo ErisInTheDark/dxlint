@@ -1,0 +1,10 @@
+import .ts
+in ts_member rule member-value-contract {
+  let member_value_parts value_constituents(node)
+  let member_value_valid if object.text == "unconstrained" then member_value_parts == null
+    else if object.text == "conflict" then member_value_parts != null && count(member_value_parts) == 0
+    else member_value_parts != null && count(member_value_parts) > 0
+      && all(member_value_parts, arm => any(arm, part => contains(part.traits, "number")))
+  when !member_value_valid
+  warn "member value lost its constraint"
+}

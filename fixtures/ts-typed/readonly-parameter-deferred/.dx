@@ -1,0 +1,9 @@
+import .ts
+import .ts/typed/readonly-parameters
+rule prefer-readonly-parameter-types {
+  set allow [
+    { from: "package", name: "AllowedAlias", package: "not-this-file" },
+    { from: "file", name: "AllowedNested" },
+    { from: "lib", name: "LocalSymbol" },
+  ]
+}

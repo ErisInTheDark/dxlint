@@ -9,3 +9,12 @@ type Readonly<T> = { readonly [K in keyof T]: T[K] };
 interface Obj { id: number; }
 declare const readonly: Readonly<Obj>;
 const mutable = readonly as Obj;
+declare const named: Obj;
+const identical = named as Obj;
+type Box<T> = { value: T };
+declare const box: Box<number>;
+const sameBox = box as Box<number>;
+const different = box as Box<string>;
+declare const union: Obj | string;
+const sameUnion = union as Obj | string;
+const removedArm = union as Obj;

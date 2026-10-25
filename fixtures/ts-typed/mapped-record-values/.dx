@@ -1,0 +1,52 @@
+import .ts
+
+fn mapped_trait(source, key, trait) = {
+  value member: value_lookup(source, key).member
+  value parts: value_constituents(member)
+  value parts != null && count(parts) > 0
+    && all(parts, arm => any(arm, part => contains(part.traits, trait)))
+}
+fn mapped_literal(source, key, expected) = {
+  value parts: value_constituents(value_lookup(source, key).member)
+  value parts != null && count(parts) > 0 && all(parts, arm =>
+    any(arm, part => part.identity_known && part.identity.kind == "value" && part.identity.value == expected))
+}
+fn mapped_closed_empty(source) = {
+  value children: value_children(source, true, [])
+  value children != null && count(children) == 0 && value_has_member(source, "x", null) == false
+}
+fn mapped_optional_readonly(source) = {
+  value lookup: value_lookup(source, "x")
+  value value_constituents(lookup.member) != null && count(lookup.alternatives) > 0
+    && all(lookup.alternatives, arm => arm.matched == true && arm.required == false
+      && count(arm.sources) > 0 && all(arm.sources, site => contains(site.flags, "readonly")))
+    && ts_value_has_trait(lookup.member, "number") == true
+    && ts_value_has_trait(lookup.member, "undefined") == true
+}
+in ts_declarator rule mapped-record-contract {
+  let subject node.type.node
+  let valid if node.name.text == "finite" then mapped_trait(subject, "x", "number")
+      && mapped_trait(subject, "y", "number") && value_has_member(subject, "z", null) == false
+    else if node.name.text == "numeric" then mapped_trait(subject, 0, "string")
+      && mapped_trait(subject, 1, "string") && value_has_member(subject, 2, null) == false
+    else if node.name.text == "text" then mapped_trait(subject, "arbitrary", "boolean")
+      && value_children(subject, true, []) == null
+    else if node.name.text == "ordinal" then mapped_trait(subject, 17, "boolean")
+    else if node.name.text == "symbolic" then mapped_trait(subject, { domain: "symbol" }, "boolean")
+    else if node.name.text == "dependent" then mapped_literal(subject, "x", "x") && mapped_literal(subject, "y", "y")
+    else if node.name.text == "optional" || node.name.text == "picked" then mapped_optional_readonly(subject)
+      && value_has_member(subject, "y", null) == (node.name.text == "optional")
+    else if node.name.text == "pickedRequired" then mapped_trait(subject, "x", "number")
+      && value_has_member(subject, "y", null) == false
+      && all(value_lookup(subject, "x").alternatives, row => row.matched && row.required)
+    else if node.name.text == "pickedMutable" then mapped_trait(subject, "x", "number")
+      && all(value_lookup(subject, "x").alternatives, row => row.matched && row.required
+        && all(row.sources, source => !contains(source.flags, "readonly")))
+    else if node.name.text == "empty" then mapped_closed_empty(subject)
+    else if node.name.text == "opaque" then value_has_member(subject, "x", null) == null
+    else true
+  when valid != true
+  report at node.name.node
+  warn "Mapped members must preserve keys, values and modifiers for {node.name.text}."
+}
+rule mapped-record-contract

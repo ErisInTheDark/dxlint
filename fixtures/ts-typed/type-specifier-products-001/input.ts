@@ -1,0 +1,13 @@
+type Element = number;
+type SafeArray = number[];
+declare const deniedArray: number[];
+declare const deniedTuple: [number, string];
+declare const deniedElementAlias: Element[];
+declare const allowedAlias: SafeArray;
+declare function source(): number[];
+const pendingComputed = source();
+deniedArray;
+deniedTuple;
+deniedElementAlias;
+allowedAlias;
+pendingComputed;

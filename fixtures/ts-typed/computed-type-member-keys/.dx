@@ -1,0 +1,11 @@
+import .ts
+
+in ts_declarator rule computed-members {
+  when contains(["fromInterface", "fromLiteral"], name.text)
+  let method value_lookup(node, 0).member
+  let headers { value value_signatures(method) ?? []; flat_map (arm) arm }
+  let optional value_lookup(node, 1).member
+  report at name.node
+  info "{ count(headers) }/{ ts_value_has_trait(first(headers).result, 'number') }/{ ts_value_has_trait(optional, 'undefined') }"
+}
+rule computed-members
