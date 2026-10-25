@@ -49,6 +49,8 @@ pub enum Value {
     Has { key: Box<Value>, from: Option<Box<Value>> },
     /// The value's member keys, one literal leaf each (`keyof`).
     Keys { of: Box<Value> },
+    /// The nth type argument of the value's carriers.
+    Argument { index: u32, of: Box<Value> },
     Ordinal(u32),
     Instance { name: Box<str>, classes: u64, arguments: Vec<Value> },
     Select(Box<Selection>),
@@ -132,6 +134,7 @@ pub(in crate::grammar::names) fn lower_value(
             if is_has { Value::Has { key: part, from } } else { Value::Includes { value: part, from } }
         }
         Unwrap::Keys { of } => Value::Keys { of: Box::new(lower(of, vocabulary, errors)?) },
+        Unwrap::Argument { index, of } => Value::Argument { index: *index, of: Box::new(lower(of, vocabulary, errors)?) },
         Unwrap::Ordinal(index) => Value::Ordinal(*index),
         Unwrap::Instance { name, class, arguments } => {
             let classes = class_bits(&mut vocabulary.declaration_classes, std::slice::from_ref(class), errors)?;

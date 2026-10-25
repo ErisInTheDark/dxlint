@@ -1,4 +1,4 @@
-use super::{Carrier, Known, Leaf, NodeRef, Target, Values};
+use super::{Carrier, Known, Leaf, NodeRef, NodeValue, Target, Values};
 
 impl Values<'_> {
     pub fn carrier(&self, at: Leaf) -> Known<Option<Carrier>> {
@@ -6,6 +6,28 @@ impl Values<'_> {
         let at = self.modified_source(at).unwrap_or(at);
         let Known::Yes(at) = self.semantic.leaf(at) else { return Known::Unknown };
         self.memoized(&self.semantic.values.carriers, at, || self.direct_carrier(at))
+    }
+
+    /// `argument <index> of`: each alternative's carrier argument at
+    /// `index`. Every part of an alternative that carries a generic
+    /// declaration must agree (merged declarations share their arguments);
+    /// an alternative with none is unknown.
+    pub(super) fn carrier_argument(&self, value: &NodeValue, index: usize) -> NodeValue {
+        let NodeValue::Alternatives(rows) = value else { return NodeValue::Unknown };
+        let mut arguments = Vec::with_capacity(rows.len());
+        for row in rows {
+            let mut found: Option<NodeValue> = None;
+            for &leaf in row {
+                if !self.question.budget.step() { return NodeValue::Unknown }
+                let Known::Yes(carrier) = self.carrier(leaf) else { return NodeValue::Unknown };
+                let Some(argument) = carrier.and_then(|carrier| carrier.arguments.into_iter().nth(index)) else { continue };
+                if found.as_ref().is_some_and(|previous| previous != &argument) { return NodeValue::Unknown }
+                found = Some(argument);
+            }
+            let Some(argument) = found else { return NodeValue::Unknown };
+            arguments.push(argument);
+        }
+        self.combine(arguments, false)
     }
 
     fn direct_carrier(&self, at: Leaf) -> Known<Option<Carrier>> {

@@ -356,6 +356,11 @@ impl<'a, 'world> Run<'a, 'world> {
                 let value = if operand.exists { self.values.keys(&operand.value) } else { NodeValue::Unknown };
                 self.answers.push(Answer { exists: true, value });
             }
+            Value::Argument { index, of } => {
+                let operand = Run { values: self.values, tasks: vec![Task::Expression(at, of)], answers: Vec::new() }.run_answer();
+                let value = if operand.exists { self.values.carrier_argument(&operand.value, *index as usize) } else { NodeValue::Unknown };
+                self.answers.push(Answer { exists: true, value });
+            }
             Value::Instance { name, classes, arguments } => {
                 self.answers.push(Answer { exists: true, value: self.values.instance(at, name, *classes, arguments) });
             }

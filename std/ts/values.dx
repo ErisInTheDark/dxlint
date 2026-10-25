@@ -147,6 +147,14 @@ fn ts_value_array_rest(n) = {
   value arms != null && count(arms) > 0 && all(arms, arm =>
     any(arm.parts, part => contains(part.traits, "array") && !contains(part.traits, "tuple")))
 }
+# One alternative of the library's `Promise` and declarations merged into it
+# (not a subclass: its first type argument need not be what it resolves to).
+fn ts_value_lib_promise(n) = {
+  value arms: value_parts(n)
+  value arms != null && count(arms) == 1
+    && any(first(arms).parts, part => ts_value_builtin_part(part, n, ["Promise"]) == true)
+    && all(first(arms).parts, part => part.carrier.description.name == "Promise")
+}
 fn ts_value_string_array(n) = {
   value arms: value_parts(n)
   value ts_value_array_like(n) && all(arms, arm => {
@@ -648,8 +656,12 @@ in ts_call {
 }
 in ts_call, ts_new { arguments type_argument }
 in ts_await {
+  # The library's own `Promise<T>` awaits to `Awaited<T>` without relating
+  # it structurally to `{ then(onfulfilled: infer F) }`.
+  let ts_value_await_promise ts_value_lib_promise(argument.node)
   when argument always any { unwraps argument }
-  when !(argument always any) { unwraps instance "Awaited" of argument }
+  when !(argument always any) && ts_value_await_promise { unwraps instance "Awaited" of (argument 0 of argument) }
+  when !(argument always any) && !ts_value_await_promise { unwraps instance "Awaited" of argument }
 }
 in ts_yield { unwraps unknown }
 in ts_unary {

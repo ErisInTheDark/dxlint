@@ -77,6 +77,9 @@ pub enum Unwrap {
     Has { key: Box<Unwrap>, from: Option<Box<Unwrap>> },
     /// `keys of <value>`: the value's member keys, each a literal (`keyof`).
     Keys { of: Box<Unwrap> },
+    /// `argument <n> of <value>`: the nth type argument of the value's
+    /// generic carrier (`T` of `Promise<T>`), without relating structure.
+    Argument { index: u32, of: Box<Unwrap> },
     Ordinal(u32),
     /// An ordinary global declaration with ordered evaluated arguments.
     Instance { name: Name, class: Name, arguments: Vec<Unwrap> },

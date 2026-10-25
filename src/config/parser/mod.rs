@@ -969,6 +969,17 @@ impl<'a> Parser<'a> {
                 }
                 Some(Unwrap::Keys { of: Box::new(self.unwrap_value()?) })
             }
+            Tk::Ident if t.is_ident("argument") && self.ts.peek_raw(1).is_some_and(|token| token.kind == Tk::Num)
+                && self.ts.peek_raw(2).is_some_and(|token| token.is_ident("of")) => {
+                self.ts.next_raw();
+                let index = self.ts.next_raw()?;
+                let Ok(index) = index.text.parse::<u32>() else {
+                    self.error_here("expected a type argument index: `argument 0 of <value>`");
+                    return None;
+                };
+                self.ts.next_raw();
+                Some(Unwrap::Argument { index, of: Box::new(self.unwrap_unary()?) })
+            }
             Tk::Ident if t.is_ident("returned") && self.ts.peek_raw(1).is_some_and(|token| token.is_ident("default")) => {
                 self.ts.next_raw();
                 self.returned_value()
