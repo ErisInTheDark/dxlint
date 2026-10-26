@@ -4,7 +4,7 @@ Reports identifiers on a list of forbidden names. Use it to avoid vague names wh
 
 | | |
 | --- | --- |
-| Upstream | [`es-id-denylist`](https://eslint.org/docs/latest/rules/id-denylist) |
+| Upstream | [`id-denylist`](https://eslint.org/docs/latest/rules/id-denylist) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |

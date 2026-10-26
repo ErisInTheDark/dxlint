@@ -39,6 +39,8 @@ const second = 2;
 
 ## Options
 
+`max` is the default option: `rule shared-blank-lines set <value>` sets it.
+
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `max` | `int(0..)` | `2` | Maximum blank lines in a matched run. |

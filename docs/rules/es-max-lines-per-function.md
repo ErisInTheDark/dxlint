@@ -4,7 +4,7 @@ Reports functions with too many lines. Unlike a statement count, this catches lo
 
 | | |
 | --- | --- |
-| Upstream | [`es-max-lines-per-function`](https://eslint.org/docs/latest/rules/max-lines-per-function) |
+| Upstream | [`max-lines-per-function`](https://eslint.org/docs/latest/rules/max-lines-per-function) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |
@@ -39,6 +39,8 @@ function sum() {
 ```
 
 ## Options
+
+`max` is the default option: `rule es-max-lines-per-function set <value>` sets it.
 
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |

@@ -4,7 +4,7 @@ Put a switch's `default` clause after all its cases. This rule does not require 
 
 | | |
 | --- | --- |
-| Upstream | [`es-default-case-last`](https://eslint.org/docs/latest/rules/default-case-last) |
+| Upstream | [`default-case-last`](https://eslint.org/docs/latest/rules/default-case-last) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |

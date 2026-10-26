@@ -4,7 +4,7 @@ Requires regular expressions to use Unicode mode with a `u` or `v` flag. This gi
 
 | | |
 | --- | --- |
-| Upstream | [`es-require-unicode-regexp`](https://eslint.org/docs/latest/rules/require-unicode-regexp) |
+| Upstream | [`require-unicode-regexp`](https://eslint.org/docs/latest/rules/require-unicode-regexp) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |

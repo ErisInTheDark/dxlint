@@ -28,7 +28,7 @@ fn comparison_fix(source, n) = {
 }
 
 in ts_binary rule es-yoda {
-  option mode ("never" | "always") = "never" "literal comparison side"
+  default option mode ("never" | "always") = "never" "literal comparison side"
   option exceptRange boolean = false "allow parenthesised ordered range checks"
   option onlyEquality boolean = false "apply only to equality operators"
   when contains(["==", "===", "!=", "!==", "<", ">", "<=", ">="], operator)

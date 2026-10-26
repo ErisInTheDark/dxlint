@@ -4,7 +4,7 @@ Reports returned values in Promise executor functions. An executor's return valu
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-promise-executor-return`](https://eslint.org/docs/latest/rules/no-promise-executor-return) |
+| Upstream | [`no-promise-executor-return`](https://eslint.org/docs/latest/rules/no-promise-executor-return) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |

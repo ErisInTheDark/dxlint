@@ -23,7 +23,7 @@ in ts_import_attribute_comma {
 }
 in ts_comma, ts_import_attribute_comma let comma_style_checked comma_style_owner is comma_style_lists
 in ts_comma, ts_import_attribute_comma rule es-comma-style {
-  option style "last" | "first" = "last" "comma line position"
+  default option style "last" | "first" = "last" "comma line position"
   when if style == "last" then space_before.line_break else space_after.line_break
   when comma_style_checked
   when comma_style_owner not (ts_array, ts_array_pattern) || comma_style_previous != null
@@ -57,7 +57,7 @@ fn layout_attribute_sites(sites, style, policies) = {
   }) else []
 }
 in ts_array, ts_array_pattern, ts_object, ts_object_pattern, ts_function, ts_arrow, ts_method, ts_function_type, ts_call, ts_new, ts_import_call, ts_import, ts_export, ts_enum, ts_tuple_type, ts_class, ts_interface, ts_type_alias, ts_type_reference, ts_method_signature, ts_call_signature, ts_import_attributes rule es-comma-dangle {
-  option style trailing_comma_mode = "never" "trailing comma policy"
+  default option style trailing_comma_mode = "never" "trailing comma policy"
   option arrays trailing_comma_mode | null = null "array policy"
   option objects trailing_comma_mode | null = null "object policy"
   option functions trailing_comma_mode | null = null "parameter and argument policy"
@@ -95,7 +95,7 @@ in ts_variable_declaration let layout_semi_initializer parent is ts_for && offse
 in ts_semicolon let layout_semi_header if parent is ts_for then parent.init != null && (parent.test == null && previous_token not ts_semicolon || offset < parent.test.offset) || parent.test != null && offset >= parent.test.end_offset else parent.layout_semi_initializer.nonempty ?? false
 in ts_semicolon let layout_semi_statement parent is layout_semi_owner && end_offset == parent.end_offset
 in ts_semicolon rule es-semi-style {
-  option style "last" | "first" = "last" "semicolon line position"
+  default option style "last" | "first" = "last" "semicolon line position"
   when layout_semi_header || layout_semi_statement
   let semi_at_end style == "last" || layout_semi_header
   when if semi_at_end then position(offset).js_line != position(token(node, "before").end).js_line
@@ -167,7 +167,7 @@ fn layout_next_position_len(source, offset) = {
   value if char == "\r" && byte_char(source, offset + 1) == "\n" then 2 else byte_len(char)
 }
 in semicolon_statement rule es-semi {
-  option mode "always" | "never" = "always" "statement semicolon policy"
+  default option mode "always" | "never" = "always" "statement semicolon policy"
   option omitLastInOneLineBlock boolean = false "omit final semicolons in single-line blocks"
   option omitLastInOneLineClassBody boolean = false "omit final semicolons in single-line class bodies"
   option beforeStatementContinuationChars "always" | "any" | "never" = "any" "semicolons before continuation characters"

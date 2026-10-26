@@ -4,7 +4,7 @@ Reports `\8` and `\9` in string literals. These legacy escapes are unnecessary a
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-nonoctal-decimal-escape`](https://eslint.org/docs/latest/rules/no-nonoctal-decimal-escape) |
+| Upstream | [`no-nonoctal-decimal-escape`](https://eslint.org/docs/latest/rules/no-nonoctal-decimal-escape) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | `rules:suspicious`, `rules:recommended` |

@@ -59,7 +59,7 @@ fn comment_case_fix(n, body, mode) = {
 }
 in ts_comment let capitalized_comments_checked true
 @macro restriction_capitalized_comment_body {
-  option mode "always" | "never" = "always" "required initial letter case"
+  default option mode "always" | "never" = "always" "required initial letter case"
   option ignorePattern regex = "" "starting comment text to ignore"
   when capitalized_comments_checked
   when (if mode == "always" then restriction_comment_lowercase else restriction_comment_uppercase)

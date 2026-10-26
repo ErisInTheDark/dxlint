@@ -4,7 +4,7 @@ Reports references to names that have not been declared. This catches misspellin
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-undef`](https://eslint.org/docs/latest/rules/no-undef) |
+| Upstream | [`no-undef`](https://eslint.org/docs/latest/rules/no-undef) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | `rules:bugs` (error), `rules:recommended` |

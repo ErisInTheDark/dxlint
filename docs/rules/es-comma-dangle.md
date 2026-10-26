@@ -35,6 +35,8 @@ const item = { name: 'example' };
 
 ## Options
 
+`style` is the default option: `rule es-comma-dangle set <value>` sets it.
+
 `trailing_comma_mode` accepts `"never"`, `"always"`, `"always-multiline"`, `"only-multiline"` and `"ignore"`. `always-multiline` requires a comma when the last item and closing delimiter are on different lines; `only-multiline` merely permits it there.
 
 | Option | Type | Default | Meaning |

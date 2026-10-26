@@ -4,7 +4,7 @@ Requires object keys in alphabetical order. Case-sensitive ascending order is th
 
 | | |
 | --- | --- |
-| Upstream | [`es-sort-keys`](https://eslint.org/docs/latest/rules/sort-keys) |
+| Upstream | [`sort-keys`](https://eslint.org/docs/latest/rules/sort-keys) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |
@@ -32,6 +32,8 @@ const object = { a: 1, b: 2, c: 3 };
 ```
 
 ## Options
+
+`mode` is the default option: `rule es-sort-keys set <value>` sets it.
 
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |

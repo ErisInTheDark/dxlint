@@ -4,7 +4,7 @@ Reports functions created in loops that capture variables modified outside their
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-loop-func`](https://eslint.org/docs/latest/rules/no-loop-func) |
+| Upstream | [`no-loop-func`](https://eslint.org/docs/latest/rules/no-loop-func) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |

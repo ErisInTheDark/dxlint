@@ -4,7 +4,7 @@ Reports `javascript:` URLs in strings and template literals. These URLs execute 
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-script-url`](https://eslint.org/docs/latest/rules/no-script-url) |
+| Upstream | [`no-script-url`](https://eslint.org/docs/latest/rules/no-script-url) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |

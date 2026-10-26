@@ -33,6 +33,8 @@ const message = "short";
 
 ## Options
 
+`max` is the default option: `rule shared-max-line-length set <value>` sets it.
+
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `max` | `int(1..)` | `120` | Maximum characters per line. |

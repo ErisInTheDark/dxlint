@@ -18,14 +18,14 @@ in ts_binary rule es-no-compare-neg-zero {
 in ts_assignment let is_assignment true
 in ts_parenthesized let wraps_assignment expression.is_assignment == true
 in ts_if.test, ts_while.test, ts_do_while.test, ts_for.test, ts_conditional.test rule es-no-cond-assign {
-  option mode "except-parens" | "always" = "except-parens"
+  default option mode "except-parens" | "always" = "except-parens"
   when mode == "except-parens"
   when is ts_assignment || parent is ts_conditional && is ts_parenthesized && wraps_assignment == true
   report at unparenthesised_node(node)
   warn "Expected a conditional expression and instead saw an assignment."
 }
 in ts_assignment rule es-no-cond-assign:always {
-  option mode "except-parens" | "always" = "except-parens"
+  default option mode "except-parens" | "always" = "except-parens"
   let where if conditional_ancestor is ts_if then "an 'if' statement" else if conditional_ancestor is ts_while then "a 'while' statement" else if conditional_ancestor is ts_do_while then "a 'do...while' statement" else if conditional_ancestor is ts_for then "a 'for' statement" else "ConditionalExpression"
   when mode == "always" && conditional_ancestor != null
   warn "Unexpected assignment within {where}."

@@ -4,7 +4,7 @@ Reports holes in array literals, often caused by an accidental extra comma. A tr
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-sparse-arrays`](https://eslint.org/docs/latest/rules/no-sparse-arrays) |
+| Upstream | [`no-sparse-arrays`](https://eslint.org/docs/latest/rules/no-sparse-arrays) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | `rules:bugs` (error), `rules:recommended` |

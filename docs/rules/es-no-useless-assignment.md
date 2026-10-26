@@ -4,7 +4,7 @@ Reports assignments whose stored values are never read later. Unlike `es-no-unus
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-useless-assignment`](https://eslint.org/docs/latest/rules/no-useless-assignment) |
+| Upstream | [`no-useless-assignment`](https://eslint.org/docs/latest/rules/no-useless-assignment) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | `rules:suspicious`, `rules:recommended` |

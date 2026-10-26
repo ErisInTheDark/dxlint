@@ -4,7 +4,7 @@ Reports access to the obsolete SpiderMonkey `__iterator__` property. Use standar
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-iterator`](https://eslint.org/docs/latest/rules/no-iterator) |
+| Upstream | [`no-iterator`](https://eslint.org/docs/latest/rules/no-iterator) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |

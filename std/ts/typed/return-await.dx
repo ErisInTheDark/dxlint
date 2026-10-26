@@ -74,7 +74,7 @@ fn return_await_selected(result, mode) = result.certainty == "never" && result.a
   })
 
 in ts_function, ts_arrow, ts_method rule es-return-await {
-  option mode ("always" | "error-handling-correctness-only" | "in-try-catch" | "never") = "in-try-catch" "Await policy for returned promises"
+  default option mode ("always" | "error-handling-correctness-only" | "in-try-catch" | "never") = "in-try-catch" "Await policy for returned promises"
   when contains([] modifier, "async") && body != null
   let owner node
   let resources {

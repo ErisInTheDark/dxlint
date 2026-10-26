@@ -218,7 +218,7 @@ in ts_function let scoping_function_context {
   }
 }
 in ts_function rule es-func-names {
-  option mode "always" | "as-needed" | "never" = "always"
+  default option mode "always" | "as-needed" | "never" = "always"
   option generators "always" | "as-needed" | "never" | null = null "override policy for generators"
   let context scoping_function_context
   let policy if context.generator && generators != null then generators else mode
@@ -270,7 +270,7 @@ in ts_property, ts_class_property let scoping_name_destination
     property: true, commonjs: false, descriptor: if static_name == "value" then parent.scoping_descriptor_context else null, offset: offset}
 in ts_parenthesized let scoping_name_destination parent.scoping_name_destination
 in ts_function rule es-func-name-matching {
-  option mode "always" | "never" = "always"
+  default option mode "always" | "never" = "always"
   option considerPropertyDescriptor boolean = false
   option includeCommonJSModuleExports boolean = false
   let matched parent.scoping_name_destination
@@ -548,7 +548,7 @@ in ts_variable_declaration rule es-vars-on-top {
 }
 
 in ts_function rule es-no-inner-declarations {
-  option mode "functions" | "both" = "functions"
+  default option mode "functions" | "both" = "functions"
   option blockScopedFunctions "allow" | "disallow" = "allow"
   when parent is (ts_program, ts_block, ts_export, ts_if, ts_labeled, ts_while, ts_do_while, ts_for, ts_for_in, ts_for_of, ts_case)
   when !parent.scoping_body_root && parent not ts_export
@@ -556,7 +556,7 @@ in ts_function rule es-no-inner-declarations {
   warn "Move function declaration to { parent.scoping_declaration_body.nonempty ?? 'program' } root."
 }
 in ts_variable_declaration rule es-no-inner-declarations:variable {
-  option mode "functions" | "both" = "functions"
+  default option mode "functions" | "both" = "functions"
   option blockScopedFunctions "allow" | "disallow" = "allow"
   when mode == "both" && kind == "var" && !parent.scoping_body_root && parent not ts_export
   warn "Move variable declaration to { parent.scoping_declaration_body.nonempty ?? 'program' } root."
@@ -642,7 +642,7 @@ in ts_program.binding_declarations rule es-no-shadow {
 }
 
 in ts_identifier rule es-no-use-before-define {
-  option mode "always" | "nofunc" = "always"
+  default option mode "always" | "nofunc" = "always"
   option functions boolean = true "check function declarations"
   option classes boolean = true "check class declarations across execution contexts"
   option variables boolean = true "check variables across execution contexts"
@@ -735,14 +735,14 @@ in ts_variable_declaration {
   let scoping_iteration_binding is (ts_for_in.left, ts_for_of.left)
 }
 in ts_declarator rule es-init-declarations {
-  option mode "always" | "never" = "always"
+  default option mode "always" | "never" = "always"
   option ignoreForLoopInit boolean = false "allow initialized declarations in loop initializers"
   when name.declaration_kind != null && name.ambient != true && mode == "always" && init == null
   when !parent.scoping_iteration_binding
   warn "Variable '{name}' should be initialized on declaration."
 }
 in ts_declarator rule es-init-declarations:never {
-  option mode "always" | "never" = "always"
+  default option mode "always" | "never" = "always"
   option ignoreForLoopInit boolean = false "allow initialized declarations in loop initializers"
   when name.declaration_kind != null && name.ambient != true && mode == "never"
   when parent.kind != "const" && name.declaration_kind != "using"

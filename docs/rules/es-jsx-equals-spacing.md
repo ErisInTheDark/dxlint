@@ -34,6 +34,8 @@ Correct:
 
 ## Options
 
+`mode` is the default option: `rule es-jsx-equals-spacing set <value>` sets it.
+
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `mode` | `"always" \| "never"` | `"never"` | Require or forbid surrounding spaces. |

@@ -35,24 +35,26 @@ new Date();
 
 ## Options
 
+`mode` is the default option: `rule es-function-call-spacing set <value>` sets it.
+
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `mode` | `"always"` / `"never"` | `"never"` | Require or forbid invocation spacing. |
 | `allowNewlines` | `boolean` | `false` | Allow line breaks in `always` mode. |
-| `chain_before` | `boolean` | `true` | In `always` mode, require space before optional-call `?.`. |
-| `chain_after` | `boolean` | `true` | In `always` mode, require space after optional-call `?.`. |
+| `chainBefore` | `boolean` | `true` | In `always` mode, require space before optional-call `?.`. |
+| `chainAfter` | `boolean` | `true` | In `always` mode, require space after optional-call `?.`. |
 
 ```dx
 rule es-function-call-spacing {
   set mode "always"
-  set chain_before false
-  set chain_after true
+  set chainBefore false
+  set chainAfter true
 }
 ```
 
 ## Differences from upstream
 
 - The positional policy is named `mode`.
-- dxlint exposes optional-call spacing through `chain_before` and `chain_after`.
+- dxlint exposes optional-call spacing through `chainBefore` and `chainAfter`.
 
 Adapted from the [ESLint Stylistic](https://eslint.style/rules/function-call-spacing) documentation (MIT).

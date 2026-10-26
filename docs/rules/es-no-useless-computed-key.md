@@ -4,7 +4,7 @@ Reports literal property keys wrapped in unnecessary square brackets. Plain prop
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-useless-computed-key`](https://eslint.org/docs/latest/rules/no-useless-computed-key) |
+| Upstream | [`no-useless-computed-key`](https://eslint.org/docs/latest/rules/no-useless-computed-key) |
 | Needs types | no |
 | Fix | autofix |
 | Rulesets | none |

@@ -4,7 +4,7 @@ Prefer strict equality operators so comparisons do not silently coerce values. O
 
 | | |
 | --- | --- |
-| Upstream | [`es-eqeqeq`](https://eslint.org/docs/latest/rules/eqeqeq) |
+| Upstream | [`eqeqeq`](https://eslint.org/docs/latest/rules/eqeqeq) |
 | Needs types | no |
 | Fix | autofix |
 | Rulesets | `rules:style` |

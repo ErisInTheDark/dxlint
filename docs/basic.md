@@ -78,7 +78,8 @@ rule es-no-console off                  # off
 rule es-semi:always info                # one variant of a rule
 rule es-no-misused-promises             # a family: every variant
 rule es-no-misused-promises:spreads off # ...minus one
-rule es-brace-style:* {                 # options go in a block
+rule es-quotes set "single"             # a rule's default option, inline
+rule es-brace-style:* {                 # other options go in a block
   set style "stroustrup"
   set allowSingleLine true
 }
@@ -149,7 +150,7 @@ import ../.dx
 rule es-no-console off
 ```
 
-When `dxlint` walks into a folder that has its own `.dx`, it skips that folder and says so. Name the folder (`dxlint . packages/app`) to lint it too, with its own config. `-c` lints every named path with that one config. For rules that only differ by folder, `files` and `ignore` inside a rule block do the job without a second config.
+When `dxlint` walks into a folder that has its own `.dx`, it skips that folder and says so. Name the folder (`dxlint . packages/app`) to lint it too, with its own config. `-c` lints every named path with that one config.
 
 ## Language settings
 

@@ -34,6 +34,8 @@ Correct:
 
 ## Options
 
+`mode` is the default option: `rule es-jsx-quotes set <value>` sets it.
+
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `mode` | `"prefer-double" \| "prefer-single"` | `"prefer-double"` | Preferred attribute-string quote style. |

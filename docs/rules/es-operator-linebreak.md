@@ -35,6 +35,8 @@ const height = top +
 
 ## Options
 
+`mode` is the default option: `rule es-operator-linebreak set <value>` sets it.
+
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `mode` | `"before" \| "after" \| "none" \| null` | `null` | Operator placement; `null` uses the default after/before policy. |

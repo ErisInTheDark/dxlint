@@ -43,7 +43,7 @@ in multiple_space_gap rule es-no-multi-spaces {
 
 
 @macro layout_comment_policy {
-  option style "always" | "never" = "always" "spacing inside comment delimiters"
+  default option style "always" | "never" = "always" "spacing inside comment delimiters"
   option exceptions string[] = [] "repeated sequences exempt from spacing"
   option markers string[] = [] "comment prefix markers"
   let comment_block is ts_block_comment

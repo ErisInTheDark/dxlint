@@ -4,7 +4,7 @@ Reports comments beginning with warning terms such as `TODO` or `FIXME`. Use it 
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-warning-comments`](https://eslint.org/docs/latest/rules/no-warning-comments) |
+| Upstream | [`no-warning-comments`](https://eslint.org/docs/latest/rules/no-warning-comments) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |

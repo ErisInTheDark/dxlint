@@ -4,7 +4,7 @@ Reports calls to `Sync`-suffixed methods inside functions. Synchronous I/O can b
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-sync`](https://eslint.org/docs/latest/rules/no-sync) |
+| Upstream | [`no-sync`](https://eslint.org/docs/latest/rules/no-sync) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |

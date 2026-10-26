@@ -4,7 +4,7 @@ Reports array callbacks that fail to return a value where one is needed, such as
 
 | | |
 | --- | --- |
-| Upstream | [`es-array-callback-return`](https://eslint.org/docs/latest/rules/array-callback-return) |
+| Upstream | [`array-callback-return`](https://eslint.org/docs/latest/rules/array-callback-return) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |

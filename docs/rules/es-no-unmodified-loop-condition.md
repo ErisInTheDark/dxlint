@@ -4,7 +4,7 @@ Reports variables used in a loop condition but never modified in the loop. A for
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-unmodified-loop-condition`](https://eslint.org/docs/latest/rules/no-unmodified-loop-condition) |
+| Upstream | [`no-unmodified-loop-condition`](https://eslint.org/docs/latest/rules/no-unmodified-loop-condition) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |

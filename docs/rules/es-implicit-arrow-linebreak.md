@@ -37,6 +37,8 @@ Correct:
 
 ## Options
 
+`mode` is the default option: `rule es-implicit-arrow-linebreak set <value>` sets it.
+
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `mode` | `"beside" \| "below"` | `"beside"` | Keep the expression beside the arrow, or require it below. |

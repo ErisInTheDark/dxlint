@@ -4,7 +4,7 @@ Requires or forbids compound arithmetic and bitwise assignments such as `+=`. Lo
 
 | | |
 | --- | --- |
-| Upstream | [`es-operator-assignment`](https://eslint.org/docs/latest/rules/operator-assignment) |
+| Upstream | [`operator-assignment`](https://eslint.org/docs/latest/rules/operator-assignment) |
 | Needs types | no |
 | Fix | autofix |
 | Rulesets | none |
@@ -34,6 +34,8 @@ x[0] /= y;
 ```
 
 ## Options
+
+`mode` is the default option: `rule es-operator-assignment set <value>` sets it.
 
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |

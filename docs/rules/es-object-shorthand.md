@@ -4,7 +4,7 @@ Controls shorthand properties and methods in object literals. The default prefer
 
 | | |
 | --- | --- |
-| Upstream | [`es-object-shorthand`](https://eslint.org/docs/latest/rules/object-shorthand) |
+| Upstream | [`object-shorthand`](https://eslint.org/docs/latest/rules/object-shorthand) |
 | Needs types | no |
 | Fix | autofix |
 | Rulesets | none |
@@ -32,6 +32,8 @@ const foo = { x, run() {} };
 ```
 
 ## Options
+
+`mode` is the default option: `rule es-object-shorthand set <value>` sets it.
 
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |

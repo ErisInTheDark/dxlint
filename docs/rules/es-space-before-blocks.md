@@ -37,6 +37,8 @@ if (ready) {
 
 ## Options
 
+`style` is the default option: `rule es-space-before-blocks set <value>` sets it.
+
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `style` | `"always" \| "never"` | `"always"` | Default spacing policy. |

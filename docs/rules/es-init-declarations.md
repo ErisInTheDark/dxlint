@@ -34,6 +34,8 @@ declare let externalCount: number;
 
 ## Options
 
+`mode` is the default option: `rule es-init-declarations set <value>` sets it.
+
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `mode` | `"always" \| "never"` | `"always"` | Require or forbid initialisers. |

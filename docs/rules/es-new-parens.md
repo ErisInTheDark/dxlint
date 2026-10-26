@@ -33,6 +33,8 @@ const person = new Person();
 
 ## Options
 
+`style` is the default option: `rule es-new-parens set <value>` sets it.
+
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `style` | `"always"` or `"never"` | `"always"` | Require or forbid empty argument parentheses. |

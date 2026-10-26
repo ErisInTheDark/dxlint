@@ -110,7 +110,7 @@ in ts_variable_declaration.kind rule es-no-var warn "Unexpected var, use let or 
 # ---- spacing ---------------------------------------------------------------
 
 in ts_open_paren rule es-space-in-parens:after {
-  option mode "always" | "never" = "never" "spacing inside parentheses"
+  default option mode "always" | "never" = "never" "spacing inside parentheses"
   option exceptions ("{}" | "[]" | "()" | "empty")[] = [] "invert spacing for nested delimiters"
   let paren_edge token(node, "after")
   when mode != "never" || count(exceptions) > 0 || paren_edge.start != end_offset
@@ -132,7 +132,7 @@ in ts_open_paren rule es-space-in-parens:after {
   warn if paren_space != "" then "There should be no space after this paren." else "There must be a space after this paren."
 }
 in ts_close_paren rule es-space-in-parens:before {
-  option mode "always" | "never" = "never" "spacing inside parentheses"
+  default option mode "always" | "never" = "never" "spacing inside parentheses"
   option exceptions ("{}" | "[]" | "()" | "empty")[] = [] "invert spacing for nested delimiters"
   let paren_edge token(node, "before")
   when mode != "never" || count(exceptions) > 0 || paren_edge.end != offset
@@ -161,7 +161,7 @@ fn format_gap_text(gap, spaced, comments) = (if spaced then " " else "") {
   join ""
 }
 in ts_array, ts_array_pattern rule es-array-bracket-spacing {
-  option style "always" | "never" = "never" "spacing inside array brackets"
+  default option style "always" | "never" = "never" "spacing inside array brackets"
   option singleValue boolean | null = null "override spacing around a single element"
   option objectsInArrays boolean | null = null "override spacing beside object elements"
   option arraysInArrays boolean | null = null "override spacing beside nested arrays"
@@ -195,7 +195,7 @@ in ts_array, ts_array_pattern rule es-array-bracket-spacing {
 }
 in ts_dot, ts_punctuator, ts_member.optional rule es-dot-location {
   @ts_token_context
-  option style "object" | "property" = "property" "line for a member-access dot"
+  default option style "object" | "property" = "property" "line for a member-access dot"
   when text == "." || text == "?."
   when parent is (ts_member, ts_qualified_name, ts_import_type, ts_meta_property, ts_jsx_name)
   when if style == "object" then position(offset).js_line != position(token(node, "before").end).js_line
@@ -210,7 +210,7 @@ in ts_dot, ts_punctuator, ts_member.optional rule es-dot-location {
 
 @macro format_template_curly {
   @ts_token_context
-  option mode "always" | "never" = "never" "spacing inside template substitutions"
+  default option mode "always" | "never" = "never" "spacing inside template substitutions"
   let template_before { value space_before.text; re_find /\s*$/; nonempty } ?? ""
   let template_after { value space_after.text; re_find /^\s*/; nonempty } ?? ""
 }
@@ -240,7 +240,7 @@ in ts_template.quasi rule es-template-curly-spacing:missing-before warn "Expecte
 }
 
 @macro format_template_tag {
-  option style "always" | "never" = "never" "spacing after a template tag"
+  default option style "always" | "never" = "never" "spacing after a template tag"
   let tag_gap ts_token_space(source, quasi.node, true)
   let tag_comments { value overlapping(ts_comment); filter (comment) comment.offset >= tag_gap.start && comment.end_offset <= tag_gap.end }
   let tag_line_comment any(tag_comments, comment => comment is ts_line_comment)
@@ -317,7 +317,7 @@ in ts_arrow.operator, ts_punctuator rule es-arrow-spacing:unexpected-after warn 
 }
 
 @macro format_arrow_parens {
-  option style "always" | "as-needed" = "always" "parentheses around one arrow parameter"
+  default option style "always" | "as-needed" = "always" "parentheses around one arrow parameter"
   option requireForBlockBody boolean = false "keep parentheses with a block body"
 }
 in ts_parameter let format_arrow_plain name is ts_identifier && optional == null && type == null && init == null && count(modifier) == 0 && count(decorator) == 0
@@ -376,7 +376,7 @@ in ts_assignment_pattern let format_curly_tail right.format_curly_tail.nonempty 
 in ts_as, ts_satisfies let format_curly_tail type.format_curly_tail.nonempty ?? type.node
 in ts_mapped_type let format_object_tail type.format_curly_tail.nonempty ?? type.node
 @macro format_object_curly_options {
-  option style "always" | "never" = "never" "spaces inside object-like braces"
+  default option style "always" | "never" = "never" "spaces inside object-like braces"
   option arraysInObjects boolean | null = null "override spacing beside array values and index signatures"
   option objectsInObjects boolean | null = null "override spacing beside object values"
   option overrides { [node: string]: "always" | "never" } = {} "spacing by syntax kind"

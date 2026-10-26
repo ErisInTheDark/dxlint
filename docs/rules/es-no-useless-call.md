@@ -4,7 +4,7 @@ Reports `.call()` and `.apply()` uses that can be replaced with a direct call wi
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-useless-call`](https://eslint.org/docs/latest/rules/no-useless-call) |
+| Upstream | [`no-useless-call`](https://eslint.org/docs/latest/rules/no-useless-call) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |

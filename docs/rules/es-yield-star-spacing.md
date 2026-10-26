@@ -37,6 +37,8 @@ function* generator() {
 
 ## Options
 
+`mode` is the default option: `rule es-yield-star-spacing set <value>` sets it.
+
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `mode` | `"before"`, `"after"`, `"both"` or `"neither"` | `"after"` | Which sides of the star require spacing. |

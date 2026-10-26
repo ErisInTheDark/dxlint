@@ -35,6 +35,8 @@ const value = (1 + 2) * 3;
 
 ## Options
 
+`mode` is the default option: `rule es-space-in-parens set <value>` sets it.
+
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `mode` | `"always" \| "never"` | `"never"` | Require or disallow inner spaces. |

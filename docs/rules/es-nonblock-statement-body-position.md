@@ -34,6 +34,8 @@ if (foo) bar();
 
 ## Options
 
+`mode` is the default option: `rule es-nonblock-statement-body-position set <value>` sets it.
+
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `mode` | `"beside" \| "below" \| "any"` | `"beside"` | Position of a non-block body. |

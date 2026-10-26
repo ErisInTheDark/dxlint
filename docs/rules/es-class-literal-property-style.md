@@ -37,6 +37,8 @@ class Example {
 
 ## Options
 
+`mode` is the default option: `rule es-class-literal-property-style set <value>` sets it.
+
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `mode` | `"fields"` or `"getters"` | `"fields"` | Preferred declaration for literal-valued members. |

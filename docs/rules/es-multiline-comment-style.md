@@ -39,6 +39,8 @@ const value = 1;
 
 ## Options
 
+`mode` is the default option: `rule es-multiline-comment-style set <value>` sets it.
+
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `mode` | `"starred-block"`, `"bare-block"`, or `"separate-lines"` | `"starred-block"` | Preferred multiline comment shape. |

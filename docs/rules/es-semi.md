@@ -33,6 +33,8 @@ const name = "dxlint";
 
 ## Options
 
+`mode` is the default option: `rule es-semi set <value>` sets it.
+
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `mode` | `"always" \| "never"` | `"always"` | Require or omit statement semicolons. |

@@ -4,7 +4,7 @@ Reports use of the implicit `arguments` object. Rest parameters name the argumen
 
 | | |
 | --- | --- |
-| Upstream | [`es-prefer-rest-params`](https://eslint.org/docs/latest/rules/prefer-rest-params) |
+| Upstream | [`prefer-rest-params`](https://eslint.org/docs/latest/rules/prefer-rest-params) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | `rules:style` |

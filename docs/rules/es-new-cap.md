@@ -4,7 +4,7 @@ Reports lowercase constructor names and capitalised functions called without `ne
 
 | | |
 | --- | --- |
-| Upstream | [`es-new-cap`](https://eslint.org/docs/latest/rules/new-cap) |
+| Upstream | [`new-cap`](https://eslint.org/docs/latest/rules/new-cap) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |

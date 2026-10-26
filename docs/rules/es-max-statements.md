@@ -4,7 +4,7 @@ Reports functions containing too many statements. Statements inside nested funct
 
 | | |
 | --- | --- |
-| Upstream | [`es-max-statements`](https://eslint.org/docs/latest/rules/max-statements) |
+| Upstream | [`max-statements`](https://eslint.org/docs/latest/rules/max-statements) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |
@@ -41,6 +41,8 @@ function example() {
 ```
 
 ## Options
+
+`max` is the default option: `rule es-max-statements set <value>` sets it.
 
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |

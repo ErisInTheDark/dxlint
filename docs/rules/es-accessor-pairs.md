@@ -4,7 +4,7 @@ Reports properties with a setter but no getter. A property that can be written b
 
 | | |
 | --- | --- |
-| Upstream | [`es-accessor-pairs`](https://eslint.org/docs/latest/rules/accessor-pairs) |
+| Upstream | [`accessor-pairs`](https://eslint.org/docs/latest/rules/accessor-pairs) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |

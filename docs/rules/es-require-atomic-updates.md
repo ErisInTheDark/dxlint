@@ -4,7 +4,7 @@ Reports updates that read a shared value before `await` or `yield` and write it 
 
 | | |
 | --- | --- |
-| Upstream | [`es-require-atomic-updates`](https://eslint.org/docs/latest/rules/require-atomic-updates) |
+| Upstream | [`require-atomic-updates`](https://eslint.org/docs/latest/rules/require-atomic-updates) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |

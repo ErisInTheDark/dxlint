@@ -4,7 +4,7 @@ Reports function declarations, and optionally `var` declarations, nested below a
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-inner-declarations`](https://eslint.org/docs/latest/rules/no-inner-declarations) |
+| Upstream | [`no-inner-declarations`](https://eslint.org/docs/latest/rules/no-inner-declarations) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |
@@ -39,6 +39,8 @@ if (condition) {
 ```
 
 ## Options
+
+`mode` is the default option: `rule es-no-inner-declarations set <value>` sets it.
 
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |

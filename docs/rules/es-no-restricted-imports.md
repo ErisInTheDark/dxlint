@@ -4,7 +4,7 @@ Reports imports and re-exports forbidden by module path or imported name. Use it
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-restricted-imports`](https://eslint.org/docs/latest/rules/no-restricted-imports) |
+| Upstream | [`no-restricted-imports`](https://eslint.org/docs/latest/rules/no-restricted-imports) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |

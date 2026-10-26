@@ -4,7 +4,7 @@ Reports string concatenation with non-literal values. Template literals keep int
 
 | | |
 | --- | --- |
-| Upstream | [`es-prefer-template`](https://eslint.org/docs/latest/rules/prefer-template) |
+| Upstream | [`prefer-template`](https://eslint.org/docs/latest/rules/prefer-template) |
 | Needs types | no |
 | Fix | autofix |
 | Rulesets | `rules:style` |

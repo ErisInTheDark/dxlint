@@ -4,7 +4,7 @@ Reports code that cannot run after an unconditional exit. Also reports instance 
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-unreachable`](https://eslint.org/docs/latest/rules/no-unreachable) |
+| Upstream | [`no-unreachable`](https://eslint.org/docs/latest/rules/no-unreachable) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | `rules:bugs` (error), `rules:recommended` |

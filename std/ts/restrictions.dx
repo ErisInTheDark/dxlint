@@ -366,7 +366,7 @@ in ts_property, ts_method {
 }
 in ts_object let restriction_sort_key_count count(property)
 in ts_property, ts_method, ts_spread rule es-sort-keys {
-  option mode "asc" | "desc" = "asc" "key order"
+  default option mode "asc" | "desc" = "asc" "key order"
   option caseSensitive boolean = true "compare letter case"
   option natural boolean = false "compare digit sequences numerically"
   option minKeys int(2..) = 2 "minimum object properties"
@@ -502,7 +502,7 @@ in ts_parameter {
   let max_params_counted !restriction_void_this_parameter || node != first(parent.parameter.nodes)
 }
 in restriction_parameter_function rule es-max-params {
-  option max int(0..) = 3 "maximum parameters"
+  default option max int(0..) = 3 "maximum parameters"
   let amount { value parameter.nodes; filter (p) p.max_params_counted.nonempty ?? true; count }
   when amount > max
   report at restriction_function_head(node)
@@ -519,7 +519,7 @@ in ts_function_like {
   let max_statements_checked true
 }
 in ts_function_like rule es-max-statements {
-  option max int(0..) = 10 "maximum statements"
+  default option max int(0..) = 10 "maximum statements"
   option ignoreTopLevelFunctions boolean = false "skip top-level functions unless the file has only one"
   when restriction_subtree_statements > max
   when max_statements_checked
@@ -528,7 +528,7 @@ in ts_function_like rule es-max-statements {
   warn "{@restriction_function_name} has too many statements ({restriction_subtree_statements}). Maximum allowed is {max}."
 }
 in ts_function_like rule es-complexity {
-  option max int(0..) = 20 "maximum cyclomatic complexity"
+  default option max int(0..) = 20 "maximum cyclomatic complexity"
   option variant "classic" | "modified" = "classic" "how switches contribute"
   let amount 1 + (if variant == "classic" then restriction_subtree_classic else restriction_subtree_modified)
   when amount > max
@@ -536,7 +536,7 @@ in ts_function_like rule es-complexity {
   warn "{@restriction_function_name} has a complexity of {amount}. Maximum allowed is {max}."
 }
 in ts_static_block, ts_class_property.init rule es-complexity:implicit {
-  option max int(0..) = 20 "maximum cyclomatic complexity"
+  default option max int(0..) = 20 "maximum cyclomatic complexity"
   option variant "classic" | "modified" = "classic" "how switches contribute"
   let amount if is (ts_function, ts_arrow) then 1 else 1 + (if variant == "classic" then restriction_subtree_classic else restriction_subtree_modified)
   when amount > max
@@ -546,21 +546,21 @@ in ts_static_block, ts_class_property.init rule es-complexity:implicit {
 group restriction_depth_control ts_if, ts_switch, ts_try, ts_do_while, ts_while, ts_with, ts_for, ts_for_in, ts_for_of
 in ts_statement, ts_arrow, ts_method, ts_static_block, ts_case let restriction_nesting if is (ts_function_like, ts_static_block) then 0 else (parent.restriction_nesting.nonempty ?? 0) + (if is restriction_depth_control && !(is ts_if && is ts_if.alternate) then 1 else 0)
 in restriction_depth_control rule es-max-depth {
-  option max int(0..) = 4 "maximum control-flow nesting"
+  default option max int(0..) = 4 "maximum control-flow nesting"
   when !(is ts_if && is ts_if.alternate)
   when restriction_nesting > max
   report at { start: first_token.start, end: first_token.end }
   warn "Blocks are nested too deeply ({restriction_nesting}). Maximum allowed is {max}."
 }
 in ts_function, ts_arrow rule es-max-nested-callbacks {
-  option max int(0..) = 10 "maximum callback nesting"
+  default option max int(0..) = 10 "maximum callback nesting"
   let amount restriction_callbacks
   when max_nested_callbacks_counted && amount > max
   report at function_warning_site(node)
   warn "Too many nested callbacks ({amount}). Maximum allowed is {max}."
 }
 in ts_program rule es-max-classes-per-file {
-  option max int(1..) = 1 "maximum classes"
+  default option max int(1..) = 1 "maximum classes"
   option ignoreExpressions boolean = false "count only class declarations"
   let amount if ignoreExpressions then restriction_declared_classes else restriction_classes
   when amount > max
@@ -608,7 +608,7 @@ fn restriction_function_head(n) = when {
   else then { start: n.offset, end: restriction_open_paren(n) }
 }
 in ts_program rule es-max-lines {
-  option max int(0..) = 300 "maximum lines"
+  default option max int(0..) = 300 "maximum lines"
   option skipComments boolean = false "exclude comment-only lines"
   option skipBlankLines boolean = false "exclude blank lines"
   let lines filter(restriction_line_rows, l => !(skipComments && l.restriction_line_comment || skipBlankLines && l.restriction_line_blank))
@@ -620,7 +620,7 @@ in ts_program rule es-max-lines {
 }
 in ts_function_like let max_lines_per_function_checked !restriction_iife
 in ts_function_like rule es-max-lines-per-function {
-  option max int(0..) = 50 "maximum function lines"
+  default option max int(0..) = 50 "maximum function lines"
   option skipComments boolean = false "exclude comment-only lines"
   option skipBlankLines boolean = false "exclude blank lines"
   let lines filter(restriction_line_rows, l => !(skipComments && l.restriction_line_comment || skipBlankLines && l.restriction_line_blank))
@@ -694,7 +694,7 @@ in ts_identifier, ts_private_name {
   let id_match_checked contains(["always", "destructuring", "import", "declaration", "reference"], restriction_name_match_context)
 }
 in ts_identifier, ts_private_name rule es-id-match {
-  option mode regex = "^.+$" "required identifier pattern"
+  default option mode regex = "^.+$" "required identifier pattern"
   when !restriction_name_attributes && id_match_checked && !restriction_name_external
   when !re_test(restriction_identifier_name, mode)
   warn "Identifier '{text}' does not match the pattern '{mode}'."

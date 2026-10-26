@@ -123,7 +123,7 @@ fn suggestion_function_style(n) = {
 }
 
 in ts_function, ts_arrow rule es-func-style {
-  option style ("declaration" | "expression") = "expression" "function syntax policy"
+  default option style ("declaration" | "expression") = "expression" "function syntax policy"
   option allowArrowFunctions boolean = false "allow arrow expressions"
   option allowTypeAnnotation boolean = false "allow annotated function variables"
   option overrides { namedExports: "" | "declaration" | "expression" | "ignore" } = { namedExports: "" } "named export policy"
@@ -136,7 +136,7 @@ in ts_function, ts_arrow rule es-func-style {
 }
 
 in ts_assignment rule es-no-return-assign {
-  option mode ("except-parens" | "always") = "except-parens" "assignment return policy"
+  default option mode ("except-parens" | "always") = "except-parens" "assignment return policy"
   let return_info return_assignment_context
   when return_info != null && (mode == "always" || parent not ts_parenthesized)
   report at return_info.offset
@@ -190,7 +190,7 @@ fn arrow_body_block_fix(source, n) = {
     else { start: body.offset, end: body.end_offset, text: replacement }
 }
 in ts_arrow rule es-arrow-body-style {
-  option mode ("always" | "never" | "as-needed") = "as-needed" "arrow body block policy"
+  default option mode ("always" | "never" | "as-needed") = "as-needed" "arrow body block policy"
   option requireReturnForObjectLiteral boolean = false "require a block for object values"
   when body != null
   let body_block body is ts_block

@@ -370,28 +370,28 @@ fn indexed_notation_replacement(source, owner, info) = {
     }
 }
 in ts_type_literal rule es-consistent-indexed-object-style {
-  option mode ("record" | "index-signature") = "record" "Preferred indexed object notation."
+  default option mode ("record" | "index-signature") = "record" "Preferred indexed object notation."
   when mode == "record" && indexed_record_eligible
   warn "A record is preferred over an index signature."
   let replacement indexed_notation_replacement(source, node, indexed_conversion)
   fix if replacement != null as replacement
 }
 in ts_interface rule es-consistent-indexed-object-style:interface {
-  option mode ("record" | "index-signature") = "record" "Preferred indexed object notation."
+  default option mode ("record" | "index-signature") = "record" "Preferred indexed object notation."
   when mode == "record" && indexed_record_eligible
   warn "A record is preferred over an index signature."
   let replacement indexed_notation_replacement(source, node, indexed_conversion)
   fix if replacement != null as replacement
 }
 in ts_mapped_type rule es-consistent-indexed-object-style:mapped {
-  option mode ("record" | "index-signature") = "record" "Preferred indexed object notation."
+  default option mode ("record" | "index-signature") = "record" "Preferred indexed object notation."
   when mode == "record" && indexed_record_eligible
   warn "A record is preferred over an index signature."
   let replacement indexed_notation_replacement(source, node, indexed_conversion)
   fix if replacement != null as replacement
 }
 in ts_type_reference rule es-consistent-indexed-object-style:record {
-  option mode ("record" | "index-signature") = "record" "Preferred indexed object notation."
+  default option mode ("record" | "index-signature") = "record" "Preferred indexed object notation."
   when mode == "index-signature" && name == "Record" && count(type_argument) == 2
   warn "An index signature is preferred over a record."
   let replacement indexed_notation_replacement(source, node, indexed_conversion)
@@ -451,14 +451,14 @@ fn type_definition_type(source, n) = {
   value if global_augmentation || open == null || header_end == null then null else type_definition_edit(source, start, close.end_offset, edits)
 }
 in ts_type_alias.name rule es-consistent-type-definitions {
-  option mode ("interface" | "type") = "interface" "Preferred object type definition."
+  default option mode ("interface" | "type") = "interface" "Preferred object type definition."
   when mode == "interface" && parent.aliases_type_literal
   warn "Use an `interface` instead of a `type`."
   let edit type_definition_interface(source, parent.node)
   fix at { start: edit.start ?? offset, end: edit.end ?? offset } if edit != null as edit.text
 }
 in ts_interface.name rule es-consistent-type-definitions:interface {
-  option mode ("interface" | "type") = "interface" "Preferred object type definition."
+  default option mode ("interface" | "type") = "interface" "Preferred object type definition."
   when mode == "type"
   warn "Use a `type` instead of an `interface`."
   let edit type_definition_type(source, parent.node)

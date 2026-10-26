@@ -4,7 +4,7 @@ Reports `return`, `throw`, `break`, and `continue` statements that leave a `fina
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-unsafe-finally`](https://eslint.org/docs/latest/rules/no-unsafe-finally) |
+| Upstream | [`no-unsafe-finally`](https://eslint.org/docs/latest/rules/no-unsafe-finally) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | `rules:bugs` (error), `rules:recommended` |

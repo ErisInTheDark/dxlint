@@ -4,7 +4,7 @@ Reports configured object properties, whether read, called or destructured. Rest
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-restricted-properties`](https://eslint.org/docs/latest/rules/no-restricted-properties) |
+| Upstream | [`no-restricted-properties`](https://eslint.org/docs/latest/rules/no-restricted-properties) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |

@@ -34,6 +34,8 @@ var value = (function () { return 1; }());
 
 ## Options
 
+`mode` is the default option: `rule es-wrap-iife set <value>` sets it.
+
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `mode` | `"outside"`, `"inside"` or `"any"` | `"outside"` | Wrap the whole call, wrap only the function, or allow either form. |

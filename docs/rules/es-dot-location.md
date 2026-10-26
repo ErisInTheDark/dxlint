@@ -35,6 +35,8 @@ const value = object
 
 ## Options
 
+`style` is the default option: `rule es-dot-location set <value>` sets it.
+
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `style` | `"object"` / `"property"` | `"property"` | Which side of the dot must share its line. |

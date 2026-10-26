@@ -4,7 +4,7 @@ Enforces the initial letter case of comments. By default, comments must not star
 
 | | |
 | --- | --- |
-| Upstream | [`es-capitalized-comments`](https://eslint.org/docs/latest/rules/capitalized-comments) |
+| Upstream | [`capitalized-comments`](https://eslint.org/docs/latest/rules/capitalized-comments) |
 | Needs types | no |
 | Fix | autofix |
 | Rulesets | none |
@@ -32,6 +32,8 @@ Correct:
 ```
 
 ## Options
+
+`mode` is the default option: `rule es-capitalized-comments set <value>` sets it.
 
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |

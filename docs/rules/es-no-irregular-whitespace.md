@@ -4,7 +4,7 @@ Reports unusual whitespace characters that are easy to overlook or confuse with 
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-irregular-whitespace`](https://eslint.org/docs/latest/rules/no-irregular-whitespace) |
+| Upstream | [`no-irregular-whitespace`](https://eslint.org/docs/latest/rules/no-irregular-whitespace) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | `rules:suspicious`, `rules:recommended` |

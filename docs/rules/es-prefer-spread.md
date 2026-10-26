@@ -4,7 +4,7 @@ Reports `.apply()` calls that can use argument spread without changing the recei
 
 | | |
 | --- | --- |
-| Upstream | [`es-prefer-spread`](https://eslint.org/docs/latest/rules/prefer-spread) |
+| Upstream | [`prefer-spread`](https://eslint.org/docs/latest/rules/prefer-spread) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | `rules:style` |

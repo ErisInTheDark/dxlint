@@ -35,6 +35,8 @@ function example(first: string, second: string, third: string) {}
 
 ## Options
 
+`max` is the default option: `rule es-max-params set <value>` sets it.
+
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `max` | `int(0..)` | `3` | Maximum parameter count. |

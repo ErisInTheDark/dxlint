@@ -35,6 +35,8 @@ The rule leaves declarations alone when both sides have type arguments, neither 
 
 ## Options
 
+`mode` is the default option: `rule es-consistent-generic-constructors set <value>` sets it.
+
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `mode` | `"constructor"` or `"type-annotation"` | `"constructor"` | Preferred side for type arguments. |

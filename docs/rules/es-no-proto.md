@@ -4,7 +4,7 @@ Reports access to the legacy `__proto__` property. Use `Object.getPrototypeOf` o
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-proto`](https://eslint.org/docs/latest/rules/no-proto) |
+| Upstream | [`no-proto`](https://eslint.org/docs/latest/rules/no-proto) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |

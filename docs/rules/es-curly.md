@@ -4,7 +4,7 @@ Require a consistent brace policy for conditional and loop bodies. The default r
 
 | | |
 | --- | --- |
-| Upstream | [`es-curly`](https://eslint.org/docs/latest/rules/curly) |
+| Upstream | [`curly`](https://eslint.org/docs/latest/rules/curly) |
 | Needs types | no |
 | Fix | autofix |
 | Rulesets | `rules:style` |
@@ -32,6 +32,8 @@ if (ready) { run(); }
 ```
 
 ## Options
+
+`mode` is the default option: `rule es-curly set <value>` sets it.
 
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |

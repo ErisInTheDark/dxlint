@@ -4,7 +4,7 @@ Reports shorthand type conversions such as `!!value`, `+value`, and `"" + value`
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-implicit-coercion`](https://eslint.org/docs/latest/rules/no-implicit-coercion) |
+| Upstream | [`no-implicit-coercion`](https://eslint.org/docs/latest/rules/no-implicit-coercion) |
 | Needs types | no |
 | Fix | autofix |
 | Rulesets | none |

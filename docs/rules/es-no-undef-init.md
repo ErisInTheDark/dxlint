@@ -4,7 +4,7 @@ Reports `let` and `var` declarations explicitly initialised to `undefined`. An u
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-undef-init`](https://eslint.org/docs/latest/rules/no-undef-init) |
+| Upstream | [`no-undef-init`](https://eslint.org/docs/latest/rules/no-undef-init) |
 | Needs types | no |
 | Fix | autofix |
 | Rulesets | `rules:style` |

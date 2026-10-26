@@ -45,6 +45,8 @@ async function result() {
 
 ## Options
 
+`mode` is the default option: `rule es-return-await set <value>` sets it.
+
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `mode` | `"always"`, `"error-handling-correctness-only"`, `"in-try-catch"` or `"never"` | `"in-try-catch"` | Choose when returned promises must be awaited. |

@@ -4,7 +4,7 @@ Reports writes to constant bindings. Reassigning a `const` variable throws at ru
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-const-assign`](https://eslint.org/docs/latest/rules/no-const-assign) |
+| Upstream | [`no-const-assign`](https://eslint.org/docs/latest/rules/no-const-assign) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | `rules:bugs` (error), `rules:recommended` |

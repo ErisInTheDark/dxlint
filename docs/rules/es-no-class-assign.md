@@ -4,7 +4,7 @@ Reports assignments to class declaration bindings. Replacing a class name usuall
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-class-assign`](https://eslint.org/docs/latest/rules/no-class-assign) |
+| Upstream | [`no-class-assign`](https://eslint.org/docs/latest/rules/no-class-assign) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | `rules:bugs` (error), `rules:recommended` |

@@ -4,7 +4,7 @@ Reports assignments inside returned expressions. Separating assignment from retu
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-return-assign`](https://eslint.org/docs/latest/rules/no-return-assign) |
+| Upstream | [`no-return-assign`](https://eslint.org/docs/latest/rules/no-return-assign) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |
@@ -39,6 +39,8 @@ const copy = (a, b) => (a = b);
 ```
 
 ## Options
+
+`mode` is the default option: `rule es-no-return-assign set <value>` sets it.
 
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |

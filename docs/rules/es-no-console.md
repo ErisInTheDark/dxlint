@@ -4,7 +4,7 @@ Reports use of `console` methods, including assignments to them. This helps keep
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-console`](https://eslint.org/docs/latest/rules/no-console) |
+| Upstream | [`no-console`](https://eslint.org/docs/latest/rules/no-console) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | `rules:style` |

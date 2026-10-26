@@ -38,6 +38,8 @@ Correct:
 
 ## Options
 
+`mode` is the default option: `rule es-jsx-closing-tag-location set <value>` sets it.
+
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `mode` | `"tag-aligned" \| "line-aligned"` | `"tag-aligned"` | Align with the opening tag or with its line's indentation. |

@@ -4,7 +4,7 @@ Reports escapes that do not change a string, template literal, or regular expres
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-useless-escape`](https://eslint.org/docs/latest/rules/no-useless-escape) |
+| Upstream | [`no-useless-escape`](https://eslint.org/docs/latest/rules/no-useless-escape) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | `rules:suspicious`, `rules:recommended` |

@@ -4,7 +4,7 @@ Reports ternaries that can be replaced with simpler boolean expressions. An opti
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-unneeded-ternary`](https://eslint.org/docs/latest/rules/no-unneeded-ternary) |
+| Upstream | [`no-unneeded-ternary`](https://eslint.org/docs/latest/rules/no-unneeded-ternary) |
 | Needs types | no |
 | Fix | autofix |
 | Rulesets | none |

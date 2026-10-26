@@ -34,6 +34,8 @@ type Name = string;
 
 ## Options
 
+`mode` is the default option: `rule es-consistent-type-definitions set <value>` sets it.
+
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `mode` | `"interface"` / `"type"` | `"interface"` | Preferred object definition. |

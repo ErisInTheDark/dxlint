@@ -4,7 +4,7 @@ Reports assignments that can use `||=`, `&&=`, or `??=`. You can reverse the pol
 
 | | |
 | --- | --- |
-| Upstream | [`es-logical-assignment-operators`](https://eslint.org/docs/latest/rules/logical-assignment-operators) |
+| Upstream | [`logical-assignment-operators`](https://eslint.org/docs/latest/rules/logical-assignment-operators) |
 | Needs types | no |
 | Fix | autofix |
 | Rulesets | none |
@@ -34,6 +34,8 @@ value ??= fallback;
 ```
 
 ## Options
+
+`mode` is the default option: `rule es-logical-assignment-operators set <value>` sets it.
 
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |

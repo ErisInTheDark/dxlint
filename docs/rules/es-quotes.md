@@ -34,6 +34,8 @@ const greeting = `Hello, ${name}!`;
 
 ## Options
 
+`style` is the default option: `rule es-quotes set <value>` sets it.
+
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `style` | `"double" \| "single" \| "backtick"` | `"double"` | Preferred string delimiter. |

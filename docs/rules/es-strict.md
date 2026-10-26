@@ -4,7 +4,7 @@ Requires or disallows `"use strict"` directives. Directives are unnecessary in E
 
 | | |
 | --- | --- |
-| Upstream | [`es-strict`](https://eslint.org/docs/latest/rules/strict) |
+| Upstream | [`strict`](https://eslint.org/docs/latest/rules/strict) |
 | Needs types | no |
 | Fix | autofix |
 | Rulesets | none |
@@ -35,6 +35,8 @@ export const value = 1;
 ```
 
 ## Options
+
+`mode` is the default option: `rule es-strict set <value>` sets it.
 
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |

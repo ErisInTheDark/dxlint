@@ -4,7 +4,7 @@ Reports `var` bindings used outside the block where they were declared. Although
 
 | | |
 | --- | --- |
-| Upstream | [`es-block-scoped-var`](https://eslint.org/docs/latest/rules/block-scoped-var) |
+| Upstream | [`block-scoped-var`](https://eslint.org/docs/latest/rules/block-scoped-var) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |

@@ -39,6 +39,8 @@ Correct:
 
 ## Options
 
+`mode` is the default option: `rule es-jsx-first-prop-new-line set <value>` sets it.
+
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `mode` | `"always" \| "never" \| "multiline" \| "multiline-multiprop" \| "multiprop"` | `"multiline-multiprop"` | First-prop placement policy. |

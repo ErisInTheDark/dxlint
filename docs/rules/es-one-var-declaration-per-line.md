@@ -34,6 +34,8 @@ let a, b,
 
 ## Options
 
+`mode` is the default option: `rule es-one-var-declaration-per-line set <value>` sets it.
+
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `mode` | `"initializations" \| "always"` | `"initializations"` | Require line breaks around initialisations or every declarator. |

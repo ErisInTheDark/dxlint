@@ -37,6 +37,8 @@ Correct:
 
 ## Options
 
+`mode` is the default option: `rule es-jsx-indent-props set <value>` sets it.
+
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `mode` | `int \| "tab" \| "first"` | `4` | Spaces per level, tabs, or alignment with the first prop. |

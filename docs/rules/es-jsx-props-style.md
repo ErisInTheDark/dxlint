@@ -43,7 +43,7 @@ Correct:
 | --- | --- | --- | --- |
 | `max` on `:singleline` | `int(0..) \| null` | `null` | Wrap a single-line tag above this prop count; null means no limit. |
 | `min` on `:multiline` | `int(0..)` | `0` | Minimum prop count for retaining multiline wrapping. |
-| `max_per_line` on both | `int(1..)` | `1` | Maximum props per line when wrapping. |
+| `maxPerLine` on both | `int(1..)` | `1` | Maximum props per line when wrapping. |
 
 ```dx
 rule es-jsx-props-style
@@ -52,7 +52,7 @@ rule es-jsx-props-style:singleline {
 }
 rule es-jsx-props-style:multiline {
   set min 3
-  set max_per_line 1
+  set maxPerLine 1
 }
 ```
 
@@ -67,6 +67,6 @@ rule es-jsx-props-style:multiline {
 
 ## Differences from upstream
 
-- Upstream's `singleLine.maxItems` becomes `:singleline`'s `max`; `multiLine.minItems` becomes `:multiline`'s `min`. dxlint also exposes `max_per_line`.
+- Upstream's `singleLine.maxItems` becomes `:singleline`'s `max`; `multiLine.minItems` becomes `:multiline`'s `min`. dxlint also exposes `maxPerLine`.
 
 Adapted from the [ESLint Stylistic](https://eslint.style/rules/jsx-props-style) documentation (MIT).

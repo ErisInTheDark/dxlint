@@ -4,7 +4,7 @@ Reports standalone blocks that provide no useful scope. Blocks containing lexica
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-lone-blocks`](https://eslint.org/docs/latest/rules/no-lone-blocks) |
+| Upstream | [`no-lone-blocks`](https://eslint.org/docs/latest/rules/no-lone-blocks) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |

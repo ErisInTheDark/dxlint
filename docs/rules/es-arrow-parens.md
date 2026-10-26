@@ -33,6 +33,8 @@ const identity = (value) => value;
 
 ## Options
 
+`style` is the default option: `rule es-arrow-parens set <value>` sets it.
+
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `style` | `"always"` or `"as-needed"` | `"always"` | Require parentheses or omit them when legal. |

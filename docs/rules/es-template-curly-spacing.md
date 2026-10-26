@@ -33,6 +33,8 @@ const greeting = `hello, ${people.name}!`;
 
 ## Options
 
+`mode` is the default option: `rule es-template-curly-spacing set <value>` sets it.
+
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `mode` | `"always" \| "never"` | `"never"` | Require or disallow spaces inside substitutions. |

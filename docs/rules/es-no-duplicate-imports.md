@@ -4,7 +4,7 @@ Reports imports and re-exports from the same module when their declarations can 
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-duplicate-imports`](https://eslint.org/docs/latest/rules/no-duplicate-imports) |
+| Upstream | [`no-duplicate-imports`](https://eslint.org/docs/latest/rules/no-duplicate-imports) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |

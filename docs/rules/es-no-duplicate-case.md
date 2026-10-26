@@ -4,7 +4,7 @@ Reports repeated test expressions in a `switch` statement. A duplicated case oft
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-duplicate-case`](https://eslint.org/docs/latest/rules/no-duplicate-case) |
+| Upstream | [`no-duplicate-case`](https://eslint.org/docs/latest/rules/no-duplicate-case) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | `rules:bugs` (error), `rules:recommended` |

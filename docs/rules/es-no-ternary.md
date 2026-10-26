@@ -4,7 +4,7 @@ Reports conditional expressions using `? :`. Use this rule when a project prefer
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-ternary`](https://eslint.org/docs/latest/rules/no-ternary) |
+| Upstream | [`no-ternary`](https://eslint.org/docs/latest/rules/no-ternary) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |

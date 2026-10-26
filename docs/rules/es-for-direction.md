@@ -4,7 +4,7 @@ Report for-loop counters that move away from their stop condition. This catches 
 
 | | |
 | --- | --- |
-| Upstream | [`es-for-direction`](https://eslint.org/docs/latest/rules/for-direction) |
+| Upstream | [`for-direction`](https://eslint.org/docs/latest/rules/for-direction) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | `rules:bugs` (error), `rules:recommended` |

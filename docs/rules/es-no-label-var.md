@@ -4,7 +4,7 @@ Reports statement labels sharing a name with an in-scope variable. Distinct name
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-label-var`](https://eslint.org/docs/latest/rules/no-label-var) |
+| Upstream | [`no-label-var`](https://eslint.org/docs/latest/rules/no-label-var) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |

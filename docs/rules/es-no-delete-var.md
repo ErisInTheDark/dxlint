@@ -4,7 +4,7 @@ Reports use of `delete` on a variable. `delete` removes object properties, not l
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-delete-var`](https://eslint.org/docs/latest/rules/no-delete-var) |
+| Upstream | [`no-delete-var`](https://eslint.org/docs/latest/rules/no-delete-var) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | `rules:suspicious`, `rules:recommended` |

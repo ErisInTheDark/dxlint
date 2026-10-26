@@ -4,7 +4,7 @@ Reports use of the identifier `undefined`. This supports styles that prefer unin
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-undefined`](https://eslint.org/docs/latest/rules/no-undefined) |
+| Upstream | [`no-undefined`](https://eslint.org/docs/latest/rules/no-undefined) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |

@@ -4,7 +4,7 @@ Reports switch cases that run into the next case without a break or other exit. 
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-fallthrough`](https://eslint.org/docs/latest/rules/no-fallthrough) |
+| Upstream | [`no-fallthrough`](https://eslint.org/docs/latest/rules/no-fallthrough) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | `rules:suspicious`, `rules:recommended` |

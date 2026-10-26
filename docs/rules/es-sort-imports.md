@@ -4,7 +4,7 @@ Checks import declaration order and alphabetical order of named import members. 
 
 | | |
 | --- | --- |
-| Upstream | [`es-sort-imports`](https://eslint.org/docs/latest/rules/sort-imports) |
+| Upstream | [`sort-imports`](https://eslint.org/docs/latest/rules/sort-imports) |
 | Needs types | no |
 | Fix | autofix (members only) |
 | Rulesets | none |

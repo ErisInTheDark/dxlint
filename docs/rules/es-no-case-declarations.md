@@ -4,7 +4,7 @@ Reports lexical declarations directly inside `case` or `default` clauses. Wrap a
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-case-declarations`](https://eslint.org/docs/latest/rules/no-case-declarations) |
+| Upstream | [`no-case-declarations`](https://eslint.org/docs/latest/rules/no-case-declarations) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | `rules:suspicious`, `rules:recommended` |

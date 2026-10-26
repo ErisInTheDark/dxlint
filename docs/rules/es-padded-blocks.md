@@ -39,6 +39,8 @@ if (a) {
 
 ## Options
 
+`style` is the default option: `rule es-padded-blocks set <value>` sets it.
+
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `style` | `"always" \| "never" \| "start" \| "end" \| null` | `null` | Global padding policy. |

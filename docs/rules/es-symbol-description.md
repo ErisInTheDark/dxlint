@@ -4,7 +4,7 @@ Requires a description when creating a symbol. Descriptions make symbols easier 
 
 | | |
 | --- | --- |
-| Upstream | [`es-symbol-description`](https://eslint.org/docs/latest/rules/symbol-description) |
+| Upstream | [`symbol-description`](https://eslint.org/docs/latest/rules/symbol-description) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |

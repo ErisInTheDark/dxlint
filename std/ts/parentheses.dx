@@ -12,7 +12,7 @@ in ts_parenthesized let structure_iife_callee expression.structure_iife_callee
 in ts_member, ts_index let structure_iife_callee if (object.structure_iife_callee).direct && contains(["call", "apply"], static_name) then { direct: false, prototype: true, wrapped: (object.structure_iife_callee).wrapped, node: (object.structure_iife_callee).node } else null
 
 in ts_call rule es-wrap-iife {
-  option mode "outside" | "inside" | "any" = "outside"
+  default option mode "outside" | "inside" | "any" = "outside"
   option functionPrototypeMethods boolean = false "include function call/apply invocations"
   let info callee.structure_iife_callee
   when info != null && (functionPrototypeMethods || !info.prototype)

@@ -4,7 +4,7 @@ Reports `RegExp` constructors with fixed patterns and flags. Regex literals avoi
 
 | | |
 | --- | --- |
-| Upstream | [`es-prefer-regex-literals`](https://eslint.org/docs/latest/rules/prefer-regex-literals) |
+| Upstream | [`prefer-regex-literals`](https://eslint.org/docs/latest/rules/prefer-regex-literals) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |

@@ -4,7 +4,7 @@ Reports boolean conversions in places that already convert their value to a bool
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-extra-boolean-cast`](https://eslint.org/docs/latest/rules/no-extra-boolean-cast) |
+| Upstream | [`no-extra-boolean-cast`](https://eslint.org/docs/latest/rules/no-extra-boolean-cast) |
 | Needs types | no |
 | Fix | autofix |
 | Rulesets | `rules:suspicious`, `rules:recommended` |

@@ -4,7 +4,7 @@ Controls whether a file starts with the Unicode byte order mark, U+FEFF. The def
 
 | | |
 | --- | --- |
-| Upstream | [`es-unicode-bom`](https://eslint.org/docs/latest/rules/unicode-bom) |
+| Upstream | [`unicode-bom`](https://eslint.org/docs/latest/rules/unicode-bom) |
 | Needs types | no |
 | Fix | autofix |
 | Rulesets | none |
@@ -32,6 +32,8 @@ let value;
 ```
 
 ## Options
+
+`mode` is the default option: `rule es-unicode-bom set <value>` sets it.
 
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |

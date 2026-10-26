@@ -35,6 +35,8 @@ Correct:
 
 ## Options
 
+`mode` is the default option: `rule es-jsx-curly-brace-presence set <value>` sets it.
+
 `"always"` requires braces, `"never"` removes unnecessary braces, and `"ignore"` skips that context.
 
 | Option | Type | Default | Meaning |

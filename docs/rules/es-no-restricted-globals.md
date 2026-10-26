@@ -4,7 +4,7 @@ Reports uses of configured global names. Local variables with the same name are 
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-restricted-globals`](https://eslint.org/docs/latest/rules/no-restricted-globals) |
+| Upstream | [`no-restricted-globals`](https://eslint.org/docs/latest/rules/no-restricted-globals) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |

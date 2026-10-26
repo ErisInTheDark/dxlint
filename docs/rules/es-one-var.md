@@ -4,7 +4,7 @@ Controls whether variable declarations are combined or separated within a scope.
 
 | | |
 | --- | --- |
-| Upstream | [`es-one-var`](https://eslint.org/docs/latest/rules/one-var) |
+| Upstream | [`one-var`](https://eslint.org/docs/latest/rules/one-var) |
 | Needs types | no |
 | Fix | autofix |
 | Rulesets | none |

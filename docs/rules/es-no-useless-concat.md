@@ -4,7 +4,7 @@ Reports adjacent string or template literals joined with `+` when one literal wo
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-useless-concat`](https://eslint.org/docs/latest/rules/no-useless-concat) |
+| Upstream | [`no-useless-concat`](https://eslint.org/docs/latest/rules/no-useless-concat) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |

@@ -4,7 +4,7 @@ Reports assignments used as conditions where a comparison may have been intended
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-cond-assign`](https://eslint.org/docs/latest/rules/no-cond-assign) |
+| Upstream | [`no-cond-assign`](https://eslint.org/docs/latest/rules/no-cond-assign) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | `rules:suspicious`, `rules:recommended` |
@@ -39,6 +39,8 @@ while ((node = node.parentNode)) {
 ```
 
 ## Options
+
+`mode` is the default option: `rule es-no-cond-assign set <value>` sets it.
 
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |

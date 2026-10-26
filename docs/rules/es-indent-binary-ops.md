@@ -43,6 +43,8 @@ if (a
 
 ## Options
 
+`mode` is the default option: `rule es-indent-binary-ops set <value>` sets it.
+
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `mode` | `number \| "tab"` | `2` | Indentation width or tabs. |

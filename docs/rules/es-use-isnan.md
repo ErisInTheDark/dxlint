@@ -4,7 +4,7 @@ Reports comparisons with `NaN`, including `Number.NaN`. Equality never matches `
 
 | | |
 | --- | --- |
-| Upstream | [`es-use-isnan`](https://eslint.org/docs/latest/rules/use-isnan) |
+| Upstream | [`use-isnan`](https://eslint.org/docs/latest/rules/use-isnan) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | `rules:bugs` (error), `rules:recommended` |

@@ -4,7 +4,7 @@ Reports loose equality comparisons with `null`. Use strict equality when you mea
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-eq-null`](https://eslint.org/docs/latest/rules/no-eq-null) |
+| Upstream | [`no-eq-null`](https://eslint.org/docs/latest/rules/no-eq-null) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |

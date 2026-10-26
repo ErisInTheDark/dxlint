@@ -4,7 +4,7 @@ Require or forbid names on function expressions. Names can make stack traces eas
 
 | | |
 | --- | --- |
-| Upstream | [`es-func-names`](https://eslint.org/docs/latest/rules/func-names) |
+| Upstream | [`func-names`](https://eslint.org/docs/latest/rules/func-names) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |
@@ -32,6 +32,8 @@ Foo.prototype.bar = function bar() {};
 ```
 
 ## Options
+
+`mode` is the default option: `rule es-func-names set <value>` sets it.
 
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |

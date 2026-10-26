@@ -4,7 +4,7 @@ Reports calls to `Math.pow` that can use the `**` operator. The operator express
 
 | | |
 | --- | --- |
-| Upstream | [`es-prefer-exponentiation-operator`](https://eslint.org/docs/latest/rules/prefer-exponentiation-operator) |
+| Upstream | [`prefer-exponentiation-operator`](https://eslint.org/docs/latest/rules/prefer-exponentiation-operator) |
 | Needs types | no |
 | Fix | autofix |
 | Rulesets | none |

@@ -218,7 +218,7 @@ fn assignment_fix_text(source, n, mode, shorthand) = {
   }
 }
 in ts_assignment rule es-operator-assignment {
-  option mode ("always" | "never") = "always" "compound arithmetic assignment policy"
+  default option mode ("always" | "never") = "always" "compound arithmetic assignment policy"
   let assigned_key left.reference_key_strict
   let shorthand if operator == "=" && right.arithmetic_operator != null && assigned_key != null && (assigned_key == right.strict_left_reference_key || contains(["*", "&", "^", "|"], right.arithmetic_operator) && assigned_key == right.strict_right_reference_key) then right.arithmetic_operator "=" else null
   when if mode == "never" then operator != "=" && !contains(["&&=", "||=", "??="], operator) else shorthand != null

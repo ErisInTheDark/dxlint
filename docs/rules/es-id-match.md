@@ -4,7 +4,7 @@ Reports identifier names that do not match a regular expression. This lets a pro
 
 | | |
 | --- | --- |
-| Upstream | [`es-id-match`](https://eslint.org/docs/latest/rules/id-match) |
+| Upstream | [`id-match`](https://eslint.org/docs/latest/rules/id-match) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |
@@ -36,6 +36,8 @@ function doSomething() {}
 ```
 
 ## Options
+
+`mode` is the default option: `rule es-id-match set <value>` sets it.
 
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |

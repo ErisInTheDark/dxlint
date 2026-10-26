@@ -256,7 +256,7 @@ fn logical_assignment_fix(source, n, info) = if !expression_fix_clean(n) then nu
   }
 
 in ts_assignment, ts_logical, ts_if rule es-logical-assignment-operators {
-  option mode ("always" | "never") = "always" "logical assignment policy"
+  default option mode ("always" | "never") = "always" "logical assignment policy"
   option enforceForIfStatements boolean = false "include conditional assignments"
   when not ts_if || enforceForIfStatements
   let logical_info logical_assignment_info(node)

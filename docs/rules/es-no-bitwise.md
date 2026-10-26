@@ -4,7 +4,7 @@ Reports bitwise operators. In code that does not manipulate bits, `&` or `|` may
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-bitwise`](https://eslint.org/docs/latest/rules/no-bitwise) |
+| Upstream | [`no-bitwise`](https://eslint.org/docs/latest/rules/no-bitwise) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |

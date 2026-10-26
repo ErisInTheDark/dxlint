@@ -4,7 +4,7 @@ Reports return statements with values inside class constructors. Returning an ob
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-constructor-return`](https://eslint.org/docs/latest/rules/no-constructor-return) |
+| Upstream | [`no-constructor-return`](https://eslint.org/docs/latest/rules/no-constructor-return) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |

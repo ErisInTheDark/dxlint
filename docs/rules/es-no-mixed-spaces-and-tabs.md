@@ -37,6 +37,8 @@ function add(x, y) {
 
 ## Options
 
+`mode` is the default option: `rule es-no-mixed-spaces-and-tabs set <value>` sets it.
+
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `mode` | `"default" \| "smart-tabs"` | `"default"` | Disallow mixed indentation, or allow tabs followed by alignment spaces. |

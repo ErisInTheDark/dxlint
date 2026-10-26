@@ -126,7 +126,7 @@ in ts_object rule es-accessor-pairs:descriptor {
 }
 
 in ts_method, ts_method_signature rule es-grouped-accessor-pairs {
-  option mode ("anyOrder" | "getBeforeSet" | "setBeforeGet") = "anyOrder" "accessor order"
+  default option mode ("anyOrder" | "getBeforeSet" | "setBeforeGet") = "anyOrder" "accessor order"
   option enforceForTSTypes boolean = false "check type accessors"
   let group_info accessor_pair.grouping
   when accessor_pair.scope != "type" || enforceForTSTypes

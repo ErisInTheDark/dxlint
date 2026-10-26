@@ -4,7 +4,7 @@ Reports control-flow blocks nested beyond the limit. Deep nesting can make the p
 
 | | |
 | --- | --- |
-| Upstream | [`es-max-depth`](https://eslint.org/docs/latest/rules/max-depth) |
+| Upstream | [`max-depth`](https://eslint.org/docs/latest/rules/max-depth) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |
@@ -44,6 +44,8 @@ function run() {
 ```
 
 ## Options
+
+`max` is the default option: `rule es-max-depth set <value>` sets it.
 
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |

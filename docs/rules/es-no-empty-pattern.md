@@ -4,7 +4,7 @@ Reports empty destructuring patterns. They do not bind any variables and can be 
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-empty-pattern`](https://eslint.org/docs/latest/rules/no-empty-pattern) |
+| Upstream | [`no-empty-pattern`](https://eslint.org/docs/latest/rules/no-empty-pattern) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | `rules:suspicious`, `rules:recommended` |

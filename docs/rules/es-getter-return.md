@@ -4,7 +4,7 @@ Require getters to return a value on paths that finish normally. A getter with n
 
 | | |
 | --- | --- |
-| Upstream | [`es-getter-return`](https://eslint.org/docs/latest/rules/getter-return) |
+| Upstream | [`getter-return`](https://eslint.org/docs/latest/rules/getter-return) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | `rules:bugs` (error), `rules:recommended` |

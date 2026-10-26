@@ -4,7 +4,7 @@ Reports comparisons with the same expression on both sides. For a `NaN` test, us
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-self-compare`](https://eslint.org/docs/latest/rules/no-self-compare) |
+| Upstream | [`no-self-compare`](https://eslint.org/docs/latest/rules/no-self-compare) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |

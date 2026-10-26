@@ -14,14 +14,14 @@ define {
 
   in .* layer lines match core_file_tail /[^\n]\z/
   in core_file_tail rule shared-eol-last warn "Newline required at end of file but not found." {
-    option mode "always" | "never" = "always" "whether files end in a newline"
+    default option mode "always" | "never" = "always" "whether files end in a newline"
     when mode == "always"
     report at end_offset
     fix as text "\n"
   }
   in .* layer lines match core_final_newlines /(?:\r?\n)+\z/
   in core_final_newlines rule shared-eol-last:never warn "Newline not allowed at end of file." {
-    option mode "always" | "never" = "always" "whether files end in a newline"
+    default option mode "always" | "never" = "always" "whether files end in a newline"
     when mode == "never"
     report at { start: end_offset - (if ends_with(text, "\r\n") then 2 else 1), end: end_offset }
     fix as ""
@@ -43,7 +43,7 @@ define {
 
   in core_line match core_line_break /\r\n|[\n\r\u{2028}\u{2029}]/
   in core_line_break rule shared-linebreak-style {
-    option mode "unix" | "windows" = "unix"
+    default option mode "unix" | "windows" = "unix"
     when mode == "unix" && text != "\n" || mode == "windows" && text != "\r\n"
     fix as if mode == "unix" then "\n" else "\r\n"
     warn if mode == "unix" then "Expected linebreaks to be 'LF' but found 'CRLF'." else "Expected linebreaks to be 'CRLF' but found 'LF'."

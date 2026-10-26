@@ -4,7 +4,7 @@ Reports catch clauses that only rethrow the same error. Removing such a catch le
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-useless-catch`](https://eslint.org/docs/latest/rules/no-useless-catch) |
+| Upstream | [`no-useless-catch`](https://eslint.org/docs/latest/rules/no-useless-catch) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | `rules:suspicious`, `rules:recommended` |

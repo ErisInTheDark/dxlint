@@ -4,7 +4,7 @@ Reports async functions passed as `Promise` executors. Errors thrown by an async
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-async-promise-executor`](https://eslint.org/docs/latest/rules/no-async-promise-executor) |
+| Upstream | [`no-async-promise-executor`](https://eslint.org/docs/latest/rules/no-async-promise-executor) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | `rules:bugs` (error), `rules:recommended` |

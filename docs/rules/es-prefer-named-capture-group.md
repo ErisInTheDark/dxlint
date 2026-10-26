@@ -4,7 +4,7 @@ Reports unnamed capturing groups in regular expressions. Use a named group when 
 
 | | |
 | --- | --- |
-| Upstream | [`es-prefer-named-capture-group`](https://eslint.org/docs/latest/rules/prefer-named-capture-group) |
+| Upstream | [`prefer-named-capture-group`](https://eslint.org/docs/latest/rules/prefer-named-capture-group) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |

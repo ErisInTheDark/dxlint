@@ -4,7 +4,7 @@ Reports negated conditions in ternaries and `if` statements with an `else` branc
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-negated-condition`](https://eslint.org/docs/latest/rules/no-negated-condition) |
+| Upstream | [`no-negated-condition`](https://eslint.org/docs/latest/rules/no-negated-condition) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |

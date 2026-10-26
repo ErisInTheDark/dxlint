@@ -4,7 +4,7 @@ Reports empty blocks and empty `switch` statements. A comment inside the block c
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-empty`](https://eslint.org/docs/latest/rules/no-empty) |
+| Upstream | [`no-empty`](https://eslint.org/docs/latest/rules/no-empty) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | `rules:suspicious`, `rules:recommended` |

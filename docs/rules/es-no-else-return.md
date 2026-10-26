@@ -4,7 +4,7 @@ Reports an `else` after a branch that always returns. Moving that code after the
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-else-return`](https://eslint.org/docs/latest/rules/no-else-return) |
+| Upstream | [`no-else-return`](https://eslint.org/docs/latest/rules/no-else-return) |
 | Needs types | no |
 | Fix | autofix |
 | Rulesets | none |

@@ -4,7 +4,7 @@ Reports `new Symbol` and `new BigInt`. These built-in functions must be called w
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-new-native-nonconstructor`](https://eslint.org/docs/latest/rules/no-new-native-nonconstructor) |
+| Upstream | [`no-new-native-nonconstructor`](https://eslint.org/docs/latest/rules/no-new-native-nonconstructor) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | `rules:bugs` (error), `rules:recommended` |

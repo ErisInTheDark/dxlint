@@ -4,7 +4,7 @@ Reports assignments to read-only globals. Overwriting built-in names can break u
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-global-assign`](https://eslint.org/docs/latest/rules/no-global-assign) |
+| Upstream | [`no-global-assign`](https://eslint.org/docs/latest/rules/no-global-assign) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | `rules:suspicious`, `rules:recommended` |

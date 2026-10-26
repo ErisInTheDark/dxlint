@@ -37,6 +37,8 @@ function collect(...args) { return args; }
 
 ## Options
 
+`style` is the default option: `rule es-rest-spread-spacing set <value>` sets it.
+
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `style` | `"always"` or `"never"` | `"never"` | Require or forbid spacing after `...`. |

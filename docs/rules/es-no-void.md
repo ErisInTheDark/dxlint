@@ -4,7 +4,7 @@ Reports the `void` operator, which evaluates an expression and discards its resu
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-void`](https://eslint.org/docs/latest/rules/no-void) |
+| Upstream | [`no-void`](https://eslint.org/docs/latest/rules/no-void) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |

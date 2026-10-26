@@ -4,7 +4,7 @@ Reports comments on the same line as code. Moving comments onto their own lines 
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-inline-comments`](https://eslint.org/docs/latest/rules/no-inline-comments) |
+| Upstream | [`no-inline-comments`](https://eslint.org/docs/latest/rules/no-inline-comments) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |

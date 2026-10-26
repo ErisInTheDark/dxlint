@@ -4,7 +4,7 @@ Reports `debugger` statements. Remove them from shipped code and use debugger br
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-debugger`](https://eslint.org/docs/latest/rules/no-debugger) |
+| Upstream | [`no-debugger`](https://eslint.org/docs/latest/rules/no-debugger) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | `rules:suspicious`, `rules:recommended` |

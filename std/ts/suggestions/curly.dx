@@ -105,7 +105,7 @@ fn curly_replacement(source, n, block) = if !block then "{{" n.text "}}" else {
 }
 
 @macro suggestion_curly_policy {
-  option mode ("all" | "multi" | "multi-line" | "multi-or-nest") = "all" "control body brace policy"
+  default option mode ("all" | "multi" | "multi-line" | "multi-or-nest") = "all" "control body brace policy"
   option style ("consistent" | null) = null "consistent braces throughout if chains"
   let curly_info curly_body_info(node, mode, style == "consistent")
   when curly_info != null

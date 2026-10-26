@@ -4,7 +4,7 @@ Reports calls to `Object` without an argument, with or without `new`. An object 
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-object-constructor`](https://eslint.org/docs/latest/rules/no-object-constructor) |
+| Upstream | [`no-object-constructor`](https://eslint.org/docs/latest/rules/no-object-constructor) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |

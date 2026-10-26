@@ -4,7 +4,7 @@ Reports the increment and decrement operators, `++` and `--`. Compound assignmen
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-plusplus`](https://eslint.org/docs/latest/rules/no-plusplus) |
+| Upstream | [`no-plusplus`](https://eslint.org/docs/latest/rules/no-plusplus) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |

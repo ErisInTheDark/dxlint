@@ -6,7 +6,7 @@ import .ts/format
 define {
 
 in ts_open_paren rule es-space-before-function-paren {
-  option style "always" | "never" = "always" "spaces before function parameter lists"
+  default option style "always" | "never" = "always" "spaces before function parameter lists"
   option named "always" | "never" | "ignore" | null = null "named function policy"
   option anonymous "always" | "never" | "ignore" | null = null "anonymous function policy"
   option asyncArrow "always" | "never" | "ignore" | null = null "async arrow policy"
@@ -39,10 +39,10 @@ fn layout_invocation_chain(gap, allow_newlines, before, after) = {
   value if after then (if re_test(prefix, /\s$/) then prefix else prefix " ") else trim_end(prefix)
 }
 in ts_open_paren rule es-function-call-spacing {
-  option mode "always" | "never" = "never" "spacing before invocation parentheses"
+  default option mode "always" | "never" = "never" "spacing before invocation parentheses"
   option allowNewlines boolean = false "allow line breaks before invocation parentheses"
-  option chain_before boolean = true "space before optional invocation punctuation"
-  option chain_after boolean = true "space after optional invocation punctuation"
+  option chainBefore boolean = true "space before optional invocation punctuation"
+  option chainAfter boolean = true "space after optional invocation punctuation"
   when parent is (ts_call, ts_new, ts_import_call)
   when offset >= parent.layout_invocation_end
   let invocation_optional parent.layout_invocation_optional
@@ -50,23 +50,23 @@ in ts_open_paren rule es-function-call-spacing {
   let invocation_spaced invocation_prefix.spaced || space_before.spaced
   let bad_newline mode == "always" && !allowNewlines && (invocation_prefix.line_break || space_before.line_break)
   let bad_space if mode == "never" then invocation_spaced
-    else if invocation_optional then invocation_prefix.spaced != chain_before || space_before.spaced != chain_after
+    else if invocation_optional then invocation_prefix.spaced != chainBefore || space_before.spaced != chainAfter
     else !invocation_spaced
   when bad_newline || bad_space
   report at { start: invocation_prefix.start, end: offset }
   warn if bad_newline then "Unexpected newline between function name and paren."
-    else if mode == "never" || invocation_optional && (!chain_before && invocation_prefix.spaced || !chain_after && space_before.spaced) then "Unexpected whitespace between function name and paren."
+    else if mode == "never" || invocation_optional && (!chainBefore && invocation_prefix.spaced || !chainAfter && space_before.spaced) then "Unexpected whitespace between function name and paren."
     else "Missing space between function name and paren."
   let invocation_insert mode == "always" && !invocation_optional && !invocation_spaced
   let invocation_gap byte_slice(source, invocation_prefix.start, offset)
   let invocation_fix if mode == "never" then (if invocation_optional then "?." else "")
-    else if invocation_optional then layout_invocation_chain(invocation_gap, allowNewlines, chain_before, chain_after) else " "
+    else if invocation_optional then layout_invocation_chain(invocation_gap, allowNewlines, chainBefore, chainAfter) else " "
   fix at { start: if invocation_insert then offset else invocation_prefix.start, end: offset } if invocation_insert || !(invocation_prefix.comments || space_before.comments) as invocation_fix
 }
 
 # Empty constructor argument lists belong to this new expression, not its callee.
 in ts_new rule es-new-parens {
-  option style "always" | "never" = "always" "empty constructor parentheses"
+  default option style "always" | "never" = "always" "empty constructor parentheses"
   let constructor_open opener.ts_open_paren.offset
   let constructor_close closer.ts_close_paren.offset
   when count(argument) == 0

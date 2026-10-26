@@ -4,7 +4,7 @@ Reports an `if` that is the only statement in an `else` block. An `else if` expr
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-lonely-if`](https://eslint.org/docs/latest/rules/no-lonely-if) |
+| Upstream | [`no-lonely-if`](https://eslint.org/docs/latest/rules/no-lonely-if) |
 | Needs types | no |
 | Fix | autofix |
 | Rulesets | none |

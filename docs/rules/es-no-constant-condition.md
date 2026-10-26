@@ -4,7 +4,7 @@ Reports conditions whose truthiness cannot change. Such conditions can hide unre
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-constant-condition`](https://eslint.org/docs/latest/rules/no-constant-condition) |
+| Upstream | [`no-constant-condition`](https://eslint.org/docs/latest/rules/no-constant-condition) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | `rules:suspicious`, `rules:recommended` |

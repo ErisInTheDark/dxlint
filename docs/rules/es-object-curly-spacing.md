@@ -34,6 +34,8 @@ import {foo} from "bar";
 
 ## Options
 
+`style` is the default option: `rule es-object-curly-spacing set <value>` sets it.
+
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `style` | `"always" \| "never"` | `"never"` | Require or forbid inner spaces. |

@@ -644,4 +644,11 @@ fn all_std_rules_and_rulesets_compile_without_inert_targets() {
         }
     }
     assert!(l.rules.iter().all(|r| r.severity != Severity::Off));
+    // Option names are what configs `set`: camelCase, like upstream's.
+    let uncased: Vec<String> = l.rules.iter()
+        .flat_map(|rule| rule.options().iter().map(move |option| (rule, option)))
+        .filter(|(_, option)| !option.name.starts_with(|c: char| c.is_ascii_lowercase()) || !option.name.chars().all(|c| c.is_ascii_alphanumeric()))
+        .map(|(rule, option)| format!("{} {}", rule.name, option.name))
+        .collect();
+    assert!(uncased.is_empty(), "option names not camelCase:\n{}", uncased.join("\n"));
 }

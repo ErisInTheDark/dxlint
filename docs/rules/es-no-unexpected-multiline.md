@@ -4,7 +4,7 @@ Reports confusing line breaks that continue an expression instead of starting a 
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-unexpected-multiline`](https://eslint.org/docs/latest/rules/no-unexpected-multiline) |
+| Upstream | [`no-unexpected-multiline`](https://eslint.org/docs/latest/rules/no-unexpected-multiline) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | `rules:bugs` (error), `rules:recommended` |

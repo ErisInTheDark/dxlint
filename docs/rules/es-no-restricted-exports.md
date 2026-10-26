@@ -4,7 +4,7 @@ Reports exported names listed in your project's restrictions. No names are restr
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-restricted-exports`](https://eslint.org/docs/latest/rules/no-restricted-exports) |
+| Upstream | [`no-restricted-exports`](https://eslint.org/docs/latest/rules/no-restricted-exports) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |

@@ -35,6 +35,8 @@ parseInt('071', 8);
 
 ## Options
 
+`mode` is the default option: `rule es-radix set <value>` sets it.
+
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `mode` | `"always" \| "as-needed"` | `"always"` | Legacy policy setting; both values require a radix. |

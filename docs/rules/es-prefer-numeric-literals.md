@@ -4,7 +4,7 @@ Reports `parseInt` calls that convert a fixed binary, octal, or hexadecimal stri
 
 | | |
 | --- | --- |
-| Upstream | [`es-prefer-numeric-literals`](https://eslint.org/docs/latest/rules/prefer-numeric-literals) |
+| Upstream | [`prefer-numeric-literals`](https://eslint.org/docs/latest/rules/prefer-numeric-literals) |
 | Needs types | no |
 | Fix | autofix |
 | Rulesets | none |

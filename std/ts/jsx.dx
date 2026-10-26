@@ -25,7 +25,7 @@ in ts_jsx_attribute, ts_jsx_spread_attribute {
   let jsx_prop_indent_extra previous.jsx_prop_indent_extra == true || !jsx_prop_indent_operator && !contains(jsx_prop_indent_line, "<") && (if previous == null then parent.jsx_prop_indent_operator else previous.jsx_prop_indent_operator)
 }
 in ts_jsx_attribute, ts_jsx_spread_attribute rule es-jsx-indent-props {
-  option mode int | "tab" | "first" = 4 "prop indent size or alignment"
+  default option mode int | "tab" | "first" = 4 "prop indent size or alignment"
   let size if mode == "tab" then 1 else mode
   let base_indent if mode == "tab" then jsx_indent_tabs(parent.jsx_line_prefix) else jsx_indent_spaces(parent.jsx_line_prefix)
   let actual if mode == "tab" then jsx_indent_tabs(jsx_line_prefix) else jsx_indent_spaces(jsx_line_prefix)
@@ -200,7 +200,7 @@ in ts_jsx_element, ts_jsx_fragment rule es-jsx-wrap-multilines {
   fix at edit if expression_fix_retains_comments(original, edit.text) as edit.text
 }
 in ts_jsx_element, ts_jsx_fragment rule es-jsx-function-call-newline {
-  option mode "always" | "multiline" = "multiline" "call argument linebreak policy"
+  default option mode "always" | "multiline" = "multiline" "call argument linebreak policy"
   when jsx_call_argument && (mode == "always" || jsx_break(text))
   when !space_before.line_break || next_token not ts_comma && !space_after.line_break
   warn "Missing line break around JSX"
@@ -256,7 +256,7 @@ in ts_jsx_expression {
   let jsx_presence_comments { value descendants(ts_comment); count }
 }
 in ts_jsx_expression, ts_jsx_text, ts_string, ts_jsx_element, ts_jsx_fragment rule es-jsx-curly-brace-presence {
-  option mode "always" | "never" | "ignore" = "never" "default brace policy"
+  default option mode "always" | "never" | "ignore" = "never" "default brace policy"
   option props "always" | "never" | "ignore" | null = null "attribute literal brace policy"
   option children "always" | "never" | "ignore" | null = null "child literal brace policy"
   option propElementValues "always" | "never" | "ignore" = "ignore" "JSX element attribute brace policy"
@@ -474,7 +474,7 @@ in jsx_self_closing_brackets rule es-jsx-closing-bracket-location:self-closing {
   @jsx_closing_bracket_body
 }
 in ts_open_angle rule es-jsx-closing-tag-location {
-  option mode "tag-aligned" | "line-aligned" = "tag-aligned" "closing-tag alignment"
+  default option mode "tag-aligned" | "line-aligned" = "tag-aligned" "closing-tag alignment"
   let here position(offset)
   let expected if mode == "tag-aligned" then position(parent.parent.opening.offset).js_column else jsx_indent(parent.parent.opening.jsx_line_prefix) + 1
   let own_line jsx_trim_space(jsx_line_prefix) == ""
@@ -544,7 +544,7 @@ fn jsx_contains_quote(text, double) = { value result: if double then '"' else "'
   value re_test(text, result_2)
 }
 in ts_jsx_attribute.value rule es-jsx-quotes {
-  option mode "prefer-double" | "prefer-single" = "prefer-double" "preferred attribute quote"
+  default option mode "prefer-double" | "prefer-single" = "prefer-double" "preferred attribute quote"
   let double mode == "prefer-double"
   when is ts_string
   when slice(text, 0, 1) != (if double then '"' else "'") && !{ value result: len(text) - 1; value slice(text, 1, result); jsx_contains_quote double }
@@ -556,7 +556,7 @@ in ts_jsx_attribute.value rule es-jsx-quotes {
   fix at node as quote body quote
 }
 @macro jsx_equals_spacing_body {
-  option mode "always" | "never" = "never" "spacing around equals"
+  default option mode "always" | "never" = "never" "spacing around equals"
   when parent is ts_jsx_attribute
   when { value if jsx_equals_before then space_before.text else space_after.text; jsx_js_space } != (mode == "always")
   report at if jsx_equals_before then space_before else space_after
@@ -592,7 +592,7 @@ in ts_jsx_attribute let jsx_prop_name jsx_strip_space(name)
 in ts_parenthesized let jsx_unparenthesized_text expression.jsx_unparenthesized_text.nonempty ?? expression
 in ts_jsx_spread_attribute let jsx_prop_name argument.jsx_unparenthesized_text.nonempty ?? argument
 in ts_jsx_attribute, ts_jsx_spread_attribute rule es-jsx-first-prop-new-line {
-  option mode "always" | "never" | "multiline" | "multiline-multiprop" | "multiprop" = "multiline-multiprop" "first prop placement"
+  default option mode "always" | "never" | "multiline" | "multiline-multiprop" | "multiprop" = "multiline-multiprop" "first prop placement"
   let should_wrap mode == "always" || mode == "multiline" && !parent.jsx_opening_single || mode == "multiline-multiprop" && !parent.jsx_opening_single && parent.jsx_property_count > 1 || mode == "multiprop" && parent.jsx_property_count > 1
   let should_inline mode == "never" || mode == "multiprop" && !parent.jsx_opening_single && parent.jsx_property_count <= 1
   when jsx_prop_first && (should_wrap && jsx_prop_headline || should_inline && !jsx_prop_headline)
@@ -622,8 +622,8 @@ in jsx_max_props_multiline rule es-jsx-max-props-per-line:multiline {
   @jsx_max_props_body
 }
 @macro jsx_props_style_body {
-  option max_per_line int(1..) = 1 "maximum props per line when wrapping"
-  when if need_wrap then jsx_prop_same && (jsx_prop_first || jsx_prop_run > max_per_line && (jsx_prop_run - 1) % max_per_line == 0) else !jsx_prop_same
+  option maxPerLine int(1..) = 1 "maximum props per line when wrapping"
+  when if need_wrap then jsx_prop_same && (jsx_prop_first || jsx_prop_run > maxPerLine && (jsx_prop_run - 1) % maxPerLine == 0) else !jsx_prop_same
   report at if is ts_jsx_attribute then name.node else node
   warn if need_wrap then "Prop `{jsx_prop_name}` must be placed on a new line" else "Prop `{jsx_prop_name}` should not be placed on a new line"
   fix at space_before if jsx_gap_safe(space_before.text) as if need_wrap then "\n" else " "

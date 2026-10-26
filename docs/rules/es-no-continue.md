@@ -4,7 +4,7 @@ Reports `continue` statements, including labelled ones. Use an `if` block when y
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-continue`](https://eslint.org/docs/latest/rules/no-continue) |
+| Upstream | [`no-continue`](https://eslint.org/docs/latest/rules/no-continue) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |

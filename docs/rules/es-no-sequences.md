@@ -4,7 +4,7 @@ Reports comma operators that hide multiple operations in one expression. Loop in
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-sequences`](https://eslint.org/docs/latest/rules/no-sequences) |
+| Upstream | [`no-sequences`](https://eslint.org/docs/latest/rules/no-sequences) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | `rules:suspicious`, `rules:recommended` |

@@ -40,12 +40,12 @@ const answer = 42;
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `license` | `string` | `""` | Exact comment text; an empty string disables checks. Use `\n` for multiline text. |
-| `skip_files` | `regex` | `""` | File-path pattern exempting files from the header requirement. |
+| `skipFiles` | `regex` | `""` | File-path pattern exempting files from the header requirement. |
 
 ```dx
 rule es-header {
   set license "/* Copyright Example */"
-  set skip_files /\.generated\.ts$/
+  set skipFiles /\.generated\.ts$/
 }
 ```
 

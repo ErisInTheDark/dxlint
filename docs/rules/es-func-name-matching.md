@@ -4,7 +4,7 @@ Match a named function expression's name to its variable or property name. Anony
 
 | | |
 | --- | --- |
-| Upstream | [`es-func-name-matching`](https://eslint.org/docs/latest/rules/func-name-matching) |
+| Upstream | [`func-name-matching`](https://eslint.org/docs/latest/rules/func-name-matching) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |
@@ -33,6 +33,8 @@ const bar = function() {};
 ```
 
 ## Options
+
+`mode` is the default option: `rule es-func-name-matching set <value>` sets it.
 
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |

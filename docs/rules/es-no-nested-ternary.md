@@ -4,7 +4,7 @@ Reports ternary expressions nested inside another ternary's result branches. Use
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-nested-ternary`](https://eslint.org/docs/latest/rules/no-nested-ternary) |
+| Upstream | [`no-nested-ternary`](https://eslint.org/docs/latest/rules/no-nested-ternary) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |

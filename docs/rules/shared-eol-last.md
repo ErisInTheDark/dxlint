@@ -34,6 +34,8 @@ const answer = 42;
 
 ## Options
 
+`mode` is the default option: `rule shared-eol-last set <value>` sets it.
+
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `mode` | `"always"` / `"never"` | `"always"` | Require or forbid trailing newlines. |

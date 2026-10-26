@@ -4,7 +4,7 @@ Reports legacy octal escape sequences in strings. Use Unicode or hexadecimal esc
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-octal-escape`](https://eslint.org/docs/latest/rules/no-octal-escape) |
+| Upstream | [`no-octal-escape`](https://eslint.org/docs/latest/rules/no-octal-escape) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |

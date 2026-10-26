@@ -4,7 +4,7 @@ Reports invalid patterns and flags passed to `RegExp`. Unlike invalid regex lite
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-invalid-regexp`](https://eslint.org/docs/latest/rules/no-invalid-regexp) |
+| Upstream | [`no-invalid-regexp`](https://eslint.org/docs/latest/rules/no-invalid-regexp) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | `rules:bugs` (error), `rules:recommended` |

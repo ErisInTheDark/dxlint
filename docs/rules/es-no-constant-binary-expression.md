@@ -4,7 +4,7 @@ Reports comparisons whose result is fixed and logical expressions that always or
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-constant-binary-expression`](https://eslint.org/docs/latest/rules/no-constant-binary-expression) |
+| Upstream | [`no-constant-binary-expression`](https://eslint.org/docs/latest/rules/no-constant-binary-expression) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | `rules:bugs` (error), `rules:recommended` |

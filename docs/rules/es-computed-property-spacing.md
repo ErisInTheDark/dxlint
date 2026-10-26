@@ -35,6 +35,8 @@ const result = { [key]: value };
 
 ## Options
 
+`style` is the default option: `rule es-computed-property-spacing set <value>` sets it.
+
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `style` | `"always"` or `"never"` | `"never"` | Require or forbid spaces. |

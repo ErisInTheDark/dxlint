@@ -4,7 +4,7 @@ Reports labels that no `break` or `continue` refers to. Removing unused labels m
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-unused-labels`](https://eslint.org/docs/latest/rules/no-unused-labels) |
+| Upstream | [`no-unused-labels`](https://eslint.org/docs/latest/rules/no-unused-labels) |
 | Needs types | no |
 | Fix | autofix |
 | Rulesets | `rules:suspicious`, `rules:recommended` |

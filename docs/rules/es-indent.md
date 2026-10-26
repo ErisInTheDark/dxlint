@@ -37,46 +37,48 @@ if (ready) {
 
 ## Options
 
+`mode` is the default option: `rule es-indent set <value>` sets it.
+
 Offsets are measured in indentation levels. `indent_list_offset` means a nonnegative integer or `"first"` to align later items with the first item.
 
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `mode` | `int(0..) \| "tab"` | `4` | Spaces per level, or tabs. |
-| `tab_length` | `number(1..)` | `4` | Raw-template tab width in tab mode. |
-| `switch_case` | `int(0..)` | `1` | Case labels inside a switch. |
-| `variable_declarator` | `indent_list_offset` | `1` | Continued variable declarations. |
-| `variable_declarator_var` | `indent_list_offset \| null` | `null` | Override for var; null inherits. |
-| `variable_declarator_let` | `indent_list_offset \| null` | `null` | Override for let; null inherits. |
-| `variable_declarator_const` | `indent_list_offset \| null` | `null` | Override for const; null inherits. |
-| `variable_declarator_using` | `indent_list_offset \| null` | `null` | Override for using; null inherits. |
-| `member_expression` | `int(0..)` | `1` | Continued member access. |
-| `function_declaration_parameters` | `indent_list_offset` | `1` | Declaration parameters. |
-| `function_declaration_body` | `int(0..)` | `1` | Declaration bodies. |
-| `function_declaration_return_type` | `int(0..)` | `1` | Declaration return types. |
-| `function_expression_parameters` | `indent_list_offset` | `1` | Function expression and arrow parameters. |
-| `function_expression_body` | `int(0..)` | `1` | Function expression and arrow bodies. |
-| `function_expression_return_type` | `int(0..)` | `1` | Function expression return types. |
-| `static_block` | `int(0..)` | `1` | Static block bodies. |
-| `call_expression` | `indent_list_offset` | `1` | Call arguments. |
-| `array_expression` | `indent_list_offset` | `1` | Array items. |
-| `object_expression` | `indent_list_offset` | `1` | Object members. |
-| `import_declaration` | `indent_list_offset` | `1` | Import specifiers. |
-| `assignment_operator` | `int(0..)` | `1` | Continued assignments. |
+| `tabLength` | `number(1..)` | `4` | Raw-template tab width in tab mode. |
+| `switchCase` | `int(0..)` | `1` | Case labels inside a switch. |
+| `variableDeclarator` | `indent_list_offset` | `1` | Continued variable declarations. |
+| `variableDeclaratorVar` | `indent_list_offset \| null` | `null` | Override for var; null inherits. |
+| `variableDeclaratorLet` | `indent_list_offset \| null` | `null` | Override for let; null inherits. |
+| `variableDeclaratorConst` | `indent_list_offset \| null` | `null` | Override for const; null inherits. |
+| `variableDeclaratorUsing` | `indent_list_offset \| null` | `null` | Override for using; null inherits. |
+| `memberExpression` | `int(0..)` | `1` | Continued member access. |
+| `functionDeclarationParameters` | `indent_list_offset` | `1` | Declaration parameters. |
+| `functionDeclarationBody` | `int(0..)` | `1` | Declaration bodies. |
+| `functionDeclarationReturnType` | `int(0..)` | `1` | Declaration return types. |
+| `functionExpressionParameters` | `indent_list_offset` | `1` | Function expression and arrow parameters. |
+| `functionExpressionBody` | `int(0..)` | `1` | Function expression and arrow bodies. |
+| `functionExpressionReturnType` | `int(0..)` | `1` | Function expression return types. |
+| `staticBlock` | `int(0..)` | `1` | Static block bodies. |
+| `callExpression` | `indent_list_offset` | `1` | Call arguments. |
+| `arrayExpression` | `indent_list_offset` | `1` | Array items. |
+| `objectExpression` | `indent_list_offset` | `1` | Object members. |
+| `importDeclaration` | `indent_list_offset` | `1` | Import specifiers. |
+| `assignmentOperator` | `int(0..)` | `1` | Continued assignments. |
 | `outerIIFEBody` | `int(0..)` | `1` | Outer immediately invoked function body. |
-| `flat_ternary_expressions` | `boolean` | `false` | Keep nested conditional branches flat. |
-| `offset_ternary_expressions` | `boolean` | `false` | Add depth for grouped conditional branches. |
+| `flatTernaryExpressions` | `boolean` | `false` | Keep nested conditional branches flat. |
+| `offsetTernaryExpressions` | `boolean` | `false` | Add depth for grouped conditional branches. |
 
 ```dx
 rule es-indent {
   set mode 2
-  set switch_case 1
-  set call_expression "first"
+  set switchCase 1
+  set callExpression "first"
 }
 ```
 
 ## Differences from upstream
 
-- Most upstream object options become flat snake-case names, such as `FunctionDeclaration.parameters` becoming `function_declaration_parameters`.
+- Most upstream object options become flat snake-case names, such as `FunctionDeclaration.parameters` becoming `functionDeclarationParameters`.
 - Upstream's `ignoredNodes`, `ignoreComments`, `"off"` offsets and object form of `offsetTernaryExpressions` are not exposed.
 - Flow syntax is outside this TypeScript port's supported dialect.
 - Babel `do` expressions inside JSX are not supported.

@@ -4,7 +4,7 @@ Controls which side of a comparison holds a literal value. By default, literals 
 
 | | |
 | --- | --- |
-| Upstream | [`es-yoda`](https://eslint.org/docs/latest/rules/yoda) |
+| Upstream | [`yoda`](https://eslint.org/docs/latest/rules/yoda) |
 | Needs types | no |
 | Fix | autofix |
 | Rulesets | none |
@@ -34,6 +34,8 @@ if (count < 5) { add(); }
 ```
 
 ## Options
+
+`mode` is the default option: `rule es-yoda set <value>` sets it.
 
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |

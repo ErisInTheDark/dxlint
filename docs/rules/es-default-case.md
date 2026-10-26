@@ -4,7 +4,7 @@ Require a `default` clause in switch statements, or a comment explaining its abs
 
 | | |
 | --- | --- |
-| Upstream | [`es-default-case`](https://eslint.org/docs/latest/rules/default-case) |
+| Upstream | [`default-case`](https://eslint.org/docs/latest/rules/default-case) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |

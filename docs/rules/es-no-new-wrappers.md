@@ -4,7 +4,7 @@ Reports `new String`, `new Number`, and `new Boolean`. Wrapper objects behave di
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-new-wrappers`](https://eslint.org/docs/latest/rules/no-new-wrappers) |
+| Upstream | [`no-new-wrappers`](https://eslint.org/docs/latest/rules/no-new-wrappers) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | `rules:suspicious`, `rules:recommended` |

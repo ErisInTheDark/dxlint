@@ -4,7 +4,7 @@ Reports indirect `hasOwnProperty` calls that can use `Object.hasOwn`. This short
 
 | | |
 | --- | --- |
-| Upstream | [`es-prefer-object-has-own`](https://eslint.org/docs/latest/rules/prefer-object-has-own) |
+| Upstream | [`prefer-object-has-own`](https://eslint.org/docs/latest/rules/prefer-object-has-own) |
 | Needs types | no |
 | Fix | autofix |
 | Rulesets | none |

@@ -4,7 +4,7 @@ Reports conditions already covered by earlier branches in an `if` / `else if` ch
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-dupe-else-if`](https://eslint.org/docs/latest/rules/no-dupe-else-if) |
+| Upstream | [`no-dupe-else-if`](https://eslint.org/docs/latest/rules/no-dupe-else-if) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | `rules:bugs` (error), `rules:recommended` |

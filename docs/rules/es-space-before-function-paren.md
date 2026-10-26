@@ -35,6 +35,8 @@ const bar = function () {};
 
 ## Options
 
+`style` is the default option: `rule es-space-before-function-paren set <value>` sets it.
+
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `style` | `"always" \| "never"` | `"always"` | Default spacing policy. |

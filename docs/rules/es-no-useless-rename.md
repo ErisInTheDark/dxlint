@@ -4,7 +4,7 @@ Reports imports, exports, and destructuring bindings that rename a name to itsel
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-useless-rename`](https://eslint.org/docs/latest/rules/no-useless-rename) |
+| Upstream | [`no-useless-rename`](https://eslint.org/docs/latest/rules/no-useless-rename) |
 | Needs types | no |
 | Fix | autofix |
 | Rulesets | none |

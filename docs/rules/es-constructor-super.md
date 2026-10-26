@@ -4,7 +4,7 @@ Require valid `super()` calls in constructors. Derived constructors must initial
 
 | | |
 | --- | --- |
-| Upstream | [`es-constructor-super`](https://eslint.org/docs/latest/rules/constructor-super) |
+| Upstream | [`constructor-super`](https://eslint.org/docs/latest/rules/constructor-super) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | `rules:bugs` (error), `rules:recommended` |

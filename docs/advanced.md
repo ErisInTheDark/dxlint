@@ -181,9 +181,10 @@ so nested rules compose.
 
 Every option declares its type, in TypeScript-like syntax, and a default:
 `option name <type> = <default> "description"`. Named types (`schema`) are
-shared between rules.
+shared between rules. Option names are camelCase, like upstream ESLint's,
+since configs `set` them; layers, fields, functions and schemas are snake_case.
 
-`enum(never, always)` declares string values written as bare names, including hyphenated rule-name characters. Defaults and `set` values need no quotes: `option mode enum(never, always) = never`. A rule may mark at most one option as default: `default option mode enum(never, always) = never "mode"`. Its enum cannot contain severity words (`off`, `hint`, `info`, `warn`, `error`).
+`enum(never, always)` declares string values written as bare names, including hyphenated rule-name characters. Defaults and `set` values need no quotes: `option mode enum(never, always) = never`. A rule may mark at most one option as default: `default option mode enum(never, always) = never "mode"`. Built-in rules mark the option ESLint takes as a bare value (`["warn", "never"]`), so `rule es-semi set "never"` works. Its enum cannot contain severity words (`off`, `hint`, `info`, `warn`, `error`).
 
 ```dx
 schema statement_kind "*" | "block-like" | "return" "a statement kind"

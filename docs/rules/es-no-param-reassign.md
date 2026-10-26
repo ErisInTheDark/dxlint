@@ -4,7 +4,7 @@ Reports writes to function parameters. It can also report changes to parameter p
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-param-reassign`](https://eslint.org/docs/latest/rules/no-param-reassign) |
+| Upstream | [`no-param-reassign`](https://eslint.org/docs/latest/rules/no-param-reassign) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |

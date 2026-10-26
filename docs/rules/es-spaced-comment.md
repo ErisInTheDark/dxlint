@@ -35,6 +35,8 @@ Correct:
 
 ## Options
 
+`style` is the default option: `rule es-spaced-comment set <value>` sets it.
+
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `style` | `"always" \| "never"` | `"always"` | Require or disallow opener spacing. |

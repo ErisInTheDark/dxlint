@@ -4,7 +4,7 @@ Reports character classes that split a visible Unicode character into separate p
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-misleading-character-class`](https://eslint.org/docs/latest/rules/no-misleading-character-class) |
+| Upstream | [`no-misleading-character-class`](https://eslint.org/docs/latest/rules/no-misleading-character-class) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | `rules:bugs` (error), `rules:recommended` |

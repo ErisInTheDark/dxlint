@@ -4,7 +4,7 @@ Reports assignments that copy a value back onto itself. These usually indicate a
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-self-assign`](https://eslint.org/docs/latest/rules/no-self-assign) |
+| Upstream | [`no-self-assign`](https://eslint.org/docs/latest/rules/no-self-assign) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | `rules:bugs` (error), `rules:recommended` |

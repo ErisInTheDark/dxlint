@@ -4,7 +4,7 @@ Reports constructor calls used as standalone statements, discarding the new obje
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-new`](https://eslint.org/docs/latest/rules/no-new) |
+| Upstream | [`no-new`](https://eslint.org/docs/latest/rules/no-new) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |

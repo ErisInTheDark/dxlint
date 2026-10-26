@@ -4,7 +4,7 @@ Reports files containing more classes than the configured limit. This can help k
 
 | | |
 | --- | --- |
-| Upstream | [`es-max-classes-per-file`](https://eslint.org/docs/latest/rules/max-classes-per-file) |
+| Upstream | [`max-classes-per-file`](https://eslint.org/docs/latest/rules/max-classes-per-file) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |
@@ -33,6 +33,8 @@ class Foo {}
 ```
 
 ## Options
+
+`max` is the default option: `rule es-max-classes-per-file set <value>` sets it.
 
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |

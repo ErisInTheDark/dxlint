@@ -4,7 +4,7 @@ Reports quoted strings continued across physical lines with a backslash. Use one
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-multi-str`](https://eslint.org/docs/latest/rules/no-multi-str) |
+| Upstream | [`no-multi-str`](https://eslint.org/docs/latest/rules/no-multi-str) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |

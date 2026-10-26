@@ -4,7 +4,7 @@ Reports names with underscores between words instead of camel case. Leading and 
 
 | | |
 | --- | --- |
-| Upstream | [`es-camelcase`](https://eslint.org/docs/latest/rules/camelcase) |
+| Upstream | [`camelcase`](https://eslint.org/docs/latest/rules/camelcase) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |

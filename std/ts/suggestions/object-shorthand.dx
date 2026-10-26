@@ -118,7 +118,7 @@ fn shorthand_member_fix(source, n, info, longform, method) =
   } else n.value.text
 
 in ts_property, ts_method rule es-object-shorthand {
-  option mode ("always" | "never" | "methods" | "properties" | "consistent" | "consistent-as-needed") = "always" "object shorthand policy"
+  default option mode ("always" | "never" | "methods" | "properties" | "consistent" | "consistent-as-needed") = "always" "object shorthand policy"
   option avoidQuotes boolean = false "keep string-literal keys in long form"
   option ignoreConstructors boolean = false "ignore capitalised method names"
   option methodsIgnorePattern string = "" "method names to ignore"
@@ -139,7 +139,7 @@ in ts_property, ts_method rule es-object-shorthand {
 }
 
 in ts_object rule es-object-shorthand:consistent {
-  option mode ("always" | "never" | "methods" | "properties" | "consistent" | "consistent-as-needed") = "always" "object shorthand policy"
+  default option mode ("always" | "never" | "methods" | "properties" | "consistent" | "consistent-as-needed") = "always" "object shorthand policy"
   when mode == "consistent" || mode == "consistent-as-needed"
   when shorthand_consistency == "mixed" || mode == "consistent-as-needed" && shorthand_consistency == "redundant"
   warn if shorthand_consistency == "mixed" then "Unexpected mix of shorthand and non-shorthand properties." else "Expected shorthand for all properties."

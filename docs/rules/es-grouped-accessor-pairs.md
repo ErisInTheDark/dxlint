@@ -4,7 +4,7 @@ Keep each property's getter and setter next to each other. An optional policy al
 
 | | |
 | --- | --- |
-| Upstream | [`es-grouped-accessor-pairs`](https://eslint.org/docs/latest/rules/grouped-accessor-pairs) |
+| Upstream | [`grouped-accessor-pairs`](https://eslint.org/docs/latest/rules/grouped-accessor-pairs) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |
@@ -40,6 +40,8 @@ const item = {
 ```
 
 ## Options
+
+`mode` is the default option: `rule es-grouped-accessor-pairs set <value>` sets it.
 
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |

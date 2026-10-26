@@ -4,7 +4,7 @@ Reports function expressions used as callbacks when an arrow function can replac
 
 | | |
 | --- | --- |
-| Upstream | [`es-prefer-arrow-callback`](https://eslint.org/docs/latest/rules/prefer-arrow-callback) |
+| Upstream | [`prefer-arrow-callback`](https://eslint.org/docs/latest/rules/prefer-arrow-callback) |
 | Needs types | no |
 | Fix | autofix |
 | Rulesets | none |

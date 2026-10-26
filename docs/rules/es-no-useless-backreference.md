@@ -4,7 +4,7 @@ Reports regular-expression backreferences that can only match the empty string. 
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-useless-backreference`](https://eslint.org/docs/latest/rules/no-useless-backreference) |
+| Upstream | [`no-useless-backreference`](https://eslint.org/docs/latest/rules/no-useless-backreference) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | `rules:suspicious`, `rules:recommended` |

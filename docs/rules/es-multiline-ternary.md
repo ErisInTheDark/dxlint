@@ -35,6 +35,8 @@ const value = ready
 
 ## Options
 
+`mode` is the default option: `rule es-multiline-ternary set <value>` sets it.
+
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `mode` | `"always"`, `"always-multiline"`, or `"never"` | `"always"` | Require line breaks, require them only for multiline expressions, or forbid them. |

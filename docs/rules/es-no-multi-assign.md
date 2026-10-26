@@ -4,7 +4,7 @@ Reports chained assignments. Separate assignments make each changed variable and
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-multi-assign`](https://eslint.org/docs/latest/rules/no-multi-assign) |
+| Upstream | [`no-multi-assign`](https://eslint.org/docs/latest/rules/no-multi-assign) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |

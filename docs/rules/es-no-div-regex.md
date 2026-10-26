@@ -4,7 +4,7 @@ Reports regular expression literals starting with `=`. The opening `/=` can look
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-div-regex`](https://eslint.org/docs/latest/rules/no-div-regex) |
+| Upstream | [`no-div-regex`](https://eslint.org/docs/latest/rules/no-div-regex) |
 | Needs types | no |
 | Fix | autofix |
 | Rulesets | none |

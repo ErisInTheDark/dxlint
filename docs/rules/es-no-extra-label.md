@@ -4,7 +4,7 @@ Reports labels on `break` and `continue` when the same statement would be target
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-extra-label`](https://eslint.org/docs/latest/rules/no-extra-label) |
+| Upstream | [`no-extra-label`](https://eslint.org/docs/latest/rules/no-extra-label) |
 | Needs types | no |
 | Fix | autofix |
 | Rulesets | none |

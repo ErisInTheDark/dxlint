@@ -4,7 +4,7 @@ Reports nonempty generator functions that never yield a value. A plain function 
 
 | | |
 | --- | --- |
-| Upstream | [`es-require-yield`](https://eslint.org/docs/latest/rules/require-yield) |
+| Upstream | [`require-yield`](https://eslint.org/docs/latest/rules/require-yield) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | `rules:suspicious`, `rules:recommended` |

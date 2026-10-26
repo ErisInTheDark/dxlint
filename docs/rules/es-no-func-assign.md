@@ -4,7 +4,7 @@ Reports writes to function declaration names. Use a variable holding a function 
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-func-assign`](https://eslint.org/docs/latest/rules/no-func-assign) |
+| Upstream | [`no-func-assign`](https://eslint.org/docs/latest/rules/no-func-assign) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | `rules:bugs` (error), `rules:recommended` |

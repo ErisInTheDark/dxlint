@@ -35,6 +35,8 @@ alert(value);
 
 ## Options
 
+`mode` is the default option: `rule es-no-use-before-define set <value>` sets it.
+
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `mode` | `"always"` or `"nofunc"` | `"always"` | `"nofunc"` permits references before function declarations. |

@@ -4,7 +4,7 @@ Reports labeled statements and labeled `break` or `continue`. Avoiding labels ca
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-labels`](https://eslint.org/docs/latest/rules/no-labels) |
+| Upstream | [`no-labels`](https://eslint.org/docs/latest/rules/no-labels) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |

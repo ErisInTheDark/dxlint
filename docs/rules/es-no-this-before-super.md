@@ -4,7 +4,7 @@ Reports use of `this` or a `super` property before `super()` in a derived constr
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-this-before-super`](https://eslint.org/docs/latest/rules/no-this-before-super) |
+| Upstream | [`no-this-before-super`](https://eslint.org/docs/latest/rules/no-this-before-super) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | `rules:bugs` (error), `rules:recommended` |

@@ -5,7 +5,7 @@ import .ts/layout/shared
 define {
 
 @macro layout_block_space_options {
-  option style "always" | "never" = "always" "spaces inside non-empty blocks"
+  default option style "always" | "never" = "always" "spaces inside non-empty blocks"
 }
 
 @macro layout_switch_colon_options {
@@ -51,7 +51,7 @@ fn layout_line_breaks(gap) = re_count(gap, /\r\n|[\n\r\u{2028}\u{2029}]/)
 fn layout_padding_reduced(gap) = "\n" { value gap; re_find /[^\n\r\u{2028}\u{2029}]*$/ }
 fn layout_padding_mode(style, blocks, switches, classes, owner) = if owner.layout_block_module.nonempty ?? false then null else if style != null then style else if blocks == null && switches == null && classes == null then "always" else if owner is ts_class then classes else if owner is ts_switch then switches else blocks
 @macro layout_padding_options {
-  option style "always" | "never" | "start" | "end" | null = null "padding at block boundaries"
+  default option style "always" | "never" | "start" | "end" | null = null "padding at block boundaries"
   option blocks "always" | "never" | "start" | "end" | null = null "statement block padding"
   option switches "always" | "never" | "start" | "end" | null = null "switch padding"
   option classes "always" | "never" | "start" | "end" | null = null "class padding"
@@ -152,7 +152,7 @@ fn layout_member_gap_fix(source, start, end, padded) = {
     else { start: insertion, end: insertion, text: "\n" }
 }
 in ts_class.member rule es-lines-between-class-members {
-  option style "always" | "never" = "always" "blank lines between class members"
+  default option style "always" | "never" = "always" "blank lines between class members"
   option enforce { blankLine: "always" | "never"; prev: "method" | "field" | "*"; next: "method" | "field" | "*" }[] = [] "policy by neighbouring member kinds"
   option exceptAfterSingleLine boolean = false "skip after single-line members"
   option exceptAfterOverload boolean = true "skip overload signatures"
@@ -181,7 +181,7 @@ in ts_class.member rule es-lines-between-class-members {
 }
 
 in ts_open_brace rule es-space-before-blocks {
-  option style "always" | "never" = "always" "spaces before blocks"
+  default option style "always" | "never" = "always" "spaces before blocks"
   option functions "always" | "never" | "off" | null = null "function body policy"
   option keywords "always" | "never" | "off" | null = null "statement body policy"
   option classes "always" | "never" | "off" | null = null "class body policy"
@@ -243,7 +243,7 @@ in ts_colon rule es-switch-colon-spacing:after {
 }
 
 @macro layout_brace_options {
-  option style "1tbs" | "stroustrup" | "allman" = "1tbs" "brace layout"
+  default option style "1tbs" | "stroustrup" | "allman" = "1tbs" "brace layout"
   option allowSingleLine boolean = false "allow single-line block bodies"
   when parent is (ts_block, ts_static_block, ts_switch, ts_class)
   when !(parent.layout_brace_excluded.nonempty ?? false)

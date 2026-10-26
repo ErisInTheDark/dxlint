@@ -4,7 +4,7 @@ Reports use of the global `Function` constructor, with or without `new`. Buildin
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-new-func`](https://eslint.org/docs/latest/rules/no-new-func) |
+| Upstream | [`no-new-func`](https://eslint.org/docs/latest/rules/no-new-func) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | `rules:suspicious`, `rules:recommended` |

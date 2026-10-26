@@ -4,7 +4,7 @@ Requires `var` declarations to appear together at the start of their function, p
 
 | | |
 | --- | --- |
-| Upstream | [`es-vars-on-top`](https://eslint.org/docs/latest/rules/vars-on-top) |
+| Upstream | [`vars-on-top`](https://eslint.org/docs/latest/rules/vars-on-top) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |

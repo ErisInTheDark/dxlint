@@ -4,7 +4,7 @@ Reports `let` bindings that are assigned once and never reassigned. `const` make
 
 | | |
 | --- | --- |
-| Upstream | [`es-prefer-const`](https://eslint.org/docs/latest/rules/prefer-const) |
+| Upstream | [`prefer-const`](https://eslint.org/docs/latest/rules/prefer-const) |
 | Needs types | no |
 | Fix | autofix |
 | Rulesets | `rules:style` |

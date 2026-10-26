@@ -4,7 +4,7 @@ Requires variables within one declaration to be in alphabetical order. Separate 
 
 | | |
 | --- | --- |
-| Upstream | [`es-sort-vars`](https://eslint.org/docs/latest/rules/sort-vars) |
+| Upstream | [`sort-vars`](https://eslint.org/docs/latest/rules/sort-vars) |
 | Needs types | no |
 | Fix | autofix |
 | Rulesets | none |

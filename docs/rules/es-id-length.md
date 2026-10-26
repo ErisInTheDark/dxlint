@@ -4,7 +4,7 @@ Reports identifier names shorter or longer than the configured limits. Length is
 
 | | |
 | --- | --- |
-| Upstream | [`es-id-length`](https://eslint.org/docs/latest/rules/id-length) |
+| Upstream | [`id-length`](https://eslint.org/docs/latest/rules/id-length) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |

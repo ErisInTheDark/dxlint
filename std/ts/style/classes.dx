@@ -96,14 +96,14 @@ in ts_class let setter_member_names [] member.setter_member_name
 in ts_method let literal_member_candidate kind == "get" && !contains([] modifier, "override") && body.first_member_literal && (member_static_name == null || !contains(parent.setter_member_names, member_static_name))
 in ts_class_property let literal_member_candidate contains([] modifier, "readonly") && !contains([] modifier, "declare") && !contains([] modifier, "override") && init.member_literal == true && (member_static_name == null || !contains(parent.constructor_member_writes, member_static_name))
 in ts_method.key rule es-class-literal-property-style {
-  option mode ("fields" | "getters") = "fields" "Preferred literal member declaration."
+  default option mode ("fields" | "getters") = "fields" "Preferred literal member declaration."
   when mode == "fields" && parent.literal_member_candidate
   let shape parent.style_member
   report at { start: shape.key, end: shape.key_end }
   warn "Literals should be exposed using readonly fields."
 }
 in ts_class_property.key rule es-class-literal-property-style:getters {
-  option mode ("fields" | "getters") = "fields" "Preferred literal member declaration."
+  default option mode ("fields" | "getters") = "fields" "Preferred literal member declaration."
   when mode == "getters" && parent.literal_member_candidate
   let shape parent.style_member
   report at { start: shape.key, end: shape.key_end }

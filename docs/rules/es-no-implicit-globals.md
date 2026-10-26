@@ -4,7 +4,7 @@ Reports declarations and assignments that pollute script global scope. Top-level
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-implicit-globals`](https://eslint.org/docs/latest/rules/no-implicit-globals) |
+| Upstream | [`no-implicit-globals`](https://eslint.org/docs/latest/rules/no-implicit-globals) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |

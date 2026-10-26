@@ -4,7 +4,7 @@ Reports callbacks nested beyond the configured limit. Named functions can make d
 
 | | |
 | --- | --- |
-| Upstream | [`es-max-nested-callbacks`](https://eslint.org/docs/latest/rules/max-nested-callbacks) |
+| Upstream | [`max-nested-callbacks`](https://eslint.org/docs/latest/rules/max-nested-callbacks) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |
@@ -39,6 +39,8 @@ function handleFirst() {
 ```
 
 ## Options
+
+`max` is the default option: `rule es-max-nested-callbacks set <value>` sets it.
 
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |

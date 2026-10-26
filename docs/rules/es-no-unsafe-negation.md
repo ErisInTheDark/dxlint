@@ -4,7 +4,7 @@ Reports a negation applied directly to the left operand of `in` or `instanceof`.
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-unsafe-negation`](https://eslint.org/docs/latest/rules/no-unsafe-negation) |
+| Upstream | [`no-unsafe-negation`](https://eslint.org/docs/latest/rules/no-unsafe-negation) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | `rules:bugs` (error), `rules:recommended` |

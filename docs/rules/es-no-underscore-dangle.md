@@ -4,7 +4,7 @@ Reports names with leading or trailing underscores. Underscores are a naming con
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-underscore-dangle`](https://eslint.org/docs/latest/rules/no-underscore-dangle) |
+| Upstream | [`no-underscore-dangle`](https://eslint.org/docs/latest/rules/no-underscore-dangle) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |

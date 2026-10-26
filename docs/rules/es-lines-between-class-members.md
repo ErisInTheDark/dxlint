@@ -40,6 +40,8 @@ class Example {
 
 ## Options
 
+`style` is the default option: `rule es-lines-between-class-members set <value>` sets it.
+
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `style` | `"always"` or `"never"` | `"always"` | Require or forbid blank lines. |

@@ -27,7 +27,7 @@ fn valid_radix(value) = value.type == "number" && value.value >= 2 && value.valu
 fn invalid_radix(n) = n is ts_identifier && n.text == "undefined" && n.resolved == "global" || (n is (ts_number, ts_string, ts_boolean, ts_null, ts_regex, ts_bigint) || n is ts_unary && contains(["+", "-"], n.operator) && n.argument is ts_number) && !valid_radix(n.literal_value)
 
 in ts_call rule es-radix {
-  option mode ("always" | "as-needed") = "always" "legacy radix policy"
+  default option mode ("always" | "as-needed") = "always" "legacy radix policy"
   when parse_int_name != null
   let argument_count count(argument)
   let first_argument { value argument.nodes; first; unparenthesised_node }

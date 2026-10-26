@@ -4,7 +4,7 @@ Reports `await` operations inside loops, including `await using`. Independent op
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-await-in-loop`](https://eslint.org/docs/latest/rules/no-await-in-loop) |
+| Upstream | [`no-await-in-loop`](https://eslint.org/docs/latest/rules/no-await-in-loop) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |

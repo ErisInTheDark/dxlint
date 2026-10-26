@@ -48,7 +48,7 @@ fn strict_missing(n, scope, mode) =
     else then []
   }
 in ts_program, ts_function, ts_arrow, ts_method rule es-strict {
-  option mode ("safe" | "never" | "global" | "function") = "safe" "strict directive policy"
+  default option mode ("safe" | "never" | "global" | "function") = "safe" "strict directive policy"
   let strict_scope directive_scope
   let strict_mode when {
     ts_source_type(ts_module_program(node)) == "module" then "module"

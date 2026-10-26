@@ -4,7 +4,7 @@ Reports loops whose bodies always exit before a second iteration. Use a conditio
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-unreachable-loop`](https://eslint.org/docs/latest/rules/no-unreachable-loop) |
+| Upstream | [`no-unreachable-loop`](https://eslint.org/docs/latest/rules/no-unreachable-loop) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |

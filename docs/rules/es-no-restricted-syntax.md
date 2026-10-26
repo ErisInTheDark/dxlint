@@ -4,7 +4,7 @@ Reports syntax added to the open `restricted_syntax` group. The group starts emp
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-restricted-syntax`](https://eslint.org/docs/latest/rules/no-restricted-syntax) |
+| Upstream | [`no-restricted-syntax`](https://eslint.org/docs/latest/rules/no-restricted-syntax) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |

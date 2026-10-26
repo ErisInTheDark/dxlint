@@ -4,7 +4,7 @@ Reports repeated keys in object literals. A later property with the same key can
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-dupe-keys`](https://eslint.org/docs/latest/rules/no-dupe-keys) |
+| Upstream | [`no-dupe-keys`](https://eslint.org/docs/latest/rules/no-dupe-keys) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | `rules:bugs` (error), `rules:recommended` |

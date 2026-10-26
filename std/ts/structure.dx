@@ -375,7 +375,7 @@ in ts_line_comment rule es-line-comment-position {
 }
 
 @macro structure_comment_style_options {
-  option mode "starred-block" | "bare-block" | "separate-lines" = "starred-block"
+  default option mode "starred-block" | "bare-block" | "separate-lines" = "starred-block"
   option checkJSDoc boolean = false "check JSDoc when requiring line comments"
   option checkExclamation boolean = false "check exclamation comments when requiring line comments"
 }
@@ -548,7 +548,7 @@ in ts_line_comment rule es-multiline-comment-style:consecutive {
 }
 
 in ts_question, ts_colon rule es-multiline-ternary {
-  option mode "always" | "always-multiline" | "never" = "always"
+  default option mode "always" | "always-multiline" | "never" = "always"
   option ignoreJSX boolean = false "ignore conditionals in JSX expressions"
   when parent is ts_conditional
   when !ignoreJSX || !parent.structure_ternary_jsx
@@ -577,7 +577,7 @@ in structure_tab_run rule es-no-tabs {
 }
 
 in ts_line rule es-no-mixed-spaces-and-tabs {
-  option mode "default" | "smart-tabs" = "default"
+  default option mode "default" | "smart-tabs" = "default"
   let indentation re_find(structure_line_content, /^[ \t]+/)
   let mixed if indentation == null then null
     else if mode == "smart-tabs" then re_find(indentation, /^\t* +\t/)
@@ -595,7 +595,7 @@ in ts_line rule es-no-mixed-spaces-and-tabs {
 }
 
 in ts_program rule es-unicode-bom {
-  option mode "always" | "never" = "never"
+  default option mode "always" | "never" = "never"
   when mode == "always" && !bom || mode == "never" && bom
   fix at { start: 0, end: if mode == "never" then 3 else 0 } as if mode == "always" then "\u{feff}" else ""
   report at 0
@@ -609,7 +609,7 @@ in ts_regex rule es-wrap-regex {
 }
 
 in ts_declarator rule es-one-var-declaration-per-line {
-  option mode "initializations" | "always" = "initializations"
+  default option mode "initializations" | "always" = "initializations"
   when previous_sibling != null && !re_test(previous_gap, /[\n\r\u{2028}\u{2029}]/)
   when !parent.structure_loop_declaration
   when mode == "always" || init != null || previous.init != null
@@ -646,7 +646,7 @@ fn operand_add(info) =
   || contains(["[", "(", "{{", "=>", ":"], info.before) || operand_assignment(info.before)
 
 in ts_program rule es-indent-binary-ops {
-  option mode number | "tab" = 2 "indent width or tabs"
+  default option mode number | "tab" = 2 "indent width or tabs"
   let width if mode == "tab" then 1 else mode
   let unit if mode == "tab" then "\t" else " "
   let measurements {
@@ -695,7 +695,7 @@ fn structure_operator_fix(before, after, next, policy, operator, before_comment,
 
 in ts_binary.operator, ts_logical.operator, ts_assignment.operator, ts_equals, ts_question, ts_colon,
   ts_union.structure_type_operators, ts_intersection.structure_type_operators rule es-operator-linebreak {
-  option mode "before" | "after" | "none" | null = null "operator side of a line break"
+  default option mode "before" | "after" | "none" | null = null "operator side of a line break"
   option overrides { [key: string]: "before" | "after" | "none" | "ignore" } = {} "operator-specific placement"
   when parent is (ts_binary, ts_logical, ts_assignment)
     || parent is (ts_conditional, ts_conditional_type) && contains(["?", ":"], text)
@@ -928,7 +928,7 @@ in ts_call rule es-newline-per-chained-call {
 }
 
 in ts_arrow.body rule es-implicit-arrow-linebreak {
-  option mode "beside" | "below" = "beside"
+  default option mode "beside" | "below" = "beside"
   when not ts_block
   let broken space_before.line_break
   when mode == "beside" && broken || mode == "below" && !broken
@@ -946,7 +946,7 @@ in ts_arrow rule es-no-confusing-arrow {
 }
 
 in ts_if.consequent, ts_if.alternate, ts_while.body, ts_do_while.body, ts_for.body, ts_for_in.body, ts_for_of.body rule es-nonblock-statement-body-position {
-  option mode "beside" | "below" | "any" = "beside"
+  default option mode "beside" | "below" | "any" = "beside"
   option overrides { if?: "beside" | "below" | "any"; else?: "beside" | "below" | "any"; while?: "beside" | "below" | "any"; do?: "beside" | "below" | "any"; for?: "beside" | "below" | "any" } = {} "position by statement"
   let kind if parent is ts_if then (if is ts_if.alternate then "else" else "if") else if parent is ts_while then "while" else if parent is ts_do_while then "do" else "for"
   let style {

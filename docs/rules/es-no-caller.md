@@ -4,7 +4,7 @@ Reports `arguments.caller` and `arguments.callee`. These old APIs are forbidden 
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-caller`](https://eslint.org/docs/latest/rules/no-caller) |
+| Upstream | [`no-caller`](https://eslint.org/docs/latest/rules/no-caller) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | `rules:suspicious`, `rules:recommended` |

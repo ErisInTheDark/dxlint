@@ -4,7 +4,7 @@ Reports consecutive literal spaces in regular expressions. A counted repetition 
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-regex-spaces`](https://eslint.org/docs/latest/rules/no-regex-spaces) |
+| Upstream | [`no-regex-spaces`](https://eslint.org/docs/latest/rules/no-regex-spaces) |
 | Needs types | no |
 | Fix | autofix |
 | Rulesets | `rules:suspicious`, `rules:recommended` |

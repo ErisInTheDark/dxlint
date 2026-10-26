@@ -4,7 +4,7 @@ Reports comparisons between `typeof` results and invalid type names. Valid names
 
 | | |
 | --- | --- |
-| Upstream | [`es-valid-typeof`](https://eslint.org/docs/latest/rules/valid-typeof) |
+| Upstream | [`valid-typeof`](https://eslint.org/docs/latest/rules/valid-typeof) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | `rules:bugs` (error), `rules:recommended` |

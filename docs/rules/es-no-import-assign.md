@@ -4,7 +4,7 @@ Reports writes to imported bindings and namespace import members. Imports are re
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-import-assign`](https://eslint.org/docs/latest/rules/no-import-assign) |
+| Upstream | [`no-import-assign`](https://eslint.org/docs/latest/rules/no-import-assign) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | `rules:bugs` (error), `rules:recommended` |

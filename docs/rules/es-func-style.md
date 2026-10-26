@@ -4,7 +4,7 @@ Choose function declarations or expressions for functions assigned to names. Cal
 
 | | |
 | --- | --- |
-| Upstream | [`es-func-style`](https://eslint.org/docs/latest/rules/func-style) |
+| Upstream | [`func-style`](https://eslint.org/docs/latest/rules/func-style) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |
@@ -33,6 +33,8 @@ const bar = () => {};
 ```
 
 ## Options
+
+`style` is the default option: `rule es-func-style set <value>` sets it.
 
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |

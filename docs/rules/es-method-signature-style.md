@@ -37,6 +37,8 @@ interface Example {
 
 ## Options
 
+`mode` is the default option: `rule es-method-signature-style set <value>` sets it.
+
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `mode` | `"method"` or `"property"` | `"property"` | Preferred function member syntax. |

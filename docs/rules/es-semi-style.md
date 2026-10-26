@@ -35,6 +35,8 @@ foo();
 
 ## Options
 
+`style` is the default option: `rule es-semi-style set <value>` sets it.
+
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `style` | `"last" \| "first"` | `"last"` | Put semicolons on the preceding or following line. Semicolons in `for` headers remain at line ends. |

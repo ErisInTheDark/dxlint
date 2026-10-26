@@ -6,7 +6,7 @@ import .ts/expression-fixes
 define {
 
 @macro layout_computed_space_options {
-  option style "always" | "never" = "never" "spaces inside computed property brackets"
+  default option style "always" | "never" = "never" "spaces inside computed property brackets"
   option enforceForClassMembers boolean = true "check class member keys"
 }
 group computed_spacing_owners ts_computed_key, ts_index, ts_indexed_access
@@ -20,7 +20,7 @@ in ts_function let generator_star_named name != null
 in ts_method let generator_star_shorthand parent is ts_object
 @macro layout_yield_star_options {
   @ts_token_context
-  option mode "before" | "after" | "both" | "neither" = "after" "spacing around yield star"
+  default option mode "before" | "after" | "both" | "neither" = "after" "spacing around yield star"
   option before boolean | null = null "override space before star"
   option after boolean | null = null "override space after star"
 }
@@ -200,7 +200,7 @@ in ts_unary, ts_update, ts_new, ts_await, ts_yield, ts_non_null rule es-space-un
 }
 
 in ts_ellipsis rule es-rest-spread-spacing {
-  option style "always" | "never" = "never" "spacing after rest and spread"
+  default option style "always" | "never" = "never" "spacing after rest and spread"
   when parent is (ts_rest, ts_spread) && next_token != null
   let spread_space layout_comma_space(space_after.text, false)
   when (spread_space != "") != (style == "always")

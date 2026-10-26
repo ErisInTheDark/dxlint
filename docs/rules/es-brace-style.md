@@ -43,6 +43,8 @@ if (ready) {
 
 ## Options
 
+`style` is the default option: `rule es-brace-style set <value>` sets it.
+
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `style` | `"1tbs"`, `"stroustrup"` or `"allman"` | `"1tbs"` | Block layout policy. |

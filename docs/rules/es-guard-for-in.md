@@ -4,7 +4,7 @@ Require a guard inside for-in loops to filter unwanted properties. For-in includ
 
 | | |
 | --- | --- |
-| Upstream | [`es-guard-for-in`](https://eslint.org/docs/latest/rules/guard-for-in) |
+| Upstream | [`guard-for-in`](https://eslint.org/docs/latest/rules/guard-for-in) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |

@@ -4,7 +4,7 @@ Reports bare `return;` statements that do not change a function's control flow. 
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-useless-return`](https://eslint.org/docs/latest/rules/no-useless-return) |
+| Upstream | [`no-useless-return`](https://eslint.org/docs/latest/rules/no-useless-return) |
 | Needs types | no |
 | Fix | autofix |
 | Rulesets | none |

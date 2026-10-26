@@ -34,6 +34,8 @@ const [first, second] = values;
 
 ## Options
 
+`style` is the default option: `rule es-array-bracket-spacing set <value>` sets it.
+
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `style` | `"always"` or `"never"` | `"never"` | Require or forbid spaces inside brackets. |

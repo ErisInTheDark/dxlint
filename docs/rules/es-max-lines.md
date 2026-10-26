@@ -4,7 +4,7 @@ Reports files with too many lines. Blank lines and comment-only lines can be exc
 
 | | |
 | --- | --- |
-| Upstream | [`es-max-lines`](https://eslint.org/docs/latest/rules/max-lines) |
+| Upstream | [`max-lines`](https://eslint.org/docs/latest/rules/max-lines) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |
@@ -39,6 +39,8 @@ let first,
 ```
 
 ## Options
+
+`max` is the default option: `rule es-max-lines set <value>` sets it.
 
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |

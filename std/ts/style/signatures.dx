@@ -187,7 +187,7 @@ in ts_method_signature, ts_property_signature let signature_report_end {
   value if next != null && contains([";", ","], next.text) then next.end else end_offset
 }
 in ts_method_signature rule es-method-signature-style {
-  option mode ("method" | "property") = "property" "Preferred method signature notation."
+  default option mode ("method" | "property") = "property" "Preferred method signature notation."
   when mode == "property" && kind != "get" && kind != "set"
   report at { start: offset, end: signature_report_end }
   warn "Shorthand method signature is forbidden. Use a function property instead."
@@ -195,7 +195,7 @@ in ts_method_signature rule es-method-signature-style {
   fix at { start: replacement.start ?? offset, end: replacement.end ?? offset } if replacement != null as replacement.text
 }
 in ts_property_signature rule es-method-signature-style:property {
-  option mode ("method" | "property") = "property" "Preferred method signature notation."
+  default option mode ("method" | "property") = "property" "Preferred method signature notation."
   when mode == "method" && type.is_function_type == true
   report at { start: offset, end: signature_report_end }
   warn "Function property signature is forbidden. Use a method shorthand instead."

@@ -40,6 +40,8 @@ fn(<div />);
 
 ## Options
 
+`mode` is the default option: `rule es-jsx-function-call-newline set <value>` sets it.
+
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `mode` | `"always" \| "multiline"` | `"multiline"` | Require surrounding breaks for all JSX arguments, or only multiline JSX. |

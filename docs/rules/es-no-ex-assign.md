@@ -4,7 +4,7 @@ Reports assignments to a caught exception parameter. Overwriting it loses the or
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-ex-assign`](https://eslint.org/docs/latest/rules/no-ex-assign) |
+| Upstream | [`no-ex-assign`](https://eslint.org/docs/latest/rules/no-ex-assign) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | `rules:bugs` (error), `rules:recommended` |

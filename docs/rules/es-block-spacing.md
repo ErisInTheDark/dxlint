@@ -33,6 +33,8 @@ function answer() { return 42; }
 
 ## Options
 
+`style` is the default option: `rule es-block-spacing set <value>` sets it.
+
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `style` | `"always"` or `"never"` | `"always"` | Require or forbid spaces inside non-empty blocks. |

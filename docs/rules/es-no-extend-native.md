@@ -4,7 +4,7 @@ Reports additions to built-in prototypes. These additions affect unrelated code 
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-extend-native`](https://eslint.org/docs/latest/rules/no-extend-native) |
+| Upstream | [`no-extend-native`](https://eslint.org/docs/latest/rules/no-extend-native) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |

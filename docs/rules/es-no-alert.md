@@ -4,7 +4,7 @@ Reports calls to the global `alert`, `confirm` and `prompt` functions. Use a les
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-alert`](https://eslint.org/docs/latest/rules/no-alert) |
+| Upstream | [`no-alert`](https://eslint.org/docs/latest/rules/no-alert) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |

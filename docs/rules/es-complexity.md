@@ -4,7 +4,7 @@ Limits cyclomatic complexity: the number of independent paths through a function
 
 | | |
 | --- | --- |
-| Upstream | [`es-complexity`](https://eslint.org/docs/latest/rules/complexity) |
+| Upstream | [`complexity`](https://eslint.org/docs/latest/rules/complexity) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |
@@ -41,6 +41,8 @@ function choose(value) {
 ```
 
 ## Options
+
+`max` is the default option: `rule es-complexity set <value>` sets it.
 
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |

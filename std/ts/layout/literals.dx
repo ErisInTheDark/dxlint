@@ -19,7 +19,7 @@ fn layout_quote_piece_text(piece, old, target) =
   else if piece == target || target == "`" && piece == "${{" then "\\" piece
   else piece
 in quoted_literals rule es-quotes {
-  option style "double" | "single" | "backtick" = "double" "string delimiters"
+  default option style "double" | "single" | "backtick" = "double" "string delimiters"
   option avoidEscape boolean = false "allow alternate quotes to avoid escapes"
   option allowTemplateLiterals "never" | "avoidEscape" | "always" = "never" "allow unused template delimiters"
   let quote_template is ts_template
@@ -84,7 +84,7 @@ fn layout_property_quote_sites(n) = {
   value filter(sites, site => site != null)
 }
 in ts_property, ts_pattern_property, ts_property_signature, ts_enum_member, ts_object, ts_interface, ts_type_literal, ts_enum, ts_import, ts_export rule es-quote-props {
-  option style "always" | "as-needed" | "consistent" | "consistent-as-needed" = "always" "property quoting policy"
+  default option style "always" | "as-needed" | "consistent" | "consistent-as-needed" = "always" "property quoting policy"
   option keywords boolean = false "require quotes on reserved words"
   option unnecessary boolean = true "report redundant quotes"
   option numbers boolean = false "require quoted numeric keys"

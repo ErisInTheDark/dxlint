@@ -4,7 +4,7 @@ Reports calls and references to `eval`. Executing strings as code can introduce 
 
 | | |
 | --- | --- |
-| Upstream | [`es-no-eval`](https://eslint.org/docs/latest/rules/no-eval) |
+| Upstream | [`no-eval`](https://eslint.org/docs/latest/rules/no-eval) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | `rules:suspicious`, `rules:recommended` |

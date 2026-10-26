@@ -4,7 +4,7 @@ Require consistent names for variables that capture `this`. Reserved alias names
 
 | | |
 | --- | --- |
-| Upstream | [`es-consistent-this`](https://eslint.org/docs/latest/rules/consistent-this) |
+| Upstream | [`consistent-this`](https://eslint.org/docs/latest/rules/consistent-this) |
 | Needs types | no |
 | Fix | none |
 | Rulesets | none |

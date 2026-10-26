@@ -33,6 +33,8 @@ type Dictionary = Record<string, unknown>;
 
 ## Options
 
+`mode` is the default option: `rule es-consistent-indexed-object-style set <value>` sets it.
+
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `mode` | `"record"` or `"index-signature"` | `"record"` | Preferred indexed object notation. |

@@ -4,7 +4,7 @@ Controls whether arrow functions use block bodies or return expressions directly
 
 | | |
 | --- | --- |
-| Upstream | [`es-arrow-body-style`](https://eslint.org/docs/latest/rules/arrow-body-style) |
+| Upstream | [`arrow-body-style`](https://eslint.org/docs/latest/rules/arrow-body-style) |
 | Needs types | no |
 | Fix | autofix |
 | Rulesets | none |
@@ -36,6 +36,8 @@ const update = () => {
 ```
 
 ## Options
+
+`mode` is the default option: `rule es-arrow-body-style set <value>` sets it.
 
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |

@@ -39,6 +39,8 @@ const values = [
 
 ## Options
 
+`style` is the default option: `rule es-comma-style set <value>` sets it.
+
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `style` | `"last"` or `"first"` | `"last"` | Put commas on the preceding or following item line. |

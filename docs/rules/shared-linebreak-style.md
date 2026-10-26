@@ -35,6 +35,8 @@ const value = 1; // line ends with LF (\n)
 
 ## Options
 
+`mode` is the default option: `rule shared-linebreak-style set <value>` sets it.
+
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `mode` | `"unix"` or `"windows"` | `"unix"` | Require LF or CRLF. |

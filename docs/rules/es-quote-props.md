@@ -33,6 +33,8 @@ const object = { "foo": 'bar', "baz": 42 };
 
 ## Options
 
+`style` is the default option: `rule es-quote-props set <value>` sets it.
+
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `style` | `"always" \| "as-needed" \| "consistent" \| "consistent-as-needed"` | `"always"` | Quote all keys, only required keys, all-or-none within a group, or all keys only when one needs quotes. |
