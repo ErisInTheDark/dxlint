@@ -1125,9 +1125,11 @@ reuses them while the file's text is unchanged and so is everything its lint
 read from other files: the text of every file its type questions read,
 through any number of imports (any edit to such a file, even inside a
 function body, lints its readers again), module resolution (a new `a.ts`
-beside `a/index.ts`), tsconfigs and `package.json`s, and which files declare
-globals. Results with problems are
-kept too, so a warm run only lints what changed. Any change to the rules
+beside `a/index.ts`), tsconfigs and `package.json`s. Looking up a global name
+or an ambient module reads every program file, but depends only on whether
+each file could declare it: an edit to a file that names neither keeps those
+results. Results with problems are kept too, so a warm run only lints what
+changed. Any change to the rules
 (comments and blank lines aside) or to the dxlint binary starts afresh.
 
 `--no-cache` lints everything without reading or writing the cache, and

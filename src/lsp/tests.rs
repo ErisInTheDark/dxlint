@@ -407,6 +407,37 @@ fn editing_a_file_deep_in_an_import_chain_relints_its_far_importers() {
 }
 
 #[test]
+fn a_file_starting_to_declare_a_global_relints_its_readers() {
+    let dir = std::env::temp_dir().join("dxlint-lsp-tests").join("lsp-global");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("node_modules/typescript/lib")).expect("tmp dir");
+    std::fs::write(dir.join(".dx"), "import .ts\nignore \"node_modules\"\nin ts_identifier rule typed info \"{text}: {if node always boolean then 'boolean' else 'unknown'}\" { when text == \"G\" && parent is ts_expression_statement }\n")
+        .expect("config");
+    // Globals are read only once TypeScript's default libraries are there.
+    std::fs::write(dir.join("node_modules/typescript/lib/lib.es2023.d.ts"), "interface Array<T> {}\n").expect("write");
+    std::fs::write(dir.join("node_modules/typescript/lib/lib.dom.d.ts"), "interface Window {}\n").expect("write");
+    let a = dir.join("a.ts");
+    let mention = dir.join("mention.ts");
+    let before = "export function f() { return \"G\"; }\n";
+    std::fs::write(&a, "G;\n").expect("write");
+    std::fs::write(&mention, before).expect("write");
+    let mut c = Client::start(&dir);
+    assert_eq!(c.diagnostics_for(&a)[0]["message"], "G: unknown");
+
+    // `mention` only spelled G: its global lookup holds until it declares it.
+    c.notify("textDocument/didOpen", json!({ "textDocument": { "uri": uri(&mention), "languageId": "typescript", "version": 1, "text": before } }));
+    c.notify(
+        "textDocument/didChange",
+        json!({ "textDocument": { "uri": uri(&mention), "version": 2 }, "contentChanges": [{ "text": format!("{before}declare global {{ const G: boolean }}\n") }] }),
+    );
+    assert_eq!(c.diagnostics_for(&a)[0]["message"], "G: boolean");
+
+    c.notify("textDocument/didClose", json!({ "textDocument": { "uri": uri(&mention) } }));
+    assert_eq!(c.diagnostics_for(&a)[0]["message"], "G: unknown");
+    c.shutdown();
+}
+
+#[test]
 fn nested_configs_lint_their_own_files() {
     let dir = project("lsp-nested");
     let sub = dir.join("sub");

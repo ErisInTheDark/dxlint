@@ -469,6 +469,37 @@ impl Linter {
         dep.holds()
     }
 
+    /// Whether everything `reads` read still holds, scans included.
+    pub fn reads_hold(&self, reads: &Reads) -> bool {
+        reads.holds(&mut |dep| dep.holds(), &mut |scan| self.scan_holds(scan))
+    }
+
+    pub fn scan_holds(&self, scan: &reads::Scan) -> bool {
+        scan.holds(|path| self.passes(path, reads::read_unrecorded(path).0.as_deref(), &scan.test))
+    }
+
+    /// Whether `path`, reading `text` now (`None`: no such file), passes a
+    /// scan's test.
+    pub fn passes(&self, path: &Path, text: Option<&str>, test: &reads::ScanTest) -> bool {
+        let Some(text) = text else { return true };
+        let holding = |needles: &[Box<str>]| needles.iter().any(|needle| text.contains(&**needle));
+        match test {
+            reads::ScanTest::Lacks(needles) => !holding(needles),
+            reads::ScanTest::Global { name, hints } => !holding(hints) && (!text.contains(&**name) || !self.mentions_global(path, name)),
+        }
+    }
+
+    /// Whether `path`'s module index mentions `name` as a global of any
+    /// class; true when it does not parse.
+    fn mentions_global(&self, path: &Path, name: &str) -> bool {
+        let Some(unit) = self.unit_quiet(path, None).1 else { return true };
+        let Some(front) = unit.parsed.front else { return true };
+        let run = Run { path: &unit.path, lang: unit.lang, text: &unit.text, lines: unit.lines(), file: &unit.rel, active: &[], settings: None };
+        let native = self.native_facts(front, &unit.parsed.tree, &run, (&*unit.path, Path::new(&unit.rel)), unit.parsed.state.clone());
+        let index = unit.parsed.tree.module_index(&self.grammar.names, &unit.text, &|text| native.name_key(text), None);
+        index.mentions(name, u64::MAX, crate::grammar::names::modules::index::PublicationKind::Globals)
+    }
+
     /// Forgets what the `changed` files said; [`Linter::is_stale`] then
     /// tells which recorded deps they broke.
     pub fn invalidate(&self, changed: &[PathBuf]) -> Stale {
@@ -479,7 +510,13 @@ impl Linter {
     }
 
     pub fn is_stale(&self, stale: &Stale, reads: &Reads) -> bool {
-        reads.any(&mut |dep| stale.changed.iter().any(|path| dep.touches(path)) && !dep.holds())
+        let touched = |dep: &Dep| stale.changed.iter().any(|path| dep.touches(path));
+        // Every scan of a program shares its file list: look through it once.
+        let mut files_touched = crate::fx_hash::FxHashMap::default();
+        !reads.holds(
+            &mut |dep| !touched(dep) || dep.holds(),
+            &mut |scan| !*files_touched.entry(std::sync::Arc::as_ptr(&scan.files)).or_insert_with(|| scan.files.any(&mut |dep| touched(dep))) || self.scan_holds(scan),
+        )
     }
 
     /// One parsed file's native facts, from front end `front`.

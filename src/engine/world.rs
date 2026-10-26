@@ -93,16 +93,39 @@ impl<'a> LintWorld<'a> {
         Self { snapshot: Some(snapshot), ..Self::new(linter, path, ctx) }
     }
 
+    /// `path`'s file, its text read recorded on every lookup: work in any
+    /// frame that reaches the file depends on its text, not only the frame
+    /// that loaded it.
     fn file(&'a self, path: &Path) -> Option<u32> {
         if path == self.path { return Some(0); }
-        if let Some(&file) = self.files.borrow().get(path) { return Some(file); }
-        let load = || self.linter.unit(path, self.snapshot).map(|unit| self.views.insert(unit) + 1);
-        let file = match &self.linter.profile {
+        let (file, read) = self.load(path);
+        super::reads::note(read);
+        file
+    }
+
+    /// [`LintWorld::file`] unrecorded, for scans (which record a
+    /// [`super::reads::Scan`]) and work that records the file itself.
+    fn file_quiet(&'a self, path: &Path) -> Option<u32> {
+        if path == self.path { return Some(0); }
+        self.load(path).0
+    }
+
+    /// `path`'s file, loaded once per world, and its text read.
+    fn load(&'a self, path: &Path) -> (Option<u32>, super::reads::Dep) {
+        if let Some(&file) = self.files.borrow().get(path) {
+            let unit = &self.views.get(file - 1).expect("loaded view").unit;
+            return (Some(file), super::reads::Dep::Text(unit.path.clone(), unit.hash));
+        }
+        let load = || self.linter.unit_quiet(path, self.snapshot);
+        let (hash, unit) = match &self.linter.profile {
             Some(profile) => profile.time_semantic_query("units.view", load),
             None => load(),
-        }?;
+        };
+        let Some(unit) = unit else { return (None, super::reads::Dep::Text(super::reads::dep_path(path), hash)) };
+        let read = super::reads::Dep::Text(unit.path.clone(), unit.hash);
+        let file = self.views.insert(unit) + 1;
         self.files.borrow_mut().insert(path.to_owned(), file);
-        Some(file)
+        (Some(file), read)
     }
 
     pub(crate) fn name_cache(&'a self, file: u32) -> Option<&'a std::sync::OnceLock<super::reads::Cached<std::sync::Arc<Resolved>>>> {
@@ -480,7 +503,7 @@ impl<'a> Files<'a> {
         let cached = super::reads::Cached::compute(|| {
             let Known::Yes(anchor) = program_anchor(selected, &self, &QueryContext::once()) else { return Known::Unknown };
             let context = super::program::Context { anchor, settings: selected as *const Settings as usize };
-            let load = || self.0.linter.programs.paths(context.clone(), |dep| self.0.linter.holds(dep), || {
+            let load = || self.0.linter.programs.paths(context.clone(), |reads| self.0.linter.reads_hold(reads), || {
                 let question = QueryContext::once();
                 let answer = program_inputs(selected, &self, &question);
                 if question.budget.limited() {
@@ -502,25 +525,26 @@ impl<'a> Files<'a> {
         answer
     }
 
-    /// `path`'s text, recorded: the linted text for the linted file.
-    fn source_text(self, path: &Path) -> Option<Arc<str>> {
-        if path == self.0.path {
-            super::reads::note(super::reads::Dep::Text(super::reads::dep_path(path), self.linted_hash()));
-            return Some(self.0.ctx.source.into());
-        }
-        let (text, hash) = match self.0.snapshot {
+    /// `path`'s text and hash, unrecorded: the linted text for the linted
+    /// file. Scans record their reads as a [`super::reads::Scan`].
+    fn source_text(self, path: &Path) -> (Option<Arc<str>>, u64) {
+        if path == self.0.path { return (Some(self.0.ctx.source.into()), self.linted_hash()) }
+        match self.0.snapshot {
             Some(snapshot) => snapshot.text(self.0.revision(), path),
             None => super::reads::read_unrecorded(path),
-        };
-        super::reads::note(super::reads::Dep::Text(super::reads::dep_path(path), hash));
-        text
+        }
     }
 
     /// The program's input paths whose text passes `keep` (all when the
-    /// profile gives no hints), read but not parsed.
-    fn candidate_inputs(self, paths: &[PathBuf], hinted: bool, keep: impl Fn(&str) -> bool) -> Vec<PathBuf> {
-        if !hinted { return paths.to_vec() }
-        paths.iter().filter(|path| self.source_text(path).is_none_or(|text| keep(&text))).cloned().collect()
+    /// profile gives no hints), read but not parsed, and their text reads.
+    fn candidate_inputs(self, paths: &[PathBuf], hinted: bool, keep: impl Fn(&str) -> bool) -> (Vec<PathBuf>, Arc<super::reads::Reads>) {
+        let mut deps = Vec::with_capacity(paths.len());
+        let candidates = paths.iter().filter(|path| {
+            let (text, hash) = self.source_text(path);
+            deps.push(super::reads::Dep::Text(super::reads::dep_path(path), hash));
+            !hinted || text.is_none_or(|text| keep(&text))
+        }).cloned().collect();
+        (candidates, Arc::new(super::reads::Reads { deps, ..Default::default() }))
     }
 
     fn roots(self, selected: &Settings, name: &str) -> Known<Vec<ScopeRef>> {
@@ -531,18 +555,23 @@ impl<'a> Files<'a> {
             let question = QueryContext::once();
             let roots = (|| {
                 let Known::Yes(paths) = self.timed("modules.roots.inputs", || self.input_paths(selected)) else { return Known::Unknown };
-                let paths: Arc<[PathBuf]> = match self.timed("modules.roots.candidates", || match (self.0.snapshot, hinted) {
+                let (paths, files): (Arc<[PathBuf]>, Arc<super::reads::Reads>) = match self.timed("modules.roots.candidates", || match (self.0.snapshot, hinted) {
                     (Some(snapshot), true) if self.shares(snapshot) => {
                         let Known::Yes((program, _)) = self.program_identity(selected) else { return Known::Unknown };
                         let settings = selected as *const Settings as usize;
                         // Hints don't depend on the name: each text is checked
                         // for them once per program, not once per name.
-                        let survey = self.timed("modules.roots.survey", || snapshot.survey((settings, program), || paths.iter().map(|path| {
-                            let text = self.source_text(path);
-                            let hinted = text.as_deref().is_none_or(|text| selected.globals.name_hints.iter().any(|hint| text.contains(&**hint)));
-                            (path.clone(), text, hinted)
-                        }).collect()));
-                        let sources = survey.get();
+                        let survey = self.timed("modules.roots.survey", || snapshot.survey((settings, program), || {
+                            let mut deps = Vec::with_capacity(paths.len());
+                            let sources = paths.iter().map(|path| {
+                                let (text, hash) = self.source_text(path);
+                                deps.push(super::reads::Dep::Text(super::reads::dep_path(path), hash));
+                                let hinted = text.as_deref().is_none_or(|text| selected.globals.name_hints.iter().any(|hint| text.contains(&**hint)));
+                                (path.clone(), text, hinted)
+                            }).collect();
+                            (sources, Arc::new(super::reads::Reads { deps, ..Default::default() }))
+                        }));
+                        let (sources, files) = survey.get();
                         // Kept as survey positions: a run asks thousands of
                         // names, each with up to every input as a candidate.
                         let shared = snapshot.candidates((settings, program, Box::from(name)), || {
@@ -555,20 +584,27 @@ impl<'a> Files<'a> {
                                 .filter(|(_, ((_, _, hinted), holds))| *hinted || *holds)
                                 .map(|(at, _)| u32::try_from(at).expect("inputs fit u32")).collect()
                         });
-                        Known::Yes(shared.get().iter().map(|&at| sources[at as usize].0.clone()).collect())
+                        Known::Yes((shared.get().iter().map(|&at| sources[at as usize].0.clone()).collect(), files))
                     }
-                    _ => Known::Yes(self.candidate_inputs(&paths, hinted, |text| selected.globals.may_publish(text, name)).into()),
+                    _ => {
+                        let (candidates, files) = self.candidate_inputs(&paths, hinted, |text| selected.globals.may_publish(text, name));
+                        Known::Yes((candidates.into(), files))
+                    }
                 }) {
-                    Known::Yes(paths) => paths,
+                    Known::Yes(found) => found,
                     Known::Unknown => return Known::Unknown,
                 };
+                // Each input was asked only whether it can declare the name
+                // (`depends_on_file` records the ones that can).
+                let hints = selected.globals.name_hints.clone().into_boxed_slice();
+                super::reads::note_scan(&Arc::new(super::reads::Scan { files, test: super::reads::ScanTest::Global { name: name.into(), hints } }));
                 self.timed("modules.roots.prefetch", || self.prefetch_inputs(selected, &paths));
                 let attached = self.timed("modules.roots.attach", || {
                     let mut roots = Vec::new();
                     let mut seen = crate::fx_hash::FxHashSet::default();
                     for path in paths.iter() {
                         if !question.budget.step() { return None }
-                        let file = self.0.file(path)?;
+                        let file = self.0.file_quiet(path)?;
                         if seen.insert(file) { roots.push(ScopeRef { file, scope: 0 }); }
                     }
                     Some((roots, seen))
@@ -976,12 +1012,12 @@ impl<'a> Files<'a> {
             // top, instead of a whole catalog of its own.
             let key = super::program::CatalogKey { settings: selected as *const Settings as usize, program, classes };
             let current_hash = super::reads::hash_bytes(self.0.ctx.source.as_bytes());
-            let load = || self.0.linter.programs.catalog(key.clone(), self.0.ctx.profile, |dep| {
-                if let super::reads::Dep::Text(path, hash) = dep {
-                    if **path == *self.0.path && *hash != current_hash { return false }
-                }
-                self.0.linter.holds(dep)
-            }, || match self.0.complete_attribute(|| {
+            // A catalog read another text of the linted file than this lint's.
+            let linted_differs = |dep: &super::reads::Dep| matches!(dep, super::reads::Dep::Text(path, hash) if **path == *self.0.path && *hash != current_hash);
+            let load = || self.0.linter.programs.catalog(key.clone(), self.0.ctx.profile, |reads| reads.holds(
+                &mut |dep| !linted_differs(dep) && dep.holds(),
+                &mut |scan| !scan.files.deps.iter().any(linted_differs) && self.0.linter.scan_holds(scan),
+            ), || match self.0.complete_attribute(|| {
                 let Known::Yes(paths) = self.input_paths(selected) else { return Known::Unknown };
                 let Known::Yes((declarations, texts)) = self.catalog_declarations(selected, classes, &paths, semantic) else { return Known::Unknown };
                 Known::Yes(super::program::Catalog::new(declarations, texts))
@@ -1026,14 +1062,22 @@ impl<'a> Files<'a> {
         });
         let mut declarations = Vec::new();
         let mut texts = crate::fx_hash::FxHashMap::default();
-        // Files whose text cannot declare an ambient scope are read
-        // (and recorded) but never parsed.
+        // Files whose text cannot declare an ambient scope are read but
+        // never parsed: they stay out of it while their text still cannot.
         let mut candidates = Vec::new();
+        let mut scanned = Vec::with_capacity(paths.len());
         for path in paths {
-            let Some(text) = self.source_text(path) else { return Known::Unknown };
-            texts.insert(super::reads::dep_path(path), super::reads::hash_bytes(text.as_bytes()));
+            let (Some(text), hash) = self.source_text(path) else { return Known::Unknown };
+            let path_read = super::reads::dep_path(path);
+            texts.insert(path_read.clone(), hash);
+            scanned.push(super::reads::Dep::Text(path_read, hash));
             if selected.globals.may_declare_ambient(&text) { candidates.push(path.clone()) }
         }
+        let hints = selected.globals.ambient_hints.clone().into_boxed_slice();
+        super::reads::note_scan(&Arc::new(super::reads::Scan {
+            files: Arc::new(super::reads::Reads { deps: scanned, ..Default::default() }),
+            test: super::reads::ScanTest::Lacks(hints),
+        }));
         self.prefetch_inputs(selected, &candidates);
         for path in &candidates {
             let Some(file) = self.0.file(path) else { return Known::Unknown };
@@ -1172,6 +1216,17 @@ impl World for Files<'_> {
 
     fn name_key<'s>(&self, file: u32, text: &'s str) -> Cow<'s, str> {
         self.0.key(file, text)
+    }
+
+    fn depends_on_file(&self, file: u32) {
+        let read = match file.checked_sub(1) {
+            None => super::reads::Dep::Text(super::reads::dep_path(self.0.path), self.linted_hash()),
+            Some(view) => {
+                let Some(view) = self.0.views.get(view) else { return };
+                super::reads::Dep::Text(view.unit.path.clone(), view.unit.hash)
+            }
+        };
+        super::reads::note(read);
     }
 
     fn module(&self, at: Leaf, specifier: &str, semantic: &Semantic<'_>) -> Known<Option<ScopeRef>> {
@@ -1872,6 +1927,23 @@ mod tests {
                 assert!(!std::ptr::eq(names, replacement));
                 assert_eq!(replacement.scopes.len(), 2);
             });
+        });
+        reads::drop_buffer(path);
+    }
+
+    #[test]
+    fn every_lookup_of_a_loaded_file_records_its_text_and_quiet_ones_none() {
+        let linter = linter("in paren fits marked");
+        let path = Path::new("/root/unit-relookup.t");
+        reads::set_buffer(path, "(text)");
+        with_world(&linter, |files| {
+            // A shared answer worked out after the load still depends on it.
+            for _ in 0..2 {
+                let (_, deps) = reads::track(|| files.0.file(path).expect("unit loads"));
+                assert!(deps.any(&mut |dep| matches!(dep, reads::Dep::Text(p, _) if **p == *path)));
+            }
+            let (_, quiet) = reads::track(|| files.0.file_quiet(path).expect("unit loads"));
+            assert!(quiet.is_empty());
         });
         reads::drop_buffer(path);
     }

@@ -27,6 +27,8 @@ pub(super) struct Unit {
     pub rel: String,
     pub lang: usize,
     pub text: Arc<str>,
+    /// `text`'s hash, as its [`reads::Dep::Text`] records it.
+    pub hash: u64,
     pub parsed: ParsedFile,
     pub names: OnceLock<reads::Cached<Arc<crate::grammar::names::Resolved>>>,
     lines: OnceLock<crate::line_index::LineIndex>,
@@ -74,19 +76,26 @@ impl Linter {
         Ok(ParsedFile { tree, front: plan.front, state })
     }
 
-    /// The parsed unit for `path`. Inside a run, a unit is read and validated
-    /// once; later lookups replay its text read without touching the disk.
+    /// The parsed unit for `path`, its text read recorded. Inside a run, a
+    /// unit is read and validated once; later lookups replay its text read
+    /// without touching the disk.
     pub(super) fn unit(&self, path: &Path, run: Option<&super::program::Snapshot>) -> Option<Arc<Unit>> {
-        let revision = self.invalidation.load(std::sync::atomic::Ordering::Acquire);
-        // Inside a run the text comes from the run's read of it, which name
-        // candidate scans may already have made.
-        let (hash, unit) = match run {
-            Some(run) => run.unit(revision, path, || self.load_unit(path, run.text(revision, path))),
-            None => self.load_unit(path, reads::read_unrecorded(path)),
-        };
+        let (hash, unit) = self.unit_quiet(path, run);
         let recorded = unit.as_ref().map_or_else(|| reads::dep_path(path), |unit| unit.path.clone());
         reads::note(reads::Dep::Text(recorded, hash));
         unit
+    }
+
+    /// [`Linter::unit`] with its text hash, unrecorded: for scans, which
+    /// record a [`reads::Scan`] instead.
+    pub(super) fn unit_quiet(&self, path: &Path, run: Option<&super::program::Snapshot>) -> (u64, Option<Arc<Unit>>) {
+        let revision = self.invalidation.load(std::sync::atomic::Ordering::Acquire);
+        // Inside a run the text comes from the run's read of it, which name
+        // candidate scans may already have made.
+        match run {
+            Some(run) => run.unit(revision, path, || self.load_unit(path, run.text(revision, path))),
+            None => self.load_unit(path, reads::read_unrecorded(path)),
+        }
     }
 
     /// Loads the run's units for `paths` on several threads, so a following
@@ -116,7 +125,7 @@ impl Linter {
         let Some(text) = text else { return (hash, None) };
         let cached = self.units.lock().expect("unit cache").get(path).cloned();
         if let Some(unit) = cached.filter(|unit| unit.text == text
-            && unit.names.get().is_none_or(|names| !names.reads.any(&mut |dep| !self.holds(dep)))) {
+            && unit.names.get().is_none_or(|names| self.reads_hold(&names.reads))) {
             return (hash, Some(unit));
         }
         let parse = || -> Option<Arc<Unit>> {
@@ -127,7 +136,7 @@ impl Linter {
             let tokens = front.and_then(|index| self.unit_token_kinds.get(index)).map_or(&[][..], Vec::as_slice);
             let plan = ParsePlan { lang, front, layers: true, overlays: &self.unit_overlays, child_layers: self.unit_child_layers, tokens };
             let parsed = self.parse(path, &text, plan).ok()?;
-            let unit = Arc::new(Unit { path: reads::dep_path(path), rel: rel.to_string_lossy().replace('\\', "/"), lang, text, parsed, names: OnceLock::new(), lines: OnceLock::new() });
+            let unit = Arc::new(Unit { path: reads::dep_path(path), rel: rel.to_string_lossy().replace('\\', "/"), lang, text, hash, parsed, names: OnceLock::new(), lines: OnceLock::new() });
             self.units.lock().expect("unit cache").insert(path.to_owned(), unit.clone());
             Some(unit)
         };

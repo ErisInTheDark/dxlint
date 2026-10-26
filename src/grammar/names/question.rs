@@ -438,6 +438,9 @@ pub trait World {
     fn module_index(&self, file: u32, tables: &super::Names) -> Option<&super::modules::index::Index> {
         Some(self.tree(file)?.module_index(tables, self.text(file)?, &|text| self.name_key(file, text), self.profile()))
     }
+    /// Records that the answer being worked out depends on `file`'s whole
+    /// text: for files a scan reached that turn out to matter.
+    fn depends_on_file(&self, _file: u32) {}
     /// What a name's text means in `file` (its front end's escapes).
     fn name_key<'s>(&self, file: u32, text: &'s str) -> std::borrow::Cow<'s, str>;
     /// The scope a module specifier names, asked by node `at` (its file's

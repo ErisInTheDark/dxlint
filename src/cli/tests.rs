@@ -653,6 +653,72 @@ fn cache_relints_exactly_the_files_whose_reads_changed() {
 }
 
 #[test]
+fn cache_global_lookups_relint_only_for_files_that_could_declare_the_name() {
+    // a reads the global G, b the ambient module "pkg". Every file is a
+    // program input, so both lookups scan all of them.
+    let dir = project(
+        "cli-cache-globals",
+        &[
+            (".dx", "import .ts\nignore \"node_modules\"\nin ts_identifier rule typed info \"{text}: {if node always number then 'number' else if node always string then 'string' else if node always boolean then 'boolean' else 'unknown'}\" { when text == \"G\" && parent is ts_expression_statement || reference_kind == \"import\" }\n"),
+            ("tsconfig.json", "{}"),
+            // Globals are read only once TypeScript's default libraries are there.
+            ("node_modules/typescript/lib/lib.es2023.d.ts", "interface Array<T> {}\n"),
+            ("node_modules/typescript/lib/lib.dom.d.ts", "interface Window {}\n"),
+            ("globals.d.ts", "declare const G: number;\n"),
+            ("a.ts", "G;\n"),
+            ("mention.ts", "export function f() { return \"G\"; }\n"),
+            ("plain.ts", "export const p = 1;\n"),
+            ("amb.d.ts", "declare module \"pkg\" { export const y: number; }\n"),
+            ("b.ts", "import { y } from \"pkg\";\ny;\n"),
+        ],
+    );
+    // What a and b say, and the `--stats` line.
+    let run = || {
+        let out = dxlint(&dir, &["--format", "jsonl", "--stats"]);
+        assert_eq!(out.code, 0, "{}", String::from_utf8_lossy(&out.stderr));
+        let mut said: Vec<String> = stdout(&out)
+            .lines()
+            .map(|l| serde_json::from_str::<serde_json::Value>(l).expect("json"))
+            .filter(|d| d["file"] == "a.ts" || d["file"] == "b.ts")
+            .map(|d| format!("{} {}", d["file"].as_str().unwrap_or_default(), d["message"].as_str().unwrap_or_default()))
+            .collect();
+        said.sort();
+        (said.join(", "), String::from_utf8_lossy(&out.stderr).into_owned())
+    };
+    let write = |path: &str, text: &str| std::fs::write(dir.join(path), text).expect("write");
+    let expect = |said: &str, stats: &str| {
+        let (got, line) = run();
+        assert!(got == said && line.contains(stats), "{got:?} {line}");
+    };
+
+    expect("a.ts G: number, b.ts y: number", "6 files (0 from cache)");
+    expect("a.ts G: number, b.ts y: number", "6 files (6 from cache)");
+
+    // A file naming neither G nor a module keyword answers neither lookup.
+    write("plain.ts", "export const p = 1; \n");
+    expect("a.ts G: number, b.ts y: number", "6 files (5 from cache)");
+
+    // A file spelling G without declaring it globally answers the same.
+    write("mention.ts", "export function f() { return \"G!\"; }\n");
+    expect("a.ts G: number, b.ts y: number", "6 files (5 from cache)");
+
+    // Text that could open an ambient module: the module lookup is asked again.
+    write("plain.ts", "// namespace\nexport const p = 1;\n");
+    expect("a.ts G: number, b.ts y: number", "6 files (4 from cache)");
+
+    write("globals.d.ts", "declare const G: string;\n");
+    expect("a.ts G: string, b.ts y: number", "6 files (4 from cache)");
+
+    // G moves into a file that only spelled it so far.
+    write("globals.d.ts", "declare const H: number;\n");
+    write("mention.ts", "export function f() { return \"G!\"; }\ndeclare global { const G: boolean }\n");
+    expect("a.ts G: boolean, b.ts y: number", "6 files (3 from cache)");
+
+    write("amb.d.ts", "declare module \"pkg\" { export const y: string; }\n");
+    expect("a.ts G: boolean, b.ts y: string", "6 files (4 from cache)");
+}
+
+#[test]
 fn language_only_changes_invalidate_cached_diagnostics() {
     let rules = |setting| format!("import .ts\nlanguage .js {{ set globals {{ app: \"{setting}\" }} }}\nrule es-no-global-assign error\n");
     let dir = project("cli-language-cache", &[(".dx", &rules("readonly")), ("a.js", "app = 1;\n")]);

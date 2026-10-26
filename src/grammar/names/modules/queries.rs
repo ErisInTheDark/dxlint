@@ -274,6 +274,7 @@ impl<'a> Queries<'a> {
                 // Roots whose file cannot publish the name contribute nothing;
                 // skip them before any per-scope publication work.
                 if !world.module_index(scope.file, self.semantic.tables).ok_or(())?.mentions(name, class, PublicationKind::Globals) { continue }
+                world.depends_on_file(scope.file);
                 for PreparedItem { node, item, target: prepared } in self.indexed_items(scope, Some((name, class)), PublicationKind::Globals, true)? {
                     let Action::Globals { first: true, classes, target: Some(target), module: None, asks, .. } = item.action else { continue };
                     if classes != 0 && classes & class == 0 || !self.holds(node, item.when)? { continue }

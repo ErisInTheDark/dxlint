@@ -100,11 +100,41 @@ pub fn hash_bytes(bytes: &[u8]) -> u64 {
 // ---- recording ---------------------------------------------------------------
 
 /// What some work read: its own deps, plus the reads of the shared answers
-/// it used (kept whole: many lints share them).
+/// it used (kept whole: many lints share them), plus its scans.
 #[derive(Debug, Default)]
 pub struct Reads {
     pub deps: Vec<Dep>,
     pub groups: Vec<Arc<Reads>>,
+    pub scans: Vec<Arc<Scan>>,
+}
+
+/// A lookup over many files that asked each one only `test` (a program's
+/// globals, its ambient modules): it holds while every file reads the same,
+/// or passes `test` as it reads now.
+#[derive(Debug)]
+pub struct Scan {
+    /// The scanned files' [`Dep::Text`] reads, and nothing else.
+    pub files: Arc<Reads>,
+    pub test: ScanTest,
+}
+
+/// What a [`Scan`] asked each file.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum ScanTest {
+    /// Its text holds none of these.
+    Lacks(Box<[Box<str>]>),
+    /// It cannot declare global `name`: its text holds none of `hints`, and
+    /// lacks `name` or never mentions it as a global (the engine answers
+    /// that, see `Linter::passes`).
+    Global { name: Box<str>, hints: Box<[Box<str>]> },
+}
+
+impl Scan {
+    /// Whether every scanned file reads the same or passes the test now;
+    /// `passes(path)` answers for a changed file.
+    pub fn holds(&self, passes: impl Fn(&Path) -> bool) -> bool {
+        self.files.deps.iter().all(|dep| dep.holds() || passes(dep.path()))
+    }
 }
 
 /// An answer and its dependencies; every consumer records those reads.
@@ -132,16 +162,29 @@ impl<T: Clone> Cached<T> {
 
 impl Reads {
     pub fn is_empty(&self) -> bool {
-        self.deps.is_empty() && self.groups.is_empty()
+        self.deps.is_empty() && self.groups.is_empty() && self.scans.is_empty()
     }
 
-    /// Whether `f` is true for any dep, looking into each group once.
+    /// Whether `f` is true for any dep, looking into each group once (and
+    /// into no scan: a scan's files are read only for its test).
     pub fn any(&self, f: &mut impl FnMut(&Dep) -> bool) -> bool {
         self.any_in(f, &mut HashSet::new())
     }
 
     fn any_in(&self, f: &mut impl FnMut(&Dep) -> bool, seen: &mut HashSet<*const Reads>) -> bool {
         self.deps.iter().any(&mut *f) || self.groups.iter().any(|g| seen.insert(Arc::as_ptr(g)) && g.any_in(f, seen))
+    }
+
+    /// Whether every dep and scan holds, looking into each group and scan
+    /// once.
+    pub fn holds(&self, dep: &mut impl FnMut(&Dep) -> bool, scan: &mut impl FnMut(&Scan) -> bool) -> bool {
+        self.holds_in(dep, scan, &mut HashSet::new())
+    }
+
+    fn holds_in(&self, dep: &mut impl FnMut(&Dep) -> bool, scan: &mut impl FnMut(&Scan) -> bool, seen: &mut HashSet<*const ()>) -> bool {
+        self.deps.iter().all(&mut *dep)
+            && self.scans.iter().all(|s| !seen.insert(Arc::as_ptr(s).cast()) || scan(s))
+            && self.groups.iter().all(|g| !seen.insert(Arc::as_ptr(g).cast()) || g.holds_in(dep, scan, seen))
     }
 }
 
@@ -152,6 +195,8 @@ struct Frame {
     groups: Vec<Arc<Reads>>,
     /// `groups` by address: shared answers are used many times per frame.
     group_set: crate::fx_hash::FxHashSet<*const Reads>,
+    scans: Vec<Arc<Scan>>,
+    scan_set: crate::fx_hash::FxHashSet<*const Scan>,
 }
 
 thread_local! {
@@ -176,7 +221,7 @@ pub fn track<R>(f: impl FnOnce() -> R) -> (R, Reads) {
     unwinding.0 = false;
     let frame = FRAMES.with(|f| f.borrow_mut().pop()).unwrap_or_default();
     let deps: Vec<Dep> = frame.deps.into_iter().collect();
-    (r, Reads { deps, groups: frame.groups })
+    (r, Reads { deps, groups: frame.groups, scans: frame.scans })
 }
 
 /// Records a read for the innermost `track`, if any.
@@ -197,6 +242,17 @@ pub fn note_group(group: &Arc<Reads>) {
         if let Some(frame) = f.borrow_mut().last_mut() {
             if frame.group_set.insert(Arc::as_ptr(group)) {
                 frame.groups.push(group.clone());
+            }
+        }
+    });
+}
+
+/// Records a scan for the innermost `track`, if any.
+pub fn note_scan(scan: &Arc<Scan>) {
+    FRAMES.with(|f| {
+        if let Some(frame) = f.borrow_mut().last_mut() {
+            if frame.scan_set.insert(Arc::as_ptr(scan)) {
+                frame.scans.push(scan.clone());
             }
         }
     });

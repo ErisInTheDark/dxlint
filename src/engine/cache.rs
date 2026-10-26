@@ -20,17 +20,25 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use super::{Diagnostic, Edit, Fix, Linter};
 use crate::config::ast::Severity;
-use super::reads::{hash_bytes, Dep, Reads};
+use super::reads::{hash_bytes, Dep, Reads, Scan, ScanTest};
 
 pub const FILE_NAME: &str = ".dxcache";
 /// Bumped whenever the encoding changes.
-const MAGIC: &[u8; 4] = b"ZLC5";
+const MAGIC: &[u8; 4] = b"ZLC6";
 
-/// Deps and groups, by index into the tables.
+/// Deps, groups and scans, by index into the tables.
 #[derive(Default, Clone, PartialEq, Eq, Hash)]
 struct Refs {
     deps: Vec<u32>,
     groups: Vec<u32>,
+    scans: Vec<u32>,
+}
+
+/// A saved [`super::reads::Scan`]: its files are a group of text reads.
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct SavedScan {
+    files: u32,
+    test: ScanTest,
 }
 
 struct Entry {
@@ -52,6 +60,7 @@ struct Saved {
     deps: Vec<Dep>,
     /// A group's refs only point at earlier groups.
     groups: Vec<Refs>,
+    scans: Vec<SavedScan>,
     entries: HashMap<String, Entry>,
 }
 
@@ -63,13 +72,17 @@ pub struct Cache {
     /// Whether each saved dep and group still holds, checked once per run.
     dep_holds: Vec<OnceLock<bool>>,
     group_holds: Vec<OnceLock<bool>>,
-    /// Saved groups as reads, for results taken from the cache.
+    scan_holds: Vec<OnceLock<bool>>,
+    /// Saved groups and scans as reads, for results taken from the cache.
     group_reads: Vec<OnceLock<Arc<Reads>>>,
+    scan_reads: Vec<OnceLock<Arc<Scan>>>,
     /// Directory listings answering saved file probes ([`Cache::listed_file`]).
     listings: std::sync::RwLock<crate::fx_hash::FxHashMap<PathBuf, Option<Arc<super::reads::Listing>>>>,
     /// Content hashes of the files this run looked up: other files' saved
     /// text reads of them check against these instead of reading again.
     texts: std::sync::RwLock<crate::fx_hash::FxHashMap<PathBuf, u64>>,
+    /// Texts of changed files that scans test ([`Cache::current_text`]).
+    current: std::sync::RwLock<crate::fx_hash::FxHashMap<PathBuf, Option<Arc<str>>>>,
     fresh: Mutex<HashMap<String, Fresh>>,
     /// Something new to write.
     changed: AtomicBool,
@@ -90,8 +103,11 @@ impl Cache {
             dep_holds: saved.deps.iter().map(|_| OnceLock::new()).collect(),
             group_holds: saved.groups.iter().map(|_| OnceLock::new()).collect(),
             group_reads: saved.groups.iter().map(|_| OnceLock::new()).collect(),
+            scan_holds: saved.scans.iter().map(|_| OnceLock::new()).collect(),
+            scan_reads: saved.scans.iter().map(|_| OnceLock::new()).collect(),
             listings: Default::default(),
             texts: Default::default(),
+            current: Default::default(),
             saved,
             fresh: Mutex::default(),
             changed: AtomicBool::new(false),
@@ -125,7 +141,30 @@ impl Cache {
     }
 
     fn holds(&self, linter: &Linter, refs: &Refs) -> bool {
-        refs.deps.iter().all(|&i| *self.dep_holds[i as usize].get_or_init(|| match &self.saved.deps[i as usize] {
+        refs.deps.iter().all(|&i| self.dep_holds(linter, i))
+            && refs.scans.iter().all(|&i| *self.scan_holds[i as usize].get_or_init(|| {
+                let scan = &self.saved.scans[i as usize];
+                // Only files read otherwise than saved are tested again.
+                self.saved.groups[scan.files as usize].deps.iter().all(|&dep| {
+                    self.dep_holds(linter, dep) || {
+                        let path = self.saved.deps[dep as usize].path();
+                        linter.passes(path, self.current_text(path).as_deref(), &scan.test)
+                    }
+                })
+            }))
+            && refs.groups.iter().all(|&i| *self.group_holds[i as usize].get_or_init(|| self.holds(linter, &self.saved.groups[i as usize])))
+    }
+
+    /// A changed file's text, read once however many scans test it.
+    fn current_text(&self, path: &Path) -> Option<Arc<str>> {
+        if let Some(text) = self.current.read().expect("cache current texts").get(path) { return text.clone() }
+        let text = super::reads::read_unrecorded(path).0;
+        self.current.write().expect("cache current texts").insert(path.to_owned(), text.clone());
+        text
+    }
+
+    fn dep_holds(&self, linter: &Linter, i: u32) -> bool {
+        *self.dep_holds[i as usize].get_or_init(|| match &self.saved.deps[i as usize] {
             Dep::IsFile(path, found) => self.listed_file(path) == *found,
             // A text read that found nothing still finds nothing while no
             // file is there: its directory's listing answers that.
@@ -135,8 +174,7 @@ impl Cache {
                 seen.map_or_else(|| linter.holds(dep), |seen| seen == *hash)
             }
             dep => linter.holds(dep),
-        }))
-            && refs.groups.iter().all(|&i| *self.group_holds[i as usize].get_or_init(|| self.holds(linter, &self.saved.groups[i as usize])))
+        })
     }
 
     /// Whether `path` is a file, from its directory's listing (read once per
@@ -153,12 +191,20 @@ impl Cache {
         held
     }
 
-    /// Saved refs as reads, each group built once.
+    /// Saved refs as reads, each group and scan built once.
     fn reads(&self, refs: &Refs) -> Reads {
         Reads {
             deps: refs.deps.iter().map(|&i| self.saved.deps[i as usize].clone()).collect(),
-            groups: refs.groups.iter().map(|&i| self.group_reads[i as usize].get_or_init(|| Arc::new(self.reads(&self.saved.groups[i as usize]))).clone()).collect(),
+            groups: refs.groups.iter().map(|&i| self.group_reads(i)).collect(),
+            scans: refs.scans.iter().map(|&i| self.scan_reads[i as usize].get_or_init(|| {
+                let scan = &self.saved.scans[i as usize];
+                Arc::new(Scan { files: self.group_reads(scan.files), test: scan.test.clone() })
+            }).clone()).collect(),
         }
+    }
+
+    fn group_reads(&self, i: u32) -> Arc<Reads> {
+        self.group_reads[i as usize].get_or_init(|| Arc::new(self.reads(&self.saved.groups[i as usize]))).clone()
     }
 
     /// Remembers this run's result for `rel`.
@@ -200,9 +246,14 @@ impl Cache {
         for d in &tables.deps {
             w.dep(d);
         }
+        // Groups name scans and scans name groups: both counts come first.
+        w.var(tables.scans.len() as u64);
         w.var(tables.groups.len() as u64);
         for g in &tables.groups {
             w.refs(g);
+        }
+        for s in &tables.scans {
+            w.scan(s);
         }
         w.var(entries.len() as u64);
         for (rel, content, refs, diags) in entries {
@@ -233,7 +284,8 @@ fn key(fingerprint: u64) -> u64 {
     hash_bytes(&[MAGIC.as_slice(), &fingerprint.to_le_bytes(), &exe.to_le_bytes()].concat())
 }
 
-/// The tables being written: deps and groups interned, groups by content.
+/// The tables being written: deps, groups and scans interned, groups and
+/// scans by content.
 struct Tables<'a> {
     saved: &'a Saved,
     deps: Vec<Dep>,
@@ -244,6 +296,11 @@ struct Tables<'a> {
     /// results) or by saved index.
     by_address: HashMap<usize, u32>,
     by_saved: HashMap<u32, u32>,
+    scans: Vec<SavedScan>,
+    scan_ids: HashMap<SavedScan, u32>,
+    /// Scans already interned, as for groups.
+    scan_by_address: HashMap<usize, u32>,
+    scan_by_saved: HashMap<u32, u32>,
 }
 
 impl<'a> Tables<'a> {
@@ -256,7 +313,43 @@ impl<'a> Tables<'a> {
             group_ids: HashMap::new(),
             by_address: HashMap::new(),
             by_saved: HashMap::new(),
+            scans: Vec::new(),
+            scan_ids: HashMap::new(),
+            scan_by_address: HashMap::new(),
+            scan_by_saved: HashMap::new(),
         }
+    }
+
+    fn scan(&mut self, scan: SavedScan) -> u32 {
+        if let Some(&id) = self.scan_ids.get(&scan) {
+            return id;
+        }
+        let id = self.scans.len() as u32;
+        self.scans.push(scan.clone());
+        self.scan_ids.insert(scan, id);
+        id
+    }
+
+    fn reads_scan(&mut self, s: &Arc<Scan>) -> u32 {
+        let address = Arc::as_ptr(s) as usize;
+        if let Some(&id) = self.scan_by_address.get(&address) {
+            return id;
+        }
+        let files = self.reads_group(&s.files);
+        let id = self.scan(SavedScan { files, test: s.test.clone() });
+        self.scan_by_address.insert(address, id);
+        id
+    }
+
+    fn saved_scan(&mut self, i: u32) -> u32 {
+        if let Some(&id) = self.scan_by_saved.get(&i) {
+            return id;
+        }
+        let saved = &self.saved.scans[i as usize];
+        let files = self.saved_group(saved.files);
+        let id = self.scan(SavedScan { files, test: saved.test.clone() });
+        self.scan_by_saved.insert(i, id);
+        id
     }
 
     fn dep(&mut self, dep: &Dep) -> u32 {
@@ -282,7 +375,8 @@ impl<'a> Tables<'a> {
     fn reads(&mut self, reads: &Reads) -> Refs {
         let deps = reads.deps.iter().map(|d| self.dep(d)).collect();
         let groups = reads.groups.iter().map(|g| self.reads_group(g)).collect();
-        sorted(Refs { deps, groups })
+        let scans = reads.scans.iter().map(|s| self.reads_scan(s)).collect();
+        sorted(Refs { deps, groups, scans })
     }
 
     fn reads_group(&mut self, g: &Arc<Reads>) -> u32 {
@@ -300,7 +394,8 @@ impl<'a> Tables<'a> {
         let saved = self.saved;
         let deps = refs.deps.iter().map(|&i| self.dep(&saved.deps[i as usize])).collect();
         let groups = refs.groups.iter().map(|&i| self.saved_group(i)).collect();
-        sorted(Refs { deps, groups })
+        let scans = refs.scans.iter().map(|&i| self.saved_scan(i)).collect();
+        sorted(Refs { deps, groups, scans })
     }
 
     fn saved_group(&mut self, i: u32) -> u32 {
@@ -319,6 +414,8 @@ fn sorted(mut refs: Refs) -> Refs {
     refs.deps.dedup();
     refs.groups.sort_unstable();
     refs.groups.dedup();
+    refs.scans.sort_unstable();
+    refs.scans.dedup();
     refs
 }
 
@@ -411,6 +508,23 @@ impl Writer<'_> {
     fn refs(&mut self, refs: &Refs) {
         self.ids(&refs.deps);
         self.ids(&refs.groups);
+        self.ids(&refs.scans);
+    }
+
+    fn scan(&mut self, s: &SavedScan) {
+        self.var(u64::from(s.files));
+        let (tag, words): (u8, &[Box<str>]) = match &s.test {
+            ScanTest::Lacks(needles) => (0, needles),
+            ScanTest::Global { hints, .. } => (1, hints),
+        };
+        self.out.push(tag);
+        if let ScanTest::Global { name, .. } = &s.test {
+            self.str(name);
+        }
+        self.var(words.len() as u64);
+        for word in words {
+            self.str(word);
+        }
     }
 
     fn dep(&mut self, d: &Dep) {
@@ -471,20 +585,22 @@ fn decode(bytes: &[u8], key: u64, root: &Path) -> Option<Saved> {
         r.strings.push(s);
     }
     let deps = (0..r.var()?).map(|_| r.dep()).collect::<Option<Vec<_>>>()?;
+    let scan_count = usize::try_from(r.var()?).ok()?;
     let mut groups = Vec::new();
     for _ in 0..r.var()? {
-        let refs = r.refs(deps.len(), groups.len())?;
+        let refs = r.refs(deps.len(), groups.len(), scan_count)?;
         groups.push(refs);
     }
+    let scans = (0..scan_count).map(|_| r.scan(&groups)).collect::<Option<Vec<_>>>()?;
     let mut entries = HashMap::new();
     for _ in 0..r.var()? {
         let rel = r.str()?;
         let content = r.u64()?;
-        let refs = r.refs(deps.len(), groups.len())?;
+        let refs = r.refs(deps.len(), groups.len(), scans.len())?;
         let diags = (0..r.var()?).map(|_| r.diag()).collect::<Option<Vec<_>>>()?;
         entries.insert(rel, Entry { content, refs, diags });
     }
-    Some(Saved { deps, groups, entries })
+    Some(Saved { deps, groups, scans, entries })
 }
 
 struct Reader<'a> {
@@ -541,8 +657,24 @@ impl<'a> Reader<'a> {
         Some(out)
     }
 
-    fn refs(&mut self, deps: usize, groups: usize) -> Option<Refs> {
-        Some(Refs { deps: self.ids(deps)?, groups: self.ids(groups)? })
+    fn refs(&mut self, deps: usize, groups: usize, scans: usize) -> Option<Refs> {
+        Some(Refs { deps: self.ids(deps)?, groups: self.ids(groups)?, scans: self.ids(scans)? })
+    }
+
+    /// A scan, whose files group holds only deps.
+    fn scan(&mut self, groups: &[Refs]) -> Option<SavedScan> {
+        let files = u32::try_from(self.var()?).ok()?;
+        let only_deps = groups.get(files as usize)?;
+        if !only_deps.groups.is_empty() || !only_deps.scans.is_empty() { return None }
+        let tag = self.u8()?;
+        let name = if tag == 1 { Some(self.str()?) } else { None };
+        let words: Box<[Box<str>]> = (0..self.var()?).map(|_| self.str().map(Box::from)).collect::<Option<_>>()?;
+        let test = match (tag, name) {
+            (0, None) => ScanTest::Lacks(words),
+            (1, Some(name)) => ScanTest::Global { name: name.into(), hints: words },
+            _ => return None,
+        };
+        Some(SavedScan { files, test })
     }
 
     fn path(&mut self) -> Option<PathBuf> {

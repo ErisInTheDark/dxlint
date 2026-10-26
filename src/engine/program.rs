@@ -6,7 +6,7 @@ use std::thread::ThreadId;
 use crate::grammar::names::question::Known;
 use crate::fx_hash::FxHashMap;
 
-use super::{Profile, reads::{self, Cached, Dep}};
+use super::{Profile, reads::{self, Cached, Reads}};
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub(super) struct Context {
@@ -205,8 +205,9 @@ pub(super) struct Programs {
 }
 
 impl Programs {
-    pub fn paths(&self, context: Context, holds: impl Fn(&Dep) -> bool, build: impl FnOnce() -> Known<Vec<PathBuf>>) -> Known<Arc<Vec<PathBuf>>> {
-        self.paths.get(context, None, |answer| !answer.reads.any(&mut |dep| !holds(dep)), || match build() {
+    /// `holds`: whether an answer's reads still hold.
+    pub fn paths(&self, context: Context, holds: impl Fn(&Reads) -> bool, build: impl FnOnce() -> Known<Vec<PathBuf>>) -> Known<Arc<Vec<PathBuf>>> {
+        self.paths.get(context, None, |answer| holds(&answer.reads), || match build() {
             Known::Yes(paths) => Known::Yes(self.intern(paths)),
             Known::Unknown => Known::Unknown,
         })
@@ -223,8 +224,8 @@ impl Programs {
         list
     }
 
-    pub fn catalog(&self, key: CatalogKey, profile: Option<&Profile>, holds: impl Fn(&Dep) -> bool, build: impl FnOnce() -> Known<Catalog>) -> Known<Arc<Catalog>> {
-        self.catalogs.get(key, profile, |answer| !answer.reads.any(&mut |dep| !holds(dep)), || match build() {
+    pub fn catalog(&self, key: CatalogKey, profile: Option<&Profile>, holds: impl Fn(&Reads) -> bool, build: impl FnOnce() -> Known<Catalog>) -> Known<Arc<Catalog>> {
+        self.catalogs.get(key, profile, |answer| holds(&answer.reads), || match build() {
             Known::Yes(catalog) => Known::Yes(Arc::new(catalog)),
             Known::Unknown => Known::Unknown,
         })
@@ -266,7 +267,7 @@ pub(super) struct Snapshot {
     /// text may publish it, as positions in the program's survey.
     candidates: Slots<(usize, u64, Box<str>), Arc<[u32]>>,
     /// Per program (settings, input hash): every input's text, read once.
-    surveys: Slots<(usize, u64), Survey>,
+    surveys: Slots<(usize, u64), Surveyed>,
     /// Per surveyed program, the inputs each word occurs in.
     words: Slots<(usize, u64), Words>,
     /// Program configurations by revision, settings and program directory.
@@ -353,6 +354,9 @@ pub(super) enum StableQuestion {
 /// text holds a name-independent publication hint (so it may publish any
 /// global name).
 pub(super) type Survey = Arc<[(PathBuf, Option<Arc<str>>, bool)]>;
+
+/// A survey and its text reads, for the scans of lookups over it.
+pub(super) type Surveyed = (Survey, Arc<Reads>);
 
 /// The byte trigrams each surveyed input's text holds, hashed into a fixed
 /// set of bits (2 KiB per input): a name can only occur in a text holding
@@ -494,9 +498,9 @@ impl Snapshot {
         Ok(found)
     }
 
-    /// A program's input texts, read once per run (`read` records them);
-    /// concurrent callers wait for the one reading.
-    pub(super) fn survey(&self, key: (usize, u64), read: impl FnOnce() -> Survey) -> Cached<Survey> {
+    /// A program's input texts, read once per run; concurrent callers wait
+    /// for the one reading.
+    pub(super) fn survey(&self, key: (usize, u64), read: impl FnOnce() -> Surveyed) -> Cached<Surveyed> {
         once(&self.surveys, key, read)
     }
 
@@ -505,8 +509,7 @@ impl Snapshot {
         once(&self.words, key, build)
     }
 
-    /// The inputs that may publish a global name, computed once per run
-    /// (`compute` records the text reads it makes).
+    /// The inputs that may publish a global name, computed once per run.
     pub(super) fn candidates(&self, key: (usize, u64, Box<str>), compute: impl FnOnce() -> Arc<[u32]>) -> Cached<Arc<[u32]>> {
         once(&self.candidates, key, compute)
     }
@@ -699,7 +702,7 @@ mod tests {
         let snapshot = Snapshot::default();
         let hash = reads::hash_bytes(b"main");
         let load = |snapshot: &Snapshot, revision| snapshot.catalog(revision, key.clone(), Some((main, hash)), || {
-            programs.catalog(key.clone(), Some(&profile), |dep| dep.holds(), || {
+            programs.catalog(key.clone(), Some(&profile), |reads| !reads.any(&mut |dep| !dep.holds()), || {
                 let text = reads::read(library).unwrap();
                 let mut texts = FxHashMap::default();
                 texts.insert(reads::dep_path(main), reads::hash_bytes(reads::read(main).unwrap().as_bytes()));
