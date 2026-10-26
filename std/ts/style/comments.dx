@@ -32,13 +32,46 @@ in ts_comment rule es-ban-linter-comment {
     { name: "eslint", pattern: /^(?:\/\/|\/\*)\s*eslint-(?:disable|enable)(?:-(?:line|next-line))?(?:\s|\*\/|$)/ },
     { name: "eslint", pattern: /^\/\*\s*(?:eslint|eslint-env|globals?|exported)(?:\s|\*\/)/ }
   ] "linter comments to report: a name for the message and a pattern over the whole comment"
+  option renames { [rule: string]: string } = {} "dxlint names for ESLint rule ids in converted suppressions, over the built-in mapping"
   let format first(filter(formats, format => re_test(text, format.pattern)))
   when format != null
   let content re_replace(text, /^\/\/|^\/\*|\*\/$/, "")
   let normalised re_replace(content, /^\s+|\s+$/, "")
-  let edit linter_comment_edit(source, node)
+  # ESLint suppressions become dxlint's own; other linter comments go.
+  let suppression eslint_suppression(source, node, normalised, renames)
+  let edit if suppression == "keep" then null
+    else if suppression != null then { start: offset, end: end_offset, text: suppression } else linter_comment_edit(source, node)
   warn "{format.name} comment detected: \"{if node is ts_line_comment then '// ' normalised else '/* ' normalised ' */'}\""
   fix at edit if edit != null as edit.text
+}
+
+# `eslint-disable-next-line a, b -- why` as `dxlint-ignore es-a es-b`; the
+# block forms become `dxlint-ignore-start` / `-end`. `dxlint-ignore` alone on
+# its line covers the next line, after code its own: a next-line directive
+# after code has no equivalent ("keep": reported, not fixed), and a same-line
+# one alone on its line suppresses nothing (null: removed). Null for other
+# comments too.
+fn eslint_suppression(source, n, content, renames) = {
+  value kind: if re_test(content, /^eslint-(?:disable-next-line|disable-line|disable|enable)(?:\s|$)/)
+    then re_replace(content, /^eslint-(disable-next-line|disable-line|disable|enable)[\s\S]*$/, "$1") else null
+  value alone: re_test(byte_slice(source, position(n.offset).js_line_start, n.offset), /^[ \t]*$/)
+  value rest: re_replace(re_replace(content, /^eslint-[a-z-]+/, ""), /\s--[\s\S]*$/, "")
+  value ids: filter(split(trim(re_replace(rest, /[\s,]+/, " ")), " "), id => id != "")
+  value names: join(map(ids, id => " " eslint_rule_name(id, renames)))
+  value word: get({ disable: "dxlint-ignore-start", enable: "dxlint-ignore-end" }, kind ?? "")
+    ?? (if kind == "disable-next-line" && alone || kind == "disable-line" && !alone then "dxlint-ignore" else null)
+  value if kind == "disable-next-line" && !alone then "keep"
+    else if word == null then null else if n is ts_line_comment then "// " word names else "/* " word names " */"
+}
+
+# An ESLint rule id as dxlint names it: the plugin goes (`@typescript-eslint/`,
+# `import/`, ...), the language prefix comes.
+fn eslint_rule_name(id, renames) = get(renames, id) ?? get({
+  "import/no-deprecated": "es-import-no-deprecated",
+  "license-header/header": "es-header"
+}, id) ?? {
+  value bare: re_replace(id, /^.*\//, "")
+  value if contains(["eol-last", "linebreak-style", "no-trailing-spaces"], bare) then "shared-" bare else "es-" bare
 }
 
 # Only directives before the first code token are triple-slash references.

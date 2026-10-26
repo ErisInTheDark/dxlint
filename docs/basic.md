@@ -192,7 +192,7 @@ language .js {
 - Rule names are the upstream name without its plugin prefix, after a language prefix: `@typescript-eslint/no-floating-promises` and `@stylistic/indent` are `es-no-floating-promises` and `es-indent`, the same for JavaScript and TypeScript. Text rules every language shares, such as `eol-last`, are `shared-eol-last`. Where typescript-eslint extends a core rule (`es-no-unused-vars`, `es-no-shadow`, ...), dxlint has one rule that behaves like the typescript-eslint version.
 - Options keep their upstream names and values; a rule's option object becomes `set` lines.
 - A config object with `files`, `ignores` and `rules` becomes a `files` block, its `ignores` as `!` globs; top-level `ignores` become `ignore` lines.
-- Replace `eslint-disable` comments with `dxlint-ignore`.
+- `eslint-disable` comments convert to `dxlint-ignore` with `es-ban-linter-comment`'s fix; to apply only that, run `dxlint -c migrate.dx --fix` with a `migrate.dx` holding `import .ts` and `rule es-ban-linter-comment`.
 - Each rule's page in [rules/](rules/README.md) has a parity row: how many of the upstream rule's own test cases dxlint matches.
 
 ## Editors

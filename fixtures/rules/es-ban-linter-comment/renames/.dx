@@ -1,0 +1,4 @@
+import .ts
+rule es-ban-linter-comment {
+  set renames { "local/condition-complexity": "condition-complexity", "@typescript-eslint/no-explicit-any": "my-any" }
+}
