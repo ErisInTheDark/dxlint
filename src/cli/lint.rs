@@ -143,6 +143,8 @@ pub(super) fn walker(roots: &[PathBuf], jobs: usize, keep: impl Fn(&ignore::DirE
 }
 
 fn lint_file(linter: &Linter, run: &LintRun<'_>, cache: Option<&Cache>, path: &Path, fix: bool) -> Msg {
+    // Another Workbench thread's file: reported, never rewritten.
+    let fix = fix && !super::workbench::holds(path);
     let text = if let Some(text) = reads::buffer(path) {
         text.to_string()
     } else {
@@ -285,6 +287,8 @@ fn lint(output: &mut Output<'_>, args: LintArgs, config: &ConfigArg, sources: Op
     }
     let named: Vec<PathBuf> = args.paths.iter().map(|p| normalize_path(&output.cwd.join(p))).collect();
     let jobs = args.jobs.map_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get()), |n| n.get());
+    // In a Workbench agent's shell, read the arc view while configs load.
+    let mut view = (super::workbench::active() && !args.no_workbench_view).then(|| super::workbench::start(output.cwd.to_path_buf()));
     let mut tally = Tally::new();
     for (path, roots) in configs {
         let whole = roots.is_none();
@@ -301,7 +305,23 @@ fn lint(output: &mut Output<'_>, args: LintArgs, config: &ConfigArg, sources: Op
             walked = Some(found);
             nested
         };
-        let (mut project, folded) = match super::load_tree_with(output, &path, nested, &crate::config::source::Disk, true) {
+        let loaded = super::load_tree_with(output, &path, nested, &crate::config::source::Disk, true);
+        if let Some(handle) = view.take() {
+            match handle.join().unwrap_or_else(|_| Err("reading it panicked".into())) {
+                Ok(found) => super::workbench::apply(&found),
+                Err(error) => render::error(output, &format!("workbench view not applied ({error}); linting the files on disk")),
+            }
+        }
+        // A config file another thread holds: read it again as the view has it.
+        let config_held = loaded.as_ref().is_ok_and(|(project, _)| project.linter.sources.files()
+            .any(|(_, file)| file.path.as_deref().is_some_and(super::workbench::holds)));
+        let loaded = if config_held {
+            let nested = walked.as_ref().filter(|_| config.config.is_none()).map(|w| w.nested.clone()).unwrap_or_default();
+            super::load_tree_with(output, &path, |_| nested, &crate::config::source::Disk, true)
+        } else {
+            loaded
+        };
+        let (mut project, folded) = match loaded {
             Ok(project) => project,
             Err(_) => {
                 tally.config_ok = false;
@@ -422,8 +442,10 @@ fn lint_project(output: &mut Output<'_>, args: &LintArgs, project: &mut Project,
                 // Lint the biggest files first: a big file found late would
                 // otherwise be the tail every other thread waits on.
                 files.into_iter().filter(|(_, path)| {
-                    // Explicitly named files are linted even if ignored by git.
+                    // Explicitly named files are linted even if ignored by git;
+                    // files a Workbench view lacks are not there at all.
                     !apart.iter().any(|dir| path.starts_with(dir))
+                        && !matches!(reads::overlaid(&normalize_path(path)), Some(None))
                         && (linter.wants(path) || (explicit.iter().any(|e| e == path) && !linter.is_ignored(path)))
                 }).collect()
             };

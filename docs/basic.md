@@ -167,6 +167,10 @@ rule es-no-console off
 
 Such a config is a `files` block that lives in its folder: when it holds only what a block can (rule lines, `severity`, ruleset imports), a run of the parent lints the folder in the same pass, with one linter. Any other nested `.dx` is a project of its own: `dxlint` skips its folder and says so; name the folder (`dxlint . packages/app`) to lint it too, with its own config. `-c` lints every named path with that one config and folds nothing.
 
+## Agents in Workbench
+
+In a Workbench agent's shell, `dxlint` lints the agent's view of the repository (`wb git arc held`): files other live threads claim read as the view has them, the rest from disk. `--fix` never rewrites those files. `--no-workbench-view` lints the disk as it is.
+
 ## Language settings
 
 JavaScript environment settings (ESLint's `languageOptions`) live in a `language` block:

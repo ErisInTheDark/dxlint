@@ -6,6 +6,7 @@ mod fixtures;
 mod info;
 mod lint;
 mod render;
+mod workbench;
 
 #[cfg(test)]
 mod tests;
@@ -163,6 +164,10 @@ pub struct LintArgs {
     /// Results depend on it, so it implies --no-cache.
     #[arg(long, value_name = "STEPS")]
     pub semantic_budget: Option<std::num::NonZeroU32>,
+    /// In a Workbench agent's shell: lint the disk, not the agent's arc view
+    /// (files other threads claim, as at HEAD)
+    #[arg(long)]
+    pub no_workbench_view: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]

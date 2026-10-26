@@ -54,7 +54,7 @@ fn request(output: &mut Output<'_>, config: &ConfigArg, path: &Path, cache: &mut
     let code = super::lint::prepared(output, LintArgs {
         paths: Vec::new(), sources: None, jobs: std::num::NonZeroUsize::new(1),
         fix: false, fix_preview: true, format: Format::Jsonl,
-        stats: false, profile: false, no_cache: true, semantic_budget: None,
+        stats: false, profile: false, no_cache: true, semantic_budget: None, no_workbench_view: true,
     }, project, Some(&sources), started);
     if !project.config_ok { *cache = None; }
     code

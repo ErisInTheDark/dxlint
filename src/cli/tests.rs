@@ -717,6 +717,19 @@ fn walks_fold_nested_configs_importing_their_parent_and_skip_other_projects() {
 }
 
 #[test]
+fn a_workbench_view_lints_held_files_as_it_has_them_and_fixes_none_of_them() {
+    let dir = crate::config::source::normalize_path(&project("cli-workbench-view", &[(".dx", RULES), ("held.t", "quiet\n"), ("gone.t", "LOUD\n"), ("own.t", "LOUD\n")]));
+    // Another thread holds `held.t` (LOUD at HEAD, edited on disk) and `gone.t` (new, not at HEAD).
+    super::workbench::apply(&super::workbench::View { texts: vec![(dir.join("held.t"), "LOUD\n".into())], absent: vec![dir.join("gone.t")] });
+    let out = dxlint(&dir, &["--format", "jsonl", "--fix", "--no-cache"]);
+    let lines = stdout(&out);
+    assert!(lines.contains("\"file\":\"held.t\""), "{lines}");
+    assert!(!lines.contains("gone.t"), "{lines}");
+    assert_eq!(std::fs::read_to_string(dir.join("held.t")).unwrap(), "quiet\n");
+    assert_eq!(std::fs::read_to_string(dir.join("own.t")).unwrap(), "loud\n");
+}
+
+#[test]
 fn named_paths_inside_each_other_lint_each_file_once() {
     let dir = project("cli-overlapping-roots", &[(".dx", RULES), ("sub/.dx", NESTED), ("sub/a.t", "LOUD\n")]);
     let out = dxlint(&dir, &["--format", "jsonl", "-c", ".dx", ".", "sub"]);

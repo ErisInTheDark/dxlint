@@ -214,6 +214,8 @@ pub fn note_group(group: &Arc<Reads>) {
 #[derive(Default)]
 struct Buffers {
     texts: HashMap<PathBuf, Arc<str>>,
+    /// Files that read as absent whatever is on disk (`hide_file`).
+    hidden: std::collections::HashSet<PathBuf>,
     /// Child reference counts include descendants: inserting `a/b.ts`
     /// supplies `a` in its parent without scanning all open files.
     directories: HashMap<PathBuf, HashMap<OsString, usize>>,
@@ -286,10 +288,45 @@ pub(crate) fn buffer(path: &Path) -> Option<Arc<str>> {
     buffers().read().ok()?.texts.get(path).cloned()
 }
 
+/// From now on, `path` reads as absent, whatever is on disk.
+pub fn hide_file(path: &Path) {
+    buffers().write().expect("buffers lock").hidden.insert(path.to_path_buf());
+}
+
+/// `path`'s overlay, if any: `Some(Some(text))` for a buffer, `Some(None)`
+/// for a hidden file; `None` reads the disk.
+pub fn overlaid(path: &Path) -> Option<Option<Arc<str>>> {
+    match overlay(path) {
+        Overlay::Text(text) => Some(Some(text)),
+        Overlay::Hidden => Some(None),
+        Overlay::Disk => None,
+    }
+}
+
+/// What a path reads as over the disk.
+enum Overlay {
+    Text(Arc<str>),
+    Hidden,
+    Disk,
+}
+
+fn overlay(path: &Path) -> Overlay {
+    let Ok(buffers) = buffers().read() else { return Overlay::Disk };
+    match buffers.texts.get(path) {
+        Some(text) => Overlay::Text(text.clone()),
+        None if buffers.hidden.contains(path) => Overlay::Hidden,
+        None => Overlay::Disk,
+    }
+}
+
 // ---- reading -----------------------------------------------------------------------
 
 fn text(path: &Path) -> Option<Arc<str>> {
-    buffer(path).or_else(|| std::fs::read_to_string(path).ok().map(Into::into))
+    match overlay(path) {
+        Overlay::Text(text) => Some(text),
+        Overlay::Hidden => None,
+        Overlay::Disk => std::fs::read_to_string(path).ok().map(Into::into),
+    }
 }
 
 /// A file's text and its hash ([`MISSING`] when unreadable).
@@ -300,7 +337,11 @@ fn content(path: &Path) -> (Option<Arc<str>>, u64) {
 }
 
 fn file_exists(path: &Path) -> bool {
-    buffer(path).is_some() || path.is_file()
+    match overlay(path) {
+        Overlay::Text(_) => true,
+        Overlay::Hidden => false,
+        Overlay::Disk => path.is_file(),
+    }
 }
 
 /// A file's text, recorded.
@@ -358,7 +399,11 @@ pub fn list_unrecorded(dir: &Path) -> Option<Listing> {
 /// `listing` where that is certain (an exact plain-file name, or no entry
 /// of that name even ignoring case); a real probe otherwise.
 pub fn is_file_listed(path: &Path, listing: &Listing) -> bool {
-    if buffer(path).is_some() { return true }
+    match overlay(path) {
+        Overlay::Text(_) => return true,
+        Overlay::Hidden => return false,
+        Overlay::Disk => {}
+    }
     let Some(name) = path.file_name() else { return file_exists(path) };
     if listing.files.contains(name) { return true }
     if !listing.unsure.contains(name) && !listing.folded.contains(&name.to_string_lossy().to_lowercase()) { return false }
@@ -385,8 +430,14 @@ fn listing(dir: &Path) -> (Vec<String>, u64) {
     let mut names: Vec<String> = std::fs::read_dir(dir)
         .map(|d| d.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect())
         .unwrap_or_default();
-    if let Some(children) = buffers().read().expect("buffers lock").directories.get(dir) {
-        names.extend(children.keys().map(|name| name.to_string_lossy().into_owned()));
+    {
+        let buffers = buffers().read().expect("buffers lock");
+        if let Some(children) = buffers.directories.get(dir) {
+            names.extend(children.keys().map(|name| name.to_string_lossy().into_owned()));
+        }
+        if !buffers.hidden.is_empty() {
+            names.retain(|name| !buffers.hidden.contains(&dir.join(name)) || buffers.texts.contains_key(&dir.join(name)));
+        }
     }
     names.sort_unstable();
     names.dedup();
@@ -618,6 +669,21 @@ mod tests {
         std::fs::remove_dir(library.parent().unwrap()).unwrap();
         std::fs::remove_dir(dir.join("node_modules")).unwrap();
         std::fs::remove_dir(dir).unwrap();
+    }
+
+    #[test]
+    fn hidden_files_read_as_absent_over_the_disk() {
+        let dir = std::env::temp_dir().join(format!("dxlint-hidden-files-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("kept.ts"), "kept").unwrap();
+        std::fs::write(dir.join("gone.ts"), "gone").unwrap();
+        hide_file(&dir.join("gone.ts"));
+        assert!(read(&dir.join("gone.ts")).is_none());
+        assert!(!is_file(&dir.join("gone.ts")));
+        assert!(!is_file_listed(&dir.join("gone.ts"), &list_unrecorded(&dir).unwrap()));
+        assert_eq!(list(&dir), ["kept.ts"]);
+        assert_eq!(read(&dir.join("kept.ts")).as_deref(), Some("kept"));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
