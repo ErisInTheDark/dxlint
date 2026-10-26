@@ -1,0 +1,3 @@
+import .ts
+rule es-no-unused-imports
+rule es-no-unused-vars

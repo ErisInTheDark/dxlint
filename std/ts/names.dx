@@ -142,9 +142,13 @@ in ts_identifier {
     # `[key: string]: T` names nothing.
     || is ts_parameter.name && parent is ts_index_signature.parameter) {
     when ts_name_outside_method != null { resolves value outside ts_name_outside_method }
-    when ts_name_outside_method == null { resolves value }
+    when ts_name_outside_method == null && !ts_name_type_key { resolves value }
+    # A computed key inside type syntax reads like `typeof`: type-only
+    # imports count.
+    when ts_name_outside_method == null && ts_name_type_key { resolves query }
   }
 }
+in ts_identifier let ts_name_type_key name_type_access && containing(ts_computed_key) != null
 in ts_type_reference { resolves type name }
 # `export { x }` uses `x`; `export { x } from "m"` does not.
 in ts_export_specifier { when parent.from == null { resolves value, type local } }
