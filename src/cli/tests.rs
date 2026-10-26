@@ -717,6 +717,14 @@ fn walks_fold_nested_configs_importing_their_parent_and_skip_other_projects() {
 }
 
 #[test]
+fn named_paths_inside_each_other_lint_each_file_once() {
+    let dir = project("cli-overlapping-roots", &[(".dx", RULES), ("sub/.dx", NESTED), ("sub/a.t", "LOUD\n")]);
+    let out = dxlint(&dir, &["--format", "jsonl", "-c", ".dx", ".", "sub"]);
+    let lines = stdout(&out);
+    assert_eq!(lines.lines().filter(|l| l.contains("\"file\":\"sub/a.t\"")).count(), 1, "{lines}");
+}
+
+#[test]
 fn ignored_nested_projects_are_skipped_quietly() {
     let root = format!("{RULES}\nignore \"sub\"\n");
     let dir = project("cli-nested-ignored", &[(".dx", root.as_str()), ("sub/.dx", NESTED), ("sub/a.t", "LOUD\n")]);

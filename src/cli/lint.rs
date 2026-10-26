@@ -341,7 +341,10 @@ fn walk(roots: &[PathBuf], jobs: usize, base: &Path, ignores: &crate::path_globs
             WalkState::Continue
         })
     });
-    let files = found.into_inner().expect("file list");
+    // Named roots may lie inside each other (`dxlint . sub`): each file once.
+    let mut files = found.into_inner().expect("file list");
+    files.sort_unstable_by(|a, b| a.1.cmp(&b.1));
+    files.dedup_by(|a, b| a.1 == b.1);
     let mut nested: Vec<PathBuf> = files.iter().map(|(_, path)| path)
         .filter(|path| path.file_name().is_some_and(|n| n == crate::config::CONFIG_NAME) && path.parent().is_some_and(|dir| !roots.iter().any(|r| r == dir)))
         .map(|path| normalize_path(path))
