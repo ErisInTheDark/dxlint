@@ -465,7 +465,6 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
         unit_token_kinds,
         unit_child_layers: !unit_reads.all_tokens && !unit_reads.own_tokens,
         semantic_layers: unit_layers.iter().copied().filter(|&m| grammar.native_kind(m).is_none()).collect(),
-        projects: super::frontend::Projects::new(&grammar.natives),
         reach,
         profile: None,
         split_at: 128 * 1024,

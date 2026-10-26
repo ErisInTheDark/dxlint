@@ -146,8 +146,8 @@ Types are read from the files
 they are declared in (other project files, `node_modules` packages and
 `@types`, `declare module "x"`), with the nearest `tsconfig.json`'s `paths`,
 `lib`, `types` and `references` deciding what is visible. Other files are
-read once per run and kept only as declaration summaries; unannotated
-functions of the linted file itself are typed from their `return`s.
+parsed once per run, when a question first needs them, and read like the
+linted file: `export const v = w` in another file is typed from `w`.
 
 The `.ts/modules` library declares publications, import links, namespaces, globals and module-resolution profiles. The [facts reference](#facts) includes queries for module exports, program options and declaration origins.
 

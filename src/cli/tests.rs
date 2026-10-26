@@ -597,6 +597,62 @@ fn cache_replays_results_and_relints_exactly_what_changed() {
 }
 
 #[test]
+fn cache_relints_exactly_the_files_whose_reads_changed() {
+    // a's question about `x` reads b, c and d; b only forwards and asks
+    // nothing; e reads nothing of the others.
+    let dir = project(
+        "cli-cache-chain",
+        &[
+            (".dx", "import .ts\nin ts_identifier rule typed info \"{text}: {if node always number then 'number' else if node always string then 'string' else if node always boolean then 'boolean' else 'unknown'}\" { when reference_kind == \"import\" }\n"),
+            ("tsconfig.json", "{}"),
+            ("a.ts", "import { x } from \"./b\";\nx;\n"),
+            ("b.ts", "export { v as x } from \"./c\";\n"),
+            ("c.ts", "import { w } from \"./d\";\nexport const v = w;\n"),
+            ("d/index.ts", "export declare const w: number;\n"),
+            ("e.ts", "export const e = 1;\n"),
+        ],
+    );
+    // What a says about `x`, and the `--stats` line.
+    let run = || {
+        let out = dxlint(&dir, &["--format", "jsonl", "--stats"]);
+        assert_eq!(out.code, 0, "{}", String::from_utf8_lossy(&out.stderr));
+        let said = stdout(&out)
+            .lines()
+            .map(|l| serde_json::from_str::<serde_json::Value>(l).expect("json"))
+            .find(|d| d["file"] == "a.ts")
+            .map(|d| d["message"].as_str().unwrap_or_default().to_string());
+        (said.unwrap_or_default(), String::from_utf8_lossy(&out.stderr).into_owned())
+    };
+    let write = |path: &str, text: &str| std::fs::write(dir.join(path), text).expect("write");
+    let expect = |said: &str, stats: &str| {
+        let (got, line) = run();
+        assert!(got == said && line.contains(stats), "{got:?} {line}");
+    };
+
+    expect("x: number", "5 files (0 from cache)");
+    expect("x: number", "5 files (5 from cache)");
+
+    // Three imports away: d, c and a lint again, b and e do not.
+    write("d/index.ts", "export declare const w: string;\n");
+    expect("x: string", "5 files (2 from cache)");
+
+    // A read file's whole text is the dep: an edit nothing exports still
+    // relints its readers.
+    write("d/index.ts", "export declare const w: string;\nfunction unused() { return 1 }\n");
+    expect("x: string", "5 files (2 from cache)");
+
+    // A new `d.ts` takes `./d` over from `d/index.ts`: a resolution probe
+    // two imports away.
+    write("d.ts", "export declare const w: boolean;\n");
+    expect("x: boolean", "6 files (3 from cache)");
+    std::fs::remove_file(dir.join("d.ts")).expect("remove");
+    expect("x: string", "5 files (3 from cache)");
+
+    write("e.ts", "export const e = 2;\n");
+    expect("x: string", "5 files (4 from cache)");
+}
+
+#[test]
 fn language_only_changes_invalidate_cached_diagnostics() {
     let rules = |setting| format!("import .ts\nlanguage .js {{ set globals {{ app: \"{setting}\" }} }}\nrule es-no-global-assign error\n");
     let dir = project("cli-language-cache", &[(".dx", &rules("readonly")), ("a.js", "app = 1;\n")]);

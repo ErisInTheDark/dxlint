@@ -50,10 +50,6 @@ pub enum Dep {
     IsDir(DepPath, bool),
     /// A directory's entry names, hashed.
     List(DepPath, u64),
-    /// Another file's summary: its content hash and summary fingerprint
-    /// ([`MISSING`] for both when there is none). Still holds when the
-    /// content changed but the fingerprint did not.
-    Summary(DepPath, u64, u64),
     /// The files below a directory a [`Discovery`] (by name) finds.
     Discovered(&'static str, DepPath, u64),
     /// A policy-filtered discovery, retaining its request for cache replay
@@ -64,7 +60,7 @@ pub enum Dep {
 impl Dep {
     pub fn path(&self) -> &Path {
         match self {
-            Dep::Text(p, _) | Dep::IsFile(p, _) | Dep::IsDir(p, _) | Dep::List(p, _) | Dep::Summary(p, ..) | Dep::Discovered(_, p, _) => p,
+            Dep::Text(p, _) | Dep::IsFile(p, _) | Dep::IsDir(p, _) | Dep::List(p, _) | Dep::Discovered(_, p, _) => p,
             Dep::Requested(_, request, _) => &request.root,
         }
     }
@@ -79,16 +75,13 @@ impl Dep {
         }
     }
 
-    /// Whether the dep still holds. Summaries need the summariser, so the
-    /// caller answers those: `fingerprint(path)` is the current summary's,
-    /// asked only when the content changed.
-    pub fn holds(&self, fingerprint: impl Fn(&Path) -> u64) -> bool {
+    /// Whether the dep still holds.
+    pub fn holds(&self) -> bool {
         match self {
             Dep::Text(p, h) => content(p).1 == *h,
             Dep::IsFile(p, b) => file_exists(p) == *b,
             Dep::IsDir(p, b) => directory_exists(p) == *b,
             Dep::List(p, h) => listing(p).1 == *h,
-            Dep::Summary(p, content_hash, f) => content(p).1 == *content_hash || fingerprint(p) == *f,
             Dep::Discovered(name, p, h) => discovery(name).is_some_and(|d| walk(d, p, 1).1 == *h),
             Dep::Requested(name, request, hash) => *name == PROGRAM_FILES.name && request_walk(request).map_or(MISSING, |(_, current)| current) == *hash,
         }
@@ -625,12 +618,12 @@ mod tests {
         let request = DiscoveryRequest { root, include: vec!["src/**".into()], exclude: vec!["src/generated/**".into()], extensions: vec![".ts".into()] };
         let (paths, reads) = track(|| requested(&request).unwrap());
         assert_eq!(paths, vec![included.clone()]);
-        assert!(reads.deps.iter().all(|dep| dep.holds(|_| 0)));
+        assert!(reads.deps.iter().all(|dep| dep.holds()));
         set_buffer(&included, "changed text, same membership");
-        assert!(reads.deps.iter().all(|dep| dep.holds(|_| 0)));
+        assert!(reads.deps.iter().all(|dep| dep.holds()));
         let added = request.root.join("src/second.ts");
         set_buffer(&added, "");
-        assert!(reads.deps.iter().any(|dep| !dep.holds(|_| 0)));
+        assert!(reads.deps.iter().any(|dep| !dep.holds()));
         for path in [&included, &excluded, &other, &outside, &added] { drop_buffer(path); }
     }
 
@@ -657,11 +650,11 @@ mod tests {
             };
             assert_eq!(requested(&subtree), Some(vec![included.clone()]));
         });
-        assert!(reads.deps.iter().all(|dep| dep.holds(|_| 0)));
+        assert!(reads.deps.iter().all(|dep| dep.holds()));
         std::fs::write(&included, "changed text").unwrap();
-        assert!(reads.deps.iter().all(|dep| dep.holds(|_| 0)));
+        assert!(reads.deps.iter().all(|dep| dep.holds()));
         std::fs::remove_file(&included).unwrap();
-        assert!(reads.deps.iter().all(|dep| !dep.holds(|_| 0)));
+        assert!(reads.deps.iter().all(|dep| !dep.holds()));
         std::fs::remove_file(&other).unwrap();
         std::fs::remove_file(library.join(".ignore")).unwrap();
         std::fs::remove_file(dir.join(".ignore")).unwrap();
@@ -703,11 +696,11 @@ mod tests {
             assert_eq!(list(&dir), ["disk.txt", "virtual"]);
             assert_eq!(list(&dir.join("virtual")), ["nested", "other.ts"]);
         });
-        assert!(reads.deps.iter().all(|dep| dep.holds(|_| 0)));
+        assert!(reads.deps.iter().all(|dep| dep.holds()));
         assert!(reads.deps.iter().filter(|dep| matches!(dep, Dep::IsDir(..) | Dep::List(..))).all(|dep| dep.touches(&file)));
         drop_buffer(&file);
         assert!(!is_dir(&dir.join("virtual/nested")));
-        assert!(reads.deps.iter().any(|dep| !dep.holds(|_| 0)));
+        assert!(reads.deps.iter().any(|dep| !dep.holds()));
         assert_eq!(list(&dir.join("virtual")), ["other.ts"]);
         drop_buffer(&other);
         assert!(!is_dir(&dir.join("virtual")));
@@ -738,12 +731,12 @@ mod tests {
     #[test]
     fn buffers_read_instead_of_the_disk() {
         let path = std::env::temp_dir().join(format!("dxlint-buffer-{}.ts", std::process::id()));
-        assert!(!Dep::IsFile(dep_path(&path), true).holds(|_| 0));
+        assert!(!Dep::IsFile(dep_path(&path), true).holds());
         set_buffer(&path, "declare global {}");
         let (text, reads) = track(|| read(&path));
         assert_eq!(text.as_deref(), Some("declare global {}"));
-        assert!(reads.deps[0].holds(|_| 0) && Dep::IsFile(dep_path(&path), true).holds(|_| 0));
+        assert!(reads.deps[0].holds() && Dep::IsFile(dep_path(&path), true).holds());
         drop_buffer(&path);
-        assert!(!reads.deps[0].holds(|_| 0));
+        assert!(!reads.deps[0].holds());
     }
 }

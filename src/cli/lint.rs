@@ -454,7 +454,6 @@ fn lint_project(output: &mut Output<'_>, args: &LintArgs, project: &mut Project,
             let threads = jobs.min(queue.len().max(1));
             // File and rule workers share one budget, rather than multiplying it.
             linter.set_rule_jobs(jobs / threads);
-            linter.set_discovery_jobs(jobs / threads);
             let linter = &*linter;
             let run = linter.run();
             let working = std::sync::atomic::AtomicUsize::new(threads);

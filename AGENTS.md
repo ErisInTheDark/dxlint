@@ -19,7 +19,7 @@ Rust linter; rules in `.dx` (docs/advanced.md). Binary `dxlint`.
 - `src/expr`: rule expressions; functions registry in `functions.rs`
 - `src/engine`: linter, fixes, suppressions, `.dxcache` (`cache.rs`), symbol index; end-to-end tests in `engine/tests.rs`
 - `src/engine/frontend.rs`: the `Frontend` trait, the engine's only view of a native front end (kinds/fields, parse, per-file facts, project state); `lib.rs` `FRONTENDS` registers them
-- `src/native/ts`: TypeScript front end (`frontend.rs` implements `Frontend`); `modules.rs` project (summaries, resolution, globals)
+- `src/native/ts`: TypeScript front end, syntax and tokens only (`frontend.rs` implements `Frontend`); programs, modules and globals belong to the engine (`engine/world.rs`, `engine/program.rs`)
 - `src/native/ts/topics/<family>.rs`: native facts grouped by family (`FACTS` list, read via `Facts::with_file`; whole-file results via `NativeFile::cached`); legacy home of rule logic being moved to `std/ts/<family>.dx`
 - `std/`: built-in languages (`import .ts`); matchers, plus rule definitions in `define { }` (off until `rule name`), topic files under `std/<lang>/`
 - `rules/`: built-in rulesets (`import rules:x`): only `rule name` lines

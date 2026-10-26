@@ -378,6 +378,35 @@ fn editing_an_export_relints_its_importers() {
 }
 
 #[test]
+fn editing_a_file_deep_in_an_import_chain_relints_its_far_importers() {
+    let dir = std::env::temp_dir().join("dxlint-lsp-tests").join("lsp-chain");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("tmp dir");
+    std::fs::write(dir.join(".dx"), "import .ts\nin ts_identifier rule typed info \"{text}: {if node always number then 'number' else if node always string then 'string' else 'unknown'}\" { when reference_kind == \"import\" }\n")
+        .expect("config");
+    let a = dir.join("a.ts");
+    let d = dir.join("d.ts");
+    std::fs::write(&a, "import { x } from \"./b\";\nx;\n").expect("write");
+    std::fs::write(dir.join("b.ts"), "export { v as x } from \"./c\";\n").expect("write");
+    std::fs::write(dir.join("c.ts"), "import { w } from \"./d\";\nexport const v = w;\n").expect("write");
+    std::fs::write(&d, "export declare const w: number;\n").expect("write");
+    let mut c = Client::start(&dir);
+    assert_eq!(c.diagnostics_for(&a)[0]["message"], "x: number");
+
+    // An unsaved edit three imports away reaches `a`, which is not open.
+    c.notify("textDocument/didOpen", json!({ "textDocument": { "uri": uri(&d), "languageId": "typescript", "version": 1, "text": "export declare const w: number;\n" } }));
+    c.notify(
+        "textDocument/didChange",
+        json!({ "textDocument": { "uri": uri(&d), "version": 2 }, "contentChanges": [{ "text": "export declare const w: string;\n" }] }),
+    );
+    assert_eq!(c.diagnostics_for(&a)[0]["message"], "x: string");
+
+    c.notify("textDocument/didClose", json!({ "textDocument": { "uri": uri(&d) } }));
+    assert_eq!(c.diagnostics_for(&a)[0]["message"], "x: number");
+    c.shutdown();
+}
+
+#[test]
 fn nested_configs_lint_their_own_files() {
     let dir = project("lsp-nested");
     let sub = dir.join("sub");

@@ -1122,10 +1122,11 @@ CLI linting skips compilation of off-rule bodies, unreachable functions and libr
 
 **`.dxcache`.** dxlint keeps each file's results beside the config and
 reuses them while the file's text is unchanged and so is everything its lint
-read from other files: the declaration summaries of imported files (an edit
-inside a function body changes nothing for importers, an exported type
-does), module resolution (a new `a.ts` beside `a/index.ts`), tsconfigs and
-`package.json`s, and which files declare globals. Results with problems are
+read from other files: the text of every file its type questions read,
+through any number of imports (any edit to such a file, even inside a
+function body, lints its readers again), module resolution (a new `a.ts`
+beside `a/index.ts`), tsconfigs and `package.json`s, and which files declare
+globals. Results with problems are
 kept too, so a warm run only lints what changed. Any change to the rules
 (comments and blank lines aside) or to the dxlint binary starts afresh.
 

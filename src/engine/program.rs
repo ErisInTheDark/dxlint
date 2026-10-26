@@ -669,7 +669,7 @@ mod tests {
         let validations = Cell::new(0);
         let load = || memo.get((), None, |answer| !answer.reads.any(&mut |dep| {
             validations.set(validations.get() + 1);
-            !dep.holds(|_| reads::MISSING)
+            !dep.holds()
         }), || {
             builds.set(builds.get() + 1);
             Known::Yes(reads::read(path).unwrap().to_string())
@@ -699,7 +699,7 @@ mod tests {
         let snapshot = Snapshot::default();
         let hash = reads::hash_bytes(b"main");
         let load = |snapshot: &Snapshot, revision| snapshot.catalog(revision, key.clone(), Some((main, hash)), || {
-            programs.catalog(key.clone(), Some(&profile), |dep| dep.holds(|_| reads::MISSING), || {
+            programs.catalog(key.clone(), Some(&profile), |dep| dep.holds(), || {
                 let text = reads::read(library).unwrap();
                 let mut texts = FxHashMap::default();
                 texts.insert(reads::dep_path(main), reads::hash_bytes(reads::read(main).unwrap().as_bytes()));

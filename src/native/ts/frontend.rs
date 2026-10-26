@@ -2,15 +2,14 @@
 //! ([`crate::engine::frontend::Frontend`]): syntax and tokens only.
 
 use std::any::Any;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, LazyLock};
 
 use super::file::TsFile;
 use super::kinds::{field_shape, Kind, ALL_FIELDS, ALL_KINDS, KINDS};
 use super::syntax::Syntax;
 use super::tokens::Lexed;
-use crate::engine::frontend::{self, FieldShape, FileInput, Frontend, Native, Parsed};
-use crate::engine::reads::{Dep, Reads};
+use crate::engine::frontend::{FieldShape, FileInput, Frontend, Native, Parsed};
 
 pub struct Ts;
 
@@ -80,32 +79,5 @@ impl Frontend for Ts {
     fn file<'t>(&'t self, input: FileInput<'t, '_>) -> Box<dyn Native + 't> {
         let tokens = input.state.as_deref().and_then(|state| state.downcast_ref::<Lexed>()).cloned();
         Box::new(TsFile::new(Syntax::new(input.tree, input.text, input.front)).with_tokens(tokens))
-    }
-
-    fn project(&self) -> Box<dyn frontend::Project> {
-        Box::new(NoProject)
-    }
-}
-
-/// The front end keeps no cross-file state: the engine owns programs.
-struct NoProject;
-
-impl frontend::Project for NoProject {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn set_discovery_jobs(&mut self, _jobs: usize) {}
-
-    fn holds(&self, _dep: &Dep) -> bool {
-        false
-    }
-
-    fn invalidate(&self, _changed: &[PathBuf]) -> Box<dyn Any + Send + Sync> {
-        Box::new(())
-    }
-
-    fn is_stale(&self, _stale: &(dyn Any + Send + Sync), _reads: &Reads) -> bool {
-        false
     }
 }

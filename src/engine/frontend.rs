@@ -5,13 +5,13 @@
 //! file. `native <name>` in a config enables one.
 
 use std::any::Any;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use crate::expr::facts::FactInfo;
 use crate::expr::Value;
 use crate::grammar::{NativeFront, Node, Tree};
-use super::reads::{Dep, Discovery, Reads};
+use super::reads::Discovery;
 
 /// What one parsed file answers about its nodes. Facts are numbered as its
 /// front end declares them ([`Frontend::facts`]); [`crate::expr::facts`]
@@ -118,7 +118,6 @@ pub struct FileInput<'t, 'o> {
     pub text: &'t str,
     pub front: &'t NativeFront,
     pub path: &'t Path,
-    pub project: &'t dyn Project,
     /// Language options (`language ts { globals ... }`) for this file.
     pub options: &'o [(&'o str, &'o Value<'static>)],
     pub state: Option<Arc<dyn Any + Send + Sync>>,
@@ -157,32 +156,11 @@ pub trait Frontend: Sync {
         Vec::new()
     }
 
-    /// State shared by every file of a project (other files' exports, globals).
-    fn project(&self) -> Box<dyn Project>;
     /// Its directory searches ([`super::reads::discover`]), so recorded
     /// results can be checked again.
     fn discoveries(&self) -> &'static [&'static Discovery] {
         &[]
     }
-}
-
-/// A front end's project state: what other files said, kept across files
-/// and invalidated when they change.
-pub trait Project: Send + Sync {
-    fn as_any(&self) -> &dyn Any;
-    fn set_discovery_jobs(&mut self, jobs: usize);
-    /// Whether a recorded read still holds.
-    fn holds(&self, dep: &Dep) -> bool;
-    /// Forgets what the `changed` files said; the result tells
-    /// [`Project::is_stale`] which recorded reads they broke.
-    fn invalidate(&self, changed: &[PathBuf]) -> Box<dyn Any + Send + Sync>;
-    fn is_stale(&self, stale: &(dyn Any + Send + Sync), reads: &Reads) -> bool;
-}
-
-/// What changed files broke, per front end ([`super::Linter::invalidate`]).
-pub struct Stale {
-    fronts: Vec<Box<dyn Any + Send + Sync>>,
-    pub(super) changed: Vec<PathBuf>,
 }
 
 /// Every front end this build has.
@@ -192,35 +170,4 @@ pub fn all() -> &'static [&'static dyn Frontend] {
 
 pub fn named(name: &str) -> Option<&'static dyn Frontend> {
     all().iter().copied().find(|front| front.name() == name)
-}
-
-/// One project state per enabled front end.
-pub(super) struct Projects(Vec<Box<dyn Project>>);
-
-impl Projects {
-    pub(super) fn new(fronts: &[NativeFront]) -> Self {
-        Projects(fronts.iter().map(|front| front.frontend.project()).collect())
-    }
-
-    pub(super) fn get(&self, front: usize) -> &dyn Project {
-        &*self.0[front]
-    }
-
-    pub(super) fn set_discovery_jobs(&mut self, jobs: usize) {
-        for project in &mut self.0 {
-            project.set_discovery_jobs(jobs);
-        }
-    }
-
-    pub(super) fn holds(&self, dep: &Dep) -> bool {
-        self.0.iter().all(|project| project.holds(dep))
-    }
-
-    pub(super) fn invalidate(&self, changed: &[PathBuf]) -> Stale {
-        Stale { fronts: self.0.iter().map(|project| project.invalidate(changed)).collect(), changed: changed.to_vec() }
-    }
-
-    pub(super) fn is_stale(&self, stale: &Stale, reads: &Reads) -> bool {
-        self.0.iter().zip(&stale.fronts).any(|(project, stale)| project.is_stale(&**stale, reads))
-    }
 }

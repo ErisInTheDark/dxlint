@@ -36,7 +36,6 @@ impl Linter {
                         text,
                         front,
                         path,
-                        project: self.projects.get(index),
                         options: &[],
                         state: parsed.state,
                     });

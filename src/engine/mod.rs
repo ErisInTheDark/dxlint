@@ -28,7 +28,6 @@ use std::path::{Path, PathBuf};
 pub use build::{build, build_for_lint, Built};
 pub use diagnostic::{Diagnostic, Edit, Fix, ENGINE_RULE};
 pub use fix::{apply_fixes, Fixed};
-pub use frontend::Stale;
 pub use profile::{EffectBuild, Profile, Query, StepSite};
 pub(crate) use profile::ValueEvaluation;
 
@@ -257,9 +256,6 @@ pub struct Linter {
     by_lang: Vec<(usize, Option<usize>)>,
     /// `let` attributes, by id.
     pub(crate) attrs: Attributes,
-    /// Each native front end's project state (other files' exports...),
-    /// read on demand by native rules.
-    projects: frontend::Projects,
     /// Identifies these rules: the tokens parsed (imports and macros
     /// expanded) and the project root.
     pub fingerprint: u64,
@@ -269,6 +265,11 @@ pub struct Linter {
 }
 
 static NO_INDENTS: crate::expr::IndentPlan = crate::expr::IndentPlan::EMPTY;
+
+/// The files a [`Linter::invalidate`] forgot, for [`Linter::is_stale`].
+pub struct Stale {
+    changed: Vec<PathBuf>,
+}
 
 /// One read snapshot shared by files in a batch. Start another run after editing inputs.
 pub struct LintRun<'a> {
@@ -295,7 +296,6 @@ impl Linter {
         self.units.get_mut().expect("unit cache").clear();
         self.discoveries.get_mut().expect("unit discoveries").clear();
         self.programs.clear();
-        self.projects = frontend::Projects::new(&self.grammar.natives);
         self.profile = None;
         *self.invalidation.get_mut() = 0;
         self.attrs.values.clear_runtime();
@@ -435,11 +435,6 @@ impl Linter {
         self.rule_jobs = jobs.max(1);
     }
 
-    /// Budget for the shared, one-time project global discovery.
-    pub fn set_discovery_jobs(&mut self, jobs: usize) {
-        self.projects.set_discovery_jobs(jobs);
-    }
-
     /// Collect `--profile` counters from now on.
     pub fn enable_profile(&mut self) {
         self.profile = Some(Profile::new(self.grammar.matchers.len(), self.rules.len())
@@ -464,33 +459,27 @@ impl Linter {
     }
 
     /// [`Linter::lint`], plus what the lint read besides `text` (other
-    /// files' summaries, module resolution, tsconfigs): the result stays
+    /// files' texts, module resolution, tsconfigs): the result stays
     /// right while every dep holds ([`Linter::holds`]).
     pub fn lint_tracked(&self, path: &Path, text: &str) -> (Vec<Diagnostic>, Reads) {
         reads::track(|| self.lint(path, text))
     }
 
     pub fn holds(&self, dep: &Dep) -> bool {
-        match dep {
-            Dep::Summary(..) => self.projects.holds(dep),
-            _ => dep.holds(|_| reads::MISSING),
-        }
+        dep.holds()
     }
 
-    /// Forgets what the `changed` files said (see `Project::invalidate`);
-    /// [`Linter::is_stale`] then tells which recorded deps they broke.
+    /// Forgets what the `changed` files said; [`Linter::is_stale`] then
+    /// tells which recorded deps they broke.
     pub fn invalidate(&self, changed: &[PathBuf]) -> Stale {
         self.units.lock().expect("unit cache").retain(|path, _| !changed.contains(path));
         self.discoveries.lock().expect("unit discoveries").retain(|request, _| !changed.iter().any(|path| path.starts_with(&request.root)));
-        let stale = self.projects.invalidate(changed);
         self.invalidation.fetch_add(1, std::sync::atomic::Ordering::Release);
-        stale
+        Stale { changed: changed.to_vec() }
     }
 
     pub fn is_stale(&self, stale: &Stale, reads: &Reads) -> bool {
-        self.projects.is_stale(stale, reads) || reads.any(&mut |dep| {
-            !matches!(dep, Dep::Summary(..)) && stale.changed.iter().any(|path| dep.touches(path)) && !self.holds(dep)
-        })
+        reads.any(&mut |dep| stale.changed.iter().any(|path| dep.touches(path)) && !dep.holds())
     }
 
     /// One parsed file's native facts, from front end `front`.
@@ -509,7 +498,6 @@ impl Linter {
             text: run.text,
             front: native,
             path,
-            project: self.projects.get(front),
             options: &options,
             state,
         })

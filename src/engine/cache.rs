@@ -1,6 +1,6 @@
 //! `.dxcache`: lint results kept between runs, beside the config. A
 //! file's result is reused when its text and everything its lint read
-//! (other files' summaries, module resolution probes, tsconfigs: see
+//! (other files' texts, module resolution probes, tsconfigs: see
 //! `engine::reads`) still match. Results are kept for clean files and
 //! for files with problems alike, so a warm run only lints what changed.
 //!
@@ -414,21 +414,17 @@ impl Writer<'_> {
     }
 
     fn dep(&mut self, d: &Dep) {
-        let (tag, a, b) = match d {
-            Dep::Text(_, h) => (0, *h, None),
-            Dep::IsFile(_, found) => (1, u64::from(*found), None),
-            Dep::IsDir(_, found) => (2, u64::from(*found), None),
-            Dep::List(_, h) => (3, *h, None),
-            Dep::Summary(_, content, fingerprint) => (4, *content, Some(*fingerprint)),
-            Dep::Discovered(_, _, h) => (5, *h, None),
-            Dep::Requested(_, _, hash) => (6, *hash, None),
+        let (tag, a) = match d {
+            Dep::Text(_, h) => (0, *h),
+            Dep::IsFile(_, found) => (1, u64::from(*found)),
+            Dep::IsDir(_, found) => (2, u64::from(*found)),
+            Dep::List(_, h) => (3, *h),
+            Dep::Discovered(_, _, h) => (5, *h),
+            Dep::Requested(_, _, hash) => (6, *hash),
         };
         self.out.push(tag);
         self.path(d.path());
         self.out.extend_from_slice(&a.to_le_bytes());
-        if let Some(b) = b {
-            self.out.extend_from_slice(&b.to_le_bytes());
-        }
         if let Dep::Discovered(name, ..) = d {
             self.str(name);
         }
@@ -573,7 +569,6 @@ impl<'a> Reader<'a> {
             1 => Dep::IsFile(path, a != 0),
             2 => Dep::IsDir(path, a != 0),
             3 => Dep::List(path, a),
-            4 => Dep::Summary(path, a, self.u64()?),
             // An unknown discovery (another build's front end) drops the entry.
             5 => Dep::Discovered(super::reads::discovery_name(&self.str()?)?, path, a),
             6 => {
@@ -645,10 +640,10 @@ mod tests {
         writer.dep(&reads.deps[0]);
         let mut reader = Reader { bytes: &writer.out, at: 0, root, strings: writer.strings };
         let dep = reader.dep().expect("cached discovery");
-        assert!(dep.holds(|_| 0));
+        assert!(dep.holds());
         let added = root.join("src/second.ts");
         super::super::reads::set_buffer(&added, "");
-        assert!(!dep.holds(|_| 0));
+        assert!(!dep.holds());
         super::super::reads::drop_buffer(&first);
         super::super::reads::drop_buffer(&added);
     }

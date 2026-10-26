@@ -139,7 +139,7 @@ Exit codes: `0` no errors, `1` errors found, `2` broken config or input.
 
 ## The cache
 
-Results are kept in `.dxcache` beside the config; add it to `.gitignore`. A file is linted again only when its text changed, the config changed, or something its result read changed: an imported declaration, module resolution, a `tsconfig.json` or `package.json`. Editing one file re-checks the files that depend on it, so a cached run is safe before a release; `--no-cache` is never needed for correctness.
+Results are kept in `.dxcache` beside the config; add it to `.gitignore`. A file is linted again only when its text changed, the config changed, or something its result read changed: a file its type questions read (through any number of imports), module resolution, a `tsconfig.json` or `package.json`. Editing one file re-checks the files that depend on it, so a cached run is safe before a release; `--no-cache` is never needed for correctness.
 
 ## Suppressing a finding
 
