@@ -52,7 +52,7 @@ impl<'a> Arena<'a> {
             let build = || {
                 let unit = &view.unit;
                 let front = unit.parsed.front?;
-                let run = Run { path: &unit.path, lang: unit.lang, text: &unit.text, lines: unit.lines(), file: &unit.rel, active: &[] };
+                let run = Run { path: &unit.path, lang: unit.lang, text: &unit.text, lines: unit.lines(), file: &unit.rel, active: &[], settings: None };
                 Some(self.linter.native_facts(front, &unit.parsed.tree, &run, (&*unit.path, std::path::Path::new(&unit.rel)), unit.parsed.state.clone()))
             };
             match &self.linter.profile {

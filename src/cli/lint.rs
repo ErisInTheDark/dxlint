@@ -235,6 +235,8 @@ struct Scope<'a> {
     named: &'a [PathBuf],
     /// The whole project, so the cache forgets files that are gone.
     whole: bool,
+    /// The files under `roots`, walked before the config was built.
+    walked: Option<Walked>,
 }
 
 /// Each named path is linted with its nearest `.dx` (or `--config`), so a
@@ -282,27 +284,77 @@ fn lint(output: &mut Output<'_>, args: LintArgs, config: &ConfigArg, sources: Op
         crate::config::build_one_config();
     }
     let named: Vec<PathBuf> = args.paths.iter().map(|p| normalize_path(&output.cwd.join(p))).collect();
+    let jobs = args.jobs.map_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get()), |n| n.get());
     let mut tally = Tally::new();
     for (path, roots) in configs {
-        let mut project = match super::load_from_with(output, &path, &crate::config::source::Disk, true) {
+        let whole = roots.is_none();
+        let roots = roots.unwrap_or_else(|| vec![path.parent().map(Path::to_path_buf).unwrap_or_default()]);
+        // The walk comes between reading and building the config: it skips
+        // what the config ignores, and the nested configs it finds may fold
+        // into this one, which is then built once with them. `--config` is
+        // that one config alone.
+        let base = path.parent().map(Path::to_path_buf).unwrap_or_default();
+        let mut walked = None;
+        let nested = |ignores: &crate::path_globs::PathGlobs| {
+            let found = walk(&roots, jobs, &base, ignores);
+            let nested = if config.config.is_some() { Vec::new() } else { found.nested.clone() };
+            walked = Some(found);
+            nested
+        };
+        let (mut project, folded) = match super::load_tree_with(output, &path, nested, &crate::config::source::Disk, true) {
             Ok(project) => project,
             Err(_) => {
                 tally.config_ok = false;
                 continue;
             }
         };
-        let whole = roots.is_none();
-        let roots = roots.unwrap_or_else(|| vec![project.linter.root.clone()]);
-        lint_project(output, &args, &mut project, None, Scope { roots, named: &named, whole }, started, &mut tally);
+        let walked = walked.map(|walked| Walked { folded, ..walked });
+        lint_project(output, &args, &mut project, None, Scope { roots, named: &named, whole, walked }, started, &mut tally);
     }
     tally.finish(output, args.format)
+}
+
+/// What a walk found before any config was built: every file (with its
+/// size) and the nested configs, and after loading, which of them folded.
+struct Walked {
+    files: Vec<(u64, PathBuf)>,
+    nested: Vec<PathBuf>,
+    folded: Vec<PathBuf>,
+}
+
+/// Every file under `roots`, minus folders the config at `base` ignores
+/// (named roots are walked whatever it ignores).
+fn walk(roots: &[PathBuf], jobs: usize, base: &Path, ignores: &crate::path_globs::PathGlobs) -> Walked {
+    let found: std::sync::Mutex<Vec<(u64, PathBuf)>> = std::sync::Mutex::default();
+    let (base, ignores) = (base.to_path_buf(), ignores.clone());
+    walker(roots, jobs, move |entry| {
+        entry.depth() == 0 || !entry.file_type().is_some_and(|t| t.is_dir())
+            || entry.path().strip_prefix(&base).map_or(true, |rel| !ignores.matches(rel))
+    }).build_parallel().run(|| {
+        let found = &found;
+        Box::new(move |entry| {
+            let Ok(entry) = entry else { return WalkState::Continue };
+            if entry.file_type().is_some_and(|t| t.is_file()) {
+                let size = entry.metadata().map_or(0, |m| m.len());
+                found.lock().expect("file list").push((size, entry.path().to_path_buf()));
+            }
+            WalkState::Continue
+        })
+    });
+    let files = found.into_inner().expect("file list");
+    let mut nested: Vec<PathBuf> = files.iter().map(|(_, path)| path)
+        .filter(|path| path.file_name().is_some_and(|n| n == crate::config::CONFIG_NAME) && path.parent().is_some_and(|dir| !roots.iter().any(|r| r == dir)))
+        .map(|path| normalize_path(path))
+        .collect();
+    nested.sort();
+    Walked { files, nested, folded: Vec::new() }
 }
 
 /// One built project over its own root (conformance's packed sources).
 pub(super) fn prepared(output: &mut Output<'_>, args: LintArgs, project: &mut Project, sources: Option<&Sources>, started: Instant) -> u8 {
     let mut tally = Tally::new();
     let roots = vec![project.linter.root.clone()];
-    lint_project(output, &args, project, sources, Scope { roots, named: &[], whole: true }, started, &mut tally);
+    lint_project(output, &args, project, sources, Scope { roots, named: &[], whole: true, walked: None }, started, &mut tally);
     tally.finish(output, args.format)
 }
 
@@ -334,7 +386,7 @@ fn lint_project(output: &mut Output<'_>, args: &LintArgs, project: &mut Project,
     // budget gives other results than cached ones.
     let cache = (!args.no_cache && !args.profile && !args.fix_preview && args.semantic_budget.is_none()).then(|| Cache::open(&linter));
     let cwd = output.cwd;
-    let Scope { roots, named, whole } = scope;
+    let Scope { roots, named, whole, walked } = scope;
     let jobs = args.jobs.map_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get()), |n| n.get());
 
     let packed = sources.map(|sources| sources.files.iter().filter(|(_, path)| linter.wants(path)).cloned().collect::<Vec<_>>());
@@ -358,38 +410,19 @@ fn lint_project(output: &mut Output<'_>, args: &LintArgs, project: &mut Project,
             let mut queue = if let Some(queue) = packed {
                 queue
             } else {
-                // A folder with its own `.dx` below a root is another project.
-                let walker = walker(&roots, jobs, move |entry| {
-                    let nested = entry.depth() > 0 && entry.file_type().is_some_and(|t| t.is_dir())
-                        && entry.path().join(crate::config::CONFIG_NAME).is_file();
-                    if nested {
-                        skipping.lock().expect("skipped folders").push(entry.path().to_path_buf());
-                    }
-                    !nested
-                });
-                // Walk first, then lint the biggest files first: a big file found
-                // late would otherwise be the tail every other thread waits on.
-                let found: std::sync::Mutex<Vec<(u64, PathBuf)>> = std::sync::Mutex::default();
-                walker.build_parallel().run(|| {
-                    let linter = &*linter;
-                    let explicit = &explicit;
-                    let found = &found;
-                    Box::new(move |entry| {
-                        let Ok(entry) = entry else { return WalkState::Continue };
-                        if !entry.file_type().is_some_and(|t| t.is_file()) {
-                            return WalkState::Continue;
-                        }
-                        let path = entry.path();
-                        // Explicitly named files are linted even if ignored by git.
-                        let wanted = linter.wants(path) || (explicit.iter().any(|e| e == path) && !linter.is_ignored(path));
-                        if wanted {
-                            let size = entry.metadata().map_or(0, |m| m.len());
-                            found.lock().expect("file list").push((size, path.to_path_buf()));
-                        }
-                        WalkState::Continue
-                    })
-                });
-                found.into_inner().expect("file list")
+                let Walked { files, nested, folded } = walked.unwrap_or_else(|| walk(&roots, jobs, &linter.root, &crate::path_globs::PathGlobs::default()));
+                // A folder with its own `.dx` below a root is another project,
+                // unless that config folded into this one.
+                let apart: Vec<&Path> = nested.iter().filter(|c| !folded.contains(c)).filter_map(|c| c.parent()).collect();
+                let mut outermost: Vec<PathBuf> = apart.iter().filter(|dir| !apart.iter().any(|other| other != *dir && dir.starts_with(other))).map(|dir| dir.to_path_buf()).collect();
+                skipping.lock().expect("skipped folders").append(&mut outermost);
+                // Lint the biggest files first: a big file found late would
+                // otherwise be the tail every other thread waits on.
+                files.into_iter().filter(|(_, path)| {
+                    // Explicitly named files are linted even if ignored by git.
+                    !apart.iter().any(|dir| path.starts_with(dir))
+                        && (linter.wants(path) || (explicit.iter().any(|e| e == path) && !linter.is_ignored(path)))
+                }).collect()
             };
             queue.sort_unstable_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
             let next = std::sync::atomic::AtomicUsize::new(0);
@@ -504,6 +537,9 @@ fn lint_project(output: &mut Output<'_>, args: &LintArgs, project: &mut Project,
         output.err(format_args!("  config reading: lexing {:.1} ms", lex_time.as_secs_f64() * 1000.0));
         let phases: Vec<String> = build_phases.iter().map(|(name, time)| format!("{name} {:.1}", time.as_secs_f64() * 1000.0)).collect();
         output.err(format_args!("  config build phases (ms): {}", phases.join(", ")));
+        if !linter.scopes.is_empty() {
+            output.err(format_args!("  files blocks: {} rule copies for their option values", linter.scopes.copies()));
+        }
         if crate::alloc::heap::on() {
             let (owners, peak) = crate::alloc::heap::report();
             let mib = |bytes: isize| bytes as f64 / 1048576.0;

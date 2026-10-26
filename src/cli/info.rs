@@ -21,20 +21,21 @@ const CYAN: Style = Style::new().fg_color(Some(anstyle::Color::Ansi(AnsiColor::C
 /// included (with the severity `rule name` turns them on at).
 pub fn rules(output: &mut Output<'_>, linter: &Linter) -> u8 {
     enum Row<'a> {
-        Compiled(&'a crate::engine::Rule),
+        Compiled(usize, &'a crate::engine::Rule),
         Inert(&'a crate::engine::InertRule),
     }
-    let mut rows: Vec<(&str, Row)> = linter.rules.iter().map(|r| (r.name.as_str(), Row::Compiled(r))).collect();
+    // A `files` block's compiled copies show under their rule.
+    let mut rows: Vec<(&str, Row)> = linter.rules.iter().enumerate().filter(|(i, _)| !linter.scopes.is_copy(*i)).map(|(i, r)| (r.name.as_str(), Row::Compiled(i, r))).collect();
     rows.extend(linter.inert.iter().map(|r| (r.name.as_str(), Row::Inert(r))));
     rows.sort_by(|a, b| a.0.cmp(b.0));
     let off = |default: Severity| format!("{DIM}off (default {}){DIM:#}", default.as_str());
     for (_, row) in rows {
-        let f = match row {
+        let (index, f) = match row {
             Row::Inert(r) => {
                 output.out(format_args!("{BOLD}{}{BOLD:#} {} {DIM}in{DIM:#} {CYAN}{}{CYAN:#}", r.name, off(r.default_severity), r.target_text));
                 continue;
             }
-            Row::Compiled(f) => f,
+            Row::Compiled(index, f) => (index, f),
         };
         let sev = render::severity_style(f.severity);
         let sev_text = if f.severity == Severity::Off { off(f.default_severity) } else { format!("{sev}{}{sev:#}", f.severity.as_str()) };
@@ -47,6 +48,10 @@ pub fn rules(output: &mut Output<'_>, linter: &Linter) -> u8 {
             let changed = if o.value != o.default { format!(" {DIM}(default {}){DIM:#}", show(&o.default)) } else { String::new() };
             let desc = o.description.as_deref().map(|d| format!(" {DIM}- {d}{DIM:#}")).unwrap_or_default();
             output.out(format_args!("    {CYAN}{}{CYAN:#}{DIM}: {}{DIM:#} = {}{changed}{desc}", o.name, o.schema, show(&o.value)));
+        }
+        for block in linter.scopes.blocks_of(index, &linter.rules) {
+            let options: String = block.options.iter().map(|(slot, value)| format!(", {} = {}", f.options()[*slot].name, show(value))).collect();
+            output.out(format_args!("    {DIM}in files {}:{DIM:#} {}{options}", block.globs, block.severity.as_str()));
         }
     }
     0
@@ -84,7 +89,8 @@ pub fn rule_dependencies(output: &mut Output<'_>, linter: &Linter, symbols: &Sym
     let related =|layer: u32| (0..grammar.matchers.len() as u32).filter(move |&other| {
         reach[other as usize][layer as usize] || reach[layer as usize][other as usize] || grammar.is_a(other, layer)
     });
-    let mut rules: Vec<_> = linter.rules.iter().filter(|rule| rule.severity != Severity::Off).collect();
+    // A `files` block's copies read what their rule reads.
+    let mut rules: Vec<_> = linter.rules.iter().enumerate().filter(|(i, rule)| rule.live && !linter.scopes.is_copy(*i)).map(|(_, rule)| rule).collect();
     rules.sort_by(|a, b| a.name.cmp(&b.name));
     for rule in rules {
         let mut depends = std::collections::BTreeSet::new();

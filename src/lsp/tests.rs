@@ -405,6 +405,30 @@ fn nested_configs_lint_their_own_files() {
 }
 
 #[test]
+fn nested_configs_importing_their_parent_lint_with_its_linter_and_reload_it() {
+    let dir = project("lsp-folded");
+    let sub = dir.join("sub");
+    std::fs::create_dir_all(&sub).expect("sub dir");
+    let nested = sub.join(".dx");
+    std::fs::write(&nested, "import ../.dx\nrule no-bad error\n").expect("nested config");
+    let top = dir.join("top.t");
+    let inner = sub.join("inner.t");
+    std::fs::write(&top, "BAD\n").expect("write");
+    std::fs::write(&inner, "BAD\n").expect("write");
+    let mut c = Client::start(&dir);
+
+    // LSP severities: 1 error, 2 warning, 3 information.
+    let diags = c.diagnostics_for_each(&[&top, &inner]);
+    assert_eq!((&diags[0][0]["severity"], &diags[1][0]["severity"]), (&json!(2), &json!(1)));
+
+    // Editing the nested config reloads the parent it folded into.
+    std::fs::write(&nested, "import ../.dx\nrule no-bad info\n").expect("nested config");
+    c.notify("workspace/didChangeWatchedFiles", json!({ "changes": [{ "uri": uri(&nested), "type": 2 }] }));
+    assert_eq!(c.diagnostics_for(&inner)[0]["severity"], json!(3));
+    c.shutdown();
+}
+
+#[test]
 fn scan_reaches_configs_below_uncovered_and_ignored_dirs() {
     // The workspace root has no config; `proj` has one that ignores
     // `skipped`, which still holds a nested config of its own.

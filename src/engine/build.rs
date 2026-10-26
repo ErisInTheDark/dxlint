@@ -4,6 +4,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use super::scopes::{Change, Scoped, Scopes, Setting};
 use super::symbols::Symbols;
 use super::{InertRule, Linter, NodeSelection, OptionSlot, Rule, Target};
 use crate::config::ast::{Config, Dropped, Expr, ExprKind, Name, Parent, RuleDef, Severity, Target as AstTarget, Use};
@@ -142,7 +143,7 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
     };
     // `rule name ...` lines: which rules are on, and their extra clauses
     // (merged before compiling); option values are set after.
-    let option_values = configure(&mut config, &mut errors);
+    let settings = configure(&mut config, &mut errors);
     if tooling {
         super::prune::prune(&mut config);
     } else {
@@ -276,57 +277,86 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
             .collect();
         InertRule { name: def.name.text.clone(), span: def.name.span, target_text: targets.join(", "), default_severity: def.severity.unwrap_or(Severity::Warn) }
     };
-    for def in &config.rules {
+    // Each definition's compiled copy for files outside every `files` block.
+    let mut base: Vec<Option<usize>> = vec![None; config.rules.len()];
+    for (d, def) in config.rules.iter().enumerate() {
         if def.inert {
             inert.push(as_inert(def));
             continue;
         }
         // An off library rule that does not compile (the config redefined
         // a layer it reads) is the library's business until it is turned on.
-        if def.defined_only && !def.enabled() {
+        if def.defined_only && !def.live() {
             let mut quiet = Vec::new();
             match rule(def, &grammar, &schemas, &attr_names, &uses, &helper_reads, &mut quiet) {
-                Some(r) if quiet.is_empty() && !def.broken => rules.push(r),
+                Some(r) if quiet.is_empty() && !def.broken => {
+                    base[d] = Some(rules.len());
+                    rules.push(r);
+                }
                 _ => inert.push(as_inert(def)),
             }
             continue;
         }
         let before = errors.len();
         if let Some(r) = rule(def, &grammar, &schemas, &attr_names, &uses, &helper_reads, &mut errors).filter(|_| !def.broken) {
+            base[d] = Some(rules.len());
             rules.push(r);
         } else if def.defined_only && !def.broken && errors.len() == before {
             inert.push(as_inert(def));
         }
     }
-    // Option values, in order; a rule that failed to build was reported.
-    for (rule_name, config_index, option_index) in &option_values {
-        let (name, value) = &config.configs[*config_index].options[*option_index];
-        let Some(f) = rules.iter_mut().find(|r| r.name == *rule_name) else {
+    // Option values, in order, per configuring line; a rule that failed to
+    // build was reported.
+    let mut converted: Vec<Vec<Vec<(usize, Value<'static>)>>> = vec![Vec::new(); config.rules.len()];
+    for (d, def_settings) in settings.iter().enumerate() {
+        let def = &config.rules[d];
+        let Some(b) = base[d] else {
             // Off bodies are not compiled at runtime, but their explicit
             // settings still have to fit the declared option schemas.
-            let dormant = inert.iter().any(|r| r.name == *rule_name);
-            if !tooling || dormant {
-                if let Some(def) = config.rules.iter().find(|r| r.name.text == *rule_name && (!r.enabled() || dormant)) {
+            let dormant = inert.iter().any(|r| r.name == def.name.text);
+            if (!tooling || dormant) && (!def.enabled() || dormant) {
+                for &(ci, oi) in def_settings.iter().flat_map(|s| &s.options) {
+                    let (name, value) = &config.configs[ci].options[oi];
                     if let Some(option) = def.options.iter().find(|o| o.name.text == name.text) {
-                        option_value(rule_name, name, value, &option.schema, &grammar, &schemas, &mut errors);
+                        option_value(&def.name.text, name, value, &option.schema, &grammar, &schemas, &mut errors);
                     }
                 }
             }
             continue;
         };
-        let Some(slot) = f.options.iter_mut().find(|o| o.name == name.text) else {
-            let mut err = ConfigError::new(name.span, format!("no option `{}` on `{}`", name.text, rule_name))
-                .suggest(&name.text, f.options.iter().map(|o| o.name.as_str()));
-            if f.options.is_empty() {
-                err = err.note("this rule has no options");
+        let f = &mut rules[b];
+        for setting in def_settings {
+            let mut set = Vec::new();
+            for &(ci, oi) in &setting.options {
+                let (name, value) = &config.configs[ci].options[oi];
+                let Some(slot) = f.options.iter().position(|o| o.name == name.text) else {
+                    let mut err = ConfigError::new(name.span, format!("no option `{}` on `{}`", name.text, f.name))
+                        .suggest(&name.text, f.options.iter().map(|o| o.name.as_str()));
+                    if f.options.is_empty() {
+                        err = err.note("this rule has no options");
+                    }
+                    errors.push(err);
+                    continue;
+                };
+                if let Some(value) = option_value(&f.name, name, value, &f.options[slot].schema, &grammar, &schemas, &mut errors) {
+                    if setting.scope.is_none() {
+                        f.options[slot].value = value.clone();
+                    }
+                    set.push((slot, value));
+                }
             }
-            errors.push(err);
-            continue;
-        };
-        if let Some(value) = option_value(rule_name, name, value, &slot.schema, &grammar, &schemas, &mut errors) {
-            slot.value = value;
+            converted[d].push(set);
         }
     }
+    let scoped = scoped_copies(&config, &settings, converted, &base, &mut rules, |def| {
+        rule(def, &grammar, &schemas, &attr_names, &RefCell::default(), &helper_reads, &mut Vec::new())
+    });
+    let scope_globs = config.scopes.iter().map(|scope| PathGlobs::new(scope.globs.iter().map(|(g, _)| g.as_str())).unwrap_or_else(|(glob, e)| {
+        errors.push(ConfigError::new(scope.globs.iter().find(|(g, _)| *g == glob).map_or(scope.span, |(_, s)| *s), format!("invalid glob `{glob}`: {e}")));
+        PathGlobs::default()
+    })).collect();
+    let labels = config.scopes.iter().map(|scope| scope.globs.iter().map(|(g, _)| format!("\"{g}\"")).collect::<Vec<_>>().join(" ")).collect();
+    let scopes = Scopes::new(scope_globs, labels, scoped);
 
     phase("rules");
     let ignores = match PathGlobs::new(config.ignores.iter().map(|(g, _)| g.as_str())) {
@@ -348,7 +378,7 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
     });
 
     let sources = std::sync::Arc::new(sources);
-    let symbols = tooling.then(|| std::sync::Arc::new(Symbols::build(&config, &grammar, &rules, &inert, uses.into_inner(), sources.clone())));
+    let symbols = tooling.then(|| std::sync::Arc::new(Symbols::build(&config, &grammar, &rules, &scopes, &inert, uses.into_inner(), sources.clone())));
     for rule in &mut rules {
         rule.specialise_options(&grammar.functions);
     }
@@ -429,6 +459,7 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
         units: Default::default(),
         discoveries: Default::default(),
         programs: Default::default(),
+        scopes,
         unit_overlays,
         unit_token_reasons,
         unit_token_kinds,
@@ -572,12 +603,101 @@ rule active warn "{read(node)}" fix as lower(text) { when accepted(node) }
     }
 }
 
+/// The definitions some `files` block configures, each with a compiled copy
+/// per distinct option set the blocks can give it: every combination of
+/// the blocks setting its options, over its own values. Past
+/// [`MAX_COMBINED`] blocks or [`MAX_COPIES`] option sets, one copy reads
+/// options at runtime instead.
+fn scoped_copies(
+    config: &Config,
+    settings: &[Vec<Setting>],
+    mut converted: Vec<Vec<Vec<(usize, Value<'static>)>>>,
+    base: &[Option<usize>],
+    rules: &mut Vec<Rule>,
+    compile: impl Fn(&RuleDef) -> Option<Rule>,
+) -> Vec<Scoped> {
+    use super::scopes::{MAX_COMBINED, MAX_COPIES};
+    let mut out = Vec::new();
+    for (d, def_settings) in settings.iter().enumerate() {
+        let Some(b) = base[d] else { continue };
+        if def_settings.iter().all(|s| s.scope.is_none()) {
+            continue;
+        }
+        let def = &config.rules[d];
+        let mut scoped = Scoped {
+            copies: vec![b],
+            default: def.severity.unwrap_or(Severity::Warn),
+            defined_only: def.defined_only,
+            settings: def_settings.clone(),
+            values: std::mem::take(&mut converted[d]),
+            by_key: Default::default(),
+            unfolded: None,
+            slots: rules[b].options.len(),
+        };
+        let outside = scoped.key(|scope| scope.is_none());
+        scoped.by_key.insert(outside, b);
+        let blocks = scoped.option_scopes();
+        if blocks.is_empty() {
+            out.push(scoped);
+            continue;
+        }
+        let own = rules[b].option_values();
+        // Copies run only where a file's settings pick them.
+        let compile = |def: &RuleDef| compile(def).map(|mut copy| {
+            copy.severity = Severity::Off;
+            copy
+        });
+        // Every combination of the blocks that set options: which values win.
+        let keys: Option<Vec<Vec<Option<usize>>>> = (blocks.len() <= MAX_COMBINED).then(|| (0..1usize << blocks.len()).map(|mask| {
+            scoped.key(|scope| scope.is_none_or(|s| blocks.iter().position(|&b| b == s).is_none_or(|bit| mask >> bit & 1 == 1)))
+        }).collect());
+        let mut sets: Vec<Vec<Value<'static>>> = vec![own.clone()];
+        let mut chosen: Vec<(Vec<Option<usize>>, usize)> = Vec::new();
+        for key in keys.iter().flatten() {
+            let values = scoped.options(key, &own);
+            let at = sets.iter().position(|set| *set == values).unwrap_or_else(|| {
+                sets.push(values);
+                sets.len() - 1
+            });
+            chosen.push((key.clone(), at));
+        }
+        if keys.is_none() || sets.len() - 1 > MAX_COPIES {
+            if let Some(mut copy) = compile(def) {
+                copy.unfolded = true;
+                copy.options.iter_mut().zip(&own).for_each(|(slot, value)| slot.value = value.clone());
+                scoped.unfolded = Some(rules.len());
+                scoped.copies.push(rules.len());
+                rules.push(copy);
+            }
+            out.push(scoped);
+            continue;
+        }
+        let mut copies = vec![Some(b)];
+        for set in &sets[1..] {
+            copies.push(compile(def).map(|mut copy| {
+                copy.options.iter_mut().zip(set).for_each(|(slot, value)| slot.value = value.clone());
+                scoped.copies.push(rules.len());
+                rules.push(copy);
+                rules.len() - 1
+            }));
+        }
+        for (key, at) in chosen {
+            if let Some(copy) = copies[at] {
+                scoped.by_key.insert(key, copy);
+            }
+        }
+        out.push(scoped);
+    }
+    out
+}
+
 /// Applies `rule name ...` lines to the definitions, in order: turning
-/// rules on or off, replacing messages and fixes, adding clauses. Returns
-/// the option values to set once the rules are compiled, as (rule, config
-/// index, option index).
-fn configure(config: &mut crate::config::ast::Config, errors: &mut Vec<ConfigError>) -> Vec<(String, usize, usize)> {
-    let mut values = Vec::new();
+/// rules on or off, replacing messages and fixes, adding clauses. Lines in
+/// `files` blocks change no definition. Returns, per definition, every line
+/// that configures it (in order, blocks included): its severity changes and
+/// the option values to set once the rules are compiled.
+fn configure(config: &mut crate::config::ast::Config, errors: &mut Vec<ConfigError>) -> Vec<Vec<Setting>> {
+    let mut settings: Vec<Vec<Setting>> = vec![Vec::new(); config.rules.len()];
     let mut configs = std::mem::take(&mut config.configs);
     for (ci, c) in configs.iter_mut().enumerate() {
         let pattern = &c.patch.name;
@@ -588,8 +708,19 @@ fn configure(config: &mut crate::config::ast::Config, errors: &mut Vec<ConfigErr
             let family = format!("{}:", pattern.text);
             matching.extend((0..config.rules.len()).filter(|&i| config.rules[i].name.text.starts_with(&family)));
         }
+        // `severity <level>` sees, per file, the rules on there at this point.
         if c.on_only {
-            matching.retain(|&i| config.rules[i].enabled());
+            let change = Change::OnlyIfOn(c.patch.severity.unwrap_or(Severity::Warn));
+            for &i in &matching {
+                settings[i].push(Setting { scope: c.scope, change, options: Vec::new() });
+            }
+            if c.scope.is_none() {
+                matching.retain(|&i| config.rules[i].enabled());
+                for &i in &matching {
+                    config.rules[i].configured = c.patch.severity;
+                }
+            }
+            continue;
         }
         if matching.is_empty() {
             if c.soft {
@@ -626,13 +757,32 @@ fn configure(config: &mut crate::config::ast::Config, errors: &mut Vec<ConfigErr
             }
         }
         let patch = &c.patch;
+        let mut owned: Vec<Vec<(usize, usize)>> = vec![Vec::new(); matching.len()];
         for (oi, (name, _)) in c.options.iter().enumerate() {
-            let owners: Vec<usize> = matching.iter().copied().filter(|&i| config.rules[i].options.iter().any(|o| o.name.text == name.text)).collect();
-            if owners.is_empty() {
+            let mut owners = 0;
+            for (m, &i) in matching.iter().enumerate() {
+                if config.rules[i].options.iter().any(|o| o.name.text == name.text) {
+                    owned[m].push((ci, oi));
+                    owners += 1;
+                }
+            }
+            if owners == 0 {
                 let names = matching.iter().flat_map(|&i| config.rules[i].options.iter().map(|o| o.name.text.as_str()));
                 errors.push(ConfigError::new(name.span, format!("no option `{}` on `{}`", name.text, pattern.text)).suggest(&name.text, names));
             }
-            values.extend(owners.into_iter().map(|i| (config.rules[i].name.text.clone(), ci, oi)));
+        }
+        let change = match patch.severity {
+            Some(s) => Change::Set(s),
+            None => Change::On,
+        };
+        for (&i, options) in matching.iter().zip(owned) {
+            settings[i].push(Setting { scope: c.scope, change, options });
+            if c.scope.is_some() {
+                config.rules[i].scoped_on |= !matches!(change, Change::Set(Severity::Off));
+            }
+        }
+        if c.scope.is_some() {
+            continue;
         }
         for &i in &matching {
             let def = &mut config.rules[i];
@@ -675,7 +825,7 @@ fn configure(config: &mut crate::config::ast::Config, errors: &mut Vec<ConfigErr
         }
     }
     config.configs = configs;
-    values
+    settings
 }
 
 /// Labels available on a node of `target`.
@@ -1087,6 +1237,8 @@ fn rule(def: &RuleDef, g: &Grammar, schemas: &Schemas, attrs: &AttrNames, uses: 
             None => def.severity.unwrap_or(Severity::Warn),
         },
         default_severity: def.severity.unwrap_or(Severity::Warn),
+        live: def.live(),
+        unfolded: false,
         options,
         files,
         ignore,

@@ -4,6 +4,7 @@
 //!   `node_modules`, `target`)
 //! - a glob with `/` matches the whole path relative to the project root
 //!   (`src/**/*.rs`, `tests/fixtures/**`), or any of its parent directories
+//! - `!glob` excludes; the last glob that matches decides, as in `.gitignore`
 
 use std::path::Path;
 
@@ -13,12 +14,15 @@ use globset::{Glob, GlobSet, GlobSetBuilder};
 pub struct PathGlobs {
     component: GlobSet,
     path: GlobSet,
+    /// Each set's glob indices in list order, with whether it is `!`-negated;
+    /// empty when nothing is negated, so plain lists stay on `is_match`.
+    order: Option<(Vec<(usize, bool)>, Vec<(usize, bool)>)>,
     empty: bool,
 }
 
 impl Default for PathGlobs {
     fn default() -> Self {
-        PathGlobs { component: GlobSet::empty(), path: GlobSet::empty(), empty: true }
+        PathGlobs { component: GlobSet::empty(), path: GlobSet::empty(), order: None, empty: true }
     }
 }
 
@@ -26,19 +30,29 @@ impl PathGlobs {
     pub fn new<'a>(globs: impl IntoIterator<Item = &'a str>) -> Result<PathGlobs, (String, String)> {
         let mut component = GlobSetBuilder::new();
         let mut path = GlobSetBuilder::new();
+        let (mut component_order, mut path_order) = (Vec::new(), Vec::new());
+        let mut negated_any = false;
         let mut empty = true;
-        for g in globs {
-            let trimmed = g.trim_start_matches("./").trim_end_matches('/');
+        for (i, g) in globs.into_iter().enumerate() {
+            let (negated, pattern) = match g.strip_prefix('!') {
+                Some(rest) => (true, rest),
+                None => (false, g),
+            };
+            negated_any |= negated;
+            let trimmed = pattern.trim_start_matches("./").trim_end_matches('/');
             let glob = Glob::new(trimmed).map_err(|e| (g.to_string(), e.kind().to_string()))?;
             if trimmed.contains('/') {
                 path.add(glob);
+                path_order.push((i, negated));
             } else {
                 component.add(glob);
+                component_order.push((i, negated));
             }
             empty = false;
         }
         let build = |b: GlobSetBuilder| b.build().map_err(|e| ("globs".to_string(), e.to_string()));
-        Ok(PathGlobs { component: build(component)?, path: build(path)?, empty })
+        let order = negated_any.then_some((component_order, path_order));
+        Ok(PathGlobs { component: build(component)?, path: build(path)?, order, empty })
     }
 
     pub fn is_empty(&self) -> bool {
@@ -51,20 +65,15 @@ impl PathGlobs {
             return false;
         }
         let unix = rel.to_string_lossy().replace('\\', "/");
-        if unix.split('/').any(|c| self.component.is_match(c)) {
-            return true;
-        }
         // A path glob also matches anything inside a matching directory.
-        let mut prefix = unix.as_str();
-        loop {
-            if self.path.is_match(prefix) {
-                return true;
-            }
-            match prefix.rfind('/') {
-                Some(i) => prefix = &prefix[..i],
-                None => return false,
-            }
-        }
+        let prefixes = || std::iter::successors(Some(unix.as_str()), |p| p.rfind('/').map(|i| &p[..i]));
+        let Some((component_order, path_order)) = &self.order else {
+            return unix.split('/').any(|c| self.component.is_match(c)) || prefixes().any(|p| self.path.is_match(p));
+        };
+        let last = unix.split('/').flat_map(|c| self.component.matches(c).into_iter().map(|m| component_order[m]))
+            .chain(prefixes().flat_map(|p| self.path.matches(p).into_iter().map(|m| path_order[m])))
+            .max_by_key(|&(i, _)| i);
+        last.is_some_and(|(_, negated)| !negated)
     }
 }
 
@@ -95,6 +104,23 @@ mod tests {
         assert!(g.matches(Path::new("docs/a.md")));
         assert!(!g.matches(Path::new("docs/b.md")));
         assert!(!PathGlobs::default().matches(Path::new("x")));
+    }
+
+    #[test]
+    fn the_last_matching_glob_decides_and_bang_negates() {
+        let g = PathGlobs::new(["src/**", "!src/generated/**", "src/generated/keep.ts", "!*.snap"]).unwrap();
+        assert!(g.matches(Path::new("src/a.ts")));
+        assert!(!g.matches(Path::new("src/generated/b.ts")));
+        assert!(g.matches(Path::new("src/generated/keep.ts")));
+        assert!(!g.matches(Path::new("src/x.snap")));
+        assert!(!g.matches(Path::new("lib/a.ts")));
+        // A folder pattern covers what is inside it, in its place in the order.
+        let g = PathGlobs::new(["!dist/types", "dist"]).unwrap();
+        assert!(g.matches(Path::new("dist/types/a.d.ts")));
+        let g = PathGlobs::new(["dist", "!dist/types"]).unwrap();
+        assert!(!g.matches(Path::new("dist/types/a.d.ts")));
+        assert!(g.matches(Path::new("dist/a.js")));
+        assert!(!PathGlobs::new(["!x"]).unwrap().matches(Path::new("x")));
     }
 
     #[test]

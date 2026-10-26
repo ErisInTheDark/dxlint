@@ -1,0 +1,28 @@
+import .ts
+
+rule es-semi
+rule es-no-debugger
+rule es-quotes
+
+# Options and on/off for src, minus a `!` hole.
+files "src/**" "!src/server/legacy/**" {
+  rule es-semi set "never"
+  rule es-no-debugger off
+}
+
+# Overlaps the block above: later lines win for the files both hold.
+files "src/server/**" {
+  rule es-semi set "always"
+  rule es-no-console
+}
+
+# A ruleset for some files only.
+files "scripts/**" {
+  import rules:bugs
+}
+
+# A later top-level line overrides earlier blocks.
+files "src/**" {
+  rule es-quotes set "single"
+}
+rule es-quotes set "double"

@@ -254,7 +254,11 @@ rule es-padding-line-between-statements {
   set config [
     { blankLine: "always", prev: "*", next: "return" },
   ]
-  ignore "scripts/**"                # clauses add to the rule
+  when !re_test(file, /\.spec\.ts$/)  # clauses add to the rule
+}
+files "scripts/**" "!scripts/keep/**" {  # settings for some files
+  rule es-padding-line-between-statements off
+  rule es-semi set "never"
 }
 ```
 
@@ -273,8 +277,17 @@ rule es-no-misused-promises:conditionals { set flagUnions "strict" }
   its default severity (unless it is on already), `rule name <severity>`
   sets the severity, a message after the severity replaces the rule's own,
   and `rule name off` turns it off.
-- In the block, `set option value` sets an option; `when`, `let`, `files`
-  and `ignore` add to the rule; `fix as` and `report` replace its own.
+- In the block, `set option value` sets an option; `when` and `let` add to
+  the rule; `fix as` and `report` replace its own. (`files` and `ignore`
+  belong to definitions: a rule's own scope.)
+- `files <globs> { ... }` holds `rule` lines, `severity` and ruleset imports
+  for the files its globs match (`!glob` excludes; the last matching glob
+  decides). Its lines take their place in the order like any other, for
+  those files only. Severity changes are per-file data; a rule given other
+  option values compiles once per distinct set of values (past 8, one copy
+  reads its options at runtime). A nested `.dx` whose first item imports its
+  parent, and that holds only what a block can, folds into the parent as
+  `files "<its folder>/**" { ... }`.
 - Inline `set value` sets the rule's default option; severity and `set` may appear in either order. A family name sets each variant's default option. Without a declared default option, inline `set` is an error; block `set name value` still works for any option.
 - These lines may come before or after the definition; they apply in order,
   imported ones where their `import` sits, so a later `set` wins. A bare
@@ -812,7 +825,8 @@ in rs_function.name rule fn-snake-case warn "function names are snake_case" fix 
 | `in A forward x, y from field` | `A`'s nodes pass attributes `x` and `y` up from a field, see [Attributes](#attributes) |
 | `native ts` | TypeScript/JavaScript syntax as `ts_*` layers, see [Native layers](ts.md#syntax-layers) |
 | `override <definition>`, `drop ...` | replace or remove what an import defined, see [Changing imported definitions](#changing-imported-definitions-override-drop) |
-| `ignore "glob" "glob"` | never lint matching files |
+| `ignore "glob" "!glob"` | never lint matching files (`!` takes some back; the last matching glob decides) |
+| `files "glob" "!glob" { lines }` | `rule` lines, `severity` and ruleset imports for matching files only, see [Turning rules on](#turning-rules-on-and-configuring-them) |
 | `skip narrowing, selection` | trade type precision for speed: reads keep their declared value (`narrowing`), conditional types are unknown (`selection`) |
 | `import .ts`, `import rules:recommended`, `import some/path` | a built-in language, a built-in ruleset, or another `.dx` file, see [Imports](#imports-and-macros) |
 | `@macro name tokens`, `@macro name(args) { lines }` | define a macro; call it with `@name` |

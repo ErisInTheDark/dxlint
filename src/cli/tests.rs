@@ -700,15 +700,19 @@ fn named_files_use_their_nearest_config() {
 }
 
 #[test]
-fn walks_skip_nested_projects_and_say_so() {
-    let dir = project("cli-nested-skip", &[(".dx", RULES), ("sub/.dx", NESTED), ("sub/a.t", "LOUD\n"), ("b.t", "quiet\n")]);
+fn walks_fold_nested_configs_importing_their_parent_and_skip_other_projects() {
+    let dir = project("cli-nested-fold", &[(".dx", RULES), ("sub/.dx", NESTED), ("sub/a.t", "LOUD\n"), ("other/.dx", RULES), ("other/c.t", "LOUD\n"), ("b.t", "quiet\n")]);
     let out = dxlint(&dir, &["--format", "jsonl"]);
-    assert_eq!(out.code, 0, "{}", stdout(&out));
-    assert!(stdout(&out).is_empty(), "{}", stdout(&out));
-    assert!(String::from_utf8_lossy(&out.stderr).contains("skipped sub"), "{}", String::from_utf8_lossy(&out.stderr));
-    let named = dxlint(&dir, &["--format", "jsonl", ".", "sub"]);
-    assert_eq!(named.code, 1, "{}", stdout(&named));
-    assert!(stdout(&named).contains("\"severity\":\"error\""), "{}", stdout(&named));
+    let lines = stdout(&out);
+    let err = String::from_utf8_lossy(&out.stderr);
+    // `sub` builds on this config: linted in the same run, with its settings.
+    assert_eq!(out.code, 1, "{lines}");
+    assert!(lines.lines().any(|l| l.contains("\"file\":\"sub/a.t\"") && l.contains("\"severity\":\"error\"")), "{lines}");
+    // `other` is a project of its own.
+    assert!(!lines.contains("other/c.t"), "{lines}");
+    assert!(err.contains("skipped other") && !err.contains("sub"), "{err}");
+    let named = dxlint(&dir, &["--format", "jsonl", ".", "other"]);
+    assert!(stdout(&named).contains("\"file\":\"other/c.t\""), "{}", stdout(&named));
     assert!(!String::from_utf8_lossy(&named.stderr).contains("skipped"), "{}", String::from_utf8_lossy(&named.stderr));
 }
 

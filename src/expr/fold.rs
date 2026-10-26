@@ -49,7 +49,8 @@ pub(crate) fn specialise(expr: &mut CExpr, options: &[Value<'static>], functions
     // runtime expression, including in unvisited branches and dormant rules.
     let constant = |expr: &CExpr| matches!(expr, CExpr::Const(_));
     let eligible = match expr {
-        CExpr::Opt(_) => true,
+        // Copies that read options at runtime specialise against none.
+        CExpr::Opt(i) => *i < options.len(),
         CExpr::UserCall(_, _) => true,
         CExpr::Bind(value, _, _) => constant(value),
         CExpr::Each(stage) => constant(&stage.input) && stage.args.iter().all(constant),

@@ -396,14 +396,26 @@ impl Server {
                 self.show(3, &format!("dxlint: no {} found in the workspace; linting is off", config::CONFIG_NAME));
             }
         }
-        let configs = std::mem::take(&mut self.stale);
+        // Each config once, through the one that loads it (a folded config's
+        // parent), parents first so they fold their nested configs before
+        // those would load on their own.
+        let mut configs: Vec<PathBuf> = std::mem::take(&mut self.stale).into_iter().map(|c| self.projects.loader_of(&c)).collect();
+        configs.sort_by_key(|c| (c.components().count(), c.clone()));
+        configs.dedup();
         if configs.is_empty() && !rescan {
             return false;
         }
         let mut changed = rescan;
         let docs = &self.docs;
         let uri_of = |p: &Path| docs.get(p).map(|d| d.uri.clone()).unwrap_or_else(|| uri::from_path(p));
+        let mut loaded: Vec<PathBuf> = Vec::new();
         for config in &configs {
+            // Folded by a parent loaded just before: loaded with it.
+            let loader = self.projects.loader_of(config);
+            if loader != *config && loaded.contains(&loader) {
+                continue;
+            }
+            loaded.push(config.clone());
             if self.projects.load(config, &Overlay(docs), &uri_of) {
                 changed = true;
                 rescan |= scan::walk_reaches(&self.roots, config);

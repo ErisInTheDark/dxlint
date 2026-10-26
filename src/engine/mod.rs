@@ -14,6 +14,7 @@ mod profile;
 mod program;
 mod prune;
 pub mod reads;
+pub mod scopes;
 mod suppress;
 pub mod symbols;
 pub mod world;
@@ -74,6 +75,12 @@ pub struct Rule {
     pub severity: Severity,
     /// The severity `rule name` (without one) turns it on at.
     pub default_severity: Severity,
+    /// On for some file (outside or inside a `files` block): lowered and
+    /// dispatched.
+    pub(crate) live: bool,
+    /// A `files` block copy whose options are read at runtime instead of
+    /// folded in ([`scopes`]).
+    pub(crate) unfolded: bool,
     options: Vec<OptionSlot>,
     files: PathGlobs,
     ignore: PathGlobs,
@@ -155,7 +162,8 @@ impl Rule {
     }
 
     fn specialise_options(&mut self, functions: &[crate::grammar::UserFn]) {
-        let options = self.option_values();
+        // No values: option reads stay runtime reads.
+        let options = if self.unfolded { Vec::new() } else { self.option_values() };
         let fold = |expr: &mut CExpr| crate::expr::fold::specialise(expr, &options, functions);
         self.locals.iter_mut().chain(&mut self.node_when).chain(&mut self.when).for_each(fold);
         for expr in [
@@ -185,8 +193,10 @@ impl Rule {
         self.node_when.iter().chain(&self.when).any(|e| matches!(e, CExpr::Const(v) if !v.truthy()))
     }
 
-    fn applies_to(&self, rel: &Path, lang: usize) -> bool {
-        if self.severity == Severity::Off {
+    /// Whether the rule runs on `rel` at `severity` (its own, or the file's
+    /// `files` block one).
+    fn applies_to(&self, rel: &Path, lang: usize, severity: Severity) -> bool {
+        if severity == Severity::Off {
             return false;
         }
         // A rule only on other languages' files has nothing to do here.
@@ -216,6 +226,8 @@ pub struct Linter {
     units: std::sync::Mutex<crate::fx_hash::FxHashMap<PathBuf, std::sync::Arc<units::Unit>>>,
     discoveries: std::sync::Mutex<crate::fx_hash::FxHashMap<crate::grammar::names::modules::resolution::DiscoveryRequest, reads::Cached<Option<Vec<PathBuf>>>>>,
     programs: program::Programs,
+    /// `files` blocks: per-file severities and option copies.
+    pub scopes: scopes::Scopes,
     unit_overlays: Vec<bool>,
     /// Per front end, by native kind: the tokens semantic-only units attach.
     unit_token_kinds: Vec<Vec<bool>>,
@@ -298,7 +310,7 @@ impl Linter {
         }).collect();
         let functions = &self.grammar.functions;
         let values = &mut self.attrs.values;
-        for rule in self.rules.iter_mut().filter(|rule| rule.severity != Severity::Off) {
+        for rule in self.rules.iter_mut().filter(|rule| rule.live) {
             let item = rule.each.is_some();
             // Indent lines are read on other nodes: no locals, no item.
             rule.indents.lower(rule.indent_reset.as_ref(), functions, values);
@@ -316,7 +328,10 @@ impl Linter {
             rule.message_vm = rule.message_plan.as_ref().zip(rule.message.as_ref())
                 .map(|(plan, message)| lower(&plan.indexed(message, u16::from(item)), item));
             let failed = values.take_lowering_errors(&format!("rule `{}`", rule.name));
-            if !failed.is_empty() { rule.severity = Severity::Off; }
+            if !failed.is_empty() {
+                rule.severity = Severity::Off;
+                rule.live = false;
+            }
             errors.extend(failed.into_iter().map(|error| ConfigError::new(rule.span, error)));
         }
         for condition in &self.grammar.names.conditions {
@@ -365,7 +380,7 @@ impl Linter {
             set
         };
         let mut roots = Vec::new();
-        for rule in self.rules.iter().filter(|rule| rule.severity != Severity::Off) {
+        for rule in self.rules.iter().filter(|rule| rule.live) {
             let mut kinds = KindSet::empty(n);
             for target in &rule.targets {
                 match *target {
@@ -393,7 +408,7 @@ impl Linter {
         let compiled_rules = &self.rules;
         let selection_reads: Vec<_> = self.by_selection.iter().flat_map(|(&matcher, selections)| {
             selections.iter().filter_map(move |(selection, rules)| match selection {
-                NodeSelection::Attribute(attr) if rules.iter().any(|&rule| compiled_rules[rule].severity != Severity::Off) => {
+                NodeSelection::Attribute(attr) if rules.iter().any(|&rule| compiled_rules[rule].live) => {
                     let mut kinds = KindSet::empty(n);
                     kinds.insert(matcher);
                     Some((kinds, CExpr::Attr(*attr)))
@@ -510,7 +525,9 @@ impl Linter {
             return Vec::new();
         }
         let Some(lang) = self.grammar.lang_for(&rel) else { return Vec::new() };
-        let active: Vec<bool> = self.rules.iter().map(|f| f.applies_to(&rel, lang)).collect();
+        let settings = self.scopes.for_file(&rel, &self.rules);
+        let severity = |i: usize| settings.as_ref().map_or(self.rules[i].severity, |s| s.severity[i]);
+        let active: Vec<bool> = self.rules.iter().enumerate().map(|(i, f)| f.applies_to(&rel, lang, severity(i))).collect();
         if !active.iter().any(|a| *a) {
             return Vec::new();
         }
@@ -582,7 +599,7 @@ impl Linter {
         }
         let lines = LineIndex::new(text);
         let file = rel.to_string_lossy().replace('\\', "/");
-        let run = Run { path, lang, text, lines: &lines, file: &file, active: &active };
+        let run = Run { path, lang, text, lines: &lines, file: &file, active: &active, settings: settings.as_deref() };
         let mut out = Vec::new();
 
         let overlays: Vec<bool> = self.reach.iter().map(|r| r.iter().zip(&targets).any(|(r, t)| *r && *t)).collect();
@@ -815,7 +832,7 @@ impl Linter {
                         lines: run.lines,
                         file: run.file,
                         file_id: 0,
-                        options: &[],
+                        options: run.settings.and_then(|s| s.options[fi].as_deref()).unwrap_or(&[]),
                         language_options: Some(&self.language_options),
                         reindented: &reindented[fi],
                         attrs: &self.attrs,
@@ -831,7 +848,10 @@ impl Linter {
                         Some(profile) => profile.time_rule(fi, || self.apply_each(&self.rules[fi], &ctx)),
                         None => self.apply_each(&self.rules[fi], &ctx),
                     };
-                    for d in found {
+                    for mut d in found {
+                        if let Some(settings) = run.settings {
+                            d.severity = settings.severity[fi];
+                        }
                         if let Some([edit]) = d.fix.as_ref().map(|fix| fix.edits.as_slice()) {
                             record_reindent(&mut reindented[fi].borrow_mut(), run.text, run.lines, edit);
                         }
@@ -1017,6 +1037,8 @@ struct Run<'a> {
     lines: &'a LineIndex,
     file: &'a str,
     active: &'a [bool],
+    /// Inside a `files` block: the severities and runtime options there.
+    settings: Option<&'a scopes::FileSettings>,
 }
 
 fn engine_warning(at: usize, message: String) -> Diagnostic {

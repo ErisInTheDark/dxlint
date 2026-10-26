@@ -99,7 +99,7 @@ const KEYWORDS: &[(&str, &str)] = &[
     ("default", "`default option name <type> = value`: the option an inline `rule name set value` sets"),
     ("skip", "`skip narrowing, selection`: trade type precision for speed; reads keep their declared value (`narrowing`), conditional types are unknown (`selection`)"),
     ("import", "`import .ts` (a built-in language, its rules defined but off), `import rules:recommended` (a built-in ruleset), `import some/path` (a file, relative to this one): pasted here, once"),
-    ("ignore", "`ignore \"glob\" ...`: never lint these files"),
+    ("ignore", "`ignore \"glob\" \"!glob\" ...`: never lint these files (`!` takes some back; the last matching glob decides)"),
     ("severity", "`severity warn` (or `hint`, `info`, `error`): every rule on at this point gets that severity; rules that are off stay off, and lines below can change it again"),
     ("native", "`native ts`: the TypeScript parser's node kinds as `ts_*` layers"),
     ("lang", "`lang name \"*.ext\" ...`: a language, whose root layer is `.name`"),
@@ -112,7 +112,7 @@ const KEYWORDS: &[(&str, &str)] = &[
     ("as", "`fix as expr`"),
     ("option", "rule clause: `option name <type> = <default> \"description\"`, set with `rule name { set option value }`. Types: `string`, `number`, `int`, `boolean`, `any`, `null`, `regex`, literals, `T[]`, `{ key: T }`, `a | b`, `int(0..)`, `T[1..]`, schema names"),
     ("schema", "`schema name <type> \"description\"`: a named option type rules can share"),
-    ("files", "rule clause: `files \"glob\" ...`, only these files"),
+    ("files", "`files \"glob\" \"!glob\" { ... }`: rule lines, `severity` and ruleset imports for these files only; in a rule definition, `files \"glob\"` limits the rule to them"),
     ("report", "rule clause: `report node | change | end`, where diagnostics point"),
     ("drop", "`drop rule name`, `drop match x`, `drop in a match x`, `drop let x`, `drop in a let x`, `drop macro m`, `drop group g [members]`, `drop ignore \"glob\"`: remove a definition; whatever still uses it is an error at the `drop`"),
     ("override", "`override <definition>`: replace the existing definition of that name, in its place"),
@@ -145,6 +145,7 @@ impl Symbols {
         config: &Config,
         grammar: &Grammar,
         rules: &[Rule],
+        scopes: &super::scopes::Scopes,
         inert: &[super::InertRule],
         resolved: Vec<(Span, Resolved)>,
         sources: Arc<SourceMap>,
@@ -152,7 +153,7 @@ impl Symbols {
         let mut s = Symbols { symbols: Vec::new(), uses: Vec::new(), by_key: HashMap::new(), sources };
         s.registry();
         s.layers(config, grammar);
-        s.rules_and_options(config, rules);
+        s.rules_and_options(config, rules, scopes);
         for r in inert {
             let doc = format!("checks `{}`, **off** (`rule {}` turns it on at {})", r.target_text, r.name, r.default_severity.as_str());
             s.add(Kind::Rule, &r.name, r.target_text.clone(), doc);
@@ -434,9 +435,10 @@ impl Symbols {
         }
     }
 
-    fn rules_and_options(&mut self, config: &Config, rules: &[Rule]) {
+    fn rules_and_options(&mut self, config: &Config, rules: &[Rule], scopes: &super::scopes::Scopes) {
         let schemas: crate::config::schema::Schemas = config.schemas.iter().map(|s| (s.name.text.clone(), s.clone())).collect();
-        for r in rules {
+        // A `files` block's compiled copies are described with their rule.
+        for (index, r) in rules.iter().enumerate().filter(|(i, _)| !scopes.is_copy(*i)) {
             let state = if r.severity == crate::config::ast::Severity::Off {
                 format!("**off** (`rule {}` turns it on at {})", r.name, r.default_severity.as_str())
             } else {
@@ -456,6 +458,10 @@ impl Symbols {
                     let _ = write!(doc, ", {d}");
                 }
                 self.option(&r.name, Kind::Rule, OptionView { name: &o.name, schema: &o.schema, value: &o.value, default: &o.default, description: o.description.as_deref(), primary: o.primary }, &schemas);
+            }
+            for block in scopes.blocks_of(index, rules) {
+                let options: String = block.options.iter().map(|(slot, value)| format!(", `{}` = {}", r.options[*slot].name, crate::expr::show(value))).collect();
+                let _ = write!(doc, "\n- in `files {}`: **{}**{options}", block.globs, block.severity.as_str());
             }
             self.add(Kind::Rule, &r.name, r.target_text.clone(), doc);
             self.def(Kind::Rule, &r.name, r.span);

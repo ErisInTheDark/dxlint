@@ -93,6 +93,21 @@ pub struct Parser<'a> {
     conditions: Vec<Expr>,
     /// Items started so far, nested ones included.
     items_started: usize,
+    /// Inside `files "glob" { ... }` (or a folded nested config): the
+    /// `Config::scopes` index its rule lines apply to.
+    scope: Option<usize>,
+    /// While folding a nested config: the files its parent config already
+    /// read, which its imports of them skip.
+    parent_files: HashSet<String>,
+    /// While checking a nested config folds: whether an import of its parent
+    /// came before any item that is not an import.
+    fold_head: Option<FoldHead>,
+}
+
+#[derive(Clone, Copy, Default)]
+struct FoldHead {
+    parent_imported: bool,
+    item_before_parent: bool,
 }
 
 /// A built-in import parsed as a configuration's first item: everything it
@@ -141,7 +156,44 @@ impl<'a> Parser<'a> {
             defining: 0,
             conditions: Vec::new(),
             items_started: 0,
+            scope: None,
+            parent_files: HashSet::new(),
+            fold_head: None,
         }
+    }
+
+    /// Every file read so far, by import key.
+    pub fn imported(&self) -> &HashSet<String> {
+        &self.imported
+    }
+
+    /// Parses a nested config folded into this one: its lines, minus its
+    /// import of `parent_files`, as a `files "<glob>"` block.
+    pub fn parse_folded(&mut self, path: &Path, glob: String, parent_files: HashSet<String>) {
+        let span = Span { file: super::source::FileId(0), start: 0, end: 0 };
+        self.config.scopes.push(FilesScope { globs: vec![(glob, span)], span });
+        self.scope = Some(self.config.scopes.len() - 1);
+        self.parent_files = parent_files;
+        self.parse_entry(path);
+        self.scope = None;
+        self.parent_files.clear();
+    }
+
+    /// Whether the nested config at `path` folds into a parent that read
+    /// `parent_files`: it imports the parent first (directly or through
+    /// plain files) and holds nothing a `files` block cannot. Returns the
+    /// files it reads besides the parent's.
+    pub fn folds(path: &Path, parent_files: &HashSet<String>, provider: &dyn SourceProvider) -> Option<HashSet<String>> {
+        let mut sources = SourceMap::default();
+        let mut parser = Parser::new(&mut sources, provider);
+        parser.config.scopes.push(FilesScope { globs: Vec::new(), span: Span { file: super::source::FileId(0), start: 0, end: 0 } });
+        parser.scope = Some(0);
+        parser.parent_files = parent_files.clone();
+        parser.fold_head = Some(FoldHead::default());
+        parser.parse_entry(path);
+        let head = parser.fold_head.unwrap_or_default();
+        let folds = parser.errors.is_empty() && head.parent_imported && !head.item_before_parent;
+        folds.then(|| parser.imported.iter().map(|key| key.split_once("#files").map_or(key.as_str(), |(file, _)| file).to_string()).collect())
     }
 
     /// Parses an entry file and everything it imports.
@@ -334,6 +386,18 @@ impl<'a> Parser<'a> {
         let Some(t) = self.peek() else { return };
         self.items_started += 1;
         let before = self.errors.len();
+        if let Some(head) = &mut self.fold_head {
+            head.item_before_parent |= !head.parent_imported && !t.is_ident("import");
+        }
+        if self.scope.is_some() && !matches!((t.kind, &*t.text), (Tk::Ident, "rule" | "severity" | "import")) {
+            self.errors.push(
+                ConfigError::new(t.span, format!("a `files` block cannot hold {}", t.describe()))
+                    .note("it holds `rule` lines, `severity` and imports of rulesets or settings files; definitions go outside it"),
+            );
+            self.bump();
+            self.recover_if_mid_line();
+            return;
+        }
         match (t.kind, &*t.text) {
             (Tk::Ident, "import") => self.import(),
             (Tk::Ident, "@macro") => { self.macro_def(); }
@@ -368,6 +432,7 @@ impl<'a> Parser<'a> {
             (Tk::Ident, "set") => self.old_set(),
             (Tk::Ident, "ignore") => self.ignore(),
             (Tk::Ident, "severity") if ctx.is_none() => self.severity_item(),
+            (Tk::Ident, "files") if ctx.is_none() && self.defining == 0 => self.files_block(),
             (Tk::Ident, "drop") => self.drop_item(),
             (Tk::Ident, "override") => self.override_item(ctx),
             (Tk::Ident, "define") => self.define_block(),
@@ -381,7 +446,7 @@ impl<'a> Parser<'a> {
             _ => {
                 self.errors.push(
                     ConfigError::new(t.span, format!("expected an item, found {}", t.describe())).note(
-                        "items are: lang, language, group, match, in ..., rule, indent, let, fn, @macro, schema, import, ignore, native, define, drop, override",
+                        "items are: lang, language, group, match, in ..., rule, indent, let, fn, @macro, schema, import, ignore, files, native, define, drop, override",
                     ),
                 );
                 self.bump();
@@ -1384,7 +1449,11 @@ impl<'a> Parser<'a> {
                     return;
                 }
             };
-            if !self.imported.insert(key.clone()) {
+            if self.scope.is_some() && namespace == "std" {
+                self.errors.push(ConfigError::new(span, "a `files` block cannot import a language").note("import it at the top of the config; inside, import rulesets (`rules:<name>`) or settings files"));
+                return;
+            }
+            if !self.imported.insert(self.scoped_key(&key)) {
                 self.record_import(span, |f| f.name == key);
                 return;
             }
@@ -1421,7 +1490,14 @@ impl<'a> Parser<'a> {
         }
         let full = normalize_path(&full);
         let key = full.to_string_lossy().into_owned();
-        if !self.imported.insert(key) {
+        if self.parent_files.contains(&key) {
+            if let Some(head) = &mut self.fold_head {
+                head.parent_imported = true;
+            }
+            self.record_import(span, |f| f.path.as_deref() == Some(full.as_path()));
+            return;
+        }
+        if !self.imported.insert(self.scoped_key(&key)) {
             self.record_import(span, |f| f.path.as_deref() == Some(full.as_path()));
             return;
         }
@@ -1472,6 +1548,48 @@ impl<'a> Parser<'a> {
         self.imported.extend(parsed.imported.iter().cloned());
         self.errors.extend(parsed.errors.iter().cloned());
         self.config.uses.push(Use::Import(span, parsed.id));
+    }
+
+    /// What `imported` records a file under: inside a `files` block, a file
+    /// read before (outside it, or in another block) is read again for it.
+    fn scoped_key(&self, key: &str) -> String {
+        match self.scope {
+            Some(scope) => format!("{key}#files{scope}"),
+            None => key.to_string(),
+        }
+    }
+
+    /// `files "glob" "!glob" { ... }`: rule lines, `severity` and ruleset
+    /// imports for those files only.
+    fn files_block(&mut self) {
+        let kw = self.bump().expect("peeked");
+        let globs = self.globs("a path glob");
+        if globs.is_empty() {
+            return;
+        }
+        self.skip(false, true);
+        if !self.ts.peek_raw(0).is_some_and(|t| t.kind == Tk::LBrace) {
+            self.error_here("expected `{` after the globs: `files \"src/**\" { rule ... }`".to_string());
+            return;
+        }
+        self.ts.next_raw();
+        let span = kw.span.to(globs.last().map_or(kw.span, |(_, s)| *s));
+        self.config.scopes.push(FilesScope { globs, span });
+        self.scope = Some(self.config.scopes.len() - 1);
+        loop {
+            match self.peek() {
+                None => {
+                    self.errors.push(ConfigError::new(kw.span, "unclosed `files` block"));
+                    break;
+                }
+                Some(t) if t.kind == Tk::RBrace => {
+                    self.bump();
+                    break;
+                }
+                Some(_) => self.item(None),
+            }
+        }
+        self.scope = None;
     }
 
     /// An import of a file already loaded: still a link to it.
@@ -1879,10 +1997,16 @@ impl<'a> Parser<'a> {
                     .note("in `rule name { ... }`, `set option value` sets them"),
             );
         }
+        if self.scope.is_some() && !patch.settings_only() {
+            self.errors.push(
+                ConfigError::new(patch.name.span, "a `files` block sets severity and options only")
+                    .note("define a rule outside the block for different checks, messages or fixes"),
+            );
+        }
         // Built-in rulesets name rules of every language; only the imported
         // ones exist.
         let soft = self.sources.get(kw.span.file).name.starts_with("rules/");
-        self.config.configs.push(RuleConfig { patch, options, value, soft, on_only: false });
+        self.config.configs.push(RuleConfig { patch, options, value, soft, on_only: false, scope: self.scope });
     }
 
     /// `severity <level>`: every rule on at this point gets `level`; rules
@@ -1902,7 +2026,7 @@ impl<'a> Parser<'a> {
         let word = self.ts.next_raw().expect("peeked");
         let mut patch = RuleDef::new(Name { text: "*".into(), span: kw.span.to(word.span) }, Vec::new());
         patch.severity = Some(level);
-        self.config.configs.push(RuleConfig { patch, options: Vec::new(), value: None, soft: true, on_only: true });
+        self.config.configs.push(RuleConfig { patch, options: Vec::new(), value: None, soft: true, on_only: true, scope: self.scope });
     }
 
     /// `define { ... }`: rules inside are defined but stay off until a
@@ -2445,7 +2569,7 @@ impl<'a> Parser<'a> {
                         def.indents.push(IndentDecl { inside, dedent, targets, by, from, class });
                     }
                 }
-                (Tk::Ident, kw @ ("files" | "ignore")) => {
+                (Tk::Ident, kw @ ("files" | "ignore")) if options.is_none() => {
                     let kw = kw.to_string();
                     self.bump();
                     let globs = self.globs("a path glob");

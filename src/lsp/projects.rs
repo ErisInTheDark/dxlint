@@ -1,5 +1,7 @@
 //! Loaded configs. Each file is linted by its nearest `.dx` config; a
-//! nested config fully replaces its parents for the files below it.
+//! nested config fully replaces its parents for the files below it, unless
+//! it folds into them (`config::load_tree`): then the parent's linter lints
+//! its folder with the nested config's settings.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -32,6 +34,10 @@ pub struct Projects {
     by_dir: HashMap<PathBuf, Project>,
     /// URIs currently showing config errors.
     error_uris: HashSet<String>,
+    /// Every config known (loaded, or folded into another).
+    known: HashSet<PathBuf>,
+    /// Folded config directory → the directory of the config it folded into.
+    folded: HashMap<PathBuf, PathBuf>,
 }
 
 /// Linters by config directory, snapshotted for background scans.
@@ -129,7 +135,15 @@ impl Projects {
     }
 
     pub fn is_loaded(&self, config: &Path) -> bool {
-        config.parent().is_some_and(|dir| self.by_dir.contains_key(dir))
+        config.parent().is_some_and(|dir| self.by_dir.contains_key(dir) || self.folded.contains_key(dir))
+    }
+
+    /// The config that loads `config`: the one it folded into, else itself.
+    pub fn loader_of(&self, config: &Path) -> PathBuf {
+        match config.parent().and_then(|dir| self.folded.get(dir)) {
+            Some(root) => root.join(CONFIG_NAME),
+            None => config.to_path_buf(),
+        }
     }
 
     pub fn has_errors(&self, uri: &str) -> bool {
@@ -138,19 +152,46 @@ impl Projects {
 
     /// Drops configs not in `keep`. Returns whether any were dropped.
     pub fn retain(&mut self, keep: &HashSet<PathBuf>) -> bool {
-        let before = self.by_dir.len();
+        let before = self.by_dir.len() + self.folded.len();
         self.by_dir.retain(|dir, _| keep.contains(&dir.join(CONFIG_NAME)));
-        self.by_dir.len() != before
+        self.folded.retain(|dir, _| keep.contains(&dir.join(CONFIG_NAME)));
+        self.known.retain(|config| keep.contains(config));
+        self.known.extend(keep.iter().cloned());
+        self.by_dir.len() + self.folded.len() != before
     }
 
-    /// (Re)loads one config. Returns whether the linters changed: a new good
-    /// build, or a config that no longer exists.
+    /// (Re)loads one config, with the known configs below it that fold into
+    /// it. Returns whether the linters changed: a new good build, or a config
+    /// that no longer exists.
     pub fn load(&mut self, config: &Path, sources: &dyn SourceProvider, uri_of: &dyn Fn(&Path) -> String) -> bool {
         let Some(dir) = config.parent() else { return false };
+        if let Some(root) = self.folded.get(dir).cloned() {
+            return self.load(&root.join(CONFIG_NAME), sources, uri_of);
+        }
+        self.known.insert(config.to_path_buf());
         if !config.is_file() {
+            self.known.remove(config);
+            self.folded.retain(|nested, root| nested != dir && root != dir);
             return self.by_dir.remove(dir).is_some();
         }
-        let built = build(config::load_file(config, sources), dir.to_path_buf());
+        let nested: Vec<PathBuf> = self.known.iter().filter(|c| c.parent().is_some_and(|d| d != dir && d.starts_with(dir))).cloned().collect();
+        let (loaded, folded) = config::load_tree(config, |_| nested, sources);
+        let built = build(loaded, dir.to_path_buf());
+        // Folded folders are linted by this config's linter: their own
+        // entries go, so the nearest entry above them is this one.
+        let before: Vec<PathBuf> = self.folded.iter().filter(|(_, root)| *root == dir).map(|(nested, _)| nested.clone()).collect();
+        self.folded.retain(|_, root| root != dir);
+        for nested in &folded {
+            if let Some(nested_dir) = nested.parent() {
+                self.by_dir.remove(nested_dir);
+                self.folded.insert(nested_dir.to_path_buf(), dir.to_path_buf());
+            }
+        }
+        // Configs that stopped folding load on their own again.
+        let unfolded: Vec<PathBuf> = before.into_iter().filter(|d| !self.folded.contains_key(d)).collect();
+        for nested in unfolded {
+            self.load(&nested.join(CONFIG_NAME), sources, uri_of);
+        }
         let project = self.by_dir.entry(dir.to_path_buf()).or_default();
         project.files = built.sources.files().filter_map(|(_, f)| f.path.clone()).collect();
         project.symbols = built.symbols.clone();
@@ -187,5 +228,32 @@ impl Projects {
         for (u, diags) in by_uri {
             out.notify("textDocument/publishDiagnostics", json!({ "uri": u, "diagnostics": diags }));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nested_configs_that_fold_share_the_parent_linter_and_others_keep_their_own() {
+        let dir = normalize_path(&std::env::temp_dir().join("dxlint-lsp-tests").join("projects-fold"));
+        let _ = std::fs::remove_dir_all(&dir);
+        for sub in ["folds", "apart"] { std::fs::create_dir_all(dir.join(sub)).expect("dirs") }
+        let rules = "lang t \"*.t\"\nin .t match bad /BAD/ { rule no-bad warn \"bad\" }\n";
+        std::fs::write(dir.join(CONFIG_NAME), rules).expect("root");
+        std::fs::write(dir.join("folds").join(CONFIG_NAME), "import ../.dx\nrule no-bad error\n").expect("folds");
+        std::fs::write(dir.join("apart").join(CONFIG_NAME), rules).expect("apart");
+        let configs: HashSet<PathBuf> = ["", "folds", "apart"].iter().map(|sub| dir.join(sub).join(CONFIG_NAME)).collect();
+        let mut projects = Projects::default();
+        projects.retain(&configs);
+        let mut sorted: Vec<&PathBuf> = configs.iter().collect();
+        sorted.sort_by_key(|c| c.components().count());
+        for config in sorted {
+            projects.load(&projects.loader_of(config), &crate::config::source::Disk, &|p: &Path| p.display().to_string());
+        }
+        let linter = |sub: &str| projects.linter_for(&dir.join(sub).join("x.t")).expect("linter").clone();
+        assert!(Arc::ptr_eq(&linter(""), &linter("folds")));
+        assert!(!Arc::ptr_eq(&linter(""), &linter("apart")));
     }
 }

@@ -27,7 +27,7 @@ ignore "dist" "coverage" "src/generated/**"
 - `import .ts` loads the JavaScript and TypeScript support, with every one of its rules, all **off**.
 - `import rules:recommended` turns on a set of rules (see below).
 - `rule <name>` lines turn rules on, change their severity or options, or turn them off.
-- `ignore` skips files and folders (globs).
+- `ignore` skips files and folders (globs). As in `.gitignore`, a `!glob` takes files back and the last matching glob decides: `ignore "dist/**" "!dist/types/**"`.
 
 `dxlint check` validates the config without linting. A config with mistakes still lints with every part that built; the mistakes are reported and the run fails.
 
@@ -83,13 +83,6 @@ rule es-brace-style:* {                 # other options go in a block
   set style "stroustrup"
   set allowSingleLine true
 }
-rule es-max-lines {
-  set max 500
-  ignore "src/generated/**"          # this rule only, not these files
-}
-rule es-no-magic-numbers {
-  files "src/**"                     # this rule only on these files
-}
 ```
 
 - Severities: `off`, `hint`, `info`, `warn`, `error`. Only `error` makes the exit code 1.
@@ -99,6 +92,28 @@ rule es-no-magic-numbers {
 - A misspelled rule name is an error with a suggestion.
 
 `dxlint rules` lists every rule your config defines, with severity, options and message.
+
+## Settings for some files
+
+A `files` block changes rules for the files its globs match (`!` globs take files back out):
+
+```dx
+files "src/server/**" "!src/server/legacy/**" {
+  rule es-semi set "never"
+  rule es-no-console off
+}
+files "**/*.test.ts" {
+  severity warn                         # everything on stays on, as warnings
+  rule es-no-explicit-any off
+}
+files "scripts/**" {
+  import rules:style                    # a ruleset for these files only
+}
+```
+
+- Inside go `rule` lines, `severity` and ruleset imports; new rules and languages are defined outside.
+- Lines apply top to bottom, blocks included: for a file in two blocks the later one wins, and a later line outside every block changes all files.
+- A block that only changes severities costs nothing extra; a rule given other option values is compiled once more per distinct set of values.
 
 ## Type-aware rules
 
@@ -142,7 +157,7 @@ Write these in any comment:
 
 ## Nested configs
 
-Each file is linted by the nearest `.dx` at or above it, in the CLI and in the editor. A nested config replaces its parents for the files below it; import the parent to build on it:
+Each file is linted by the nearest `.dx` at or above it, in the CLI and in the editor. A nested config that starts by importing its parent builds on it:
 
 ```dx
 import ../.dx
@@ -150,7 +165,7 @@ import ../.dx
 rule es-no-console off
 ```
 
-When `dxlint` walks into a folder that has its own `.dx`, it skips that folder and says so. Name the folder (`dxlint . packages/app`) to lint it too, with its own config. `-c` lints every named path with that one config.
+Such a config is a `files` block that lives in its folder: when it holds only what a block can (rule lines, `severity`, ruleset imports), a run of the parent lints the folder in the same pass, with one linter. Any other nested `.dx` is a project of its own: `dxlint` skips its folder and says so; name the folder (`dxlint . packages/app`) to lint it too, with its own config. `-c` lints every named path with that one config and folds nothing.
 
 ## Language settings
 
@@ -172,7 +187,7 @@ language .js {
 
 - Rule names are the upstream name without its plugin prefix, after a language prefix: `@typescript-eslint/no-floating-promises` and `@stylistic/indent` are `es-no-floating-promises` and `es-indent`, the same for JavaScript and TypeScript. Text rules every language shares, such as `eol-last`, are `shared-eol-last`. Where typescript-eslint extends a core rule (`es-no-unused-vars`, `es-no-shadow`, ...), dxlint has one rule that behaves like the typescript-eslint version.
 - Options keep their upstream names and values; a rule's option object becomes `set` lines.
-- `files`/`ignores` blocks become `ignore` lines, or `files`/`ignore` inside a rule.
+- A config object with `files`, `ignores` and `rules` becomes a `files` block, its `ignores` as `!` globs; top-level `ignores` become `ignore` lines.
 - Replace `eslint-disable` comments with `dxlint-ignore`.
 - Each rule's page in [rules/](rules/README.md) has a parity row: how many of the upstream rule's own test cases dxlint matches.
 

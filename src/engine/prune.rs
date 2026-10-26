@@ -302,7 +302,7 @@ fn prune_config(config: &mut Config, runtime: bool) {
     let mut needed: HashSet<String> = HashSet::new();
 
     // What turned-on rules and the config's own items mention.
-    for r in config.rules.iter().filter(|r| r.enabled()) {
+    for r in config.rules.iter().filter(|r| r.live()) {
         for t in &r.targets {
             if let Target::Field(_, field) = t { needed.insert(field.text.clone()); }
             let name = match t {
@@ -451,7 +451,7 @@ fn prune_config(config: &mut Config, runtime: bool) {
         config.functions.retain(|f| !unusable.contains(&f.name.text));
     }
 
-    for r in config.rules.iter_mut().filter(|r| !r.enabled()) {
+    for r in config.rules.iter_mut().filter(|r| !r.live()) {
         if runtime {
             r.inert = true;
             continue;

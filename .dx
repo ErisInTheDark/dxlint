@@ -11,10 +11,15 @@ ignore "fixtures"
 
 # Hygiene everywhere, except the rule pages showing what these rules report.
 # Long lines are a judgement call here, not a rule.
-rule shared-trailing-whitespace { ignore "docs/rules/**" }
-rule shared-tab-indent { ignore "docs/rules/**" }
-rule shared-blank-lines { ignore "docs/rules/**" }
+rule shared-trailing-whitespace
+rule shared-tab-indent
+rule shared-blank-lines
 rule shared-final-newline
+files "docs/rules/**" {
+  rule shared-trailing-whitespace off
+  rule shared-tab-indent off
+  rule shared-blank-lines off
+}
 
 # ---- rust ---------------------------------------------------------------
 

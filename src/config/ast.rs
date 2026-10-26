@@ -29,6 +29,9 @@ pub struct Config {
     pub configs: Vec<RuleConfig>,
     /// Global `ignore "glob"` items: files never linted.
     pub ignores: Vec<(String, Span)>,
+    /// `files "glob" { ... }` blocks (and nested configs folded into this
+    /// one): the files their `RuleConfig`s apply to.
+    pub scopes: Vec<FilesScope>,
     pub groups: Vec<GroupDef>,
     /// `native ts`: native front ends whose node kinds become layers.
     pub natives: Vec<Name>,
@@ -468,25 +471,42 @@ pub struct RuleDef {
     /// Off, and reads library layers nothing else needs: not compiled (see
     /// `engine::prune`), only listed.
     pub inert: bool,
+    /// A `files` block turns it on for some files.
+    pub scoped_on: bool,
 }
 
 impl RuleDef {
-    /// On after its configuration.
+    /// On after its configuration, outside every `files` block.
     pub fn enabled(&self) -> bool {
         match self.configured {
             Some(s) => s != Severity::Off,
             None => !self.defined_only && self.severity.unwrap_or(Severity::Warn) != Severity::Off,
         }
     }
+
+    /// On for some file: compiled and its layers kept.
+    pub fn live(&self) -> bool {
+        self.enabled() || self.scoped_on
+    }
 }
 
 impl RuleDef {
+    /// A configuring line that changes only severity (and, beside it,
+    /// options): what a `files` block may hold.
+    pub fn settings_only(&self) -> bool {
+        self.message.is_none() && self.fix.is_none() && self.fix_when.is_none() && self.fix_at.is_none()
+            && self.locals.is_empty() && self.when.is_empty() && self.item_locals.is_empty() && self.item_when.is_empty()
+            && self.indents.is_empty() && self.indent_reset.is_none() && self.report.is_none() && self.report_at.is_none()
+            && self.each.is_none() && self.files.is_empty() && self.ignore.is_empty()
+    }
+
     /// A rule with nothing but its name and targets.
     pub fn new(name: Name, targets: Vec<Target>) -> Self {
         RuleDef {
             defined_only: false,
             configured: None,
             inert: false,
+            scoped_on: false,
             name,
             targets,
             severity: None,
@@ -565,6 +585,16 @@ pub struct RuleConfig {
     pub soft: bool,
     /// `severity <level>`: only rules already on at this point; turns none on.
     pub on_only: bool,
+    /// Inside `files "glob" { ... }`: an index into `Config::scopes`; the
+    /// line sets severity and options for those files only.
+    pub scope: Option<usize>,
+}
+
+/// `files "glob" "!glob" { ... }`, or a nested config folded into this one.
+#[derive(Clone, Debug)]
+pub struct FilesScope {
+    pub globs: Vec<(String, Span)>,
+    pub span: Span,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -413,6 +413,68 @@ fn severity_lines_set_rules_on_above_and_leave_off_rules_and_later_lines() {
 }
 
 #[test]
+fn files_blocks_set_severity_and_options_for_their_files_in_config_order() {
+    let l = linter(r#"
+        define {
+          in .t match a /a/ {
+            rule a_rule {
+              option mode string = "base"
+              error "a {mode}"
+            }
+          }
+          in .t match b /b/ { rule b_rule error "b" }
+          in .t match c /c/ { rule c_rule error "c" }
+          in .t match d /d/ { rule d_rule error "d" }
+        }
+        rule a_rule
+        rule b_rule warn
+        rule d_rule
+        files "src/**" "!src/keep/**" {
+          rule a_rule { set mode "src" }
+          rule b_rule off
+          rule c_rule
+          rule d_rule off
+        }
+        files "src/deep/**" {
+          rule a_rule { set mode "deep" }
+          severity hint
+        }
+        rule b_rule info
+    "#);
+    let at = |path: &str| -> Vec<(String, Severity)> {
+        l.lint(Path::new(path), "abcd").into_iter().map(|d| (d.message, d.severity)).collect()
+    };
+    let outside = vec![("a base".to_string(), Severity::Error), ("b".into(), Severity::Info), ("d".into(), Severity::Error)];
+    assert_eq!(at("/root/file.t"), outside);
+    assert_eq!(at("/root/src/keep/x.t"), outside);
+    assert_eq!(at("/root/src/x.t"), vec![("a src".to_string(), Severity::Error), ("b".into(), Severity::Info), ("c".into(), Severity::Error)]);
+    assert_eq!(at("/root/src/deep/x.t"), vec![("a deep".to_string(), Severity::Hint), ("b".into(), Severity::Info), ("c".into(), Severity::Hint)]);
+    // Severity is data; only distinct option sets compile another copy.
+    let copies = |name: &str| l.rules.iter().filter(|r| r.name == name).count();
+    assert_eq!((copies("a_rule"), copies("b_rule"), copies("c_rule"), copies("d_rule")), (3, 1, 1, 1));
+}
+
+#[test]
+fn many_option_sets_share_one_copy_reading_options_at_runtime() {
+    let blocks: String = (0..10).map(|i| format!("files \"p{i}/**\" {{ rule a_rule {{ set mode \"v{i}\" }} }}\n")).collect();
+    let l = linter(&format!("in .t match a /a/ {{\n  rule a_rule {{\n    option mode string = \"base\"\n    error \"a {{mode}}\"\n  }}\n}}\n{blocks}"));
+    assert_eq!(l.rules.iter().filter(|r| r.name == "a_rule").count(), 2);
+    let message = |path: &str| l.lint(Path::new(path), "a").into_iter().map(|d| d.message).collect::<Vec<_>>();
+    assert_eq!(message("/root/p7/x.t"), vec!["a v7"]);
+    assert_eq!(message("/root/x.t"), vec!["a base"]);
+}
+
+#[test]
+fn files_blocks_hold_settings_only() {
+    let rules = "in .t match a /a/ { rule a_rule error \"a\" }\n";
+    for body in ["in .t match b /b/", "rule a_rule { when true }", "rule a_rule error \"other\"", "import .t", "files \"x\" { rule a_rule }"] {
+        let errs = errors(&format!("{rules}files \"src/**\" {{\n  {body}\n}}\n"));
+        assert!(!errs.is_empty(), "accepted inside a block: {body}");
+    }
+    assert!(!errors(&format!("{rules}rule a_rule {{ files \"src/**\" }}\n")).is_empty(), "configuring lines take no files");
+}
+
+#[test]
 fn early_rule_settings_and_partial_rulesets_compile() {
     let l = linter(r#"
         rule late error
