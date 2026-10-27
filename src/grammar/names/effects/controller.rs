@@ -17,15 +17,11 @@ pub(crate) struct State {
     reads: RefCell<FxHashMap<Leaf, Known<Rc<Reads>>>>,
     entry_owners: RefCell<FxHashMap<Leaf, Leaf>>,
     /// Per file, every write's target in tree order (for `unwritten`).
-    file_writes: RefCell<FxHashMap<u32, Rc<[FileWrite]>>>,
+    file_writes: RefCell<FxHashMap<u32, Known<Rc<[FileWrite]>>>>,
     /// Per file, those writes resolved to the bindings they replace.
-    written_bindings: RefCell<FxHashMap<u32, Rc<WrittenBindings>>>,
-    discarded: RefCell<Option<Discarded>>,
-    /// Bodies whose graph build ran its own allowance out
-    /// ([`Effects::execution`]); kept across roots (never rolled back).
-    outgrown: RefCell<FxHashSet<Leaf>>,
-    /// File roots whose read catalogue ran its allowance out.
-    reads_outgrown: RefCell<FxHashSet<Leaf>>,
+    written_bindings: RefCell<FxHashMap<u32, Known<Rc<WrittenBindings>>>>,
+    /// Graphs and read catalogues being built: an ask meanwhile is a cycle.
+    building: RefCell<FxHashSet<(Leaf, Option<bool>)>>,
 }
 
 /// One built graph of a body, with the conditions its build decided (by
@@ -49,29 +45,6 @@ enum FileWrite {
 struct WrittenBindings {
     first: FxHashMap<NodeRef, usize>,
     unknown: Option<usize>,
-}
-
-#[derive(Default)]
-struct Discarded {
-    graphs: FxHashSet<Leaf>,
-    reads: FxHashSet<Leaf>,
-}
-
-impl State {
-    pub(crate) fn rollback(&self) {
-        let mut discarded = self.discarded.borrow_mut();
-        self.graphs.borrow_mut().retain(|&(entry, _), graph| {
-            if matches!(graph, Known::Yes(_)) { return true }
-            if let Some(discarded) = discarded.as_mut() { discarded.graphs.insert(entry); }
-            false
-        });
-        self.reads.borrow_mut().retain(|&root, reads| {
-            if matches!(reads, Known::Yes(_)) { return true }
-            if let Some(discarded) = discarded.as_mut() { discarded.reads.insert(root); }
-            false
-        });
-    }
-
 }
 
 pub(super) type Reads = FxHashMap<NodeRef, FxHashSet<(NodeRef, NodeRef)>>;
@@ -128,34 +101,32 @@ impl Effects<'_> {
         let Some(tree) = self.semantic.world.tree(node.file) else { return Known::Unknown };
         let root = Leaf { target: Target::Node(NodeRef { node: tree.root, ..node }), ..at };
         let Some(root) = self.semantic.leaf(root).known() else { return Known::Unknown };
-        if let Some(reads) = self.semantic.effects.reads.borrow().get(&root) { return reads.clone() }
-        let Some(effect) = self.semantic.tables.vocabulary.effect("read") else { return Known::Unknown };
-        // A file whose catalogue outgrew its allowance outgrows every later
-        // one: answer as the build did, without rebuilding.
-        if self.semantic.effects.reads_outgrown.borrow().contains(&root) {
-            self.semantic.question.budget.exhaust();
-            return Known::Unknown;
+        let effects = &self.semantic.effects;
+        let kept = effects.reads.borrow().get(&root).cloned();
+        if let Some(reads) = kept {
+            if effects.building.borrow().contains(&(root, None)) { self.semantic.values().note_cycle_read() }
+            return reads;
         }
-        self.semantic.effects.reads.borrow_mut().insert(root, Known::Unknown);
-        // Kept for every later question of the file: built on an allowance for
-        // the file's size, not on what the asking question has left (each
-        // question cut it short and rebuilt it from the start).
+        let Some(effect) = self.semantic.tables.vocabulary.effect("read") else { return Known::Unknown };
+        effects.reads.borrow_mut().insert(root, Known::Unknown);
+        effects.building.borrow_mut().insert((root, None));
+        let mark = self.semantic.values().cycle_mark();
+        // A fact kept for every later question of the file, on an allowance
+        // for the file's size.
         let allowance = u32::try_from(tree.nodes.len()).unwrap_or(u32::MAX).saturating_mul(Self::BUILD_STEPS_PER_NODE)
             .max(crate::grammar::names::question::Budget::DEFAULT);
-        let collect = || self.semantic.question.budget.detached(allowance, || self.collect_reads(at, node, tree, effect))
-            .unwrap_or_else(|| {
-                self.semantic.effects.reads_outgrown.borrow_mut().insert(root);
-                Known::Unknown
-            });
+        let collect = || self.semantic.question.budget.sized(allowance, || self.collect_reads(at, node, tree, effect))
+            .unwrap_or(Known::Unknown);
         let reads = match self.semantic.world.profile() {
-            Some(profile) => {
-                let rebuild = self.semantic.effects.discarded.borrow_mut()
-                    .get_or_insert_with(Discarded::default).reads.remove(&root);
-                profile.time_effect_build(crate::engine::EffectBuild::ReadCatalogue, rebuild, collect, |reads, _| matches!(reads, Known::Yes(_)))
-            }
+            Some(profile) => profile.time_effect_build(crate::engine::EffectBuild::ReadCatalogue, false, collect, |reads, _| matches!(reads, Known::Yes(_))),
             None => collect(),
         };
-        self.semantic.effects.reads.borrow_mut().insert(root, reads.clone());
+        effects.building.borrow_mut().remove(&(root, None));
+        if matches!(reads, Known::Unknown) && self.semantic.values().cycled_since(mark) {
+            effects.reads.borrow_mut().remove(&root);
+        } else {
+            effects.reads.borrow_mut().insert(root, reads.clone());
+        }
         reads
     }
 
@@ -226,14 +197,13 @@ impl Effects<'_> {
     /// order, and the first write whose binding can't be told.
     fn written_bindings(&self, at: Leaf, nodes: usize, declaration: &impl Fn(Leaf) -> Known<Option<NodeRef>>) -> Known<Rc<WrittenBindings>> {
         let Target::Node(file) = at.target else { return Known::Unknown };
-        if let Some(written) = self.semantic.effects.written_bindings.borrow().get(&file.file) { return Known::Yes(written.clone()) }
         let Known::Yes(writes) = self.file_writes(at, nodes) else { return Known::Unknown };
-        // Once per file, kept for every later question: on an allowance for
-        // the file's writes, not the first asking read's budget.
+        // Once per file, kept for every later question: a fact on an
+        // allowance for the file's writes.
         let budget = &self.semantic.question.budget;
         let allowance = u32::try_from(writes.len()).unwrap_or(u32::MAX).saturating_mul(Self::FILE_WALK_STEPS_PER_NODE)
             .max(super::super::question::Budget::per_question());
-        let written = budget.detached(allowance, || {
+        self.file_fact(&self.semantic.effects.written_bindings, file.file, allowance, || {
             let mut written = WrittenBindings::default();
             for (index, &write) in writes.iter().enumerate() {
                 if !budget.step() { return None }
@@ -245,12 +215,22 @@ impl Effects<'_> {
                     Known::Unknown => { written.unknown = Some(index); break }
                 }
             }
-            Some(written)
-        });
-        let Some(Some(written)) = written else { return Known::Unknown };
-        let written = Rc::new(written);
-        self.semantic.effects.written_bindings.borrow_mut().insert(file.file, written.clone());
-        Known::Yes(written)
+            Some(Rc::new(written))
+        })
+    }
+
+    /// A once-per-file fact kept in `memo` by file
+    /// ([`super::super::question::Budget::sized`]): unknown answers too,
+    /// unless they read something undecided.
+    fn file_fact<V: Clone>(&self, memo: &RefCell<FxHashMap<u32, Known<V>>>, file: u32, allowance: u32, compute: impl FnOnce() -> Option<V>) -> Known<V> {
+        let values = self.semantic.values();
+        if let Some(answer) = memo.borrow().get(&file).cloned() { return answer }
+        let mark = values.cycle_mark();
+        let answer = self.semantic.question.budget.sized(allowance, compute).ok().flatten().map_or(Known::Unknown, Known::Yes);
+        if matches!(answer, Known::Yes(_)) || !values.cycled_since(mark) {
+            memo.borrow_mut().insert(file, answer.clone());
+        }
+        answer
     }
 
     /// Steps per node a whole-file write walk may spend: a few per node
@@ -264,7 +244,6 @@ impl Effects<'_> {
     /// and walking the whole file per read made big files quadratic.
     fn file_writes(&self, at: Leaf, nodes: usize) -> Known<Rc<[FileWrite]>> {
         let Target::Node(file) = at.target else { return Known::Unknown };
-        if let Some(writes) = self.semantic.effects.file_writes.borrow().get(&file.file) { return Known::Yes(writes.clone()) }
         let runtime = super::source::Runtime::new(self.semantic);
         let budget = &self.semantic.question.budget;
         // A whole-file walk, kept for every later question: it gets an
@@ -273,11 +252,11 @@ impl Effects<'_> {
         // every question that asked).
         let allowance = u32::try_from(nodes).unwrap_or(u32::MAX).saturating_mul(Self::FILE_WALK_STEPS_PER_NODE)
             .max(super::super::question::Budget::per_question());
-        let walk = budget.detached(allowance, || {
+        self.file_fact(&self.semantic.effects.file_writes, file.file, allowance, || {
             let mut visited = FxHashSet::default();
             let mut writes = Vec::new();
             'nodes: for id in 0..nodes {
-                if !budget.step() { return writes }
+                if !budget.step() { return None }
                 let node = Leaf { target: Target::Node(NodeRef { node: id as u32, ..file }), ..at };
                 let Some(node) = self.semantic.leaf(node).known() else { writes.push(FileWrite::Unreadable); break };
                 if !visited.insert(node) { continue }
@@ -289,12 +268,8 @@ impl Effects<'_> {
                     }
                 }
             }
-            writes
-        });
-        let Some(writes) = walk else { return Known::Unknown };
-        let writes: Rc<[FileWrite]> = writes.into();
-        self.semantic.effects.file_writes.borrow_mut().insert(file.file, writes.clone());
-        Known::Yes(writes)
+            Some(Rc::<[FileWrite]>::from(writes))
+        })
     }
 
     pub fn enclosing(&self, entry: Leaf) -> Known<Option<Creation>> {
@@ -397,13 +372,10 @@ impl Effects<'_> {
     fn graph(&self, entry: Leaf, reads: bool) -> Known<Rc<Execution>> {
         let Some(entry) = self.semantic.leaf(entry).known() else { return Known::Unknown };
         let state = &self.semantic.effects.graphs;
-        if let Some(graph) = state.borrow().get(&(entry, reads)) { return graph.clone() }
-        let budget = &self.semantic.question.budget;
-        // A body whose graph outgrew a nearly whole budget outgrows every
-        // later one: its question ends the same way, without the rebuild.
-        if self.semantic.effects.outgrown.borrow().contains(&entry) {
-            budget.exhaust();
-            return Known::Unknown;
+        let kept = state.borrow().get(&(entry, reads)).cloned();
+        if let Some(graph) = kept {
+            if self.semantic.effects.building.borrow().contains(&(entry, Some(reads))) { self.semantic.values().note_cycle_read() }
+            return graph;
         }
         // A body built in another frame builds alike when the conditions its
         // build decided answer alike here (graphs read written values
@@ -416,6 +388,8 @@ impl Effects<'_> {
             }
         }
         state.borrow_mut().insert((entry, reads), Known::Unknown);
+        self.semantic.effects.building.borrow_mut().insert((entry, Some(reads)));
+        let mark = self.semantic.values().cycle_mark();
         let source = if reads { super::source::Runtime::new(self.semantic) } else { super::source::Runtime::without_reads(self.semantic) };
         // Graphs are kept for every later question: a build runs on an
         // allowance for its file's size, not on what the asking question
@@ -427,18 +401,16 @@ impl Effects<'_> {
         };
         let allowance = u32::try_from(nodes).unwrap_or(u32::MAX).saturating_mul(Self::BUILD_STEPS_PER_NODE)
             .max(crate::grammar::names::question::Budget::DEFAULT);
-        let outgrew = std::cell::Cell::new(false);
-        let built = std::cell::Cell::new(0);
-        let build = || budget.detached(allowance, || {
-            let (graph, size) = super::build::execution_sized(&source, entry, self.semantic.question);
-            built.set(size);
-            graph
-        }).unwrap_or_else(|| { outgrew.set(true); Known::Unknown });
+        let build = || match self.semantic.question.budget.sized(allowance, || super::build::execution_sized(&source, entry, self.semantic.question).0) {
+            Ok(graph) => graph,
+            Err(cut) => {
+                if cut == crate::grammar::names::question::Cut::RanOut { source.ran_out() }
+                Known::Unknown
+            }
+        };
         let graph = match self.semantic.world.profile() {
             Some(profile) => {
-                let rebuild = self.semantic.effects.discarded.borrow_mut()
-                    .get_or_insert_with(Discarded::default).graphs.remove(&entry);
-                profile.time_effect_build(crate::engine::EffectBuild::Graph, rebuild, build, |graph, elapsed| {
+                profile.time_effect_build(crate::engine::EffectBuild::Graph, false, build, |graph, elapsed| {
                     if matches!(graph, Known::Yes(_)) { return true }
                     if let Target::Node(node) = entry.target {
                         if let Some(path) = self.semantic.world.path(node.file) {
@@ -457,12 +429,12 @@ impl Effects<'_> {
             }
             Known::Unknown => Known::Unknown,
         };
-        // Only a body whose own steps took a large share counts as outgrown
-        // (not a nested question that burned the allowance).
-        if outgrew.get() && built.get() as u64 * 4 >= u64::from(crate::grammar::names::question::Budget::DEFAULT) {
-            self.semantic.effects.outgrown.borrow_mut().insert(entry);
+        self.semantic.effects.building.borrow_mut().remove(&(entry, Some(reads)));
+        if matches!(graph, Known::Unknown) && self.semantic.values().cycled_since(mark) {
+            state.borrow_mut().remove(&(entry, reads));
+        } else {
+            state.borrow_mut().insert((entry, reads), graph.clone());
         }
-        state.borrow_mut().insert((entry, reads), graph.clone());
         graph
     }
 
@@ -749,7 +721,7 @@ mod tests {
     }
 
     #[test]
-    fn unrelated_budget_cut_keeps_completed_effects_and_retries_the_interrupted_entry() {
+    fn a_graph_that_ran_out_stays_unknown_and_completed_effects_stay_kept() {
         use crate::engine::Profile;
         use crate::grammar::names::semantic::Session;
 
@@ -768,8 +740,9 @@ mod tests {
         assert_eq!(session.run(&world, &tables, |semantic| semantic.effects().value_used(leaf(1))), Known::Yes(true));
         assert_eq!(Profile::get(&profile.effect_graph_builds), 2);
         assert_eq!(Profile::get(&profile.effect_read_catalogue_builds), 1);
-        assert!(matches!(session.run(&world, &tables, |semantic| semantic.effects().execution(leaf(4))), Known::Yes(_)));
-        assert_eq!(Profile::get(&profile.effect_graph_builds), 3);
+        // The graph's build ran out of its own allowance: that is its answer.
+        assert!(matches!(session.run(&world, &tables, |semantic| semantic.effects().execution(leaf(4))), Known::Unknown));
+        assert_eq!(Profile::get(&profile.effect_graph_builds), 2);
     }
 
     #[test]

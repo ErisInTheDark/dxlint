@@ -100,6 +100,9 @@ pub struct FileVm {
     fact_packs: RefCell<crate::fx_hash::FxHashMap<FactPackKey, FactPackStats>>,
     /// Attributes being evaluated without a memo (inside semantic questions).
     uncached: RefCell<Vec<(u32, u16)>>,
+    /// Attributes whose answers read something unknown, kept like complete
+    /// ones: what they asked are facts that answer the same on every ask.
+    incomplete: RefCell<crate::fx_hash::FxHashMap<(u32, u16), Option<V>>>,
 }
 
 // Whole-node reads use their target node. Multi-field wrappers stay distinct,
@@ -188,6 +191,7 @@ impl FileVm {
                 self.storage.replace(Storage::default());
                 self.kept.borrow_mut().clear();
                 self.shared_queries.borrow_mut().clear();
+                self.incomplete.borrow_mut().clear();
                 self.attr_errors.borrow_mut().clear();
                 self.clear_error();
             }
@@ -258,6 +262,16 @@ impl FileVm {
                 None
             }
         }
+    }
+
+    /// The kept incomplete answer of (node, attribute), if it has one.
+    pub(crate) fn kept_incomplete(&self, node: u32, attr: u16) -> Option<Option<V>> {
+        self.incomplete.borrow().get(&(node, attr)).copied()
+    }
+
+    /// Keeps an incomplete answer of (node, attribute).
+    pub(crate) fn keep_incomplete(&self, node: u32, attr: u16, value: Option<V>) {
+        self.incomplete.borrow_mut().insert((node, attr), value);
     }
 
     /// Evaluates (node, attribute) without a memo, as attributes read inside

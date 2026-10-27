@@ -23,11 +23,11 @@ pub(crate) struct State {
     tested_places: super::memo::Memo<Leaf, Known<Place>>,
     /// Per execution entry and written place, the write steps that can
     /// replace it: every read of one variable in a body shares the scan.
-    candidates: super::memo::Memo<(Leaf, Place), std::rc::Rc<[super::effects::StepId]>>,
+    candidates: super::memo::Memo<(Leaf, Place), Option<std::rc::Rc<[super::effects::StepId]>>>,
     /// Per execution entry, its writes by the binding root they write.
-    writes: super::memo::Memo<Leaf, std::rc::Rc<WriteIndex>>,
+    writes: super::memo::Memo<Leaf, Option<std::rc::Rc<WriteIndex>>>,
     /// Per execution entry, its applicable guards ([`Narrowing::guards`]).
-    guards: super::memo::Memo<Leaf, std::rc::Rc<[Guard]>>,
+    guards: super::memo::Memo<Leaf, Option<std::rc::Rc<[Guard]>>>,
     /// Per file, the binding roots its guards' proofs can test, with those
     /// guards' owner nodes ([`Narrowing::tested_roots`]); `None` when they
     /// can't be told.
@@ -35,6 +35,15 @@ pub(crate) struct State {
     /// Per file, the texts of those roots' names ([`Narrowing::tested_names`]);
     /// `None` when a root has no name text to look for.
     tested_names: super::memo::Memo<u32, Option<std::rc::Rc<crate::fx_hash::FxHashSet<Box<str>>>>>,
+}
+
+/// A fact's optional answer, and whether it was never started (an unpaid
+/// ask: nothing to keep).
+fn settled<T>(answer: Result<Option<T>, super::question::Cut>) -> (Option<T>, bool) {
+    match answer {
+        Ok(answer) => (answer, false),
+        Err(cut) => (None, cut == super::question::Cut::Unpaid),
+    }
 }
 
 /// A character that can continue a name: names split only where none of
@@ -66,18 +75,6 @@ struct Guard {
     /// Index into the owner kind's `propagates`.
     item: usize,
     path: Vec<u16>,
-}
-
-impl State {
-    pub(super) fn finish(&self, epoch: super::memo::Epoch, failed: bool, cut: u64) -> u64 {
-        self.written.finish(epoch, failed, cut, super::memo::Settled::settled)
-            + self.tested_places.finish(epoch, failed, cut, super::memo::Settled::settled)
-            + self.candidates.finish(epoch, failed, cut, |_| true)
-            + self.writes.finish(epoch, failed, cut, |_| true)
-            + self.guards.finish(epoch, failed, cut, |_| true)
-            + self.tested.finish(epoch, failed, cut, |_| true)
-            + self.tested_names.finish(epoch, failed, cut, |_| true)
-    }
 }
 
 impl Narrowing<'_> {
@@ -206,27 +203,35 @@ impl Narrowing<'_> {
     /// read there checks the same guards.
     fn guards(&self, execution: &Execution, entry: Leaf) -> Option<std::rc::Rc<[Guard]>> {
         let memo = &self.semantic.narrowing_places.guards;
-        if let Some(guards) = memo.get(&entry) { return Some(guards) }
-        let budget = &self.semantic.question.budget;
-        let mut guards = Vec::new();
-        for &node in execution.guard_owners(|execution| self.guard_owners(execution)) {
-            if !budget.step() { return None }
-            let owner = Leaf { target: Target::Node(node), frame: entry.frame };
-            let Known::Yes(owner) = self.semantic.leaf(owner) else { continue };
-            let Some(kind) = self.kind(node) else { continue };
-            for (item, (path, _, when)) in kind.propagates.iter().enumerate() {
-                if !budget.step() { return None }
-                if when.is_some_and(|condition| self.semantic.world.condition(owner, condition, self.semantic) != Known::Yes(true)) {
-                    continue;
-                }
-                if execution.field_entries(node, path).is_empty() { continue }
-                guards.push(Guard { owner, node, item, path: path.clone() });
-            }
+        let values = self.semantic.values();
+        let tag = super::values::fact_tag(memo, &entry);
+        if let Some(guards) = memo.get(&entry) {
+            values.read_kept(tag);
+            return guards;
         }
-        if budget.exhausted() { return None }
-        let guards: std::rc::Rc<[Guard]> = guards.into();
-        memo.insert(self.semantic.epoch, entry, guards.clone());
-        Some(guards)
+        let budget = &self.semantic.question.budget;
+        let mark = values.cycle_mark();
+        let guards = values.fact(tag, super::question::Budget::per_question(), || {
+            let mut guards = Vec::new();
+            for &node in execution.guard_owners(|execution| self.guard_owners(execution)) {
+                if !budget.step() { return None }
+                let owner = Leaf { target: Target::Node(node), frame: entry.frame };
+                let Known::Yes(owner) = self.semantic.leaf(owner) else { continue };
+                let Some(kind) = self.kind(node) else { continue };
+                for (item, (path, _, when)) in kind.propagates.iter().enumerate() {
+                    if !budget.step() { return None }
+                    if when.is_some_and(|condition| self.semantic.world.condition(owner, condition, self.semantic) != Known::Yes(true)) {
+                        continue;
+                    }
+                    if execution.field_entries(node, path).is_empty() { continue }
+                    guards.push(Guard { owner, node, item, path: path.clone() });
+                }
+            }
+            Some(std::rc::Rc::<[Guard]>::from(guards))
+        });
+        let (guards, unpaid) = settled(guards);
+        if guards.is_some() || !(unpaid || values.cycled_since(mark)) { memo.insert(entry, guards.clone()) }
+        guards
     }
 
     /// The lexical binding roots any guard in `file` can test, with the
@@ -242,10 +247,9 @@ impl Narrowing<'_> {
         let nodes = self.semantic.world.tree(file).map_or(0, |tree| tree.nodes.len());
         let allowance = u32::try_from(nodes).unwrap_or(u32::MAX).saturating_mul(STEPS_PER_NODE)
             .max(super::question::Budget::DEFAULT);
-        let budget = &self.semantic.question.budget;
-        let roots = budget.detached(allowance, || self.collect_tested_roots(file).map(std::rc::Rc::new))?;
-        if budget.exhausted() { return None }
-        memo.insert(self.semantic.epoch, file, roots.clone());
+        let mark = self.semantic.values().cycle_mark();
+        let roots = self.semantic.question.budget.sized(allowance, || self.collect_tested_roots(file).map(std::rc::Rc::new)).ok().flatten();
+        if roots.is_some() || !self.semantic.values().cycled_since(mark) { memo.insert(file, roots.clone()) }
         roots
     }
 
@@ -255,6 +259,7 @@ impl Narrowing<'_> {
     fn tested_names(&self, file: u32) -> Option<std::rc::Rc<crate::fx_hash::FxHashSet<Box<str>>>> {
         let memo = &self.semantic.narrowing_places.tested_names;
         if let Some(names) = memo.get(&file) { return names }
+        let mark = self.semantic.values().cycle_mark();
         let names = (|| {
             let roots = self.tested_roots(file)?;
             let tree = self.semantic.world.tree(file)?;
@@ -269,8 +274,7 @@ impl Narrowing<'_> {
             }
             Some(std::rc::Rc::new(names))
         })();
-        if self.semantic.question.budget.exhausted() { return None }
-        memo.insert(self.semantic.epoch, file, names.clone());
+        if names.is_some() || !self.semantic.values().cycled_since(mark) { memo.insert(file, names.clone()) }
         names
     }
 
@@ -382,36 +386,45 @@ impl Narrowing<'_> {
     fn write_candidates(&self, subject: &Place, execution: &Execution, entry: Leaf) -> Option<std::rc::Rc<[StepId]>> {
         let memo = &self.semantic.narrowing_places.candidates;
         let key = (entry, subject.clone());
-        if let Some(candidates) = memo.get(&key) { return Some(candidates) }
-        let budget = &self.semantic.question.budget;
-        let mut candidates = Vec::new();
-        let index = self.write_index(execution, entry)?;
-        let own = index.by_root.get(&subject.root).map_or(&[][..], Vec::as_slice);
-        // An indexed write's root is the subject's: only a path longer than
-        // the subject's rules it out before its keys are evaluated.
-        let indexed = own.iter().filter(|&&(_, length)| length <= subject.path.len()).map(|&(id, _)| (id, true));
-        for (id, shaped) in index.open.iter().map(|&id| (id, false)).chain(indexed) {
-            if !budget.step() { return None }
-            let Some(event) = execution.step(id).and_then(|step| step.event()) else { continue };
-            let replaces = if shaped { self.write_replaces(event, subject, entry.frame) } else { self.write_invalidates(event, subject, entry.frame) };
-            if replaces { candidates.push(id) }
+        let values = self.semantic.values();
+        let tag = super::values::fact_tag(memo, &key);
+        if let Some(candidates) = memo.get(&key) {
+            values.read_kept(tag);
+            return candidates;
         }
-        candidates.sort_unstable();
-        if budget.exhausted() { return None }
-        let candidates: std::rc::Rc<[StepId]> = candidates.into();
-        memo.insert(self.semantic.epoch, key, candidates.clone());
-        Some(candidates)
+        let budget = &self.semantic.question.budget;
+        let mark = values.cycle_mark();
+        let candidates = values.fact(tag, super::question::Budget::per_question(), || {
+            let mut candidates = Vec::new();
+            let index = self.write_index(execution, entry)?;
+            let own = index.by_root.get(&subject.root).map_or(&[][..], Vec::as_slice);
+            // An indexed write's root is the subject's: only a path longer
+            // than the subject's rules it out before its keys are evaluated.
+            let indexed = own.iter().filter(|&&(_, length)| length <= subject.path.len()).map(|&(id, _)| (id, true));
+            for (id, shaped) in index.open.iter().map(|&id| (id, false)).chain(indexed) {
+                if !budget.step() { return None }
+                let Some(event) = execution.step(id).and_then(|step| step.event()) else { continue };
+                let replaces = if shaped { self.write_replaces(event, subject, entry.frame) } else { self.write_invalidates(event, subject, entry.frame) };
+                if replaces { candidates.push(id) }
+            }
+            candidates.sort_unstable();
+            Some(std::rc::Rc::<[StepId]>::from(candidates))
+        });
+        let (candidates, unpaid) = settled(candidates);
+        if candidates.is_some() || !(unpaid || values.cycled_since(mark)) { memo.insert(key, candidates.clone()) }
+        candidates
     }
 
     /// `execution`'s writes by root, sorted once per entry: before, every
     /// place a body's reads tested scanned every write in the body.
     fn write_index(&self, execution: &Execution, entry: Leaf) -> Option<std::rc::Rc<WriteIndex>> {
         let memo = &self.semantic.narrowing_places.writes;
-        if let Some(index) = memo.get(&entry) { return Some(index) }
+        if let Some(index) = memo.get(&entry) { return index }
+        let mark = self.semantic.values().cycle_mark();
         let budget = &self.semantic.question.budget;
         // Once per execution, kept for every later read in it: on the
         // graph's allowance, not the first asking read's budget.
-        let index = budget.detached(execution.walk_allowance(), || {
+        let index = budget.sized(execution.walk_allowance(), || {
             let mut index = WriteIndex::default();
             for &id in execution.write_leaves() {
                 if !budget.step() { return None }
@@ -425,11 +438,9 @@ impl Narrowing<'_> {
             }
             Some(index)
         });
-        let Some(Some(index)) = index else { return None };
-        if budget.exhausted() { return None }
-        let index = std::rc::Rc::new(index);
-        memo.insert(self.semantic.epoch, entry, index.clone());
-        Some(index)
+        let index = index.ok().flatten().map(std::rc::Rc::new);
+        if index.is_some() || !self.semantic.values().cycled_since(mark) { memo.insert(entry, index.clone()) }
+        index
     }
 
     fn assigned(&self, subject: &Place, execution: &Execution, entry: Leaf, uses: &[StepId], base: NodeValue) -> NodeValue {
@@ -663,8 +674,8 @@ impl Region<'_> {
         // The candidates are exactly the steps whose write replaces the
         // tested place (sorted). The walk runs on an allowance for the
         // graph's size, not the asking read's.
-        let written = budget.detached(self.execution.walk_allowance(), || self.execution.marked_before_steps(&starts, self.entries, self.uses, &candidates, budget));
-        let Some(Known::Yes(written)) = written else { return Known::Unknown };
+        let written = budget.sized(self.execution.walk_allowance(),|| self.execution.marked_before_steps(&starts, self.entries, self.uses, &candidates, budget));
+        let Ok(Known::Yes(written)) = written else { return Known::Unknown };
         Known::Yes(!written)
     }
 }

@@ -25,6 +25,16 @@ struct Run<'a, 'world> {
     values: &'a Values<'world>,
     tasks: Vec<Task<'a>>,
     answers: Vec<Answer>,
+    /// Leaves this run opened and has not settled, innermost last, with the
+    /// task and answer counts when each opened: running out inside one
+    /// unwinds just that leaf (unknown) and its asker carries on.
+    opened: Vec<(Leaf, usize, usize)>,
+}
+
+impl<'a, 'world> Run<'a, 'world> {
+    fn new(values: &'a Values<'world>, tasks: Vec<Task<'a>>) -> Self {
+        Run { values, tasks, answers: Vec::new(), opened: Vec::new() }
+    }
 }
 
 pub(super) fn values(values: &Values<'_>, leaf: Leaf) -> NodeValue {
@@ -32,11 +42,11 @@ pub(super) fn values(values: &Values<'_>, leaf: Leaf) -> NodeValue {
         if !values.question.budget.step() { return NodeValue::Unknown }
         let Known::Yes(leaf) = values.semantic.leaf(leaf) else { return NodeValue::Unknown };
         if let Some(value) = kept(values, leaf) { return value }
-        let mut run = Run { values, tasks: Vec::new(), answers: Vec::new() };
+        let mut run = Run::new(values, Vec::new());
         run.evaluate_leaf(leaf);
         return run.run();
     }
-    Run { values, tasks: vec![Task::Leaf(leaf)], answers: Vec::new() }.run()
+    Run::new(values, vec![Task::Leaf(leaf)]).run()
 }
 
 /// The kept, known value of canonical `leaf`.
@@ -49,18 +59,30 @@ pub(super) fn kept_value(values: &Values<'_>, leaf: Leaf) -> Option<NodeValue> {
 fn kept(values: &Values<'_>, leaf: Leaf) -> Option<NodeValue> {
     let state = &values.semantic.values;
     let value = state.values.get(&leaf)?;
-    if value == NodeValue::Unknown && state.evaluating.borrow().iter().any(|&(active, _)| active == leaf) {
+    let tag = super::fact_tag(&state.values, &leaf);
+    if value != NodeValue::Unknown {
+        values.read_kept(tag);
+    } else if state.evaluating.borrow().iter().any(|&(active, ..)| active == leaf) {
         state.cycle_reads.set(state.cycle_reads.get() + 1);
+    } else {
+        match values.read_provisional(tag) {
+            Some(true) => {}
+            Some(false) => {
+                state.values.remove(&leaf);
+                return None;
+            }
+            None => values.read_kept(tag),
+        }
     }
     Some(value)
 }
 
 pub(super) fn evaluate(values: &Values<'_>, at: Leaf, expression: &Value) -> NodeValue {
-    Run { values, tasks: vec![Task::Expression(at, expression)], answers: Vec::new() }.run()
+    Run::new(values, vec![Task::Expression(at, expression)]).run()
 }
 
 pub(super) fn evaluate_optional(values: &Values<'_>, at: Leaf, expression: &Value) -> Known<Option<NodeValue>> {
-    let answer = Run { values, tasks: vec![Task::Expression(at, expression)], answers: Vec::new() }.run_answer();
+    let answer = Run::new(values, vec![Task::Expression(at, expression)]).run_answer();
     match (answer.exists, answer.value) {
         (false, _) => Known::Yes(None),
         (true, NodeValue::Unknown) => Known::Unknown,
@@ -98,7 +120,7 @@ pub(super) fn sites(values: &Values<'_>, at: Leaf, mut expression: &Value) -> Kn
             Value::Spread { path, .. } => return values.follow(at, path),
             Value::Scope { classes, from } => return values.scopes(at, from, *classes),
             Value::From(base, key, classes) if *classes == 0 => {
-                let base = Run { values, tasks: vec![Task::Expression(at, base)], answers: Vec::new() }.run_answer();
+                let base = Run::new(values, vec![Task::Expression(at, base)]).run_answer();
                 let answer = if !base.exists {
                     Known::Yes(Vec::new())
                 } else {
@@ -134,7 +156,15 @@ impl<'a, 'world> Run<'a, 'world> {
         let _site = self.values.world.profile().map(|_| crate::engine::StepSite::enter("values.evaluate"));
         while let Some(task) = self.tasks.pop() {
             if !matches!(&task, Task::Profile(_)) && !self.values.question.budget.step() {
-                return Answer::unknown();
+                // The innermost leaf this run opened ran out of its own
+                // allowance: it is unknown, and it cuts its asker in turn
+                // (see `settle`).
+                let Some(&(leaf, tasks, answers)) = self.opened.last() else { return Answer::unknown() };
+                self.tasks.truncate(tasks);
+                self.answers.truncate(answers);
+                self.settle(leaf, NodeValue::Unknown);
+                self.answers.push(Answer::unknown());
+                continue;
             }
             match task {
                 Task::Profile(timer) => drop(timer),
@@ -151,7 +181,7 @@ impl<'a, 'world> Run<'a, 'world> {
                             Some(_nested) if rows > SPREAD_DETACHED => {
                                 let allowance = u32::try_from(rows).unwrap_or(u32::MAX).saturating_mul(SPREAD_STEPS_PER_PART);
                                 let value = answer.value.clone();
-                                values.question.budget.detached(allowance, || save(value)).unwrap_or(NodeValue::Unknown)
+                                values.question.budget.sized(allowance, || save(value)).unwrap_or(NodeValue::Unknown)
                             }
                             Some(_nested) => save(answer.value.clone()),
                             None => NodeValue::Unknown,
@@ -198,7 +228,7 @@ impl<'a, 'world> Run<'a, 'world> {
         }
         if !root && super::share_values() {
             if let Some(value) = self.values.world.shared_value_kept(leaf, self.values.semantic) {
-                state.values.insert(self.values.semantic.epoch, leaf, value.clone());
+                state.values.insert(leaf, value.clone());
                 self.answers.push(Answer { exists: true, value });
                 return;
             }
@@ -216,13 +246,16 @@ impl<'a, 'world> Run<'a, 'world> {
         // budget runs out. Real nesting of one declaration (`Readonly<
         // Readonly<T>>`) stays well below the limit.
         const NESTING: usize = 8;
-        if state.evaluating.borrow().iter().filter(|(active, _)| active.target == leaf.target).nth(NESTING - 1).is_some() {
+        if state.evaluating.borrow().iter().filter(|(active, ..)| active.target == leaf.target).nth(NESTING - 1).is_some() {
             state.cycle_reads.set(state.cycle_reads.get() + 1);
             self.answers.push(Answer::unknown());
             return;
         }
-        state.values.insert(self.values.semantic.epoch, leaf, NodeValue::Unknown);
-        state.evaluating.borrow_mut().push((leaf, state.cycle_reads.get()));
+        state.values.insert(leaf, NodeValue::Unknown);
+        // The leaf's value is a fact of its own, on its own allowance.
+        let asker = self.values.question.budget.begin_fact(super::super::question::Budget::per_question());
+        state.evaluating.borrow_mut().push((leaf, self.values.cycle_mark(), asker));
+        self.opened.push((leaf, self.tasks.len(), self.answers.len()));
         let Target::Node(_) = leaf.target else {
             self.answers.push(Answer { exists: true, value: NodeValue::leaf(leaf) });
             self.tasks.push(Task::Save(leaf));
@@ -245,8 +278,8 @@ impl<'a, 'world> Run<'a, 'world> {
                     if let Known::Yes(sites) = self.values.follow(leaf, path) {
                         if sites.len() > SPREAD_DETACHED {
                             let allowance = u32::try_from(sites.len()).unwrap_or(u32::MAX).saturating_mul(SPREAD_STEPS_PER_PART);
-                            let value = self.values.question.budget.detached(allowance, || self.values.evaluate(leaf, expression));
-                            self.answers.push(value.map_or_else(Answer::unknown, |value| Answer { exists: true, value }));
+                            let value = self.values.question.budget.sized(allowance, || self.values.evaluate(leaf, expression));
+                            self.answers.push(value.ok().map_or_else(Answer::unknown, |value| Answer { exists: true, value }));
                             return;
                         }
                     }
@@ -260,27 +293,44 @@ impl<'a, 'world> Run<'a, 'world> {
         self.tasks.push(Task::Save(leaf));
     }
 
-    /// Ends `leaf`'s evaluation with `value`: kept, unless it is unknown
-    /// after reading a leaf still being evaluated. That unknown may only be
-    /// the unfinished cycle, so a later ask evaluates it afresh.
-    fn settle(&self, leaf: Leaf, value: NodeValue) {
+    /// Ends `leaf`'s evaluation with `value`: kept, but an unknown that read
+    /// a leaf still being evaluated only provisionally
+    /// ([`Values::keep_provisional`]): it may only be the unfinished cycle.
+    fn settle(&mut self, leaf: Leaf, value: NodeValue) {
+        if let Some(at) = self.opened.iter().rposition(|&(open, ..)| open == leaf) { self.opened.truncate(at) }
         let state = &self.values.semantic.values;
-        let started = {
+        let budget = &self.values.question.budget;
+        let opened = {
             let mut evaluating = state.evaluating.borrow_mut();
-            match evaluating.iter().rposition(|&(active, _)| active == leaf) {
+            match evaluating.iter().rposition(|&(active, ..)| active == leaf) {
                 Some(index) => {
-                    let started = evaluating[index].1;
+                    // Leaves opened inside it and never settled end with it.
+                    for &(_, _, inner) in evaluating[index + 1..].iter().rev() { budget.end_fact(inner); }
+                    let (_, started, asker) = evaluating[index];
                     evaluating.truncate(index);
-                    Some(started)
+                    Some((started, asker))
                 }
                 None => None,
             }
         };
-        let cyclic = started.is_none_or(|started| state.cycle_reads.get() > started);
-        if value == NodeValue::Unknown && cyclic {
-            state.values.remove(self.values.semantic.epoch, &leaf);
-        } else {
-            state.values.insert(self.values.semantic.epoch, leaf, value);
+        let tag = super::fact_tag(&state.values, &leaf);
+        // A leaf that ran out cuts its asker, as it does every later reader
+        // of its kept value.
+        if let Some((_, asker)) = opened {
+            let cut = budget.end_fact(asker);
+            self.values.note_ended(tag, cut);
+            if cut == Some(super::super::question::Cut::RanOut) { budget.exhaust() }
+        }
+        match opened {
+            Some((started, asker)) if value == NodeValue::Unknown && self.values.cycled_since(started) => {
+                state.values.insert(leaf, value);
+                self.values.keep_provisional(tag, asker.epoch);
+            }
+            None if value == NodeValue::Unknown => { state.values.remove(&leaf); }
+            _ => {
+                self.values.settle_provisional(tag);
+                state.values.insert(leaf, value);
+            }
         }
     }
 
@@ -332,7 +382,7 @@ impl<'a, 'world> Run<'a, 'world> {
                 }
             },
             Value::From(base, key, classes) if *classes == 0 => {
-                let base = Run { values: self.values, tasks: vec![Task::Expression(at, base)], answers: Vec::new() }.run_answer();
+                let base = Run::new(self.values, vec![Task::Expression(at, base)]).run_answer();
                 if !base.exists {
                     self.answers.push(base);
                     return;
@@ -352,12 +402,12 @@ impl<'a, 'world> Run<'a, 'world> {
                 self.answers.push(Answer { exists: true, value });
             }
             Value::Keys { of } => {
-                let operand = Run { values: self.values, tasks: vec![Task::Expression(at, of)], answers: Vec::new() }.run_answer();
+                let operand = Run::new(self.values, vec![Task::Expression(at, of)]).run_answer();
                 let value = if operand.exists { self.values.keys(&operand.value) } else { NodeValue::Unknown };
                 self.answers.push(Answer { exists: true, value });
             }
             Value::Argument { index, of } => {
-                let operand = Run { values: self.values, tasks: vec![Task::Expression(at, of)], answers: Vec::new() }.run_answer();
+                let operand = Run::new(self.values, vec![Task::Expression(at, of)]).run_answer();
                 let value = if operand.exists { self.values.carrier_argument(&operand.value, *index as usize) } else { NodeValue::Unknown };
                 self.answers.push(Answer { exists: true, value });
             }
@@ -374,12 +424,12 @@ impl<'a, 'world> Run<'a, 'world> {
                 self.answers.push(Answer { exists: true, value });
             }
             Value::Excludes { traits, from: Some(from) } => {
-                let mut answer = Run { values: self.values, tasks: vec![Task::Expression(at, from)], answers: Vec::new() }.run_answer();
+                let mut answer = Run::new(self.values, vec![Task::Expression(at, from)]).run_answer();
                 if answer.exists { answer.value = self.excludes(answer.value, *traits) }
                 self.answers.push(answer);
             }
             Value::Modified { source, required, readonly, flags } => {
-                let mut answer = Run { values: self.values, tasks: vec![Task::Expression(at, source)], answers: Vec::new() }.run_answer();
+                let mut answer = Run::new(self.values, vec![Task::Expression(at, source)]).run_answer();
                 if answer.exists { answer.value = self.values.modify(answer.value, *required, *readonly, flags) }
                 self.answers.push(answer);
             }
@@ -488,7 +538,7 @@ impl<'a, 'world> Run<'a, 'world> {
 
     fn query_value_path(&mut self, at: Leaf, prefix: &[u16], query: u16, spread: bool) {
         let expression = Value::Path(prefix.to_vec());
-        let answer = Run { values: self.values, tasks: vec![Task::Expression(at, &expression)], answers: Vec::new() }.run_answer();
+        let answer = Run::new(self.values, vec![Task::Expression(at, &expression)]).run_answer();
         if !answer.exists {
             self.answers.push(answer);
             return;
@@ -587,14 +637,20 @@ impl<'a, 'world> Run<'a, 'world> {
 
 fn widened(values: &Values<'_>, leaf: Leaf) -> NodeValue {
     let Known::Yes(leaf) = values.semantic.leaf(leaf) else { return NodeValue::Unknown };
-    if let Some(answer) = values.semantic.values.widened.get(&leaf) { return answer }
-    values.semantic.values.widened.insert(values.semantic.epoch, leaf, NodeValue::Unknown);
+    let tag = super::fact_tag(&values.semantic.values.widened, &leaf);
+    if let Some(answer) = values.semantic.values.widened.get(&leaf) {
+        values.read_kept(tag);
+        return answer;
+    }
+    values.semantic.values.widened.insert(leaf, NodeValue::Unknown);
     let mark = values.cycle_mark();
-    let answer = widen(values, leaf);
-    if answer == NodeValue::Unknown && values.cycled_since(mark) {
-        values.semantic.values.widened.remove(values.semantic.epoch, &leaf);
+    let answer = values.fact(tag, super::super::question::Budget::per_question(), || widen(values, leaf));
+    let unpaid = answer.as_ref().err() == Some(&super::super::question::Cut::Unpaid);
+    let answer = answer.unwrap_or(NodeValue::Unknown);
+    if answer == NodeValue::Unknown && (unpaid || values.cycled_since(mark)) {
+        values.semantic.values.widened.remove(&leaf);
     } else {
-        values.semantic.values.widened.insert(values.semantic.epoch, leaf, answer.clone());
+        values.semantic.values.widened.insert(leaf, answer.clone());
     }
     answer
 }
@@ -775,7 +831,7 @@ pub(super) fn combine(values: &Values<'_>, inputs: impl IntoIterator<Item = Node
         // enum `E`) is kept with the value it builds: on an allowance for
         // its size, like the members themselves.
         let allowance = u32::try_from(result.len()).unwrap_or(u32::MAX).saturating_mul(SPREAD_STEPS_PER_PART);
-        values.question.budget.detached(allowance, || values.normalize(NodeValue::rows(result))).unwrap_or(NodeValue::Unknown)
+        values.question.budget.sized(allowance, || values.normalize(NodeValue::rows(result))).unwrap_or(NodeValue::Unknown)
     } else if intersection {
         values.normalize(NodeValue::rows(result))
     } else {

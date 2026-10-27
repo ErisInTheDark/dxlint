@@ -604,6 +604,12 @@ impl<'a> Ctx<'a> {
             },
             Lowered::Cached(body) => (body, self.world),
         };
+        // An answer that read something unknown is kept too, and tells its
+        // readers so.
+        if let (Some(world), Some(value)) = (world, self.memo.vm.kept_incomplete(node, attr)) {
+            world.mark_unknown();
+            return value;
+        }
         let mut evaluated = None;
         let mut complete = true;
         let mut compute = || {
@@ -621,6 +627,7 @@ impl<'a> Ctx<'a> {
         if slot == NO_SLOT {
             let kept = self.memo.vm.memo(node, attr, compute);
             let value = kept.or(evaluated);
+            if !complete { self.memo.vm.keep_incomplete(node, attr, evaluated) }
             if value.is_none() && complete {
                 self.memo.vm.attr_failure(node, attr, &self.attrs.attrs[attr as usize].name);
                 self.memo.vm.remember_attr_failure(node, attr);
@@ -636,6 +643,7 @@ impl<'a> Ctx<'a> {
             Begin::Compute(at) => {
                 let answer = compute();
                 self.memo.vm.finish(at, answer);
+                if !complete { self.memo.vm.keep_incomplete(node, attr, evaluated) }
                 if evaluated.is_none() && complete { self.memo.vm.remember_attr_failure(node, attr); }
                 evaluated
             }

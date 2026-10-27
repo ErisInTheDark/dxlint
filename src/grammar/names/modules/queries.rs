@@ -13,7 +13,7 @@ pub use preparation::ClassAnswers;
 
 type Answer = Known<Option<Vec<Target>>>;
 
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 enum Request {
     Definition(NodeRef, u64),
     Global(u32, Box<str>, u64),
@@ -21,7 +21,8 @@ enum Request {
 
 #[derive(Default)]
 pub(crate) struct State {
-    answers: RefCell<BTreeMap<Request, Answer>>,
+    /// Kept answers; `None` while one is being computed.
+    answers: RefCell<BTreeMap<Request, Option<Answer>>>,
     star_filters: RefCell<BTreeMap<(ScopeRef, Box<str>), Known<bool>>>,
     publications: RefCell<BTreeMap<ScopeRef, bool>>,
     graph: Memo,
@@ -294,26 +295,39 @@ impl<'a> Queries<'a> {
         }
     }
 
+    /// A module answer kept for the file, like [`super::super::values`]'
+    /// memos: unknown answers are kept too unless something still being
+    /// decided was read meanwhile. A program that cannot be known (no
+    /// default libraries, say) makes thousands of names unknown, and
+    /// recomputing each on every ask grows without bound.
     fn cached(&self, request: Request, run: impl FnOnce() -> Result<Option<Vec<Target>>, ()>) -> Answer {
         let revision = self.sync_revision();
-        if let Some(answer) = self.semantic.modules.answers.borrow().get(&request) { return answer.clone() }
-        self.semantic.modules.answers.borrow_mut().insert(request.clone(), Known::Unknown);
-        // Module answers are kept for the whole file (and shared run-wide),
-        // so they run on an allowance of their own: charged to the question
-        // that first met them, they cut it short and every later one redid
-        // the work.
-        let mut answer = if self.spend().is_ok() {
-            self.semantic.question.budget.detached(super::super::question::Budget::DEFAULT, run)
-                .map_or(Known::Unknown, |found| found.map_or(Known::Unknown, Known::Yes))
-        } else { Known::Unknown };
+        let values = self.semantic.values();
+        // Asking costs one step, kept or not.
+        if self.spend().is_err() { return Known::Unknown }
+        let kept = self.semantic.modules.answers.borrow().get(&request).cloned();
+        match kept {
+            Some(Some(answer)) => return answer,
+            Some(None) => {
+                values.note_cycle_read();
+                return Known::Unknown;
+            }
+            None => {}
+        }
+        self.semantic.modules.answers.borrow_mut().insert(request.clone(), None);
+        let mark = values.cycle_mark();
+        // Module answers are kept for the whole file (and shared run-wide):
+        // facts about files, on a once-per-file allowance.
+        let answer = self.semantic.question.budget.sized(super::super::question::Budget::DEFAULT, run)
+            .map_or(Known::Unknown, |found| found.map_or(Known::Unknown, Known::Yes));
         if self.semantic.world.revision() != revision {
             self.sync_revision();
             return Known::Unknown;
         }
-        if self.semantic.question.budget.limited() { answer = Known::Unknown; }
-        match &answer {
-            Known::Yes(_) => { self.semantic.modules.answers.borrow_mut().insert(request, answer.clone()); }
-            Known::Unknown => { self.semantic.modules.answers.borrow_mut().remove(&request); }
+        if matches!(answer, Known::Unknown) && values.cycled_since(mark) {
+            self.semantic.modules.answers.borrow_mut().remove(&request);
+        } else {
+            self.semantic.modules.answers.borrow_mut().insert(request, Some(answer.clone()));
         }
         answer
     }
@@ -676,6 +690,10 @@ mod tests {
         cut: std::cell::Cell<bool>,
         drift: std::cell::Cell<bool>,
         operands: crate::fx_hash::FxHashMap<(NodeRef, u32), Known<crate::expr::Value<'static>>>,
+        /// Global scopes answer unknown; `cyclic_globals` also reads
+        /// something still being decided.
+        unknown_globals: bool,
+        cyclic_globals: bool,
     }
 
     impl Files {
@@ -707,6 +725,8 @@ mod tests {
                 cut: Default::default(),
                 drift: Default::default(),
                 operands: Default::default(),
+                unknown_globals: false,
+                cyclic_globals: false,
             }
         }
     }
@@ -737,8 +757,10 @@ mod tests {
                 answer => answer.clone(),
             }
         }
-        fn global_scopes(&self, _: u32, _: &str, _: &Semantic<'_>) -> Known<Vec<ScopeRef>> {
+        fn global_scopes(&self, _: u32, _: &str, semantic: &Semantic<'_>) -> Known<Vec<ScopeRef>> {
             self.global_queries.set(self.global_queries.get() + 1);
+            if self.cyclic_globals { semantic.values().note_cycle_read() }
+            if self.unknown_globals { return Known::Unknown }
             Known::Yes(vec![ScopeRef { file: 0, scope: 0 }, ScopeRef { file: 1, scope: 0 }])
         }
         fn condition(&self, _: Leaf, _: u32, semantic: &Semantic<'_>) -> Known<bool> {
@@ -787,6 +809,20 @@ mod tests {
             assert_eq!(semantic.modules().export_classes(ScopeRef { file: 0, scope: 0 }, "X", 7),
                 ClassAnswers { known: 3, present: 3 });
             assert_eq!(files.condition_queries.get(), 1);
+        }
+    }
+
+    #[test]
+    fn unknown_module_answers_are_kept_unless_they_read_an_undecided_cycle() {
+        for (cyclic, asks) in [(false, 1), (true, 3)] {
+            let mut files = Files::new();
+            files.unknown_globals = true;
+            files.cyclic_globals = cyclic;
+            let tables = tables(false);
+            let question = QueryContext::default();
+            let semantic = Semantic::new(&files, &tables, &question);
+            for _ in 0..3 { assert_eq!(semantic.modules().global(0, "X", 1), Known::Unknown) }
+            assert_eq!(files.global_queries.get(), asks, "cyclic: {cyclic}");
         }
     }
 

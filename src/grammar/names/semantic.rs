@@ -3,7 +3,6 @@
 use std::cell::{Cell, Ref, RefCell};
 use std::rc::Rc;
 
-use super::memo::Epoch;
 use super::question::{FrameId, Known, Leaf, NodeRef, QueryContext, Target, World};
 use super::values::Values;
 use super::Names;
@@ -12,7 +11,6 @@ pub struct Semantic<'a> {
     pub world: &'a dyn World,
     pub tables: &'a Names,
     pub question: &'a QueryContext,
-    pub(super) epoch: Epoch,
     state: Rc<State>,
 }
 
@@ -25,8 +23,8 @@ pub struct State {
     pub(crate) name_queries: Rc<crate::expr::queries::NamesMemo>,
     pub(crate) modules: super::modules::queries::State,
     /// Semantic attributes read inside questions, by what their answer can
-    /// depend on: complete answers only.
-    attributes: super::memo::Memo<AttributeKey, crate::vm::Packed>,
+    /// depend on, and whether the answer read something unknown.
+    attributes: super::memo::Memo<AttributeKey, (crate::vm::Packed, bool)>,
     defects: RefCell<Vec<Defect>>,
     /// [`Semantic::generic_scope`] by owner: syntax alone decides it, and
     /// frames ask it for every leaf they reach.
@@ -56,15 +54,15 @@ impl std::ops::Deref for Semantic<'_> {
 }
 
 /// One file's semantic answers and frame arena, with a fresh budget per
-/// root question. Answers a root's limit cut short never survive into the
-/// next root; answers it completed before the cut do (frames are interned,
-/// so their keys mean the same in every root).
+/// root question. Every memoised answer is a fact computed on its own
+/// allowance, so a root that runs out answers unknown itself but keeps
+/// every fact it computed (frames are interned, so their keys mean the same
+/// in every root).
 #[derive(Default)]
 pub(crate) struct Session {
     question: QueryContext,
     state: RefCell<Rc<State>>,
     revision: Cell<u64>,
-    epoch: Cell<Epoch>,
 }
 
 impl Session {
@@ -74,9 +72,7 @@ impl Session {
         if self.revision.replace(revision) != revision { self.state.replace(Rc::default()); }
         self.question.budget.restart();
         self.question.budget.trace(world.profile().is_some());
-        let epoch = self.epoch.get().next();
-        self.epoch.set(epoch);
-        let semantic = Semantic { world, tables, question: &self.question, epoch, state: self.state.borrow().clone() };
+        let semantic = Semantic { world, tables, question: &self.question, state: self.state.borrow().clone() };
         let answer = run(&semantic);
         if let Some(profile) = world.profile() {
             profile.record_semantic_budget(
@@ -95,17 +91,12 @@ impl Session {
             });
             profile.note_cut_inner(inner);
         }
-        let cut = self.question.budget.cut();
-        let discarded = semantic.values.finish(epoch, failed, cut) + semantic.calls.finish(epoch, failed, cut)
-            + semantic.narrowing_places.finish(epoch, failed, cut) + semantic.attributes.finish(epoch, failed, cut, |_| true);
+        semantic.values.end_root();
         if failed {
             if let Some(profile) = world.profile() {
                 crate::engine::Profile::add(&profile.semantic_budget_limits, 1);
                 profile.note_budget_limit();
-                crate::engine::Profile::add(&profile.semantic_state_discards, 1);
-                crate::engine::Profile::add(&profile.semantic_memo_discards, discarded);
             }
-            semantic.effects.rollback();
             semantic.defects.borrow_mut().clear();
             // Whatever was half built when the budget ran out is not an answer.
             return Known::Unknown;
@@ -122,7 +113,7 @@ pub struct Defect {
 
 impl<'a> Semantic<'a> {
     pub fn new(world: &'a dyn World, tables: &'a Names, question: &'a QueryContext) -> Self {
-        Self { world, tables, question, epoch: Epoch::default(), state: Rc::default() }
+        Self { world, tables, question, state: Rc::default() }
     }
 
     pub fn leaf(&self, mut at: Leaf) -> Known<Leaf> {
@@ -284,12 +275,13 @@ impl<'a> Semantic<'a> {
         super::narrowing::Narrowing { semantic: self }
     }
 
-    pub(crate) fn attribute(&self, key: &AttributeKey) -> Option<crate::vm::V> {
-        self.attributes.get(key).map(crate::vm::Packed::get)
+    /// A kept attribute answer, and whether it read something unknown.
+    pub(crate) fn attribute(&self, key: &AttributeKey) -> Option<(crate::vm::V, bool)> {
+        self.attributes.get(key).map(|(value, unknown)| (value.get(), unknown))
     }
 
-    pub(crate) fn remember_attribute(&self, key: AttributeKey, value: crate::vm::V) {
-        self.attributes.insert(self.epoch, key, crate::vm::Packed::new(value));
+    pub(crate) fn remember_attribute(&self, key: AttributeKey, value: crate::vm::V, unknown: bool) {
+        self.attributes.insert(key, (crate::vm::Packed::new(value), unknown));
     }
 
     /// Whether the attribute at `key` (whatever its frame) was found to ask
@@ -299,10 +291,10 @@ impl<'a> Semantic<'a> {
     }
 
     /// Keeps an attribute that asked no value question for every frame.
-    pub(crate) fn remember_frame_free(&self, key: AttributeKey, value: crate::vm::V) {
+    pub(crate) fn remember_frame_free(&self, key: AttributeKey, value: crate::vm::V, unknown: bool) {
         let root = AttributeKey { frame: FrameId::ROOT, ..key };
         self.frame_free.borrow_mut().insert(root);
-        if key.frame != FrameId::ROOT { self.attributes.insert(self.epoch, root, crate::vm::Packed::new(value)); }
+        if key.frame != FrameId::ROOT { self.remember_attribute(root, value, unknown) }
     }
 
     pub fn defect(&self, item: u32, at: Leaf, message: impl Into<Box<str>>) {
@@ -437,6 +429,17 @@ mod tests {
                     while let Some(guard) = semantic.question.budget.nest() { guards.push(guard); }
                     return Known::Unknown;
                 }
+                // Real work: more than a nearly spent asker has left.
+                3 => {
+                    for _ in 0..50 {
+                        if !semantic.question.budget.step() { return Known::Unknown }
+                    }
+                }
+                // A cycle: the condition asks the fact it decides.
+                4 => {
+                    let marked = self.grammar.names.vocabulary.traits.iter().position(|name| name == "marked").unwrap() as u16;
+                    return semantic.values().fits(at, marked);
+                }
                 _ => {}
             }
             let answer = semantic.question.get(at.frame).and_then(|frame| frame.args)
@@ -476,7 +479,6 @@ mod tests {
             let session = Session::default();
             assert_eq!(session.run(&world, &linter.grammar.names, |semantic| semantic.values().fits(at, trait_id)), Known::Yes(true));
             let before = world.conditions.get();
-            let discarded = crate::engine::Profile::get(&profile.semantic_memo_discards);
             assert_eq!(session.run(&world, &linter.grammar.names, |semantic| {
                 let complete = semantic.question.bind(FrameId::ROOT, NodeRef::here(node), None,
                     Some(vec![super::super::question::NodeValue::leaf(at)]));
@@ -486,26 +488,24 @@ mod tests {
                     Some(vec![super::super::question::NodeValue::never()]));
                 semantic.values().fits(Leaf { frame, ..at }, trait_id)
             }), Known::Unknown);
-            assert_eq!(crate::engine::Profile::get(&profile.semantic_memo_discards), discarded + 1, "only the answer cut short is dropped");
             world.cut.set(0);
             assert_eq!(session.run(&world, &linter.grammar.names, |semantic| semantic.values().fits(at, trait_id)), Known::Yes(true));
-            assert_eq!(world.conditions.get(), before + 2, "another root's limit discarded a completed answer");
             assert_eq!(session.run(&world, &linter.grammar.names, |semantic| {
                 let frame = semantic.question.bind(FrameId::ROOT, NodeRef::here(node), None,
                     Some(vec![super::super::question::NodeValue::leaf(at)]));
                 semantic.values().fits(Leaf { frame, ..at }, trait_id)
             }), Known::Yes(false));
-            assert_eq!(world.conditions.get(), before + 2, "a root cut short dropped an answer it completed before the cut");
-            // An answer that spent the whole budget is outgrown for the
-            // file: later roots answer unknown without spending it again.
-            // One cut by nesting depth spent nothing and is computed again.
+            assert_eq!(world.conditions.get(), before + 2, "a fact computed beside one that ran out is kept");
+            // A fact that ran out of its own allowance stays unknown without
+            // being redone; one cut by nesting depth (which depends on who
+            // asked) is computed again.
             let (answer, conditions) = if cut == 1 { (Known::Unknown, before + 2) } else { (Known::Yes(true), before + 3) };
             assert_eq!(session.run(&world, &linter.grammar.names, |semantic| {
                 let frame = semantic.question.bind(FrameId::ROOT, NodeRef::here(node), None,
                     Some(vec![super::super::question::NodeValue::never()]));
                 semantic.values().fits(Leaf { frame, ..at }, trait_id)
             }), answer);
-            assert_eq!(world.conditions.get(), conditions, "only an answer that spent no budget is computed again");
+            assert_eq!(world.conditions.get(), conditions);
         }
         let before = world.conditions.get();
         world.revision.set(1);
@@ -516,6 +516,50 @@ mod tests {
         world.revision.set(2);
         assert_eq!(session.run(&world, &linter.grammar.names, |semantic| semantic.values().fits(at, trait_id)), Known::Yes(true));
         assert_eq!(world.conditions.get(), before + 2);
+    }
+
+    #[test]
+    fn a_fact_answers_the_same_whichever_root_reaches_it_first() {
+        let linter = crate::engine::tests::linter("in paren fits marked when text == \"()\"");
+        let tree = crate::grammar::Tree::parse_with(&linter.grammar, 0, "()", None, None);
+        let matcher = linter.grammar.matcher("paren").unwrap();
+        let node = tree.order.iter().copied().find(|&node| tree.node(node).matcher == matcher).unwrap();
+        let world = CountingWorld { grammar: &linter.grammar, tree: &tree, conditions: Cell::new(0), cut: Cell::new(3), revision: Cell::new(0), profile: None };
+        let at = Leaf { target: Target::Node(NodeRef::here(node)), frame: FrameId::ROOT };
+        let trait_id = linter.grammar.names.vocabulary.traits.iter().position(|name| name == "marked").unwrap() as u16;
+        // The fact spends 50 steps of its own allowance: a root with 20 left
+        // gets it as a fresh root does, whichever of them computes it.
+        let ask = |session: &Session, late: bool| session.run(&world, &linter.grammar.names, |semantic| {
+            while late && semantic.question.budget.remaining() > 20 { semantic.question.budget.step(); }
+            Known::Yes(semantic.values().fits(at, trait_id))
+        });
+        for late_first in [true, false] {
+            let session = Session::default();
+            assert_eq!(ask(&session, late_first), Known::Yes(Known::Yes(true)));
+            assert_eq!(ask(&session, !late_first), Known::Yes(Known::Yes(true)));
+        }
+        assert_eq!(world.conditions.get(), 2, "each session computed the fact once");
+    }
+
+    #[test]
+    fn an_unknown_resting_on_an_unfinished_cycle_expires_with_the_fact_computing_it() {
+        let linter = crate::engine::tests::linter("in paren fits marked when text == \"()\"");
+        let tree = crate::grammar::Tree::parse_with(&linter.grammar, 0, "()", None, None);
+        let matcher = linter.grammar.matcher("paren").unwrap();
+        let node = tree.order.iter().copied().find(|&node| tree.node(node).matcher == matcher).unwrap();
+        let world = CountingWorld { grammar: &linter.grammar, tree: &tree, conditions: Cell::new(0), cut: Cell::new(4), revision: Cell::new(0), profile: None };
+        let at = Leaf { target: Target::Node(NodeRef::here(node)), frame: FrameId::ROOT };
+        let trait_id = linter.grammar.names.vocabulary.traits.iter().position(|name| name == "marked").unwrap() as u16;
+        let session = Session::default();
+        for _ in 0..2 {
+            assert_eq!(session.run(&world, &linter.grammar.names, |semantic| semantic.values().fits(at, trait_id)), Known::Unknown);
+        }
+        // Never kept for good: each root computes it afresh (a cycle head
+        // once more after its cycle), and a world where the cycle is gone
+        // answers.
+        assert_eq!(world.conditions.get(), 4);
+        world.cut.set(0);
+        assert_eq!(session.run(&world, &linter.grammar.names, |semantic| semantic.values().fits(at, trait_id)), Known::Yes(true));
     }
 
     #[test]
@@ -564,7 +608,6 @@ mod tests {
         assert_eq!(profile.semantic_budget_steps_max.load(Ordering::Relaxed), u64::from(budget));
         assert_eq!(profile.semantic_budget_steps_over_half.load(Ordering::Relaxed), 2);
         assert_eq!(profile.semantic_budget_limits.load(Ordering::Relaxed), 1);
-        assert_eq!(profile.semantic_state_discards.load(Ordering::Relaxed), 1);
     }
 
     #[test]

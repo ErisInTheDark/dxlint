@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use crate::expr::{Ctx, Value};
 use crate::expr::queries::Uncertainty;
-use crate::grammar::names::question::{FrameId, Known, Leaf, NodeRef, NodeValue, ScopeRef, Target, World};
+use crate::grammar::names::question::{Budget, FrameId, Known, Leaf, NodeRef, NodeValue, ScopeRef, Target, World};
 use crate::grammar::names::semantic::{AttributeKey, Semantic};
 use crate::grammar::names::modules::compile::Action;
 use crate::grammar::names::modules::SharedQuestion;
@@ -177,7 +177,8 @@ impl<'a> LintWorld<'a> {
         self.question().is_none() && memo.sync_revision(self.revision(), self.active_evaluation().is_none())
     }
 
-    fn mark_unknown(&self) {
+    /// The evaluation in progress read something unknown.
+    pub(crate) fn mark_unknown(&self) {
         if let Some(evaluation) = self.active_evaluation() { evaluation.unknown.set(true); }
     }
 
@@ -225,20 +226,36 @@ impl<'a> LintWorld<'a> {
         let key = AttributeKey { file, node, frame, scope, attr };
         let values = semantic.values();
         let free = semantic.frame_free_attribute(key);
-        if let Some(kept) = semantic.attribute(&key) {
+        // Attribute facts' identity for `Values::fact`: one memo, by key.
+        static ATTRIBUTES: u8 = 0;
+        let kept = |key: &AttributeKey| semantic.attribute(key).map(|(value, unknown)| {
+            if unknown { self.mark_unknown() }
+            values.read_kept(crate::grammar::names::values::fact_tag(&ATTRIBUTES, key));
+            value
+        });
+        if let Some(value) = kept(&key) {
             // What its answer asked is asked again by whoever reads it.
             if !free { values.note_value_read() }
-            return Some(kept);
+            return Some(value);
         }
         // One that asked no value question answers alike in every frame.
         if free && frame != FrameId::ROOT {
-            if let Some(kept) = semantic.attribute(&AttributeKey { frame: FrameId::ROOT, ..key }) { return Some(kept) }
+            if let Some(value) = kept(&AttributeKey { frame: FrameId::ROOT, ..key }) { return Some(value) }
         }
+        // A fact of its own: what it answers never depends on who asked.
         let reads = values.value_reads();
+        let mark = values.cycle_mark();
         let mut value = None;
-        if let Known::Yes(Some(complete)) = self.complete_attribute(|| { value = compute(); value }) {
-            semantic.remember_attribute(key, complete);
-            if values.value_reads() == reads { semantic.remember_frame_free(key, complete) }
+        let answer = values.fact(crate::grammar::names::values::fact_tag(&ATTRIBUTES, &key), Budget::per_question(),
+            || self.complete_attribute(|| { value = compute(); value }));
+        let unpaid = answer == Err(crate::grammar::names::question::Cut::Unpaid);
+        let unknown = !matches!(answer, Ok(Known::Yes(Some(_))));
+        if unknown { self.mark_unknown() }
+        // Unknown only because something further up is still undecided, or
+        // never started: a later ask may know more.
+        if let Some(found) = value.filter(|_| !(unknown && (unpaid || values.cycled_since(mark)))) {
+            semantic.remember_attribute(key, found, unknown);
+            if values.value_reads() == reads { semantic.remember_frame_free(key, found, unknown) }
         }
         value
     }
@@ -469,7 +486,10 @@ impl<'a> Files<'a> {
             let mut selected = self.0.program.selected.borrow_mut();
             match &*selected {
                 Selection::Ready(cached) => return Known::Yes(cached.get()),
-                Selection::Busy => return Known::Unknown,
+                Selection::Busy => {
+                    self.0.note_cycle();
+                    return Known::Unknown;
+                }
                 Selection::Vacant => *selected = Selection::Busy,
             }
         }
@@ -500,6 +520,7 @@ impl<'a> Files<'a> {
     fn input_paths(self, selected: &Settings) -> Known<Arc<Vec<PathBuf>>> {
         let key = selected as *const Settings;
         if let Some(cached) = self.0.program.inputs.borrow().get(&key) { return cached.get().map_or(Known::Unknown, Known::Yes) }
+        let reentries = super::program::reentries();
         let cached = super::reads::Cached::compute(|| {
             let Known::Yes(anchor) = program_anchor(selected, &self, &QueryContext::once()) else { return Known::Unknown };
             let context = super::program::Context { anchor, settings: selected as *const Settings as usize };
@@ -519,8 +540,13 @@ impl<'a> Files<'a> {
             }
         });
         let answer = cached.get();
-        // Kept unknown too (see `program::Inputs`).
-        self.0.program.inputs.borrow_mut().insert(key, super::reads::Cached { value: answer.clone().known(), reads: cached.reads });
+        // Kept unknown too (see `program::Inputs`), unless only because the
+        // list was still being collected.
+        if super::program::reentries() != reentries {
+            self.0.note_cycle();
+        } else {
+            self.0.program.inputs.borrow_mut().insert(key, super::reads::Cached { value: answer.clone().known(), reads: cached.reads });
+        }
         answer
     }
 
@@ -1004,6 +1030,7 @@ impl<'a> Files<'a> {
     fn catalog(self, selected: &Settings, classes: u64, semantic: &Semantic<'_>) -> Known<Arc<super::program::Catalog>> {
         let key = (selected as *const Settings, classes);
         if let Some(cached) = self.0.program.catalogs.borrow().get(&key) { return Known::Yes(cached.get()) }
+        let reentries = super::program::reentries();
         let cached = super::reads::Cached::compute(|| {
             let Known::Yes((program, outside)) = self.program_identity(selected) else { return Known::Unknown };
             // The program's catalog is shared by every linted file, inside
@@ -1039,6 +1066,8 @@ impl<'a> Files<'a> {
         if let Known::Yes(catalog) = &answer {
             self.0.program.catalogs.borrow_mut().insert(key, super::reads::Cached { value: catalog.clone(), reads: cached.reads });
         }
+        // Unknown because the catalog was still being built: a cycle.
+        if super::program::reentries() != reentries { self.0.note_cycle() }
         answer
     }
 
@@ -1240,16 +1269,17 @@ impl World for Files<'_> {
             let modules = self.0.program.modules.borrow();
             match modules.get(&key).and_then(|answers| answers.get(specifier)) {
                 Some(ModuleAnswer::Ready(version, answer)) if *version == revision => return Known::Yes(answer.get()),
-                Some(ModuleAnswer::Busy(version)) if *version == revision => return Known::Unknown,
+                Some(ModuleAnswer::Busy(version)) if *version == revision => {
+                    self.0.note_cycle();
+                    return Known::Unknown;
+                }
                 _ => {}
             }
         }
         self.0.program.modules.borrow_mut().entry(key).or_default().insert(specifier.into(), ModuleAnswer::Busy(revision));
         // Resolution depends only on the importer's directory (not its tree
         // or name), so imports are shared by directory, the linted file's too.
-        // Shared by the whole run, so on an allowance of its own: charged to
-        // whichever question met the import first, it cut that question short.
-        let resolve = || self.timed("modules.resolve.search", || semantic.question.budget.detached(crate::grammar::names::question::Budget::DEFAULT,
+        let resolve = || self.timed("modules.resolve.search", || semantic.question.budget.sized(crate::grammar::names::question::Budget::DEFAULT,
             || self.0.asking(semantic, at, || Resolver { host: self, settings: selected }.resolve(ctx.file_id, specifier, &[], semantic.question)))
             .unwrap_or(Known::Unknown));
         let answer = super::reads::Cached::compute(|| match World::path(self, ctx.file_id).and_then(Path::parent) {
@@ -1807,14 +1837,14 @@ mod tests {
     }
 
     #[test]
-    fn unknown_root_attribute_fallbacks_retry_instead_of_becoming_answers() {
+    fn incomplete_root_attributes_are_computed_once() {
         thread_local! { static ATTEMPTS: Cell<u32> = const { Cell::new(0) }; }
         static QUERY: crate::expr::queries::QueryFunction = crate::expr::queries::QueryFunction {
-            name: "transient",
+            name: "unknowable",
             arity: 1,
             call: |_, _, _| ATTEMPTS.with(|attempts| {
-                let before = attempts.replace(attempts.get() + 1);
-                if before == 0 { Known::Unknown } else { Known::Yes(Value::Bool(false)) }
+                attempts.set(attempts.get() + 1);
+                Known::Unknown
             }),
         };
         for shaped in [false, true] {
@@ -1836,10 +1866,8 @@ mod tests {
                 let node = tree.order.iter().copied().find(|&node| tree.node(node).matcher == matcher).unwrap();
                 let ctx = files.0.on(0, node).unwrap();
                 let read = || Session::new(&ctx, node, &[]).value(&VExpr::Attr(0), None).map(Value::into_static);
-                assert_eq!(read(), Some(Value::Bool(true)));
-                assert_eq!(read(), Some(Value::Bool(false)));
-                assert_eq!(read(), Some(Value::Bool(false)));
-                assert_eq!(ATTEMPTS.with(Cell::get), 2, "shaped={shaped}");
+                for _ in 0..3 { assert_eq!(read(), Some(Value::Bool(true))) }
+                assert_eq!(ATTEMPTS.with(Cell::get), 1, "shaped={shaped}");
             });
         }
     }
@@ -2232,7 +2260,6 @@ mod tests {
             assert_eq!(answer, Known::Yes(Some(scope)));
             reads::set_buffer(path, "(updated)");
             assert!(dependencies.any(&mut |dep| !linter.holds(dep)));
-            assert_eq!(files.module(at, "./created-unit", &repeated), Known::Unknown);
             let (answer, deps) = reads::track(|| files.module(at, "./created-unit", &semantic));
             assert_eq!(answer, Known::Yes(None));
             assert_eq!(files.module(at, "./created-unit", &repeated), Known::Yes(None));

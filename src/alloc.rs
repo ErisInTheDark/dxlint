@@ -815,8 +815,12 @@ mod tests {
         }).join().expect("second worker");
     }
 
+    /// Tests that watch which pages the shared store hands out run apart.
+    static STORE_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn freed_pages_serve_other_sizes_whichever_thread_freed_their_blocks() {
+        let _apart = STORE_TESTS.lock().unwrap_or_else(|e| e.into_inner());
         std::thread::spawn(|| {
             let _pool = own_pool();
             let small = layout(32, 8);
@@ -839,6 +843,7 @@ mod tests {
 
     #[test]
     fn released_pages_serve_allocations_again() {
+        let _apart = STORE_TESTS.lock().unwrap_or_else(|e| e.into_inner());
         std::thread::spawn(|| {
             let _pool = own_pool();
             let l = layout(512, 16);

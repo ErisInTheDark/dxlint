@@ -45,23 +45,50 @@ impl<T> Known<T> {
 
 /// One question's work budget: every step (an unwrap, a lookup, a graph
 /// edge) spends one unit; when it is gone the question's answer is
-/// [`Known::Unknown`]. One owner: questions never nest budgets, a nested
-/// step spends from the same one. It also bounds how deeply engines call
-/// into each other ([`Budget::nest`]), so a long chain of results through
-/// distinct frames ends in unknown instead of exhausting the Rust stack.
+/// [`Known::Unknown`]. Each memoised fact a question needs is computed on
+/// an allowance of its own ([`Budget::fact`]), so what a fact answers never
+/// depends on how much its first asker had left. It also bounds how deeply
+/// engines call into each other ([`Budget::nest`]), so a long chain of
+/// results through distinct frames ends in unknown instead of exhausting
+/// the Rust stack.
 pub struct Budget {
     left: Cell<u32>,
     depth: Cell<u32>,
     limited: Cell<bool>,
     /// Whether steps are attributed for `--profile` ([`crate::engine::Profile::count_step`]).
     traced: Cell<bool>,
-    /// The memo write order when the question first hit a limit
-    /// (`u64::MAX` while it hasn't): answers memoised before it are
-    /// complete.
-    cut: Cell<u64>,
-    /// Steps actually spent, detached allowances included (an `exhaust`
-    /// spends none).
-    taken: Cell<u64>,
+    /// Refusals to go deeper ([`Budget::nest`]): how deep a fact is reached
+    /// depends on who asks, so an unknown computed after one must not be
+    /// kept ([`Budget::depth_cuts`]).
+    depth_cuts: Cell<u64>,
+    /// Facts being computed ([`Budget::begin_fact`]), outermost first.
+    facts: Cell<u32>,
+    /// How many outermost facts have ended: provisional answers kept during
+    /// one ([`super::values::Values::keep_provisional`]) expire with it.
+    fact_epoch: Cell<u64>,
+}
+
+/// Why a fact ([`Budget::fact`]) gave no answer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Cut {
+    /// It spent its own allowance: its unknown answer is kept, and its
+    /// asker is cut too.
+    RanOut,
+    /// Its asker had no step left to start it: nothing to keep.
+    Unpaid,
+    /// It met the depth limit, which depends on its asker: nothing to keep.
+    Deep,
+}
+
+/// The asker's allowance while a fact runs on its own ([`Budget::begin_fact`]).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Asker {
+    left: u32,
+    limited: bool,
+    /// [`Budget::depth_cuts`] when the fact began.
+    depth_cuts: u64,
+    /// [`Budget::fact_epoch`] when the fact began.
+    pub epoch: u64,
 }
 
 /// Holds one level of [`Budget::nest`]; leaving it returns the level.
@@ -74,8 +101,8 @@ impl Drop for Nested<'_> {
 }
 
 impl Budget {
-    /// The floor of the allowances once-per-file and once-per-graph work
-    /// runs on (detached from the asking question).
+    /// The floor of the allowances once-per-file and once-per-graph facts
+    /// run on.
     pub const DEFAULT: u32 = 100_000;
     /// The work one root question may do by default: a question past it is
     /// waste, and speed ranks before parity.
@@ -84,7 +111,8 @@ impl Budget {
     pub const DEPTH: u32 = 256;
 
     pub fn new(units: u32) -> Budget {
-        Budget { left: Cell::new(units), depth: Cell::new(0), limited: Cell::new(false), traced: Cell::new(false), cut: Cell::new(u64::MAX), taken: Cell::new(0) }
+        Budget { left: Cell::new(units), depth: Cell::new(0), limited: Cell::new(false), traced: Cell::new(false), depth_cuts: Cell::new(0),
+            facts: Cell::new(0), fact_epoch: Cell::new(0) }
     }
 
     pub(crate) fn trace(&self, on: bool) {
@@ -92,7 +120,7 @@ impl Budget {
     }
 
     fn limit(&self) {
-        if !self.limited.replace(true) { self.cut.set(super::memo::write_order()) }
+        self.limited.set(true);
     }
 
     /// Enters one more level of engine-to-engine calls; `None` (answer
@@ -100,7 +128,11 @@ impl Budget {
     /// into another engine's question, never per step.
     pub fn nest(&self) -> Option<Nested<'_>> {
         let depth = self.depth.get();
-        if depth >= Self::DEPTH { self.limit(); return None }
+        if depth >= Self::DEPTH {
+            self.depth_cuts.set(self.depth_cuts.get() + 1);
+            self.limit();
+            return None;
+        }
         self.depth.set(depth + 1);
         Some(Nested(&self.depth))
     }
@@ -112,15 +144,9 @@ impl Budget {
             0 => { self.limit(); false }
             n => {
                 self.left.set(n - 1);
-                self.taken.set(self.taken.get() + 1);
                 true
             }
         }
-    }
-
-    /// See [`Budget::taken`] (the field).
-    pub(crate) fn taken(&self) -> u64 {
-        self.taken.get()
     }
 
     /// Spends the rest of the budget: the question ends as one that ran out.
@@ -129,9 +155,9 @@ impl Budget {
         self.limit();
     }
 
-    /// See [`Budget::cut`] (the field).
-    pub(crate) fn cut(&self) -> u64 {
-        if self.limited() && self.cut.get() == u64::MAX { 0 } else { self.cut.get() }
+    /// See [`Budget::depth_cuts`] (the field).
+    pub(crate) fn depth_cuts(&self) -> u64 {
+        self.depth_cuts.get()
     }
 
     pub fn exhausted(&self) -> bool {
@@ -142,25 +168,68 @@ impl Budget {
         self.left.get()
     }
 
-    /// Runs `work` on an allowance of its own (`None` when it ran out),
-    /// then gives the question back exactly the budget it had: for
-    /// once-per-file walks memoised for every later question, which a
-    /// question's budget would cut short again in every question that asks.
-    /// Running out there still cuts the question short (its partial answers
-    /// must not be kept as complete).
-    pub(crate) fn detached<R>(&self, units: u32, work: impl FnOnce() -> R) -> Option<R> {
-        // A question with nothing left gets no more work done for it.
-        if self.exhausted() { self.limit(); return None }
-        let started = super::memo::write_order();
-        let (left, limited, cut) = (self.left.replace(units), self.limited.replace(false), self.cut.get());
+    /// Computes one memoised fact on an allowance of its own: the facts it
+    /// asks have their own, so what it answers never depends on who asked
+    /// it first or what they had left. One that ran out cuts its asker, and
+    /// every later reader of its kept answer
+    /// ([`super::values::Values::read_kept`]).
+    pub(crate) fn fact<R>(&self, units: u32, work: impl FnOnce() -> R) -> Result<R, Cut> {
+        if self.exhausted() {
+            self.limit();
+            return Err(Cut::Unpaid);
+        }
+        let result = self.own_allowance(units, work);
+        if result.as_ref().err() == Some(&Cut::RanOut) { self.exhaust() }
+        result
+    }
+
+    /// Computes work sized by what it covers rather than by a question
+    /// (module answers, whole-file walks, effects graphs and their walks,
+    /// values of very many parts) on an allowance for that size. It never
+    /// cuts its asker, cold or kept: its answer is the same whoever meets
+    /// it first and whatever they have left.
+    pub(crate) fn sized<R>(&self, units: u32, work: impl FnOnce() -> R) -> Result<R, Cut> {
+        self.own_allowance(units, work)
+    }
+
+    fn own_allowance<R>(&self, units: u32, work: impl FnOnce() -> R) -> Result<R, Cut> {
+        let asker = self.begin_fact(units);
         let scope = self.traced.get().then(crate::engine::Profile::detached_scope);
         let result = work();
         drop(scope);
-        let ran_out = self.limited();
-        self.left.set(left);
-        self.limited.set(limited || ran_out);
-        self.cut.set(if ran_out && !limited { started } else { cut });
-        (!ran_out).then_some(result)
+        match self.end_fact(asker) {
+            None => Ok(result),
+            Some(cut) => Err(cut),
+        }
+    }
+
+    /// [`Budget::fact`] for work that can't be one call (the value
+    /// evaluator's task loop): starts the fact's allowance, returning the
+    /// asker's to hand to [`Budget::end_fact`].
+    pub(crate) fn begin_fact(&self, units: u32) -> Asker {
+        self.facts.set(self.facts.get() + 1);
+        Asker { left: self.left.replace(units), limited: self.limited.replace(false), depth_cuts: self.depth_cuts.get(), epoch: self.fact_epoch.get() }
+    }
+
+    /// See [`Budget::fact_epoch`] (the field).
+    pub(crate) fn fact_epoch(&self) -> u64 {
+        self.fact_epoch.get()
+    }
+
+    /// Ends a fact begun with [`Budget::begin_fact`]: the asker's allowance
+    /// is back as it was (cutting it is the caller's). Why the fact stopped
+    /// short, if it did.
+    pub(crate) fn end_fact(&self, asker: Asker) -> Option<Cut> {
+        let limited = self.limited();
+        self.left.set(asker.left);
+        self.limited.set(asker.limited);
+        self.facts.set(self.facts.get() - 1);
+        if self.facts.get() == 0 { self.fact_epoch.set(self.fact_epoch.get() + 1) }
+        match (limited, self.depth_cuts.get() != asker.depth_cuts) {
+            (false, _) => None,
+            (true, true) => Some(Cut::Deep),
+            (true, false) => Some(Cut::RanOut),
+        }
     }
 
     /// The work each root question gets in this process: [`Budget::QUESTION`]
@@ -176,9 +245,9 @@ impl Budget {
 
     pub(crate) fn restart(&self) {
         assert_eq!(self.depth.get(), 0);
+        debug_assert_eq!(self.facts.get(), 0, "a fact left open past its root");
         self.left.set(Self::per_question());
         self.limited.set(false);
-        self.cut.set(u64::MAX);
     }
 
     pub(crate) fn limited(&self) -> bool {

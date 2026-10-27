@@ -492,7 +492,7 @@ impl Execution {
         let seen = match cached {
             Some(seen) => seen,
             None => {
-                let Some(Known::Yes(Walk::Seen(seen))) = budget.detached(self.walk_allowance(),
+                let Ok(Known::Yes(Walk::Seen(seen))) = budget.sized(self.walk_allowance(),
                     || self.walk(self.entry, avoiding, |_| false, budget)) else { return Known::Unknown };
                 let mut bits = vec![0u64; seen.len().div_ceil(64)];
                 for (step, &reached) in seen.iter().enumerate() {
@@ -621,8 +621,8 @@ impl Execution {
             // allowance for the graph's size, not what the asking question
             // has left (big graphs were walked and dropped question after
             // question).
-            None => match budget.detached(self.walk_allowance(), || self.walk(self.entry, &[], |_| false, budget)) {
-                Some(Known::Yes(Walk::Seen(seen))) => self.reachable.get_or_init(|| seen),
+            None => match budget.sized(self.walk_allowance(),|| self.walk(self.entry, &[], |_| false, budget)) {
+                Ok(Known::Yes(Walk::Seen(seen))) => self.reachable.get_or_init(|| seen),
                 _ => return Known::Unknown,
             },
         };
@@ -843,7 +843,7 @@ impl Execution {
     /// writes, and walking back from each read was the graph's size per read.
     fn reaching(&self, candidates: &[StepId], budget: &Budget) -> Option<std::rc::Rc<[u64]>> {
         if let Some(found) = self.reaching.borrow().get(candidates) { return Some(found.clone()) }
-        let computed = budget.detached(self.walk_allowance().saturating_mul(4), || {
+        let computed = budget.sized(self.walk_allowance().saturating_mul(4), || {
             let mut out = vec![0u64; self.steps.len()];
             let gen = |step: StepId| candidates.iter().position(|&c| c == step).map(|index| 1u64 << index);
             out[self.entry as usize] = gen(self.entry).unwrap_or(ENTRY_REACHES);
@@ -860,7 +860,7 @@ impl Execution {
                 }
             }
             Some(std::rc::Rc::<[u64]>::from(out))
-        }).flatten()?;
+        }).ok().flatten()?;
         self.reaching.borrow_mut().insert(candidates.into(), computed.clone());
         Some(computed)
     }
@@ -875,7 +875,7 @@ impl Execution {
     fn dominators(&self, budget: &Budget) -> Option<&Dominators> {
         if let Some(dominators) = self.dominators.get() { return Some(dominators) }
         let predecessors = self.predecessors()?;
-        let dominators = budget.detached(self.walk_allowance(), || Dominators::new(self.entry, &self.edges, predecessors, budget))??;
+        let dominators = budget.sized(self.walk_allowance(),|| Dominators::new(self.entry, &self.edges, predecessors, budget)).ok()??;
         Some(self.dominators.get_or_init(|| dominators))
     }
 
@@ -1055,7 +1055,8 @@ mod tests {
     #[test]
     fn guard_reachability_matches_reaches_for_every_entry_set() {
         let graph = graph(&[&[1, 2], &[3], &[3], &[]]);
-        assert_eq!(graph.guarded(&[3], &[1], &Budget::new(0)), Known::Unknown);
+        // Kept with the graph, so the same whatever the asker has left.
+        assert_eq!(graph.guarded(&[3], &[1], &Budget::new(0)), Known::Yes(false));
         assert_eq!(graph.guarded(&[3], &[1], &Budget::default()), Known::Yes(false));
         assert_eq!(graph.guarded(&[3], &[1, 2], &Budget::default()), Known::Yes(true));
         assert_eq!(graph.guarded(&[2, 3], &[1], &Budget::default()), Known::Yes(false));
@@ -1127,8 +1128,9 @@ mod tests {
         assert_eq!(graph.reaches(0, 2, &[], &Budget::new(0)), Known::Unknown);
         assert_eq!(graph.reaches(0, 2, &[], &Budget::new(1)), Known::Unknown);
         assert_eq!(graph.reaches(0, 2, &[], &Budget::default()), Known::Yes(true));
-        assert_eq!(graph.reachable(NodeRef::here(2), &Budget::new(1)), Known::Unknown);
-        assert_eq!(graph.reachable(NodeRef::here(2), &Budget::default()), Known::Yes(true));
+        // Asking costs a step; the kept walk itself is the graph's.
+        assert_eq!(graph.reachable(NodeRef::here(2), &Budget::new(0)), Known::Unknown);
+        assert_eq!(graph.reachable(NodeRef::here(2), &Budget::new(1)), Known::Yes(true));
     }
 
     /// `graph` with step `step` replaced by `event`.

@@ -244,8 +244,6 @@ pub struct Profile {
     pub semantic_budget_steps_over_half: AtomicU64,
     /// Steps spent in root questions their budget cut short.
     pub semantic_budget_steps_limited: AtomicU64,
-    pub semantic_state_discards: AtomicU64,
-    pub semantic_memo_discards: AtomicU64,
     /// Budget steps spent on values of nodes outside the linted file
     /// (work other files' lints can repeat), and per such node its
     /// computations ([`Profile::foreign_scope`]).

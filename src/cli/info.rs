@@ -471,9 +471,8 @@ pub fn profile(output: &mut Output<'_>, linter: &Linter, format: super::Format, 
         }
     }
     output.err(format_args!(
-        "\n  {BOLD}semantic work{BOLD:#}: {} budget-limit hits, {} session state resets, {} effects graph build attempts, {} read-catalogue build attempts",
+        "\n  {BOLD}semantic work{BOLD:#}: {} budget-limit hits, {} effects graph build attempts, {} read-catalogue build attempts",
         Profile::get(&p.semantic_budget_limits),
-        Profile::get(&p.semantic_state_discards),
         Profile::get(&p.effect_graph_builds),
         Profile::get(&p.effect_read_catalogue_builds)
     ));
@@ -481,10 +480,6 @@ pub fn profile(output: &mut Output<'_>, linter: &Linter, format: super::Format, 
         "  program catalogue builds: {}; catalogue read validations: {}",
         Profile::get(&p.program_catalogue_builds),
         Profile::get(&p.catalogue_read_validations)
-    ));
-    output.err(format_args!(
-        "  memo entries discarded at limit: {}",
-        Profile::get(&p.semantic_memo_discards)
     ));
     let (foreign_steps, foreign_nodes, repeated_nodes, repeated_steps, cross_steps) = p.foreign_summary();
     output.err(format_args!(

@@ -1,6 +1,6 @@
 //! Values: `unwraps`, `fits`, `could` / `always`, `through` generics.
 
-use super::memo::{Epoch, Memo};
+use super::memo::Memo;
 use super::question::{FrameId, Known, Leaf, NodeRef, NodeValue, ScopeRef, Target};
 use super::semantic::Semantic;
 use super::Value;
@@ -167,8 +167,9 @@ pub struct Carrier {
 pub(crate) struct State {
     values: Memo<Leaf, NodeValue>,
     /// Leaves whose values are being evaluated (outermost first), each with
-    /// [`State::cycle_reads`] when it started.
-    evaluating: std::cell::RefCell<Vec<(Leaf, u64)>>,
+    /// [`Values::cycle_mark`] when it started and its asker's allowance: a
+    /// leaf's value is a fact of its own.
+    evaluating: std::cell::RefCell<Vec<(Leaf, u64, super::question::Asker)>>,
     /// Leaves of the linted file read ([`Values::root_reads`]).
     root_reads: std::cell::Cell<u64>,
     /// Reads of a leaf still being evaluated (its seed). An unknown value
@@ -187,10 +188,14 @@ pub(crate) struct State {
     /// Whether a cycle head is being computed again: heads inside it don't
     /// retry too, so the extra work stays one recomputation.
     retrying: std::cell::Cell<bool>,
-    /// Entries whose own computation spent half a question's budget and
-    /// still ran out: every later root would spend it again (and be cut
-    /// again), so they answer unknown at once for the rest of the file.
-    outgrown: std::cell::RefCell<crate::fx_hash::FxHashSet<(usize, u64)>>,
+    /// Kept facts that ran out of their own allowance, by [`fact_tag`]:
+    /// reading one cuts the reader, as computing it did
+    /// ([`Values::read_kept`]).
+    ran_out: std::cell::RefCell<crate::fx_hash::FxHashSet<(usize, u64)>>,
+    /// Kept unknowns that read an unfinished cycle, by [`fact_tag`], with
+    /// the [`super::question::Budget::fact_epoch`] they hold for
+    /// ([`Values::keep_provisional`]).
+    provisional: std::cell::RefCell<crate::fx_hash::FxHashMap<(usize, u64), u64>>,
     widened: Memo<Leaf, NodeValue>,
     traits: Memo<(Leaf, u16), Known<bool>>,
     optional: Memo<Leaf, Known<bool>>,
@@ -210,29 +215,28 @@ impl State {
     /// The innermost leaf still being evaluated: where a question cut short
     /// by its budget ran out ([`crate::engine::Profile::record_cut_root`]).
     pub(super) fn innermost(&self) -> Option<Leaf> {
-        self.evaluating.borrow().last().map(|&(leaf, _)| leaf)
+        self.evaluating.borrow().last().map(|&(leaf, ..)| leaf)
     }
 
-    pub(super) fn finish(&self, epoch: Epoch, failed: bool, cut: u64) -> u64 {
-        use super::memo::Settled;
-        // A root cut short leaves the evaluations it was inside open: none
-        // is in progress once the root ends.
+    /// Ends a root question: nothing is in progress any more (every open
+    /// leaf already settled, so nothing is lost here).
+    pub(super) fn end_root(&self) {
+        debug_assert!(self.evaluating.borrow().is_empty(), "a leaf left open past its root");
         self.evaluating.borrow_mut().clear();
         self.pending.borrow_mut().clear();
         self.cycle_heads.borrow_mut().clear();
         self.retrying.set(false);
-        self.values.finish(epoch, failed, cut, Settled::settled) + self.widened.finish(epoch, failed, cut, Settled::settled)
-            + self.traits.finish(epoch, failed, cut, Settled::settled) + self.optional.finish(epoch, failed, cut, Settled::settled)
-            + self.identities.finish(epoch, failed, cut, Settled::settled) + self.members.finish(epoch, failed, cut, Settled::settled)
-            + self.member_keys.finish(epoch, failed, cut, Settled::settled) + self.key_paths.finish(epoch, failed, cut, |_| true)
-            + self.member_closed.finish(epoch, failed, cut, Settled::settled) + self.bound_arguments.finish(epoch, failed, cut, Settled::settled)
-            + self.carriers.finish(epoch, failed, cut, Settled::settled)
-            + self.instances.finish(epoch, failed, cut, Settled::settled)
     }
 }
 
 pub struct Values<'a> {
     pub(crate) semantic: &'a Semantic<'a>,
+}
+
+/// A memoised fact's identity: its memo and its key.
+pub(crate) fn fact_tag<M, K: std::hash::Hash>(memo: &M, key: &K) -> (usize, u64) {
+    use std::hash::BuildHasher;
+    (memo as *const M as usize, crate::fx_hash::FxBuild::default().hash_one(key))
 }
 
 impl<'a> std::ops::Deref for Values<'a> {
@@ -272,7 +276,7 @@ impl Values<'_> {
         if let Some(value) = eval::kept_value(self, leaf) { return value }
         let value = self.world.shared_value(leaf, self.semantic, &mut || eval::values(self, leaf));
         if value != NodeValue::Unknown {
-            self.semantic.values.values.insert(self.semantic.epoch, leaf, value.clone());
+            self.semantic.values.values.insert(leaf, value.clone());
         }
         value
     }
@@ -321,20 +325,79 @@ impl Values<'_> {
         state.cycle_reads.set(state.cycle_reads.get() + 1);
     }
 
-    /// The cycle-read count, to tell later whether a computation read
-    /// anything still undecided ([`Self::cycled_since`]).
-    pub(super) fn cycle_mark(&self) -> u64 {
-        self.semantic.values.cycle_reads.get()
+    /// A count of what makes an unknown depend on who asked: reads of
+    /// answers still undecided, and refusals to go deeper (how deep a fact
+    /// is reached depends on its asker). See [`Self::cycled_since`].
+    pub(crate) fn cycle_mark(&self) -> u64 {
+        self.semantic.values.cycle_reads.get() + self.question.budget.depth_cuts()
     }
 
-    pub(super) fn cycled_since(&self, mark: u64) -> bool {
-        self.semantic.values.cycle_reads.get() > mark
+    /// Whether anything since `mark` makes an unknown answer unfit to keep.
+    pub(crate) fn cycled_since(&self, mark: u64) -> bool {
+        self.cycle_mark() > mark
+    }
+
+    /// Computes the fact `tag` ([`fact_tag`]) on its own allowance
+    /// ([`super::question::Budget::fact`]), noting whether it ran out for
+    /// later readers ([`Self::read_kept`]).
+    pub(crate) fn fact<R>(&self, tag: (usize, u64), units: u32, compute: impl FnOnce() -> R) -> Result<R, super::question::Cut> {
+        let answer = self.question.budget.fact(units, compute);
+        self.note_ended(tag, answer.as_ref().err().copied());
+        answer
+    }
+
+    /// Notes how fact `tag` ended, for readers of its kept answer (an answer
+    /// not kept can be computed again and end differently).
+    pub(crate) fn note_ended(&self, tag: (usize, u64), cut: Option<super::question::Cut>) {
+        let mut ran_out = self.semantic.values.ran_out.borrow_mut();
+        if cut == Some(super::question::Cut::RanOut) { ran_out.insert(tag); } else { ran_out.remove(&tag); }
+    }
+
+    /// Keeps fact `tag`'s unknown answer, which read an unfinished cycle,
+    /// only while the outermost fact that began in `epoch` runs: inside it
+    /// every ask would compute the same unknown again (the cycle is still
+    /// unfinished there), and recomputing it per ask multiplied along every
+    /// chain through the cycle. Reading it is itself a cycle read, so
+    /// nothing kept for good rests on it; once that fact ends it is computed
+    /// afresh.
+    pub(crate) fn keep_provisional(&self, tag: (usize, u64), epoch: u64) {
+        self.semantic.values.provisional.borrow_mut().insert(tag, epoch);
+    }
+
+    /// Reading a kept unknown of fact `tag`: `None` when it is final, else
+    /// whether it is a provisional answer still in force (reading it is a
+    /// cycle read) rather than an expired one (forgotten here: compute it
+    /// afresh).
+    pub(crate) fn read_provisional(&self, tag: (usize, u64)) -> Option<bool> {
+        let state = &self.semantic.values;
+        let mut provisional = state.provisional.borrow_mut();
+        let epoch = *provisional.get(&tag)?;
+        if epoch == self.question.budget.fact_epoch() {
+            state.cycle_reads.set(state.cycle_reads.get() + 1);
+            return Some(true);
+        }
+        provisional.remove(&tag);
+        Some(false)
+    }
+
+    /// Fact `tag` got a final answer: it is no longer provisional.
+    pub(crate) fn settle_provisional(&self, tag: (usize, u64)) {
+        let mut provisional = self.semantic.values.provisional.borrow_mut();
+        if !provisional.is_empty() { provisional.remove(&tag); }
+    }
+
+    /// Reading the kept answer of fact `tag` cuts the reader when computing
+    /// it ran out, as computing it did: the same whichever asker met it
+    /// first.
+    pub(crate) fn read_kept(&self, tag: (usize, u64)) {
+        if self.semantic.values.ran_out.borrow().contains(&tag) { self.question.budget.exhaust() }
     }
 
     /// A `Known` memo entry: while `compute` runs, the key reads as unknown
     /// (cutting recursion) and such a read counts as a cycle read. An
-    /// unknown answer computed after a cycle read is not kept: it may only
-    /// reflect the unfinished cycle, and keeping it would make later answers
+    /// unknown answer computed after a cycle read is kept only
+    /// provisionally ([`Self::keep_provisional`]): it may only reflect the
+    /// unfinished cycle, and keeping it for good would make later answers
     /// depend on which question happened to reach the cycle first. The head
     /// of a cycle that comes out unknown is computed once more, now that the
     /// answers inside its cycle are settled: its answer can then be kept
@@ -344,47 +407,60 @@ impl Values<'_> {
         self.memoized_with(memo, key, || Some(()), compute)
     }
 
-    /// [`Self::memoized`], where computing a missing answer first needs
-    /// `enter` (a budget step or nesting guard, held while computing): an
-    /// answer already kept costs one lookup and no budget.
+    /// [`Self::memoized`], where asking first needs `enter` (a budget step or
+    /// nesting guard, held while computing); a kept answer then cuts its
+    /// reader as computing it did ([`Self::read_kept`]).
     pub(super) fn memoized_with<K, T, G>(&self, memo: &Memo<K, Known<T>>, key: K, enter: impl FnOnce() -> Option<G>,
         compute: impl Fn() -> Known<T>) -> Known<T>
     where K: Clone + Eq + std::hash::Hash, T: Clone {
-        use std::hash::BuildHasher;
         let state = &self.semantic.values;
         let kept = memo.get(&key);
-        if let Some(answer @ Known::Yes(_)) = kept { return answer }
-        let tag = (memo as *const Memo<K, Known<T>> as usize, crate::fx_hash::FxBuild::default().hash_one(&key));
-        if kept.is_some() {
-            if state.pending.borrow().contains(&tag) {
-                state.cycle_reads.set(state.cycle_reads.get() + 1);
-                state.cycle_heads.borrow_mut().insert(tag);
-            }
+        let tag = fact_tag(memo, &key);
+        if kept.is_some() && state.pending.borrow().contains(&tag) {
+            state.cycle_reads.set(state.cycle_reads.get() + 1);
+            state.cycle_heads.borrow_mut().insert(tag);
             return Known::Unknown;
         }
-        if state.outgrown.borrow().contains(&tag) { return Known::Unknown }
+        // Asking costs the same whether the answer is kept or not.
         let Some(_entered) = enter() else { return Known::Unknown };
-        let _site = self.world.profile().map(|_| crate::engine::StepSite::enter(std::any::type_name::<(K, T)>()));
-        memo.insert(self.semantic.epoch, key.clone(), Known::Unknown);
-        state.pending.borrow_mut().push(tag);
-        let started = state.cycle_reads.get();
-        let before = self.question.budget.taken();
-        let mut answer = compute();
-        if matches!(answer, Known::Unknown) && self.question.budget.exhausted()
-            && (self.question.budget.taken() - before) * 2 >= u64::from(super::question::Budget::per_question()) {
-            state.outgrown.borrow_mut().insert(tag);
+        if let Some(answer) = kept {
+            match matches!(answer, Known::Unknown).then(|| self.read_provisional(tag)).flatten() {
+                Some(true) => return Known::Unknown,
+                Some(false) => {}
+                None => {
+                    self.read_kept(tag);
+                    return answer;
+                }
+            }
         }
+        let _site = self.world.profile().map(|_| crate::engine::StepSite::enter(std::any::type_name::<(K, T)>()));
+        memo.insert(key.clone(), Known::Unknown);
+        state.pending.borrow_mut().push(tag);
+        let mark = self.cycle_mark();
+        let epoch = self.question.budget.fact_epoch();
+        let unpaid = std::cell::Cell::new(false);
+        let fact = || match self.fact(tag, super::question::Budget::per_question(), &compute) {
+            Ok(answer) => answer,
+            Err(cut) => {
+                unpaid.set(cut == super::question::Cut::Unpaid);
+                Known::Unknown
+            }
+        };
+        let mut answer = fact();
         if matches!(answer, Known::Unknown) && state.cycle_heads.borrow_mut().remove(&tag) && !state.retrying.get() {
             state.retrying.set(true);
-            answer = compute();
+            answer = fact();
             state.retrying.set(false);
         }
         state.cycle_heads.borrow_mut().remove(&tag);
         state.pending.borrow_mut().pop();
-        if matches!(answer, Known::Unknown) && state.cycle_reads.get() > started {
-            memo.remove(self.semantic.epoch, &key);
+        if matches!(answer, Known::Unknown) && unpaid.get() {
+            memo.remove(&key);
+        } else if matches!(answer, Known::Unknown) && self.cycled_since(mark) {
+            self.keep_provisional(tag, epoch);
         } else {
-            memo.insert(self.semantic.epoch, key, answer.clone());
+            self.settle_provisional(tag);
+            memo.insert(key, answer.clone());
         }
         answer
     }
@@ -393,9 +469,7 @@ impl Values<'_> {
     /// ask would be a cycle).
     pub(super) fn computing<K, T>(&self, memo: &Memo<K, Known<T>>, key: &K) -> bool
     where K: std::hash::Hash {
-        use std::hash::BuildHasher;
-        let tag = (memo as *const Memo<K, Known<T>> as usize, crate::fx_hash::FxBuild::default().hash_one(key));
-        self.semantic.values.pending.borrow().contains(&tag)
+        self.semantic.values.pending.borrow().contains(&fact_tag(memo, key))
     }
 
     /// Whether `leaf` fits `trait_id`, declared or through a trait it fits
@@ -641,7 +715,7 @@ impl Values<'_> {
         }
         let answer = self.direct_key(at, expression);
         if let (Some(request), Known::Yes(key)) = (request, &answer) {
-            self.semantic.values.key_paths.insert(self.semantic.epoch, request, key.clone());
+            self.semantic.values.key_paths.insert(request, key.clone());
         }
         answer
     }
@@ -899,7 +973,7 @@ impl Values<'_> {
         }
         let value = eval::combine(self, values, true);
         if let (Some(key), true) = (kept, site_free && value != NodeValue::Unknown) {
-            self.semantic.values.instances.insert(self.semantic.epoch, key, value.clone());
+            self.semantic.values.instances.insert(key, value.clone());
         }
         value
     }

@@ -2,7 +2,7 @@
 
 use crate::config::ast::calls::{ExpectedAt, Variance};
 
-use super::memo::{Epoch, Memo};
+use super::memo::Memo;
 use super::question::{Known, Leaf, NodeRef, NodeValue, Target};
 use super::semantic::Semantic;
 use super::values::Values;
@@ -160,25 +160,6 @@ pub(crate) struct State {
     candidates: Memo<Leaf, select::Answer>,
     refined: Memo<Leaf, select::Answer>,
     values: Memo<(Leaf, ValueQuestion), ValueAnswer>,
-    /// Calls whose candidate selection ran its own allowance out
-    /// ([`Calls::candidates`]); kept across roots.
-    outgrown: std::cell::RefCell<crate::fx_hash::FxHashSet<Leaf>>,
-}
-
-impl State {
-    pub(super) fn finish(&self, epoch: Epoch, failed: bool, cut: u64) -> u64 {
-        use super::memo::Settled;
-        // A cut root keeps what it finished before its budget ran out, as
-        // values and narrowing do: answers holding no unknown part.
-        let value = |answer: &ValueAnswer| match answer {
-            Known::Yes(None) => true,
-            Known::Yes(Some(value)) => value.settled(),
-            Known::Unknown => false,
-        };
-        self.acceptance.finish(epoch, failed, cut, Settled::settled) + self.headers.finish(epoch, failed, cut, Settled::settled)
-            + self.candidates.finish(epoch, failed, cut, select::settled) + self.refined.finish(epoch, failed, cut, select::settled)
-            + self.values.finish(epoch, failed, cut, value)
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -261,22 +242,14 @@ impl Calls<'_> {
     fn candidates(&self, call: Leaf) -> select::Answer {
         self.profile(ProfileQuery::Select, || {
             let Known::Yes(call) = self.semantic.leaf(call) else { return Known::Unknown };
-            // A call whose selection outgrew a whole question's allowance
-            // outgrows it again: unknown, without the work.
-            if self.semantic.calls.outgrown.borrow().contains(&call) { return Known::Unknown }
             let memo = &self.semantic.calls.candidates;
             let values = self.semantic.values();
-            // Selecting a call's candidates runs on an allowance of its own,
-            // a question's worth: kept for every later question, instead of
-            // being cut with each asking question and redone by the next
-            // (long call chains were selected and cut a dozen times).
+            // Selecting a call's candidates is sized by the call, not its
+            // asker: several questions' worth.
             values.memoized_with(memo, call, || self.question.budget.step().then(|| self.question.budget.nest()).flatten(),
                 || if attached_selection() { select::candidates(call, &values) } else {
-                    self.question.budget.detached(SELECTION_QUESTIONS.saturating_mul(super::question::Budget::per_question()), || select::candidates(call, &values))
-                        .unwrap_or_else(|| {
-                            self.semantic.calls.outgrown.borrow_mut().insert(call);
-                            Known::Unknown
-                        })
+                    self.question.budget.sized(SELECTION_QUESTIONS.saturating_mul(super::question::Budget::per_question()), || select::candidates(call, &values))
+                        .unwrap_or(Known::Unknown)
                 })
         })
     }
@@ -317,7 +290,9 @@ impl Calls<'_> {
                 state.assumed.set(Some(state.assumed.get().map_or(depth, |outer| outer.min(depth))));
                 return Known::Yes(true);
             }
+            let tag = super::values::fact_tag(&state.acceptance, &key);
             if let Some(known) = state.acceptance.get(&key) {
+                self.semantic.values().read_kept(tag);
                 return known;
             }
             let Some(_nest) = self.question.budget.nest() else { return Known::Unknown };
@@ -328,17 +303,31 @@ impl Calls<'_> {
             let outer = state.assumed.replace(None);
             let values = self.semantic.values();
             let mark = values.cycle_mark();
-            let answer = accepts::accepts(expected, actual, &values);
+            // The outermost comparison is the fact. Comparisons it nests in
+            // are part of its coinductive search: on its allowance, not a
+            // fresh one each (that multiplied work with every level).
+            let mut unpaid = false;
+            let answer = if depth == 0 {
+                values.fact(tag, super::question::Budget::per_question(), || accepts::accepts(expected, actual, &values))
+                    .unwrap_or_else(|cut| {
+                        unpaid = cut == super::question::Cut::Unpaid;
+                        Known::Unknown
+                    })
+            } else {
+                accepts::accepts(expected, actual, &values)
+            };
             state.accepting.borrow_mut().pop();
             let rests_on = state.assumed.get().filter(|&at| at < depth);
             state.assumed.set(match (outer, rests_on) {
                 (Some(outer), Some(inner)) => Some(outer.min(inner)),
                 (outer, inner) => outer.or(inner),
             });
+            // A nested comparison left unknown may only have shared out its
+            // outer one's allowance: it is decided again when asked alone.
             let provisional = answer == Known::Yes(true) && rests_on.is_some()
-                || answer == Known::Unknown && values.cycled_since(mark);
+                || answer == Known::Unknown && (unpaid || depth > 0 || values.cycled_since(mark));
             if !provisional {
-                state.acceptance.insert(self.semantic.epoch, key, answer);
+                state.acceptance.insert(key, answer);
             }
             answer
         })

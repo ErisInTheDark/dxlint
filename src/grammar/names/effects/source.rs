@@ -41,6 +41,12 @@ impl Runtime<'_> {
         else { self.failure.get().unwrap_or(Failure::Shape) }
     }
 
+    /// The build ran out of its own allowance (its asker's budget, checked
+    /// by [`Runtime::failure`], is back as it was).
+    pub fn ran_out(&self) {
+        self.failure.set(Some(Failure::Budget));
+    }
+
     fn checked<T>(&self, result: Known<T>, failure: Failure) -> Known<T> {
         if matches!(result, Known::Unknown) && self.failure.get().is_none() {
             self.failure.set(Some(failure));

@@ -107,6 +107,18 @@ enum Entry<V> {
     Ready(Cached<V>),
 }
 
+thread_local! {
+    /// Unknown answers this thread got because the answer was still being
+    /// built (by itself, or by a thread waiting on it): a cycle, so callers
+    /// must not keep unknowns computed meanwhile ([`reentries`]).
+    static REENTRIES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// This thread's count of answers cut short by a build in progress.
+pub(super) fn reentries() -> u64 {
+    REENTRIES.with(std::cell::Cell::get)
+}
+
 struct Memo<K, V> {
     entries: Mutex<FxHashMap<K, Entry<V>>>,
     changed: Condvar,
@@ -141,9 +153,13 @@ impl<K: Clone + Eq + Hash, V: Clone> Memo<K, V> {
                         _ => continue,
                     }
                 }
-                Some(Entry::Building(thread)) if *thread == owner => return Known::Unknown,
+                Some(Entry::Building(thread)) if *thread == owner => {
+                    REENTRIES.with(|count| count.set(count.get() + 1));
+                    return Known::Unknown;
+                }
                 Some(Entry::Building(_)) => {
                     if entries.values().any(|entry| matches!(entry, Entry::Building(thread) if *thread == owner)) {
+                        REENTRIES.with(|count| count.set(count.get() + 1));
                         return Known::Unknown;
                     }
                     entries = self.changed.wait(entries).expect("program cache");
