@@ -48,6 +48,8 @@ import .ts/comments
         "{{package_dir}}/@typescript/typescript-darwin-x64/lib/lib.{{name:lower}}.d.ts",
         "{{package_dir}}/@typescript/typescript-darwin-arm64/lib/lib.{{name:lower}}.d.ts",
       ]
+      # `/// <reference lib="x" />` asks for `lib:x`, wherever the release keeps it.
+      library_prefix "lib:"
       library_option "lib"
       default_libraries ["es2023", "dom"]
       types_option "types"
@@ -266,7 +268,7 @@ in ts_reference_path let ts_module_path_reference {
     || re_test(path, /^[A-Za-z]:\//) then path else "./{path}"
 }
 in ts_reference_types let ts_module_types_reference "@types/{ts_module_reference}"
-in ts_reference_lib let ts_module_lib_reference "typescript/lib/lib.{ts_module_reference}.d.ts"
+in ts_reference_lib let ts_module_lib_reference "lib:{ts_module_reference}"
 in ts_reference_path {
   globals all value, type, query from module ts_module_path_reference
 }

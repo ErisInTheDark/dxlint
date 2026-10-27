@@ -85,6 +85,7 @@ const PACKAGES: &[Control] = &[
 
 const GLOBALS: &[Control] = &[
     Control { name: "libraries", field: Field::Strings(|s| &mut s.globals.libraries, Some(&["package_dir", "name"])) },
+    Control { name: "library_prefix", field: Field::Text(|s| &mut s.globals.library_prefix, None) },
     Control { name: "library_option", field: Field::Text(|s| &mut s.globals.library_option, None) },
     Control { name: "default_libraries", field: Field::Strings(|s| &mut s.globals.default_libraries, None) },
     Control { name: "types_option", field: Field::Text(|s| &mut s.globals.types_option, None) },

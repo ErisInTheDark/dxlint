@@ -87,6 +87,10 @@ pub struct Globals {
     /// (one TypeScript release ships them in `typescript`, the next in a
     /// platform package).
     pub libraries: Vec<Box<str>>,
+    /// When set: a specifier starting with it names a default library
+    /// (`<prefix><name>`), found like the configured ones
+    /// ([`Resolver::library`]).
+    pub library_prefix: Box<str>,
     pub library_option: Box<str>,
     pub default_libraries: Vec<Box<str>>,
     pub types_option: Box<str>,
@@ -161,6 +165,10 @@ impl<H: Host + ?Sized> Resolver<'_, H> {
     fn resolve_inner(&self, importer: u32, specifier: &str, conditions: &[&str], question: &QueryContext) -> Result<Option<ScopeRef>, ()> {
         let path = self.host.path(importer).known().ok_or(())?;
         let dir = path.parent().ok_or(())?;
+        let prefix = &*self.settings.globals.library_prefix;
+        if let Some(name) = specifier.strip_prefix(prefix).filter(|_| !prefix.is_empty()) {
+            return self.library(dir, name, question)?.map(|path| self.host.scope(&path, question).known().ok_or(())).transpose().map(Option::flatten);
+        }
         let relative = Path::new(specifier).is_absolute() || specifier.starts_with("./") || specifier.starts_with("../");
         let mut config = None;
         for search in &self.settings.search {
@@ -185,6 +193,27 @@ impl<H: Host + ?Sized> Resolver<'_, H> {
                 _ => None,
             };
             if result.is_some() { return Ok(result) }
+        }
+        Ok(None)
+    }
+
+    /// The default library `name`: the first `libraries` template that
+    /// names an existing file, in the nearest package directory above `dir`.
+    pub(super) fn library(&self, dir: &Path, name: &str, question: &QueryContext) -> Result<Option<PathBuf>, ()> {
+        for ancestor in dir.ancestors() {
+            for package in &self.settings.packages.directories {
+                let package_dir = ancestor.join(&**package);
+                for template in &self.settings.globals.libraries {
+                    spend(question)?;
+                    let path = clean(Path::new(&expand(template, &[("package_dir", &package_dir.to_string_lossy()), ("name", name)])?));
+                    let request = DiscoveryRequest {
+                        root: path.parent().ok_or(())?.to_path_buf(),
+                        include: vec![path.file_name().and_then(|name| name.to_str()).ok_or(())?.into()],
+                        exclude: Vec::new(), extensions: Vec::new(),
+                    };
+                    if self.host.discover(&request, question).known().ok_or(())?.contains(&path) { return Ok(Some(path)) }
+                }
+            }
         }
         Ok(None)
     }
@@ -492,6 +521,11 @@ mod tests {
         fn ambient(&self, _: u32, _: &str, _: u64, _: &QueryContext) -> Known<Option<ScopeRef>> {
             Known::Yes(None)
         }
+        fn discover(&self, request: &DiscoveryRequest, _: &QueryContext) -> Known<Vec<PathBuf>> {
+            let [name] = &*request.include else { return Known::Unknown };
+            let path = request.root.join(&**name);
+            Known::Yes(self.paths.contains_key(&path).then_some(path).into_iter().collect())
+        }
     }
 
     fn settings() -> Settings {
@@ -525,6 +559,23 @@ mod tests {
         assert_eq!(origin("/app/node_modules/.pnpm/x@1/node_modules/@types/node/globals.d.ts"), Origin::Package("@types/node".into()));
         assert_eq!(origin("/app/lib/lib.dom.d.ts"), Origin::Project);
         assert_eq!(origin("/app/src/promise.ts"), Origin::Project);
+    }
+
+    #[test]
+    fn library_requests_find_libraries_wherever_the_release_keeps_them() {
+        let mut files = Files::default();
+        let user = files.add("/app/src/main.ts", "");
+        let full = files.add("/app/node_modules/@typescript/typescript-linux-x64/lib/lib.es2015.d.ts", "");
+        let base = files.add("/app/node_modules/@typescript/typescript-linux-x64/lib/lib.es5.d.ts", "");
+        let mut settings = settings();
+        settings.globals.libraries = vec!["{package_dir}/typescript/lib/lib.{name:lower}.d.ts".into(), "{package_dir}/@typescript/typescript-linux-x64/lib/lib.{name:lower}.d.ts".into()];
+        let resolve = |settings: &Settings, importer: u32, specifier: &str| Resolver { host: &files, settings }.resolve(importer, specifier, &[], &QueryContext::default());
+        settings.globals.library_prefix = "lib:".into();
+        assert_eq!(resolve(&settings, full.file, "lib:ES5"), Known::Yes(Some(base)));
+        assert_eq!(resolve(&settings, user.file, "lib:es2015"), Known::Yes(Some(full)));
+        assert_eq!(resolve(&settings, user.file, "lib:missing"), Known::Yes(None));
+        settings.globals.library_prefix = "".into();
+        assert_eq!(resolve(&settings, user.file, "lib:es5"), Known::Yes(None));
     }
 
     #[test]

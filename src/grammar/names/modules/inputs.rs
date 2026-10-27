@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use super::configuration::{Configuration, OptionValue};
 use super::metadata::Json;
-use super::resolution::{clean, expand, spend, DiscoveryRequest, Host, Probe, Resolver, Settings};
+use super::resolution::{clean, spend, DiscoveryRequest, Host, Probe, Resolver, Settings};
 use super::super::question::{Known, QueryContext};
 
 pub fn program_inputs(settings: &Settings, host: &dyn Host, question: &QueryContext) -> Known<Vec<PathBuf>> {
@@ -80,25 +80,7 @@ impl Inputs<'_> {
             || Ok(settings.globals.default_libraries.clone()), |option| texts(&option.value)
         )?;
         for name in names {
-            let mut found = None;
-            'ancestors: for ancestor in directory.ancestors() {
-                for package in &settings.packages.directories {
-                    let package_dir = ancestor.join(&**package);
-                    for template in &settings.globals.libraries {
-                        spend(self.question)?;
-                        let path = clean(Path::new(&expand(template, &[("package_dir", &package_dir.to_string_lossy()), ("name", &name)])?));
-                        let request = DiscoveryRequest {
-                            root: path.parent().ok_or(())?.to_path_buf(),
-                            include: vec![path.file_name().and_then(|name| name.to_str()).ok_or(())?.into()],
-                            exclude: Vec::new(), extensions: Vec::new(),
-                        };
-                        if self.resolver.host.discover(&request, self.question).known().ok_or(())?.contains(&path) {
-                            found = Some(path);
-                            break 'ancestors;
-                        }
-                    }
-                }
-            }
+            let found = self.resolver.library(directory, &name, self.question)?;
             self.libraries.push(found.ok_or(())?);
         }
         Ok(())
