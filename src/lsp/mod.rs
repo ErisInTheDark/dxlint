@@ -226,11 +226,11 @@ impl Server {
         if self.changed.is_empty() && self.typed.is_empty() {
             return;
         }
-        let changed: Vec<PathBuf> = std::mem::take(&mut self.changed).into_iter().collect();
-        let typed: Vec<PathBuf> = std::mem::take(&mut self.typed).into_iter().collect();
+        let (changed, typed) = (std::mem::take(&mut self.changed), std::mem::take(&mut self.typed));
         let linters = self.projects.linters();
         // Per linter: what changed for everyone, and what only open files see.
-        let stale: Vec<(&Arc<Linter>, Stale, Stale)> = linters.all().map(|l| (l, l.invalidate(&changed), l.invalidate(&typed))).collect();
+        let (all, buffers): (Vec<PathBuf>, Vec<PathBuf>) = (changed.iter().cloned().collect(), typed.iter().cloned().collect());
+        let stale: Vec<(&Arc<Linter>, Stale, Stale)> = linters.all().map(|l| (l, l.invalidate(&all), l.invalidate(&buffers))).collect();
         let reads: Vec<(PathBuf, Arc<Reads>)> = {
             let reads = self.shared.reads.lock().expect("lock");
             // Typing alone concerns only the files the editor owns.

@@ -17,8 +17,10 @@
 //! not hold its page's pool goes on the page's remote list; the owner takes
 //! those back when the page runs dry and when it [`trim`]s.
 //!
-//! Pages are never returned to the system: the peak is what costs, and wasm
-//! memory cannot shrink anyway.
+//! A run's peak is what costs, so pages never leave the store. A long-lived
+//! host (the language server) calls [`release`] once a burst of work ends:
+//! the memory behind unused pages goes back to the system, and comes back
+//! when a page is taken again (wasm memory cannot shrink: there it stays).
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
@@ -126,39 +128,61 @@ impl Page {
     }
 }
 
-/// Unused pages, linked through `next`.
-struct Store(*mut Page);
+/// Unused pages, linked through `next`: those whose memory is still the
+/// process's, and those [`release`]d to the system.
+struct Store {
+    kept: *mut Page,
+    released: *mut Page,
+}
 
 // The store is only touched under its mutex.
 unsafe impl Send for Store {}
 
-static STORE: Mutex<Store> = Mutex::new(Store(null_mut()));
+static STORE: Mutex<Store> = Mutex::new(Store { kept: null_mut(), released: null_mut() });
+
+/// Each store page's first system page holds its link: it is never released.
+const LINK: usize = 4096;
 
 impl Store {
     fn lock() -> std::sync::MutexGuard<'static, Store> {
         STORE.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    /// Pops the head of `list`.
+    ///
+    /// # Safety
+    /// The store's lock is held; listed pages keep their `next` link.
+    unsafe fn pop(list: &mut *mut Page) -> *mut Page {
+        let head = *list;
+        if !head.is_null() { *list = unsafe { (*head).next } }
+        head
+    }
+
     /// A page for `owner`'s blocks of `size`, or null when the system is out.
     unsafe fn take(owner: *mut Pool, size: usize) -> *mut Page {
-        let mut page = {
+        let (mut page, released) = {
             let mut store = Store::lock();
-            let head = store.0;
-            // SAFETY: stored pages keep their `next` link.
-            if !head.is_null() { store.0 = unsafe { (*head).next } }
-            head
+            // SAFETY: the lock is held.
+            match unsafe { Store::pop(&mut store.kept) } {
+                page if !page.is_null() => (page, false),
+                _ => (unsafe { Store::pop(&mut store.released) }, true),
+            }
         };
+        // SAFETY: a released page's memory past its link is the system's.
+        if !page.is_null() && released && !unsafe { system::reclaim(page.cast::<u8>().add(LINK), PAGE - LINK) } {
+            return null_mut();
+        }
         if page.is_null() {
-            // SAFETY: SEGMENT is a non-zero multiple of the PAGE alignment.
-            let segment = unsafe { System.alloc(Layout::from_size_align_unchecked(SEGMENT, PAGE)) };
+            // SAFETY: SEGMENT is a non-zero multiple of PAGE.
+            let segment = unsafe { system::segment() };
             if segment.is_null() { return null_mut() }
             let mut store = Store::lock();
             for index in 1..SEGMENT / PAGE {
                 // SAFETY: each page lies inside the segment just allocated.
                 unsafe {
                     let spare = segment.add(index * PAGE).cast::<Page>();
-                    (&raw mut (*spare).next).write(store.0);
-                    store.0 = spare;
+                    (&raw mut (*spare).next).write(store.kept);
+                    store.kept = spare;
                 }
             }
             page = segment.cast();
@@ -184,9 +208,106 @@ impl Store {
     unsafe fn give(page: *mut Page) {
         let mut store = Store::lock();
         // SAFETY: the page is no pool's any more.
-        unsafe { (*page).next = store.0 };
-        store.0 = page;
+        unsafe { (*page).next = store.kept };
+        store.kept = page;
     }
+}
+
+/// Hands the memory of every unused page back to the system; their
+/// addresses stay the store's, so later allocations take them again. Pools
+/// keep their own pages: call it when a burst of work has ended (owned pools
+/// [`trim`] into the store when their workers finish).
+pub fn release() {
+    let head = std::mem::replace(&mut Store::lock().kept, null_mut());
+    if head.is_null() { return }
+    // SAFETY: the detached pages are no pool's and no other thread sees them;
+    // each keeps its link page, so the list stays intact.
+    let mut tail = head;
+    unsafe {
+        loop {
+            system::release(tail.cast::<u8>().add(LINK), PAGE - LINK);
+            if (*tail).next.is_null() { break }
+            tail = (*tail).next;
+        }
+    }
+    let mut store = Store::lock();
+    // SAFETY: the lock is held; `tail` ends the detached list.
+    unsafe { (*tail).next = store.released };
+    store.released = head;
+}
+/// The system memory behind the store.
+mod system {
+    use super::{PAGE, SEGMENT};
+
+    #[cfg(windows)]
+    mod os {
+        use std::ffi::c_void;
+        extern "system" {
+            fn VirtualAlloc(address: *mut c_void, size: usize, kind: u32, protect: u32) -> *mut c_void;
+            fn VirtualFree(address: *mut c_void, size: usize, kind: u32) -> i32;
+        }
+        const MEM_COMMIT: u32 = 0x1000;
+        const MEM_RESERVE: u32 = 0x2000;
+        const MEM_DECOMMIT: u32 = 0x4000;
+        const PAGE_READWRITE: u32 = 0x04;
+
+        /// Fresh committed memory, aligned to the 64 KiB allocation granularity.
+        pub unsafe fn segment(size: usize) -> *mut u8 {
+            let _ = (MEM_RESERVE, VirtualAlloc as unsafe extern "system" fn(_, _, _, _) -> _);
+            unsafe { std::alloc::GlobalAlloc::alloc(&std::alloc::System, std::alloc::Layout::from_size_align_unchecked(size, super::super::PAGE)) }
+        }
+
+        pub unsafe fn release(at: *mut u8, size: usize) {
+            unsafe { VirtualFree(at.cast(), size, MEM_DECOMMIT) };
+        }
+
+        pub unsafe fn reclaim(at: *mut u8, size: usize) -> bool {
+            !unsafe { VirtualAlloc(at.cast(), size, MEM_COMMIT, PAGE_READWRITE) }.is_null()
+        }
+    }
+
+    #[cfg(not(windows))]
+    mod os {
+        use std::alloc::{GlobalAlloc, Layout, System};
+
+        pub unsafe fn segment(size: usize) -> *mut u8 {
+            unsafe { System.alloc(Layout::from_size_align_unchecked(size, super::PAGE)) }
+        }
+
+        #[cfg(unix)]
+        pub unsafe fn release(at: *mut u8, size: usize) {
+            extern "C" {
+                fn madvise(address: *mut std::ffi::c_void, size: usize, advice: i32) -> i32;
+            }
+            const MADV_DONTNEED: i32 = 4;
+            unsafe { madvise(at.cast(), size, MADV_DONTNEED) };
+        }
+
+        #[cfg(not(unix))]
+        pub unsafe fn release(_: *mut u8, _: usize) {}
+
+        /// Released memory is the process's again on its next touch.
+        pub unsafe fn reclaim(_: *mut u8, _: usize) -> bool {
+            true
+        }
+    }
+
+    /// SEGMENT fresh bytes, PAGE-aligned; null when the system is out.
+    pub unsafe fn segment() -> *mut u8 {
+        unsafe { os::segment(SEGMENT) }
+    }
+
+    /// Hands `size` bytes at `at` (system-page aligned) back to the system.
+    pub unsafe fn release(at: *mut u8, size: usize) {
+        unsafe { os::release(at, size) }
+    }
+
+    /// Makes released bytes usable again; false when the system is out.
+    pub unsafe fn reclaim(at: *mut u8, size: usize) -> bool {
+        unsafe { os::reclaim(at, size) }
+    }
+
+    const _: () = assert!(PAGE.is_multiple_of(super::LINK) && SEGMENT.is_multiple_of(PAGE));
 }
 
 /// A doubly linked list of one class's pages.
@@ -713,6 +834,26 @@ mod tests {
             let landed = reused.iter().filter(|&&block| pages.contains(&(block as usize & !(PAGE - 1)))).count();
             for block in reused { unsafe { Pooled.dealloc(block, large) } }
             assert!(landed > 0, "no page freed by 32-byte blocks served 1024-byte blocks");
+        }).join().expect("worker");
+    }
+
+    #[test]
+    fn released_pages_serve_allocations_again() {
+        std::thread::spawn(|| {
+            let _pool = own_pool();
+            let l = layout(512, 16);
+            let count = 8 * PAGE / 512;
+            let blocks: Vec<*mut u8> = (0..count).map(|_| unsafe { Pooled.alloc(l) }).collect();
+            for block in blocks { unsafe { Pooled.dealloc(block, l) } }
+            trim();
+            release();
+            // Whole pages of fresh blocks, written through and read back.
+            let blocks: Vec<*mut u8> = (0..count).map(|_| unsafe { Pooled.alloc(l) }).collect();
+            for (i, &block) in blocks.iter().enumerate() { unsafe { block.write_bytes(i as u8, 512) } }
+            for (i, &block) in blocks.iter().enumerate() {
+                assert!((0..512).all(|k| unsafe { *block.add(k) } == i as u8));
+            }
+            for block in blocks { unsafe { Pooled.dealloc(block, l) } }
         }).join().expect("worker");
     }
 }

@@ -271,6 +271,10 @@ static NO_INDENTS: crate::expr::IndentPlan = crate::expr::IndentPlan::EMPTY;
 /// shared answer's reads, and each scan's file list and test.
 pub struct Stale {
     changed: Vec<PathBuf>,
+    /// The changed files and every directory holding one: a build or a
+    /// checkout changes thousands of files at once.
+    files: crate::fx_hash::FxHashSet<PathBuf>,
+    holding: crate::fx_hash::FxHashSet<PathBuf>,
     /// Per group of reads (kept, so its address stays its key): whether it
     /// holds.
     groups: RefCell<crate::fx_hash::FxHashMap<*const Reads, (std::sync::Arc<Reads>, bool)>>,
@@ -281,8 +285,23 @@ pub struct Stale {
 }
 
 impl Stale {
+    fn new(changed: &[PathBuf]) -> Self {
+        Stale {
+            changed: changed.to_vec(),
+            files: changed.iter().cloned().collect(),
+            holding: changed.iter().flat_map(|path| path.ancestors()).map(Path::to_path_buf).collect(),
+            groups: Default::default(),
+            touched: Default::default(),
+            verdicts: Default::default(),
+        }
+    }
+
+    /// [`Dep::touches`] for any changed file.
     fn touches(&self, dep: &Dep) -> bool {
-        self.changed.iter().any(|path| dep.touches(path))
+        match dep {
+            Dep::Text(..) | Dep::IsFile(..) => self.files.contains(dep.path()),
+            _ => self.holding.contains(dep.path()),
+        }
     }
 
     /// Whether everything `reads` read still holds, judging only the
@@ -567,7 +586,7 @@ impl Linter {
         self.units.lock().expect("unit cache").retain(|path, _| !changed.contains(path));
         self.discoveries.lock().expect("unit discoveries").retain(|request, _| !changed.iter().any(|path| path.starts_with(&request.root)));
         self.invalidation.fetch_add(1, std::sync::atomic::Ordering::Release);
-        Stale { changed: changed.to_vec(), groups: Default::default(), touched: Default::default(), verdicts: Default::default() }
+        Stale::new(changed)
     }
 
     /// Whether the `stale` files broke something `reads` read; only those

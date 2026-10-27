@@ -139,12 +139,15 @@ impl<'a> Runs<'a> {
         self.0.iter().find(|(l, _)| std::ptr::eq(*l, linter)).map(|(_, run)| run)
     }
 
-    /// Ends the batch: the linters let go of the files it parsed.
+    /// Ends the batch: the linters let go of the files it parsed, and the
+    /// memory goes back to the system.
     fn finish(self) {
         for (linter, run) in self.0 {
             drop(run);
             linter.forget_units();
         }
+        crate::alloc::trim();
+        crate::alloc::release();
     }
 }
 
@@ -185,6 +188,7 @@ pub fn relint(linters: Linters, files: Vec<PathBuf>, shared: Arc<Shared>, out: O
             let Some(linter) = linters.for_path(&path).filter(|l| l.wants(&path)) else { continue };
             let Some(run) = runs.of(linter) else { continue };
             publish_disk(linter, run, None, &shared, &out, &path, current);
+            crate::alloc::trim();
         }
         runs.finish();
     });
@@ -238,6 +242,7 @@ pub fn edit(shared: &Arc<Shared>, out: &Outbox, lint: EditorLint) {
             if !newer && shared.editor.lock().expect("lock").contains(&lint.path) {
                 shared.publish(&out, &lint.uri, lint.version, diags);
             }
+            crate::alloc::trim();
         }
     });
 }
@@ -346,9 +351,14 @@ pub fn start(linters: Linters, roots: Vec<PathBuf>, tabs: Vec<PathBuf>, shared: 
     lint_thread(move || Scan::new(linters, shared, out, progress, generation).run(&roots));
 }
 
-/// A thread that lints: worker-sized stack, as deep questions need.
+/// A thread that lints: worker-sized stack, as deep questions need, and an
+/// owned pool, which the next lint thread takes over: one batch's free
+/// blocks serve the next instead of each thread spreading over a new shard.
 fn lint_thread(work: impl FnOnce() + Send + 'static) {
-    std::thread::Builder::new().stack_size(crate::engine::WORKER_STACK).spawn(work).expect("lint thread");
+    std::thread::Builder::new().stack_size(crate::engine::WORKER_STACK).spawn(move || {
+        let _pool = crate::alloc::own_pool();
+        work()
+    }).expect("lint thread");
 }
 
 struct Scan {
@@ -452,24 +462,17 @@ impl Scan {
         found.into_iter().map(|(_, path)| path).collect()
     }
 
-    /// Lints priority files, then `files` in order, on half the cores so the
-    /// editor and the rest of the machine stay responsive.
+    /// Lints priority files, then `files` in order, one at a time: the
+    /// editor and the rest of the machine stay responsive, and the server
+    /// never holds more than one file's lint (`.dxcache` makes most scans
+    /// quick anyway).
     fn drain(&self, files: &[PathBuf], runs: &Runs<'_>) {
-        let workers = std::thread::available_parallelism().map_or(1, |n| (n.get() / 2).max(1));
-        let next = AtomicUsize::new(0);
-        let take = || self.shared.next_priority(self.generation).or_else(|| files.get(next.fetch_add(1, Ordering::Relaxed)).cloned());
-        std::thread::scope(|s| {
-            for _ in 0..workers {
-                std::thread::Builder::new().stack_size(crate::engine::WORKER_STACK).spawn_scoped(s, || {
-                    let _pool = crate::alloc::own_pool();
-                    while self.current() {
-                        let Some(path) = take() else { break };
-                        self.lint(&path, runs);
-                        crate::alloc::trim();
-                    }
-                }).expect("lint worker");
-            }
-        });
+        let mut next = files.iter();
+        while self.current() {
+            let Some(path) = self.shared.next_priority(self.generation).or_else(|| next.next().cloned()) else { break };
+            self.lint(&path, runs);
+            crate::alloc::trim();
+        }
     }
 
     fn lint(&self, path: &Path, runs: &Runs<'_>) {
