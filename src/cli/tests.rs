@@ -668,6 +668,7 @@ fn cache_global_lookups_relint_only_for_files_that_could_declare_the_name() {
             ("a.ts", "G;\n"),
             ("mention.ts", "export function f() { return \"G\"; }\n"),
             ("plain.ts", "export const p = 1;\n"),
+            ("ns.ts", "export namespace N { export const n = 1; }\n"),
             ("amb.d.ts", "declare module \"pkg\" { export const y: number; }\n"),
             ("b.ts", "import { y } from \"pkg\";\ny;\n"),
         ],
@@ -691,31 +692,37 @@ fn cache_global_lookups_relint_only_for_files_that_could_declare_the_name() {
         assert!(got == said && line.contains(stats), "{got:?} {line}");
     };
 
-    expect("a.ts G: number, b.ts y: number", "6 files (0 from cache)");
-    expect("a.ts G: number, b.ts y: number", "6 files (6 from cache)");
+    expect("a.ts G: number, b.ts y: number", "7 files (0 from cache)");
+    expect("a.ts G: number, b.ts y: number", "7 files (7 from cache)");
 
     // A file naming neither G nor a module keyword answers neither lookup.
     write("plain.ts", "export const p = 1; \n");
-    expect("a.ts G: number, b.ts y: number", "6 files (5 from cache)");
+    expect("a.ts G: number, b.ts y: number", "7 files (6 from cache)");
 
     // A file spelling G without declaring it globally answers the same.
     write("mention.ts", "export function f() { return \"G!\"; }\n");
-    expect("a.ts G: number, b.ts y: number", "6 files (5 from cache)");
+    expect("a.ts G: number, b.ts y: number", "7 files (6 from cache)");
 
-    // Text that could open an ambient module: the module lookup is asked again.
+    // Module keywords that open no ambient module answer the same too.
     write("plain.ts", "// namespace\nexport const p = 1;\n");
-    expect("a.ts G: number, b.ts y: number", "6 files (4 from cache)");
+    expect("a.ts G: number, b.ts y: number", "7 files (6 from cache)");
+    write("ns.ts", "export namespace N { export const n = 2; }\n");
+    expect("a.ts G: number, b.ts y: number", "7 files (6 from cache)");
+
+    // A file starting to declare an ambient module: the module lookup is asked again.
+    write("plain.ts", "export const p = 1;\ndeclare module \"other\" {}\n");
+    expect("a.ts G: number, b.ts y: number", "7 files (5 from cache)");
 
     write("globals.d.ts", "declare const G: string;\n");
-    expect("a.ts G: string, b.ts y: number", "6 files (4 from cache)");
+    expect("a.ts G: string, b.ts y: number", "7 files (5 from cache)");
 
     // G moves into a file that only spelled it so far.
     write("globals.d.ts", "declare const H: number;\n");
     write("mention.ts", "export function f() { return \"G!\"; }\ndeclare global { const G: boolean }\n");
-    expect("a.ts G: boolean, b.ts y: number", "6 files (3 from cache)");
+    expect("a.ts G: boolean, b.ts y: number", "7 files (4 from cache)");
 
     write("amb.d.ts", "declare module \"pkg\" { export const y: string; }\n");
-    expect("a.ts G: boolean, b.ts y: string", "6 files (4 from cache)");
+    expect("a.ts G: boolean, b.ts y: string", "7 files (5 from cache)");
 }
 
 #[test]

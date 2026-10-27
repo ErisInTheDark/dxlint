@@ -484,9 +484,22 @@ impl Linter {
         let Some(text) = text else { return true };
         let holding = |needles: &[Box<str>]| needles.iter().any(|needle| text.contains(&**needle));
         match test {
-            reads::ScanTest::Lacks(needles) => !holding(needles),
+            reads::ScanTest::Ambient { hints, classes } => !hints.is_empty() && !holding(hints) || !self.opens_scopes(path, *classes),
             reads::ScanTest::Global { name, hints } => !holding(hints) && (!text.contains(&**name) || !self.mentions_global(path, name)),
         }
+    }
+
+    /// Whether `path` opens a module scope of `classes`, as a world over it
+    /// alone decides; true when it does not parse.
+    fn opens_scopes(&self, path: &Path, classes: u64) -> bool {
+        let Some(unit) = self.unit_quiet(path, None).1 else { return true };
+        let run = Run { path: &unit.path, lang: unit.lang, text: &unit.text, lines: unit.lines(), file: &unit.rel, active: &[], settings: None };
+        let native = unit.parsed.front.map(|front| self.native_facts(front, &unit.parsed.tree, &run, (&*unit.path, Path::new(&unit.rel)), unit.parsed.state.clone()));
+        let memo = AttrMemo::default();
+        let reindented = RefCell::default();
+        let ctx = self.tree_ctx(unit.lang, &unit.parsed.tree, (&unit.text, unit.lines(), &unit.rel), &memo, &reindented, native.as_deref());
+        let world = world::LintWorld::new(self, &unit.path, ctx);
+        world::opens_scopes(&world, classes)
     }
 
     /// Whether `path`'s module index mentions `name` as a global of any

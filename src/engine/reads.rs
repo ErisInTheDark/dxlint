@@ -121,8 +121,10 @@ pub struct Scan {
 /// What a [`Scan`] asked each file.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ScanTest {
-    /// Its text holds none of these.
-    Lacks(Box<[Box<str>]>),
+    /// It declares no ambient module of `classes`: its text holds none of
+    /// `hints` (when there are some), or it opens no module scope of those
+    /// classes (the engine answers that, see `Linter::passes`).
+    Ambient { hints: Box<[Box<str>]>, classes: u64 },
     /// It cannot declare global `name`: its text holds none of `hints`, and
     /// lacks `name` or never mentions it as a global (the engine answers
     /// that, see `Linter::passes`).

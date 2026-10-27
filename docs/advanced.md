@@ -1127,7 +1127,8 @@ through any number of imports (any edit to such a file, even inside a
 function body, lints its readers again), module resolution (a new `a.ts`
 beside `a/index.ts`), tsconfigs and `package.json`s. Looking up a global name
 or an ambient module reads every program file, but depends only on whether
-each file could declare it: an edit to a file that names neither keeps those
+each file could declare it: an edit to a file that neither names the global
+nor declares an ambient module (`namespace N {}` does not) keeps those
 results. Results with problems are kept too, so a warm run only lints what
 changed. Any change to the rules
 (comments and blank lines aside) or to the dxlint binary starts afresh.

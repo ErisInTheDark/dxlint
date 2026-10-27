@@ -1047,19 +1047,6 @@ impl<'a> Files<'a> {
     /// path's text hash.
     fn catalog_declarations(self, selected: &Settings, classes: u64, paths: &[PathBuf], semantic: &Semantic<'_>)
         -> Known<(Vec<super::program::Declaration>, crate::fx_hash::FxHashMap<super::reads::DepPath, u64>)> {
-        // Only files with a node that opens a module scope of these
-        // classes contribute, so the others never resolve their names:
-        // per kind, the conditions of its opening items.
-        let opens: Vec<Vec<Option<u32>>> = self.0.ctx.grammar.names.kinds.iter().map(|kind| kind.modules.items.iter()
-            .filter(|item| matches!(item.action, Action::Scope { classes: opened, .. } if opened & classes != 0))
-            .map(|item| item.when).collect()).collect();
-        let opening = |file: u32, tree: &Tree| tree.order.iter().any(|&node| {
-            let at = Leaf { target: Target::Node(NodeRef { file, node }), frame: FrameId::ROOT };
-            opens.get(tree.node(node).matcher as usize).is_some_and(|whens| whens.iter().any(|when| match when {
-                None => true,
-                Some(when) => World::condition(&self, at, *when, semantic) != Known::Yes(false),
-            }))
-        });
         let mut declarations = Vec::new();
         let mut texts = crate::fx_hash::FxHashMap::default();
         // Files whose text cannot declare an ambient scope are read but
@@ -1076,13 +1063,15 @@ impl<'a> Files<'a> {
         let hints = selected.globals.ambient_hints.clone().into_boxed_slice();
         super::reads::note_scan(&Arc::new(super::reads::Scan {
             files: Arc::new(super::reads::Reads { deps: scanned, ..Default::default() }),
-            test: super::reads::ScanTest::Lacks(hints),
+            test: super::reads::ScanTest::Ambient { hints, classes },
         }));
         self.prefetch_inputs(selected, &candidates);
+        // Only files that open a module scope of these classes contribute;
+        // the scan stands for the others while they still open none.
         for path in &candidates {
-            let Some(file) = self.0.file(path) else { return Known::Unknown };
-            let Some(tree) = World::tree(&self, file) else { return Known::Unknown };
-            if !opening(file, tree) { continue }
+            let Some(file) = self.0.file_quiet(path) else { return Known::Unknown };
+            if !self.opens_scopes(file, classes, semantic) { continue }
+            World::depends_on_file(&self, file);
             let Some(names) = World::names(&self, file) else { return Known::Unknown };
             let shared_path = super::reads::dep_path(path);
             for (scope, info) in names.scopes.iter().enumerate() {
@@ -1095,6 +1084,20 @@ impl<'a> Files<'a> {
             }
         }
         Known::Yes((declarations, texts))
+    }
+
+    /// Whether `file` has a node opening a module scope of `classes`; one
+    /// whose condition cannot be decided counts.
+    fn opens_scopes(self, file: u32, classes: u64, semantic: &Semantic<'_>) -> bool {
+        let Some(tree) = World::tree(&self, file) else { return true };
+        let kinds = &self.0.ctx.grammar.names.kinds;
+        tree.order.iter().any(|&node| {
+            let Some(kind) = kinds.get(tree.node(node).matcher as usize) else { return false };
+            let at = Leaf { target: Target::Node(NodeRef { file, node }), frame: FrameId::ROOT };
+            kind.modules.items.iter()
+                .filter(|item| matches!(item.action, Action::Scope { classes: opened, .. } if opened & classes != 0))
+                .any(|item| item.when.is_none_or(|when| World::condition(&self, at, when, semantic) != Known::Yes(false)))
+        })
     }
 
     fn declaration_scope(self, declaration: &super::program::Declaration) -> Known<ScopeRef> {
@@ -1513,6 +1516,15 @@ impl Host for Files<'_> {
         let paths = discoveries.entry(request.clone()).or_insert_with(|| super::reads::Cached::compute(|| super::reads::requested(request))).get();
         paths.map_or(Known::Unknown, Known::Yes)
     }
+}
+
+/// Whether `world`'s linted file opens a module scope of `classes` (see
+/// [`Files::opens_scopes`]).
+pub(super) fn opens_scopes<'a>(world: &'a LintWorld<'a>, classes: u64) -> bool {
+    let files = Files(world);
+    let question = QueryContext::once();
+    let semantic = Semantic::new(&files, &world.ctx.grammar.names, &question);
+    files.opens_scopes(0, classes, &semantic)
 }
 
 /// `e`'s value on the context's node; unknown when the VM gives up.

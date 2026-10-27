@@ -24,7 +24,7 @@ use super::reads::{hash_bytes, Dep, Reads, Scan, ScanTest};
 
 pub const FILE_NAME: &str = ".dxcache";
 /// Bumped whenever the encoding changes.
-const MAGIC: &[u8; 4] = b"ZLC6";
+const MAGIC: &[u8; 4] = b"ZLC7";
 
 /// Deps, groups and scans, by index into the tables.
 #[derive(Default, Clone, PartialEq, Eq, Hash)]
@@ -513,14 +513,18 @@ impl Writer<'_> {
 
     fn scan(&mut self, s: &SavedScan) {
         self.var(u64::from(s.files));
-        let (tag, words): (u8, &[Box<str>]) = match &s.test {
-            ScanTest::Lacks(needles) => (0, needles),
-            ScanTest::Global { hints, .. } => (1, hints),
+        let words = match &s.test {
+            ScanTest::Ambient { hints, classes } => {
+                self.out.push(0);
+                self.var(*classes);
+                hints
+            }
+            ScanTest::Global { name, hints } => {
+                self.out.push(1);
+                self.str(name);
+                hints
+            }
         };
-        self.out.push(tag);
-        if let ScanTest::Global { name, .. } = &s.test {
-            self.str(name);
-        }
         self.var(words.len() as u64);
         for word in words {
             self.str(word);
@@ -666,13 +670,16 @@ impl<'a> Reader<'a> {
         let files = u32::try_from(self.var()?).ok()?;
         let only_deps = groups.get(files as usize)?;
         if !only_deps.groups.is_empty() || !only_deps.scans.is_empty() { return None }
-        let tag = self.u8()?;
-        let name = if tag == 1 { Some(self.str()?) } else { None };
-        let words: Box<[Box<str>]> = (0..self.var()?).map(|_| self.str().map(Box::from)).collect::<Option<_>>()?;
-        let test = match (tag, name) {
-            (0, None) => ScanTest::Lacks(words),
-            (1, Some(name)) => ScanTest::Global { name: name.into(), hints: words },
+        enum Head { Ambient(u64), Global(Box<str>) }
+        let head = match self.u8()? {
+            0 => Head::Ambient(self.var()?),
+            1 => Head::Global(self.str()?.into()),
             _ => return None,
+        };
+        let hints: Box<[Box<str>]> = (0..self.var()?).map(|_| self.str().map(Box::from)).collect::<Option<_>>()?;
+        let test = match head {
+            Head::Ambient(classes) => ScanTest::Ambient { hints, classes },
+            Head::Global(name) => ScanTest::Global { name, hints },
         };
         Some(SavedScan { files, test })
     }
