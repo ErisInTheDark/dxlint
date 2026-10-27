@@ -1991,6 +1991,27 @@ mod tests {
     }
 
     #[test]
+    fn stale_scans_judge_only_the_changed_files() {
+        let linter = linter("in paren fits marked");
+        let (declares, other) = (Path::new("/root/scan-declares.t"), Path::new("/root/scan-other.t"));
+        reads::set_buffer(declares, "()");
+        reads::set_buffer(other, "()");
+        let text = |path: &Path| reads::Dep::Text(reads::dep_path(path), reads::read_unrecorded(path).1);
+        let scan = reads::Scan {
+            files: std::sync::Arc::new(reads::Reads { deps: vec![text(declares), text(other)], ..Default::default() }),
+            test: reads::ScanTest::Global { name: "G".into(), hints: Box::new([]) },
+        };
+        let deps = reads::Reads { scans: vec![std::sync::Arc::new(scan)], ..Default::default() };
+        // `declares` now spells G (and cannot be shown not to declare it),
+        // but only `other` is reported changed.
+        reads::set_buffer(declares, "(G)");
+        reads::set_buffer(other, "( )");
+        assert!(!linter.is_stale(&linter.invalidate(&[other.to_owned()]), &deps));
+        assert!(linter.is_stale(&linter.invalidate(&[declares.to_owned()]), &deps));
+        for path in [declares, other] { reads::drop_buffer(path) }
+    }
+
+    #[test]
     fn quantified_trait_answers_survive_unrelated_unknown_alternatives_on_a_cold_ask() {
         let linter = linter(r#"
             in .t match incomplete /u/ {

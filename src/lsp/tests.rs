@@ -138,6 +138,26 @@ impl Client {
         }
     }
 
+    /// [`Client::diagnostics_for`] `file`, also returning every diagnostics
+    /// message for `watched` that arrived meanwhile.
+    fn diagnostics_watching(&mut self, file: &Path, watched: &Path) -> (Vec<Value>, Vec<Value>) {
+        let (u, w) = (uri(file), uri(watched));
+        let mut seen = Vec::new();
+        loop {
+            let msg = self.wait("publishDiagnostics", |m| m["method"] == "textDocument/publishDiagnostics");
+            let got = msg["params"]["uri"].as_str().unwrap_or("");
+            let diags = msg["params"]["diagnostics"].as_array().cloned().unwrap_or_default();
+            if same_uri(got, &w) { seen.push(Value::Array(diags.clone())) }
+            if same_uri(got, &u) { return (diags, seen) }
+        }
+    }
+
+    /// Writes `text` to `file` and tells the server the editor saved it.
+    fn save(&mut self, file: &Path, text: &str) {
+        std::fs::write(file, text).expect("write");
+        self.notify("textDocument/didSave", json!({ "textDocument": { "uri": uri(file) } }));
+    }
+
     fn request(&mut self, method: &str, params: Value) -> Value {
         self.next_id += 1;
         let id = self.next_id;
@@ -354,26 +374,43 @@ fn editing_an_export_relints_its_importers() {
     let dir = std::env::temp_dir().join("dxlint-lsp-tests").join("lsp-cross-file");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("tmp dir");
-    std::fs::write(dir.join(".dx"), "import .ts\nin ts_identifier rule typed info \"{text}: {if node always number then 'number' else if node always string then 'string' else 'unknown'}\" { when reference_kind == \"import\" }\n")
+    std::fs::write(dir.join(".dx"), "import .ts\nin ts_identifier rule typed info \"{text}: {if node always number then 'number' else if node always string then 'string' else if node always boolean then 'boolean' else 'unknown'}\" { when reference_kind == \"import\" }\n")
         .expect("config");
     let a = dir.join("a.ts");
-    let b = dir.join("b.ts");
+    let open = dir.join("b.ts");
+    let closed = dir.join("c.ts");
+    let importer = "import { x } from \"./a\";\nx;\n";
     std::fs::write(&a, "export const x: number = 1;\n").expect("write");
-    std::fs::write(&b, "import { x } from \"./a\";\nx;\n").expect("write");
+    std::fs::write(&open, importer).expect("write");
+    std::fs::write(&closed, importer).expect("write");
     let mut c = Client::start(&dir);
-    assert_eq!(c.diagnostics_for(&b)[0]["message"], "x: number");
+    assert_eq!(c.diagnostics_for_each(&[&open, &closed]).iter().map(|d| d[0]["message"].clone()).collect::<Vec<_>>(), ["x: number", "x: number"]);
 
-    // An unsaved edit to `a` reaches `b`, which is not even open.
+    // Unsaved edits to `a` reach the open importer as you type; the closed
+    // one waits for the save, and sees only the saved text.
+    c.notify("textDocument/didOpen", json!({ "textDocument": { "uri": uri(&open), "languageId": "typescript", "version": 1, "text": importer } }));
+    assert_eq!(c.diagnostics_for(&open)[0]["message"], "x: number");
     c.notify("textDocument/didOpen", json!({ "textDocument": { "uri": uri(&a), "languageId": "typescript", "version": 1, "text": "export const x: number = 1;\n" } }));
-    c.notify(
+    let edit = |c: &mut Client, version: i64, text: &str| c.notify(
         "textDocument/didChange",
-        json!({ "textDocument": { "uri": uri(&a), "version": 2 }, "contentChanges": [{ "text": "export const x: string = \"\";\n" }] }),
+        json!({ "textDocument": { "uri": uri(&a), "version": version }, "contentChanges": [{ "text": text }] }),
     );
-    assert_eq!(c.diagnostics_for(&b)[0]["message"], "x: string");
+    edit(&mut c, 2, "export const x: string = \"\";\n");
+    let (diags, mut early) = c.diagnostics_watching(&open, &closed);
+    assert_eq!(diags[0]["message"], "x: string");
+    edit(&mut c, 3, "export const x: boolean = true;\n");
+    let (diags, more) = c.diagnostics_watching(&open, &closed);
+    early.extend(more);
+    assert_eq!(diags[0]["message"], "x: boolean", "{early:?}");
+    assert!(early.is_empty(), "the closed importer relinted before the save: {early:?}");
+    c.save(&a, "export const x: boolean = true;\n");
+    assert_eq!(c.diagnostics_for(&closed)[0]["message"], "x: boolean");
 
     // Closing without saving goes back to what the disk says.
+    edit(&mut c, 4, "export const x: string = \"\";\n");
+    assert_eq!(c.diagnostics_for(&open)[0]["message"], "x: string");
     c.notify("textDocument/didClose", json!({ "textDocument": { "uri": uri(&a) } }));
-    assert_eq!(c.diagnostics_for(&b)[0]["message"], "x: number");
+    assert_eq!(c.diagnostics_for(&open)[0]["message"], "x: boolean");
     c.shutdown();
 }
 
@@ -393,16 +430,14 @@ fn editing_a_file_deep_in_an_import_chain_relints_its_far_importers() {
     let mut c = Client::start(&dir);
     assert_eq!(c.diagnostics_for(&a)[0]["message"], "x: number");
 
-    // An unsaved edit three imports away reaches `a`, which is not open.
+    // Saving an edit three imports away reaches `a`, which is not open.
     c.notify("textDocument/didOpen", json!({ "textDocument": { "uri": uri(&d), "languageId": "typescript", "version": 1, "text": "export declare const w: number;\n" } }));
     c.notify(
         "textDocument/didChange",
         json!({ "textDocument": { "uri": uri(&d), "version": 2 }, "contentChanges": [{ "text": "export declare const w: string;\n" }] }),
     );
+    c.save(&d, "export declare const w: string;\n");
     assert_eq!(c.diagnostics_for(&a)[0]["message"], "x: string");
-
-    c.notify("textDocument/didClose", json!({ "textDocument": { "uri": uri(&d) } }));
-    assert_eq!(c.diagnostics_for(&a)[0]["message"], "x: number");
     c.shutdown();
 }
 
@@ -426,13 +461,18 @@ fn a_file_starting_to_declare_a_global_relints_its_readers() {
 
     // `mention` only spelled G: its global lookup holds until it declares it.
     c.notify("textDocument/didOpen", json!({ "textDocument": { "uri": uri(&mention), "languageId": "typescript", "version": 1, "text": before } }));
+    let declares = format!("{before}declare global {{ const G: boolean }}\n");
     c.notify(
         "textDocument/didChange",
-        json!({ "textDocument": { "uri": uri(&mention), "version": 2 }, "contentChanges": [{ "text": format!("{before}declare global {{ const G: boolean }}\n") }] }),
+        json!({ "textDocument": { "uri": uri(&mention), "version": 2 }, "contentChanges": [{ "text": declares }] }),
     );
+    c.save(&mention, &declares);
     assert_eq!(c.diagnostics_for(&a)[0]["message"], "G: boolean");
 
+    // Changed on disk by something else: read again at once.
     c.notify("textDocument/didClose", json!({ "textDocument": { "uri": uri(&mention) } }));
+    std::fs::write(&mention, before).expect("write");
+    c.notify("workspace/didChangeWatchedFiles", json!({ "changes": [{ "uri": uri(&mention), "type": 2 }] }));
     assert_eq!(c.diagnostics_for(&a)[0]["message"], "G: unknown");
     c.shutdown();
 }

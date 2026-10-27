@@ -266,9 +266,57 @@ pub struct Linter {
 
 static NO_INDENTS: crate::expr::IndentPlan = crate::expr::IndentPlan::EMPTY;
 
-/// The files a [`Linter::invalidate`] forgot, for [`Linter::is_stale`].
+/// The files a [`Linter::invalidate`] forgot, for [`Linter::is_stale`],
+/// with what checking against them found so far: many lints share each
+/// shared answer's reads, and each scan's file list and test.
 pub struct Stale {
     changed: Vec<PathBuf>,
+    /// Per group of reads (kept, so its address stays its key): whether it
+    /// holds.
+    groups: RefCell<crate::fx_hash::FxHashMap<*const Reads, (std::sync::Arc<Reads>, bool)>>,
+    /// Per scanned file list (kept likewise): the indices of its changed
+    /// files.
+    touched: RefCell<crate::fx_hash::FxHashMap<*const Reads, (std::sync::Arc<Reads>, Box<[usize]>)>>,
+    verdicts: RefCell<crate::fx_hash::FxHashMap<(*const Reads, reads::ScanTest), bool>>,
+}
+
+impl Stale {
+    fn touches(&self, dep: &Dep) -> bool {
+        self.changed.iter().any(|path| dep.touches(path))
+    }
+
+    /// Whether everything `reads` read still holds, judging only the
+    /// changed files; `passes` answers a scan's test for one of them.
+    fn holds(&self, reads: &Reads, passes: &impl Fn(&Path, &reads::ScanTest) -> bool) -> bool {
+        reads.deps.iter().all(|dep| !self.touches(dep) || dep.holds())
+            && reads.scans.iter().all(|scan| self.scan_holds(scan, |path| passes(path, &scan.test)))
+            && reads.groups.iter().all(|group| {
+                let key = std::sync::Arc::as_ptr(group);
+                if let Some(&(_, holds)) = self.groups.borrow().get(&key) { return holds }
+                let holds = self.holds(group, passes);
+                self.groups.borrow_mut().insert(key, (group.clone(), holds));
+                holds
+            })
+    }
+
+    /// Whether `scan` holds, asking `passes` only about its changed files.
+    fn scan_holds(&self, scan: &reads::Scan, passes: impl Fn(&Path) -> bool) -> bool {
+        let files = std::sync::Arc::as_ptr(&scan.files);
+        let key = (files, scan.test.clone());
+        if let Some(&holds) = self.verdicts.borrow().get(&key) { return holds }
+        let touched = self.touched.borrow_mut().entry(files).or_insert_with(|| {
+            let touched = scan.files.deps.iter().enumerate()
+                .filter(|(_, dep)| self.touches(dep))
+                .map(|(i, _)| i).collect();
+            (scan.files.clone(), touched)
+        }).1.clone();
+        let holds = touched.iter().all(|&i| {
+            let dep = &scan.files.deps[i];
+            dep.holds() || passes(dep.path())
+        });
+        self.verdicts.borrow_mut().insert(key, holds);
+        holds
+    }
 }
 
 /// One read snapshot shared by files in a batch. Start another run after editing inputs.
@@ -519,17 +567,13 @@ impl Linter {
         self.units.lock().expect("unit cache").retain(|path, _| !changed.contains(path));
         self.discoveries.lock().expect("unit discoveries").retain(|request, _| !changed.iter().any(|path| path.starts_with(&request.root)));
         self.invalidation.fetch_add(1, std::sync::atomic::Ordering::Release);
-        Stale { changed: changed.to_vec() }
+        Stale { changed: changed.to_vec(), groups: Default::default(), touched: Default::default(), verdicts: Default::default() }
     }
 
+    /// Whether the `stale` files broke something `reads` read; only those
+    /// files are looked at.
     pub fn is_stale(&self, stale: &Stale, reads: &Reads) -> bool {
-        let touched = |dep: &Dep| stale.changed.iter().any(|path| dep.touches(path));
-        // Every scan of a program shares its file list: look through it once.
-        let mut files_touched = crate::fx_hash::FxHashMap::default();
-        !reads.holds(
-            &mut |dep| !touched(dep) || dep.holds(),
-            &mut |scan| !*files_touched.entry(std::sync::Arc::as_ptr(&scan.files)).or_insert_with(|| scan.files.any(&mut |dep| touched(dep))) || self.scan_holds(scan),
-        )
+        !stale.changed.is_empty() && !stale.holds(reads, &|path, test| self.passes(path, reads::read_unrecorded(path).0.as_deref(), test))
     }
 
     /// One parsed file's native facts, from front end `front`.

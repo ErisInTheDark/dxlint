@@ -76,6 +76,12 @@ impl Linter {
         Ok(ParsedFile { tree, front: plan.front, state })
     }
 
+    /// Drops the units kept between runs; later lints load what they reach.
+    /// For long-lived hosts, so memory follows the files still in use.
+    pub fn forget_units(&self) {
+        self.units.lock().expect("unit cache").clear();
+    }
+
     /// The parsed unit for `path`, its text read recorded. Inside a run, a
     /// unit is read and validated once; later lookups replay its text read
     /// without touching the disk.

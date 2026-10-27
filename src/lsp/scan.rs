@@ -5,11 +5,16 @@
 //! update each config's `.dxcache`.
 //!
 //! Every lint's reads are kept, so an edit re-lints just the files it
-//! affects ([`relint`]).
+//! affects ([`relint`]). Files the editor owns lint on their own worker
+//! ([`edit`]), so the request loop never waits for a lint.
+//!
+//! Each batch (a scan, a relint queue, a burst of editor lints) shares one
+//! [`LintRun`] per linter, like a CLI run: program-wide answers are checked
+//! once per batch, not once per file.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use ignore::{DirEntry, WalkBuilder, WalkState};
@@ -19,7 +24,7 @@ use super::projects::Linters;
 use super::transport::Outbox;
 use super::{convert, uri};
 use crate::engine::cache::Cache;
-use crate::engine::Linter;
+use crate::engine::{LintRun, Linter};
 use crate::engine::reads::Reads;
 
 /// State shared between the request loop and scans.
@@ -36,6 +41,27 @@ pub struct Shared {
     /// What each file's latest lint read, to find the files an edit affects.
     pub reads: Mutex<HashMap<PathBuf, Arc<Reads>>>,
     relint: Mutex<Relint>,
+    editing: Mutex<Editing>,
+    /// The server is exiting: the editor worker stops.
+    pub closing: AtomicBool,
+}
+
+/// A file the editor owns, to lint: an open buffer's text, or a gitignored
+/// tab read from disk (`text` and `version` are `None`).
+pub struct EditorLint {
+    pub path: PathBuf,
+    pub uri: String,
+    pub version: Option<i64>,
+    pub text: Option<String>,
+    pub linter: Arc<Linter>,
+}
+
+/// Editor files waiting for [`edit`], latest text each, and whether its
+/// worker runs.
+#[derive(Default)]
+struct Editing {
+    queue: Vec<EditorLint>,
+    running: bool,
 }
 
 /// Files waiting for [`relint`], the linters to use, and whether its
@@ -87,11 +113,38 @@ impl Shared {
         p.queue.pop_front()
     }
 
-    /// Lints `path` with `text`, keeping what the lint read.
-    pub fn lint(&self, linter: &Linter, path: &Path, text: &str) -> Vec<crate::engine::Diagnostic> {
-        let (diags, reads) = linter.lint_tracked(path, text);
+    /// Lints `path` with `text` in `run`, keeping what the lint read.
+    fn lint(&self, run: &LintRun<'_>, path: &Path, text: &str) -> Vec<crate::engine::Diagnostic> {
+        let (diags, reads) = run.lint_tracked(path, text);
         self.reads.lock().expect("lock").insert(path.to_path_buf(), Arc::new(reads));
         diags
+    }
+}
+
+/// One batch's [`LintRun`] per linter.
+struct Runs<'a>(Vec<(&'a Linter, LintRun<'a>)>);
+
+impl<'a> Runs<'a> {
+    fn new(linters: impl IntoIterator<Item = &'a Linter>) -> Self {
+        let mut runs: Vec<(&Linter, LintRun<'_>)> = Vec::new();
+        for linter in linters {
+            if !runs.iter().any(|(l, _)| std::ptr::eq(*l, linter)) {
+                runs.push((linter, linter.run()));
+            }
+        }
+        Runs(runs)
+    }
+
+    fn of(&self, linter: &Linter) -> Option<&LintRun<'a>> {
+        self.0.iter().find(|(l, _)| std::ptr::eq(*l, linter)).map(|(_, run)| run)
+    }
+
+    /// Ends the batch: the linters let go of the files it parsed.
+    fn finish(self) {
+        for (linter, run) in self.0 {
+            drop(run);
+            linter.forget_units();
+        }
     }
 }
 
@@ -111,28 +164,87 @@ pub fn relint(linters: Linters, files: Vec<PathBuf>, shared: Arc<Shared>, out: O
             return;
         }
     }
-    lint_thread(move || loop {
-        let (path, linters) = {
-            let mut relint = shared.relint.lock().expect("lock");
-            match relint.queue.pop_front() {
-                // A newer scan lints everything anyway.
-                Some(path) if shared.generation.load(Ordering::SeqCst) == generation => (path, relint.linters.clone()),
-                _ => {
-                    relint.queue.clear();
-                    relint.running = false;
-                    break;
+    lint_thread(move || {
+        let current = || shared.generation.load(Ordering::SeqCst) == generation;
+        // A config change that matters rescans, which ends this batch.
+        let linters = shared.relint.lock().expect("lock").linters.clone();
+        let runs = Runs::new(linters.all().map(|l| &**l));
+        loop {
+            let path = {
+                let mut relint = shared.relint.lock().expect("lock");
+                match relint.queue.pop_front() {
+                    // A newer scan lints everything anyway.
+                    Some(path) if current() => path,
+                    _ => {
+                        relint.queue.clear();
+                        relint.running = false;
+                        break;
+                    }
                 }
+            };
+            let Some(linter) = linters.for_path(&path).filter(|l| l.wants(&path)) else { continue };
+            let Some(run) = runs.of(linter) else { continue };
+            publish_disk(linter, run, None, &shared, &out, &path, current);
+        }
+        runs.finish();
+    });
+}
+
+/// Lints a file the editor owns on the editor worker, replacing a queued
+/// lint of the same file. Only the latest text's result is published.
+pub fn edit(shared: &Arc<Shared>, out: &Outbox, lint: EditorLint) {
+    {
+        let mut editing = shared.editing.lock().expect("lock");
+        match editing.queue.iter_mut().find(|queued| queued.path == lint.path) {
+            Some(queued) => *queued = lint,
+            None => editing.queue.push(lint),
+        }
+        if std::mem::replace(&mut editing.running, true) {
+            return;
+        }
+    }
+    let (shared, out) = (shared.clone(), out.clone());
+    lint_thread(move || loop {
+        let batch = {
+            let mut editing = shared.editing.lock().expect("lock");
+            if editing.queue.is_empty() || shared.closing.load(Ordering::SeqCst) {
+                editing.queue.clear();
+                editing.running = false;
+                return;
             }
+            std::mem::take(&mut editing.queue)
         };
-        if let Some(linter) = linters.for_path(&path).filter(|l| l.wants(&path)) {
-            publish_disk(linter, None, &shared, &out, &path, || shared.generation.load(Ordering::SeqCst) == generation);
+        let runs = Runs::new(batch.iter().map(|lint| &*lint.linter));
+        for lint in &batch {
+            if shared.closing.load(Ordering::SeqCst) {
+                break;
+            }
+            let Some(run) = runs.of(&lint.linter) else { continue };
+            let disk;
+            let text = match &lint.text {
+                Some(text) => Some(text.as_str()),
+                None if lint.linter.wants(&lint.path) => {
+                    disk = std::fs::read_to_string(&lint.path).ok();
+                    disk.as_deref()
+                }
+                None => None,
+            };
+            let diags = match text {
+                Some(text) => convert::diagnostics(text, &shared.lint(run, &lint.path, text), &lint.linter),
+                None => json!([]),
+            };
+            // A newer text is queued, or the editor let go of the file.
+            let newer = shared.editing.lock().expect("lock").queue.iter().any(|queued| queued.path == lint.path);
+            if !newer && shared.editor.lock().expect("lock").contains(&lint.path) {
+                shared.publish(&out, &lint.uri, lint.version, diags);
+            }
         }
     });
 }
 
 /// Lints a file on disk (from `cache` when it can) and publishes the
 /// result, unless the editor owns the file. Returns the problem count.
-fn publish_disk(linter: &Linter, cache: Option<&Cache>, shared: &Shared, out: &Outbox, path: &Path, current: impl Fn() -> bool) -> Option<usize> {
+fn publish_disk(linter: &Linter, run: &LintRun<'_>, cache: Option<&Cache>, shared: &Shared, out: &Outbox, path: &Path, current: impl Fn() -> bool) -> Option<usize> {
     let open = || shared.editor.lock().expect("lock").contains(path);
     if open() {
         return None;
@@ -146,7 +258,7 @@ fn publish_disk(linter: &Linter, cache: Option<&Cache>, shared: &Shared, out: &O
             diags
         }
         None => {
-            let (diags, reads) = linter.lint_tracked(path, &text);
+            let (diags, reads) = run.lint_tracked(path, &text);
             let reads = Arc::new(reads);
             if let Some(cache) = cache {
                 cache.store(&rel, &text, &diags, reads.clone());
@@ -290,12 +402,14 @@ impl Scan {
         }
         // With no configs there is nothing to lint; the stale sweep below
         // still clears what earlier configs reported.
+        let runs = Runs::new(self.linters.all().map(|l| &**l));
         if !self.linters.is_empty() {
-            self.drain(&[]);
+            self.drain(&[], &runs);
             let files = self.collect(roots);
             self.total.store(files.len(), Ordering::Relaxed);
-            self.drain(&files);
+            self.drain(&files, &runs);
         }
+        runs.finish();
         let finished = self.current();
         if finished {
             self.sweep();
@@ -338,10 +452,10 @@ impl Scan {
         found.into_iter().map(|(_, path)| path).collect()
     }
 
-    /// Lints priority files, then `files` in order, on all but one core so
-    /// the request loop stays responsive.
-    fn drain(&self, files: &[PathBuf]) {
-        let workers = std::thread::available_parallelism().map_or(1, |n| n.get().saturating_sub(1).max(1));
+    /// Lints priority files, then `files` in order, on half the cores so the
+    /// editor and the rest of the machine stay responsive.
+    fn drain(&self, files: &[PathBuf], runs: &Runs<'_>) {
+        let workers = std::thread::available_parallelism().map_or(1, |n| (n.get() / 2).max(1));
         let next = AtomicUsize::new(0);
         let take = || self.shared.next_priority(self.generation).or_else(|| files.get(next.fetch_add(1, Ordering::Relaxed)).cloned());
         std::thread::scope(|s| {
@@ -350,7 +464,7 @@ impl Scan {
                     let _pool = crate::alloc::own_pool();
                     while self.current() {
                         let Some(path) = take() else { break };
-                        self.lint(&path);
+                        self.lint(&path, runs);
                         crate::alloc::trim();
                     }
                 }).expect("lint worker");
@@ -358,13 +472,14 @@ impl Scan {
         });
     }
 
-    fn lint(&self, path: &Path) {
+    fn lint(&self, path: &Path, runs: &Runs<'_>) {
         if !self.done.lock().expect("lock").insert(path.to_path_buf()) {
             return;
         }
         let Some(linter) = self.linters.for_path(path).filter(|l| l.wants(path)) else { return };
+        let Some(run) = runs.of(linter) else { return };
         let cache = self.caches.get(&linter.root);
-        let Some(problems) = publish_disk(linter, cache, &self.shared, &self.out, path, || self.current()) else { return };
+        let Some(problems) = publish_disk(linter, run, cache, &self.shared, &self.out, path, || self.current()) else { return };
         self.problems.fetch_add(problems, Ordering::Relaxed);
         self.touched.lock().expect("lock").insert(uri::from_path(path));
         let n = self.files.fetch_add(1, Ordering::Relaxed) + 1;

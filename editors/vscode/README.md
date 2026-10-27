@@ -6,7 +6,7 @@ Runs [dxlint](https://github.com/ErisInTheDark/dxlint) as a language server, for
 
 - diagnostics for open files on every edit, from the unsaved buffer
 - the rest of the workspace linted in the background, streamed file by file, reusing `.dxcache`
-- an edit re-lints the other files it affects (an importer of a changed export), open or not
+- an edit re-lints the other files it affects (an importer of a changed export): open ones as you type, the rest when you save
 - quick fixes, "Fix all dxlint problems", and Format Document applying every fix
 - every diagnostic's rule code links to where the rule is defined
 

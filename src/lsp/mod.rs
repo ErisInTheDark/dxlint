@@ -1,7 +1,8 @@
-//! Language server. Open documents are linted on every change; the rest of
-//! the workspace is scanned in the background and streamed file by file.
-//! Each file uses its nearest `.dx` config. `.dx` edits reload configs
-//! live, with errors shown in place.
+//! Language server. Open documents are linted on every change, on their own
+//! worker; the rest of the workspace is scanned in the background and
+//! streamed file by file. Unsaved edits reach open files at once and the
+//! rest when saved. Each file uses its nearest `.dx` config. `.dx` edits
+//! reload configs live, with errors shown in place.
 
 mod config_docs;
 mod convert;
@@ -79,9 +80,12 @@ struct Server {
     ignored_tabs: HashSet<PathBuf>,
     /// Ignored tabs whose diagnostics are out of date.
     dirty_tabs: HashSet<PathBuf>,
-    /// Source files edited, created or deleted since the last flush: what
-    /// other files learned from them is out of date.
+    /// Source files saved, created, deleted or closed since the last flush:
+    /// what any file learned from them is out of date.
     changed: HashSet<PathBuf>,
+    /// Buffers opened or edited since the last flush: what open files
+    /// learned from them is out of date; the rest wait for a save.
+    typed: HashSet<PathBuf>,
 }
 
 pub fn run<R: Read + Send + 'static, W: Write + Send + 'static>(input: R, output: W, stderr: &mut dyn Write) -> u8 {
@@ -104,6 +108,7 @@ pub fn run<R: Read + Send + 'static, W: Write + Send + 'static>(input: R, output
         ignored_tabs: HashSet::new(),
         dirty_tabs: HashSet::new(),
         changed: HashSet::new(),
+        typed: HashSet::new(),
     };
     // Reading happens on its own thread so the loop below can see how much
     // input is already waiting, and lint once per burst of edits instead of
@@ -138,8 +143,9 @@ pub fn run<R: Read + Send + 'static, W: Write + Send + 'static>(input: R, output
         }
         server.flush();
     };
-    // Stop background scans and let the writer drain.
+    // Stop background work and let the writer drain.
     server.shared.generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    server.shared.closing.store(true, std::sync::atomic::Ordering::SeqCst);
     drop(server);
     drop(out);
     let _ = writer.join();
@@ -155,7 +161,7 @@ impl Server {
             // Responses to our own requests (progress tokens) need nothing.
             Some(_) if method.is_empty() => {}
             Some(id) => {
-                // Requests see the latest config and diagnostics.
+                // Requests see the latest config; lints are only queued.
                 self.flush();
                 match method {
                     "initialize" => {
@@ -181,6 +187,7 @@ impl Server {
                 "initialized" | "workspace/didChangeConfiguration" => self.rediscover = true,
                 "textDocument/didOpen" => self.did_open(params),
                 "textDocument/didChange" => self.did_change(params),
+                "textDocument/didSave" => self.did_save(params),
                 "textDocument/didClose" => self.did_close(params),
                 "workspace/didChangeWatchedFiles" => self.watched_files(params),
                 "dxlint/focus" => self.focus(params),
@@ -191,8 +198,9 @@ impl Server {
     }
 
     /// Does the deferred work of a burst of messages: at most one reload per
-    /// config, one lint per changed document (visible ones first), and only
-    /// then a rescan, so the scan never competes with what the user sees.
+    /// config, one queued lint per changed document (visible ones first),
+    /// and only then a rescan, so the scan never competes with what the user
+    /// sees.
     fn flush(&mut self) {
         let rescan = self.reload_configs();
         self.relint_dependents();
@@ -212,20 +220,35 @@ impl Server {
 
     /// Makes every linter forget what the changed files said, and relints
     /// the files whose last lint read something that changed: open ones
-    /// with the next flush, the rest in the background.
+    /// with the next flush, the rest in the background, which unsaved edits
+    /// do not reach.
     fn relint_dependents(&mut self) {
-        if self.changed.is_empty() {
+        if self.changed.is_empty() && self.typed.is_empty() {
             return;
         }
         let changed: Vec<PathBuf> = std::mem::take(&mut self.changed).into_iter().collect();
+        let typed: Vec<PathBuf> = std::mem::take(&mut self.typed).into_iter().collect();
         let linters = self.projects.linters();
-        let stale: Vec<(&Arc<Linter>, Stale)> = linters.all().map(|l| (l, l.invalidate(&changed))).collect();
-        let reads: Vec<(PathBuf, Arc<Reads>)> = self.shared.reads.lock().expect("lock").iter().map(|(p, r)| (p.clone(), r.clone())).collect();
+        // Per linter: what changed for everyone, and what only open files see.
+        let stale: Vec<(&Arc<Linter>, Stale, Stale)> = linters.all().map(|l| (l, l.invalidate(&changed), l.invalidate(&typed))).collect();
+        let reads: Vec<(PathBuf, Arc<Reads>)> = {
+            let reads = self.shared.reads.lock().expect("lock");
+            // Typing alone concerns only the files the editor owns.
+            if changed.is_empty() {
+                self.docs.keys().chain(&self.ignored_tabs).filter_map(|p| Some((p.clone(), reads.get(p)?.clone()))).collect()
+            } else {
+                reads.iter().map(|(p, r)| (p.clone(), r.clone())).collect()
+            }
+        };
         let mut background = Vec::new();
         for (path, reads) in reads {
             let Some(linter) = linters.for_path(&path) else { continue };
-            let Some((_, stale)) = stale.iter().find(|(l, _)| Arc::ptr_eq(l, linter)) else { continue };
-            if changed.contains(&path) || !linter.is_stale(stale, &reads) {
+            let Some((_, saved, unsaved)) = stale.iter().find(|(l, ..)| Arc::ptr_eq(l, linter)) else { continue };
+            if changed.contains(&path) || typed.contains(&path) {
+                continue;
+            }
+            let editor = self.docs.contains_key(&path) || self.ignored_tabs.contains(&path);
+            if !linter.is_stale(saved, &reads) && !(editor && linter.is_stale(unsaved, &reads)) {
                 continue;
             }
             if self.docs.contains_key(&path) {
@@ -241,13 +264,22 @@ impl Server {
         }
     }
 
-    /// A source file's text changed (buffer or disk), or it came or went.
+    /// A source file's text changed on disk, it came or went, or its buffer
+    /// was closed or saved: every file reading it is out of date.
     fn source_changed(&mut self, path: &Path) {
         match self.docs.get(path) {
             Some(doc) => reads::set_buffer(path, &doc.text),
             None => reads::drop_buffer(path),
         }
         self.changed.insert(path.to_path_buf());
+    }
+
+    /// An open buffer's text changed: open files reading it are out of date.
+    fn buffer_changed(&mut self, path: &Path) {
+        if let Some(doc) = self.docs.get(path) {
+            reads::set_buffer(path, &doc.text);
+        }
+        self.typed.insert(path.to_path_buf());
     }
 
     /// The config for a file the user has in the editor (buffer or tab): its
@@ -357,7 +389,7 @@ impl Server {
         self.inspect_hover = params["initializationOptions"]["inspectHover"].as_bool().unwrap_or(false);
         json!({
             "capabilities": {
-                "textDocumentSync": { "openClose": true, "change": 2 },
+                "textDocumentSync": { "openClose": true, "change": 2, "save": { "includeText": false } },
                 "codeActionProvider": { "codeActionKinds": ["quickfix", "source.fixAll.dx"] },
                 "documentFormattingProvider": true,
                 "hoverProvider": true,
@@ -436,39 +468,37 @@ impl Server {
         self.stale.extend(self.projects.owners_of(path));
     }
 
+    /// Queues an open buffer's lint on the editor worker.
     fn publish_doc(&self, path: &Path) {
         let Some(doc) = self.docs.get(path) else { return };
         if self.projects.has_errors(&doc.uri) {
             return;
         }
-        let diags = match self.projects.linter_for(path).filter(|_| doc.lint) {
-            Some(l) => convert::diagnostics(&doc.text, &self.shared.lint(l, path, &doc.text), l),
-            None => json!([]),
-        };
-        self.shared.publish(&self.out, &doc.uri, Some(doc.version), diags);
+        match self.projects.linter_for(path).filter(|_| doc.lint) {
+            Some(linter) => {
+                let lint = scan::EditorLint { path: path.to_path_buf(), uri: doc.uri.clone(), version: Some(doc.version), text: Some(doc.text.clone()), linter: linter.clone() };
+                scan::edit(&self.shared, &self.out, lint);
+            }
+            None => self.shared.publish(&self.out, &doc.uri, Some(doc.version), json!([])),
+        }
     }
 
-    /// Lints a gitignored tab from disk, unless it is open as a buffer.
+    /// Queues a gitignored tab's lint from disk, unless it is open as a
+    /// buffer.
     fn publish_ignored_tab(&self, path: &Path) {
         if self.docs.contains_key(path) || !self.ignored_tabs.contains(path) {
             return;
         }
-        self.publish_from_disk(path, &uri::from_path(path));
-    }
-
-    fn publish_from_disk(&self, path: &Path, u: &str) {
-        let diags = match self.projects.linter_for(path) {
-            Some(l) if l.wants(path) => match std::fs::read_to_string(path) {
-                Ok(text) => convert::diagnostics(&text, &self.shared.lint(l, path, &text), l),
-                Err(_) => json!([]),
-            },
-            _ => json!([]),
-        };
-        self.shared.publish(&self.out, u, None, diags);
+        let u = uri::from_path(path);
+        match self.projects.linter_for(path) {
+            Some(linter) => scan::edit(&self.shared, &self.out, scan::EditorLint { path: path.to_path_buf(), uri: u, version: None, text: None, linter: linter.clone() }),
+            None => self.shared.publish(&self.out, &u, None, json!([])),
+        }
     }
 
     /// A file the user does not have open changed on disk, or was just
-    /// closed: relint it like a scan would. Scans never lint gitignored files.
+    /// closed: relint it like a scan would, in the background. Scans never
+    /// lint gitignored files.
     fn publish_disk(&self, path: &Path, u: &str) {
         if self.ignored_tabs.contains(path) {
             self.publish_ignored_tab(path);
@@ -476,7 +506,7 @@ impl Server {
             && self.projects.linter_for(path).is_some_and(|l| l.wants(path))
             && scan::walk_reaches(&self.roots, path)
         {
-            self.publish_from_disk(path, u);
+            scan::relint(self.projects.linters(), vec![path.to_path_buf()], self.shared.clone(), self.out.clone());
         } else {
             self.shared.publish(&self.out, u, None, json!([]));
         }
@@ -503,7 +533,7 @@ impl Server {
         if let Some(config) = config {
             self.want_config(config);
         }
-        self.source_changed(&path);
+        self.buffer_changed(&path);
         self.dirty.insert(path);
     }
 
@@ -528,8 +558,16 @@ impl Server {
         if self.projects.is_config(&path) {
             self.config_touched(&path);
         } else {
-            self.source_changed(&path);
+            self.buffer_changed(&path);
             self.dirty.insert(path);
+        }
+    }
+
+    /// What was typed is on disk now: every file reading it catches up.
+    fn did_save(&mut self, params: &Value) {
+        let Some((path, _)) = Self::doc_path(params) else { return };
+        if self.docs.contains_key(&path) && !self.projects.is_config(&path) {
+            self.source_changed(&path);
         }
     }
 
