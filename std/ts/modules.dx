@@ -37,7 +37,17 @@ import .ts/comments
     star_excludes ["default", "="]
     search order
     globals {
-      libraries "{{package_dir}}/typescript/lib/lib.{{name:lower}}.d.ts"
+      # TypeScript 7 ships them in its platform package instead.
+      libraries [
+        "{{package_dir}}/typescript/lib/lib.{{name:lower}}.d.ts",
+        "{{package_dir}}/@typescript/typescript-win32-x64/lib/lib.{{name:lower}}.d.ts",
+        "{{package_dir}}/@typescript/typescript-win32-arm64/lib/lib.{{name:lower}}.d.ts",
+        "{{package_dir}}/@typescript/typescript-linux-x64/lib/lib.{{name:lower}}.d.ts",
+        "{{package_dir}}/@typescript/typescript-linux-arm64/lib/lib.{{name:lower}}.d.ts",
+        "{{package_dir}}/@typescript/typescript-linux-arm/lib/lib.{{name:lower}}.d.ts",
+        "{{package_dir}}/@typescript/typescript-darwin-x64/lib/lib.{{name:lower}}.d.ts",
+        "{{package_dir}}/@typescript/typescript-darwin-arm64/lib/lib.{{name:lower}}.d.ts",
+      ]
       library_option "lib"
       default_libraries ["es2023", "dom"]
       types_option "types"

@@ -83,17 +83,19 @@ impl Inputs<'_> {
             let mut found = None;
             'ancestors: for ancestor in directory.ancestors() {
                 for package in &settings.packages.directories {
-                    spend(self.question)?;
                     let package_dir = ancestor.join(&**package);
-                    let path = clean(Path::new(&expand(&settings.globals.libraries, &[("package_dir", &package_dir.to_string_lossy()), ("name", &name)])?));
-                    let request = DiscoveryRequest {
-                        root: path.parent().ok_or(())?.to_path_buf(),
-                        include: vec![path.file_name().and_then(|name| name.to_str()).ok_or(())?.into()],
-                        exclude: Vec::new(), extensions: Vec::new(),
-                    };
-                    if self.resolver.host.discover(&request, self.question).known().ok_or(())?.contains(&path) {
-                        found = Some(path);
-                        break 'ancestors;
+                    for template in &settings.globals.libraries {
+                        spend(self.question)?;
+                        let path = clean(Path::new(&expand(template, &[("package_dir", &package_dir.to_string_lossy()), ("name", &name)])?));
+                        let request = DiscoveryRequest {
+                            root: path.parent().ok_or(())?.to_path_buf(),
+                            include: vec![path.file_name().and_then(|name| name.to_str()).ok_or(())?.into()],
+                            exclude: Vec::new(), extensions: Vec::new(),
+                        };
+                        if self.resolver.host.discover(&request, self.question).known().ok_or(())?.contains(&path) {
+                            found = Some(path);
+                            break 'ancestors;
+                        }
                     }
                 }
             }
@@ -237,7 +239,8 @@ mod tests {
             },
             packages: Packages { directories: vec!["node_modules".into()], ..Packages::default() },
             globals: Globals {
-                libraries: "{package_dir}/typescript/lib/lib.{name}.d.ts".into(), library_option: "lib".into(),
+                libraries: vec!["{package_dir}/typescript/lib/lib.{name}.d.ts".into(), "{package_dir}/@typescript/typescript-linux-x64/lib/lib.{name}.d.ts".into()],
+                library_option: "lib".into(),
                 default_libraries: vec!["base".into()], types_option: "types".into(), type_roots_option: "typeRoots".into(),
                 references: true, ..Globals::default()
             },
@@ -283,7 +286,7 @@ mod tests {
     fn library_membership_comes_from_discovery_and_missing_libraries_remain_unknown() {
         let mut settings = settings();
         settings.globals.default_libraries = vec!["BASE".into()];
-        settings.globals.libraries = "{package_dir}/typescript/lib/lib.{name:lower}.d.ts".into();
+        settings.globals.libraries = vec!["{package_dir}/typescript/lib/lib.{name:lower}.d.ts".into()];
         let path: PathBuf = "/project/node_modules/typescript/lib/lib.base.d.ts".into();
         let request = DiscoveryRequest {
             root: path.parent().unwrap().into(), include: vec!["lib.base.d.ts".into()],
@@ -296,6 +299,19 @@ mod tests {
         assert_eq!(program_inputs(&settings, &files, &QueryContext::default()), Known::Yes(vec![path]));
         files.discovered.insert(request, Vec::new());
         assert_eq!(program_inputs(&settings, &files, &QueryContext::default()), Known::Unknown);
+    }
+
+    #[test]
+    fn default_libraries_are_found_in_any_listed_location() {
+        let library: PathBuf = "/project/node_modules/@typescript/typescript-linux-x64/lib/lib.base.d.ts".into();
+        let files = Files {
+            text: BTreeMap::from([
+                ("/project/tsconfig.json".into(), r#"{"files":[],"compilerOptions":{"types":[]}}"#.into()),
+                (library.clone(), "".into()),
+            ]),
+            discovered: BTreeMap::new(),
+        };
+        assert_eq!(program_inputs(&settings(), &files, &QueryContext::default()), Known::Yes(vec![library]));
     }
 
     #[test]

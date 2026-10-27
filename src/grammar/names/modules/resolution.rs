@@ -83,7 +83,10 @@ pub struct Packages {
 
 #[derive(Clone, Debug, Default)]
 pub struct Globals {
-    pub libraries: Box<str>,
+    /// Where a default library file lies, first found per package directory
+    /// (one TypeScript release ships them in `typescript`, the next in a
+    /// platform package).
+    pub libraries: Vec<Box<str>>,
     pub library_option: Box<str>,
     pub default_libraries: Vec<Box<str>>,
     pub types_option: Box<str>,
@@ -356,12 +359,17 @@ impl Settings {
         Origin::Project
     }
 
-    /// Whether `path` fits the `libraries` template: `{package_dir}` is any
-    /// prefix ending in a package directory, other placeholders one segment.
+    /// Whether `path` fits a `libraries` template.
     fn is_library(&self, path: &str) -> bool {
+        self.globals.libraries.iter().any(|template| self.fits_library(template, path))
+    }
+
+    /// Whether `path` fits `template`: `{package_dir}` is any prefix ending
+    /// in a package directory, other placeholders one segment.
+    fn fits_library(&self, template: &str, path: &str) -> bool {
         let mut reached = vec![false; path.len() + 1];
         reached[0] = true;
-        let mut rest = &*self.globals.libraries;
+        let mut rest = template;
         if rest.is_empty() { return false }
         while !rest.is_empty() {
             let piece = match rest.find('{') {
@@ -509,9 +517,10 @@ mod tests {
     #[test]
     fn origins_tell_libraries_from_packages_and_project_files() {
         let mut settings = settings();
-        settings.globals.libraries = "{package_dir}/typescript/lib/lib.{name:lower}.d.ts".into();
+        settings.globals.libraries = vec!["{package_dir}/typescript/lib/lib.{name:lower}.d.ts".into(), "{package_dir}/@typescript/typescript-linux-x64/lib/lib.{name:lower}.d.ts".into()];
         let origin = |path: &str| settings.origin(Path::new(path));
         assert_eq!(origin("/app/node_modules/typescript/lib/lib.es2015.promise.d.ts"), Origin::Library);
+        assert_eq!(origin("/app/node_modules/@typescript/typescript-linux-x64/lib/lib.dom.d.ts"), Origin::Library);
         assert_eq!(origin("/app/node_modules/typescript/lib/typescript.d.ts"), Origin::Package("typescript".into()));
         assert_eq!(origin("/app/node_modules/.pnpm/x@1/node_modules/@types/node/globals.d.ts"), Origin::Package("@types/node".into()));
         assert_eq!(origin("/app/lib/lib.dom.d.ts"), Origin::Project);

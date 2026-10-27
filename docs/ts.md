@@ -1,6 +1,6 @@
 # TypeScript and JavaScript
 
-`import .ts` loads dxlint's JavaScript and TypeScript library, including JSX/TSX syntax and rules. dxlint parses JS/TS itself and reads declared types using tsconfig, imported files, `@types` and `node_modules/typescript/lib`, without running TypeScript. Where a type cannot be told, rules stay quiet.
+`import .ts` loads dxlint's JavaScript and TypeScript library, including JSX/TSX syntax and rules. dxlint parses JS/TS itself and reads declared types using tsconfig, imported files, `@types` and TypeScript's default libraries (`node_modules/typescript/lib`, or TypeScript 7's `node_modules/@typescript/typescript-<platform>/lib`), without running TypeScript. Where a type cannot be told, rules stay quiet.
 
 See [everyday use](basic.md) to run it, or the [advanced guide](advanced.md) to write rules.
 
