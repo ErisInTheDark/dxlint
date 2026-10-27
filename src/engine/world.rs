@@ -39,7 +39,7 @@ type ModuleAnswers = crate::fx_hash::FxHashMap<Box<str>, ModuleAnswer>;
 #[derive(Default)]
 struct ProgramMemo<'a> {
     selected: RefCell<Selection<'a>>,
-    inputs: RefCell<crate::fx_hash::FxHashMap<*const Settings, super::reads::Cached<Arc<Vec<PathBuf>>>>>,
+    inputs: RefCell<crate::fx_hash::FxHashMap<*const Settings, super::reads::Cached<Option<Arc<Vec<PathBuf>>>>>>,
     roots: RefCell<crate::fx_hash::FxHashMap<(*const Settings, Box<str>), super::reads::Cached<Known<Vec<ScopeRef>>>>>,
     catalogs: RefCell<crate::fx_hash::FxHashMap<(*const Settings, u64), super::reads::Cached<Arc<super::program::Catalog>>>>,
     modules: RefCell<crate::fx_hash::FxHashMap<(u32, *const Settings), ModuleAnswers>>,
@@ -499,7 +499,7 @@ impl<'a> Files<'a> {
 
     fn input_paths(self, selected: &Settings) -> Known<Arc<Vec<PathBuf>>> {
         let key = selected as *const Settings;
-        if let Some(cached) = self.0.program.inputs.borrow().get(&key) { return Known::Yes(cached.get()) }
+        if let Some(cached) = self.0.program.inputs.borrow().get(&key) { return cached.get().map_or(Known::Unknown, Known::Yes) }
         let cached = super::reads::Cached::compute(|| {
             let Known::Yes(anchor) = program_anchor(selected, &self, &QueryContext::once()) else { return Known::Unknown };
             let context = super::program::Context { anchor, settings: selected as *const Settings as usize };
@@ -519,9 +519,8 @@ impl<'a> Files<'a> {
             }
         });
         let answer = cached.get();
-        if let Known::Yes(paths) = &answer {
-            self.0.program.inputs.borrow_mut().insert(key, super::reads::Cached { value: paths.clone(), reads: cached.reads });
-        }
+        // Kept unknown too (see `program::Inputs`).
+        self.0.program.inputs.borrow_mut().insert(key, super::reads::Cached { value: answer.clone().known(), reads: cached.reads });
         answer
     }
 

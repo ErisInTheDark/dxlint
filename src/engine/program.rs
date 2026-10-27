@@ -194,9 +194,21 @@ impl<K: Eq + Hash, V> Drop for Build<'_, K, V> {
     }
 }
 
+/// A program's input list; `None` when it cannot be known (a default
+/// library missing, say). Unknown is kept like an answer: every lookup
+/// asking again would redo the whole collection, per file and per name.
+type Inputs = Option<Arc<Vec<PathBuf>>>;
+
+fn inputs(answer: Known<Inputs>) -> Known<Arc<Vec<PathBuf>>> {
+    match answer {
+        Known::Yes(Some(paths)) => Known::Yes(paths),
+        _ => Known::Unknown,
+    }
+}
+
 #[derive(Default)]
 pub(super) struct Programs {
-    paths: Memo<Context, Arc<Vec<PathBuf>>>,
+    paths: Memo<Context, Inputs>,
     /// Input lists by content: files in different directories of one
     /// program get the same list, and its address is the program's identity
     /// for run-shared answers ([`super::world`]'s `program_identity`).
@@ -207,10 +219,7 @@ pub(super) struct Programs {
 impl Programs {
     /// `holds`: whether an answer's reads still hold.
     pub fn paths(&self, context: Context, holds: impl Fn(&Reads) -> bool, build: impl FnOnce() -> Known<Vec<PathBuf>>) -> Known<Arc<Vec<PathBuf>>> {
-        self.paths.get(context, None, |answer| holds(&answer.reads), || match build() {
-            Known::Yes(paths) => Known::Yes(self.intern(paths)),
-            Known::Unknown => Known::Unknown,
-        })
+        inputs(self.paths.get(context, None, |answer| holds(&answer.reads), || Known::Yes(build().known().map(|paths| self.intern(paths)))))
     }
 
     fn intern(&self, paths: Vec<PathBuf>) -> Arc<Vec<PathBuf>> {
@@ -248,7 +257,7 @@ fn once<K: Eq + Hash, V: Clone>(slots: &Slots<K, V>, key: K, compute: impl FnOnc
 
 #[derive(Default)]
 pub(super) struct Snapshot {
-    paths: Memo<(u64, Context), Arc<Vec<PathBuf>>>,
+    paths: Memo<(u64, Context), Inputs>,
     catalogs: Memo<(u64, CatalogKey), Arc<Catalog>>,
     // Read-mostly maps every lint thread consults: read locks on hits.
     units: RwLock<FxHashMap<PathBuf, (u64, Arc<UnitSlot>)>>,
@@ -587,7 +596,7 @@ impl Snapshot {
     }
 
     pub fn paths(&self, revision: u64, context: Context, build: impl FnOnce() -> Known<Arc<Vec<PathBuf>>>) -> Known<Arc<Vec<PathBuf>>> {
-        self.paths.get((revision, context), None, |_| true, build)
+        inputs(self.paths.get((revision, context), None, |_| true, || Known::Yes(build().known())))
     }
 
     /// `linted`: the linted file's path and text hash when the catalog lists
@@ -730,6 +739,34 @@ mod tests {
         assert!(load(&Snapshot::default(), 1).known().unwrap().ambient("three", 1).is_some());
         assert_eq!(Profile::get(&profile.program_catalogue_builds), 3);
         for path in [main, library] { reads::drop_buffer(path); }
+    }
+
+    #[test]
+    fn unknown_program_inputs_are_collected_once_until_their_reads_change() {
+        let config = Path::new("/program-inputs/tsconfig.json");
+        reads::set_buffer(config, "{}");
+        let programs = Programs::default();
+        let context = Context { anchor: config.to_path_buf(), settings: 0 };
+        let (builds, validations) = (Cell::new(0), Cell::new(0));
+        let ask = |snapshot: &Snapshot| snapshot.paths(0, context.clone(), || {
+            programs.paths(context.clone(), |reads| {
+                validations.set(validations.get() + 1);
+                !reads.any(&mut |dep| !dep.holds())
+            }, || {
+                builds.set(builds.get() + 1);
+                reads::read(config);
+                Known::Unknown
+            })
+        });
+        let run = Snapshot::default();
+        for _ in 0..20 { assert_eq!(ask(&run), Known::Unknown) }
+        assert_eq!((builds.get(), validations.get()), (1, 0), "one run collects an unknown input list once");
+        assert_eq!(ask(&Snapshot::default()), Known::Unknown);
+        assert_eq!((builds.get(), validations.get()), (1, 1), "a new run keeps it while its reads hold");
+        reads::set_buffer(config, "{\"files\":[]}");
+        assert_eq!(ask(&Snapshot::default()), Known::Unknown);
+        assert_eq!(builds.get(), 2);
+        reads::drop_buffer(config);
     }
 
     #[test]
