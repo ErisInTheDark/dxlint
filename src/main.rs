@@ -1,26 +1,8 @@
 #[global_allocator]
 static ALLOCATOR: dxlint::alloc::Pooled = dxlint::alloc::Pooled;
 
-/// A crash ends the process with its exit code instead of a modal error
-/// dialog: dxlint runs unattended (CI, editors, batch runs), where a dialog
-/// blocks until someone clicks it. Child processes inherit the mode.
-#[cfg(windows)]
-fn no_error_dialogs() {
-    const SEM_FAILCRITICALERRORS: u32 = 0x0001;
-    const SEM_NOGPFAULTERRORBOX: u32 = 0x0002;
-    const SEM_NOOPENFILEERRORBOX: u32 = 0x8000;
-    extern "system" {
-        fn SetErrorMode(mode: u32) -> u32;
-    }
-    // SAFETY: SetErrorMode only sets this process's error mode.
-    unsafe { SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX); }
-}
-
-#[cfg(not(windows))]
-fn no_error_dialogs() {}
-
 fn main() -> std::process::ExitCode {
-    no_error_dialogs();
+    dxlint::no_error_dialogs();
     let code = {
         // The sampler reports when it drops, before the levers do.
         let _sampler = dxlint::sampler::start_from_env();
