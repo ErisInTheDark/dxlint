@@ -45,6 +45,7 @@ function foo() {
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `options` | Array of `{ blankLine, prev, next }` policies | `[]` | Ordered policies; the last matching policy wins. |
+| `typescriptBodies` | boolean | `true` | Also pad statements in namespace bodies and members of interfaces and type literals, as `@stylistic` does. `false` checks only the statement lists ESLint core's `padding-line-between-statements` checks. |
 
 `blankLine` is `"always"`, `"never"` or `"any"`. A comment-only line does not count as a blank line. `prev` and `next` accept a statement-kind string, a selector object or an array of either.
 
@@ -63,5 +64,6 @@ rule es-padding-line-between-statements {
 ## Differences from upstream
 
 - Put upstream positional policies into the named `options` array.
+- Porting ESLint core's `padding-line-between-statements`: set `typescriptBodies false`. Core never checks namespace bodies, so a stray `};` there is left alone.
 
 Adapted from the [ESLint Stylistic](https://eslint.style/rules/padding-line-between-statements) documentation (MIT).
