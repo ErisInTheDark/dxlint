@@ -34,6 +34,8 @@ pub(super) struct Unit {
     lines: OnceLock<crate::line_index::LineIndex>,
     /// The bodies other files read only by entering them.
     bodies: OnceLock<Option<Arc<reads::Bodies>>>,
+    /// Per body of `bodies`: the read of work that entered it.
+    entered: OnceLock<Box<[OnceLock<Arc<reads::Bodies>>]>>,
 }
 
 impl Unit {
@@ -50,6 +52,15 @@ impl Linter {
             let ranges = self.opaque_ranges(unit);
             (!ranges.is_empty()).then(|| Arc::new(reads::Bodies::new(&unit.text, ranges)))
         }).clone()
+    }
+
+    /// What work entering the body at `offset` read of `unit`: its text
+    /// outside the other bodies. `None` when no body holds `offset`.
+    pub(super) fn entered(&self, unit: &Unit, offset: u32) -> Option<Arc<reads::Bodies>> {
+        let bodies = self.bodies(unit)?;
+        let index = bodies.body_at(offset)?;
+        let slots = unit.entered.get_or_init(|| (0..bodies.len()).map(|_| OnceLock::new()).collect());
+        Some(slots.get(index)?.get_or_init(|| Arc::new(bodies.exposing(index))).clone())
     }
 
     pub(super) fn parse(&self, path: &Path, text: &str, plan: ParsePlan<'_>) -> Result<ParsedFile, (u32, String)> {
@@ -152,7 +163,7 @@ impl Linter {
             let tokens = front.and_then(|index| self.unit_token_kinds.get(index)).map_or(&[][..], Vec::as_slice);
             let plan = ParsePlan { lang, front, layers: true, overlays: &self.unit_overlays, child_layers: self.unit_child_layers, tokens };
             let parsed = self.parse(path, &text, plan).ok()?;
-            let unit = Arc::new(Unit { path: reads::dep_path(path), rel: rel.to_string_lossy().replace('\\', "/"), lang, text, hash, parsed, names: OnceLock::new(), lines: OnceLock::new(), bodies: OnceLock::new() });
+            let unit = Arc::new(Unit { path: reads::dep_path(path), rel: rel.to_string_lossy().replace('\\', "/"), lang, text, hash, parsed, names: OnceLock::new(), lines: OnceLock::new(), bodies: OnceLock::new(), entered: OnceLock::new() });
             self.units.lock().expect("unit cache").insert(path.to_owned(), unit.clone());
             Some(unit)
         };

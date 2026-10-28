@@ -237,6 +237,11 @@ fn streams_workspace_diagnostics_and_serves_fixes() {
     let fix = actions.as_array().unwrap().iter().find(|a| a["kind"] == "quickfix").expect("quickfix");
     let edits = fix["edit"]["changes"].as_object().unwrap().values().next().unwrap();
     assert_eq!(edits[0]["newText"], "good");
+    // Fixing the whole file waits until that action is chosen.
+    let all = actions.as_array().unwrap().iter().find(|a| a["title"] == "Fix all dxlint problems in this file").expect("fix all");
+    assert!(all["edit"].is_null());
+    let resolved = c.request("codeAction/resolve", all.clone());
+    assert_eq!(resolved["edit"]["changes"].as_object().unwrap().values().next().unwrap()[0]["newText"], "ok\ngood\n");
 
     // Incremental edit: replace `BAD` on line 1 with `fine`.
     c.notify(

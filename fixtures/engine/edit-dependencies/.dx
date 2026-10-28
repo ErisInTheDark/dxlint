@@ -1,0 +1,4 @@
+import .ts
+
+# Every call asks a type question, so each file reads what its calls reach.
+in ts_call rule typed info "{if node always number then 'number' else 'other'}"

@@ -629,14 +629,19 @@ impl Linter {
     /// Whether `path` opens a module scope of `classes`, as a world over it
     /// alone decides; true when it does not parse.
     fn opens_scopes(&self, path: &Path, classes: u64) -> bool {
-        let Some(unit) = self.unit_quiet(path, None).1 else { return true };
+        self.alone(path, |world| world::opens_scopes(world, classes)).unwrap_or(true)
+    }
+
+    /// `ask` on a world over `path` alone; `None` when it does not parse.
+    fn alone<T>(&self, path: &Path, ask: impl for<'w> FnOnce(&'w world::LintWorld<'w>) -> T) -> Option<T> {
+        let unit = self.unit_quiet(path, None).1?;
         let run = Run { path: &unit.path, lang: unit.lang, text: &unit.text, lines: unit.lines(), file: &unit.rel, active: &[], settings: None };
         let native = unit.parsed.front.map(|front| self.native_facts(front, &unit.parsed.tree, &run, (&*unit.path, Path::new(&unit.rel)), unit.parsed.state.clone()));
         let memo = AttrMemo::default();
         let reindented = RefCell::default();
         let ctx = self.tree_ctx(unit.lang, &unit.parsed.tree, (&unit.text, unit.lines(), &unit.rel), &memo, &reindented, native.as_deref());
         let world = world::LintWorld::new(self, &unit.path, ctx);
-        world::opens_scopes(&world, classes)
+        Some(ask(&world))
     }
 
     /// The byte ranges of `unit`'s opaque bodies (`opaque` name items whose
@@ -683,15 +688,20 @@ impl Linter {
         }
     }
 
-    /// Whether `path`'s module index mentions `name` as a global of any
-    /// class; true when it does not parse.
+    /// Whether `path` could publish global `name`: a global publication of
+    /// it whose condition holds there (a module's own declarations publish
+    /// none). True when it does not parse.
     fn mentions_global(&self, path: &Path, name: &str) -> bool {
+        use crate::grammar::names::modules::index::PublicationKind;
         let Some(unit) = self.unit_quiet(path, None).1 else { return true };
         let Some(front) = unit.parsed.front else { return true };
         let run = Run { path: &unit.path, lang: unit.lang, text: &unit.text, lines: unit.lines(), file: &unit.rel, active: &[], settings: None };
         let native = self.native_facts(front, &unit.parsed.tree, &run, (&*unit.path, Path::new(&unit.rel)), unit.parsed.state.clone());
         let index = unit.parsed.tree.module_index(&self.grammar.names, &unit.text, &|text| native.name_key(text), None);
-        index.mentions(name, u64::MAX, crate::grammar::names::modules::index::PublicationKind::Globals)
+        if !index.mentions(name, u64::MAX, PublicationKind::Globals) { return false }
+        let plans: Vec<_> = index.plans(unit.parsed.tree.root, Some((name, u64::MAX)), PublicationKind::Globals)
+            .into_iter().map(|plan| (plan.node, plan.item.when)).collect();
+        !plans.is_empty() && self.alone(path, |world| world::any_holds(world, &plans)).unwrap_or(true)
     }
 
     /// Forgets what the `changed` files said; [`Linter::is_stale`] then

@@ -48,6 +48,8 @@ struct ProgramMemo<'a> {
     linted_hash: std::cell::OnceCell<u64>,
     /// Reads of the linted file's tree, text, names or index so far.
     linted_reads: Cell<u64>,
+    /// The run's unit for the linted file, when it holds the linted text.
+    linted_unit: std::cell::OnceCell<Option<Arc<super::units::Unit>>>,
     /// Whether the linted text is what the run reads for its path, so this
     /// world may use and add run-shared answers.
     shares: std::cell::OnceCell<bool>,
@@ -88,6 +90,28 @@ impl<'a> LintWorld<'a> {
 
     fn note_linted_read(&self) {
         self.program.linted_reads.set(self.program.linted_reads.get() + 1);
+    }
+
+    fn linted_hash(&self) -> u64 {
+        *self.program.linted_hash.get_or_init(|| super::reads::hash_bytes(self.ctx.source.as_bytes()))
+    }
+
+    /// The run's unit for the linted file when it holds the linted text: its
+    /// bodies are the linted file's.
+    fn linted_unit(&self) -> Option<&Arc<super::units::Unit>> {
+        self.program.linted_unit.get_or_init(|| {
+            let (hash, unit) = self.linter.unit_quiet(self.path, Some(self.snapshot?));
+            unit.filter(|_| hash == self.linted_hash())
+        }).as_ref()
+    }
+
+    /// What run-shared work that read the linted file's syntax read of it:
+    /// its text outside its bodies, like any other file it reaches.
+    fn linted_read(&self) -> super::reads::Dep {
+        match self.linted_unit() {
+            Some(unit) => self.unit_read(unit),
+            None => super::reads::Dep::Text(super::reads::dep_path(self.path), self.linted_hash()),
+        }
     }
 
     pub fn new(linter: &'a super::Linter, path: &'a Path, ctx: Ctx<'a>) -> Self {
@@ -146,30 +170,36 @@ impl<'a> LintWorld<'a> {
         }
     }
 
-    /// Work steps onto `at`: inside another file's body, it reads that
-    /// file's whole text.
+    /// Work steps onto `at`: inside a file's body, it reads that body too.
+    /// The linted file counts through the run's unit of the same text, for
+    /// run-shared answers that read it.
     fn note_entered(&self, at: Leaf) {
         let file = match at.target {
             Target::Node(node) => node.file,
             Target::Scope(scope) => scope.file,
             _ => return,
         };
-        let Some(view) = file.checked_sub(1).and_then(|view| self.views.get(view)) else { return };
-        let unit = &view.unit;
+        let unit = match file.checked_sub(1) {
+            Some(view) => match self.views.get(view) { Some(view) => &view.unit, None => return },
+            None => match self.linted_unit() { Some(unit) => unit, None => return },
+        };
         let node = match at.target {
             Target::Scope(scope) => {
                 // A scope's names come before any question inside it.
-                let Some(names) = unit.names.get() else { return };
+                let Some(names) = unit.names.get() else {
+                    if file == 0 { super::reads::note(super::reads::Dep::Text(unit.path.clone(), unit.hash)) }
+                    return;
+                };
                 let Some(info) = names.value.scopes.get(scope.scope as usize) else { return };
                 info.node
             }
             Target::Node(node) => node.node,
             _ => return,
         };
-        let Some(bodies) = self.linter.bodies(unit) else { return };
-        let Some(syntax) = unit.parsed.tree.nodes.get(node as usize) else { return };
-        if bodies.contains(syntax.start) {
-            super::reads::note(super::reads::Dep::Text(unit.path.clone(), unit.hash));
+        let tree = if file == 0 { self.ctx.tree } else { &unit.parsed.tree };
+        let Some(syntax) = tree.nodes.get(node as usize) else { return };
+        if let Some(entered) = self.linter.entered(unit, syntax.start) {
+            super::reads::note(super::reads::Dep::Outside(unit.path.clone(), entered));
         }
     }
 
@@ -783,7 +813,7 @@ impl<'a> Files<'a> {
             Some(shared) => Some(shared),
             None => {
                 let built = super::reads::Cached::compute(|| {
-                    super::reads::note(super::reads::Dep::Text(super::reads::dep_path(self.0.path), self.linted_hash()));
+                    super::reads::note(self.0.linted_read());
                     self.build_augmentations(classes, catalog, semantic)
                 });
                 match built.value {
@@ -830,7 +860,7 @@ impl<'a> Files<'a> {
     }
 
     fn linted_hash(self) -> u64 {
-        *self.0.program.linted_hash.get_or_init(|| super::reads::hash_bytes(self.0.ctx.source.as_bytes()))
+        self.0.linted_hash()
     }
 
     /// Whether `path` is a file, recorded; probed once per run.
@@ -861,7 +891,6 @@ impl<'a> Files<'a> {
             super::reads::note_group(&found.reads);
             return Known::Yes(found.value.clone());
         }
-        let linted = self.linted_hash();
         // Shared answers see every file as the run reads it; a world whose
         // linted text differs (a fix pass, an unsaved edit) keeps its own.
         let (true, Some(key)) = self.timed("modules.resolve.shared.key", || (self.shares(snapshot), self.module_key(question))) else { return compute() };
@@ -878,7 +907,7 @@ impl<'a> Files<'a> {
             let before = self.0.program.linted_reads.get();
             let value = compute();
             if self.0.program.linted_reads.get() != before {
-                super::reads::note(super::reads::Dep::Text(super::reads::dep_path(self.0.path), linted));
+                super::reads::note(self.0.linted_read());
             }
             value
         });
@@ -1329,7 +1358,7 @@ impl World for Files<'_> {
 
     fn depends_on_file(&self, file: u32) {
         let read = match file.checked_sub(1) {
-            None => super::reads::Dep::Text(super::reads::dep_path(self.0.path), self.linted_hash()),
+            None => self.0.linted_read(),
             // What a file declares for everyone lies outside its bodies.
             Some(view) => {
                 let Some(view) = self.0.views.get(view) else { return };
@@ -1636,6 +1665,18 @@ pub(super) fn opens_scopes<'a>(world: &'a LintWorld<'a>, classes: u64) -> bool {
     let question = QueryContext::once();
     let semantic = Semantic::new(&files, &world.ctx.grammar.names, &question);
     files.opens_scopes(0, classes, &semantic)
+}
+
+/// Whether some of `items` (a node of the world's file, and the condition
+/// on it) holds there or cannot be decided.
+pub(super) fn any_holds<'a>(world: &'a LintWorld<'a>, items: &[(u32, Option<u32>)]) -> bool {
+    let files = Files(world);
+    let question = QueryContext::once();
+    let semantic = Semantic::new(&files, &world.ctx.grammar.names, &question);
+    items.iter().any(|&(node, when)| {
+        let at = Leaf { target: Target::Node(NodeRef { file: 0, node }), frame: FrameId::ROOT };
+        when.is_none_or(|when| World::condition(&files, at, when, &semantic) != Known::Yes(false))
+    })
 }
 
 /// `e`'s value on the context's node; unknown when the VM gives up.

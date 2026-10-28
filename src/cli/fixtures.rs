@@ -32,7 +32,7 @@ fn entries(path: &Path) -> Result<Vec<fs::DirEntry>, String> {
 fn scenarios(path: &Path, found: &mut BTreeSet<PathBuf>) -> Result<(), String> {
     if path.join(".dx").is_file() { found.insert(path.to_path_buf()); }
     for entry in entries(path)? {
-        if matches!(entry.file_name().to_str(), Some("actual" | "expected" | ".git")) { continue; }
+        if matches!(entry.file_name().to_str(), Some("actual" | "expected" | "edits" | ".git")) { continue; }
         if entry.file_type().map_err(|e| e.to_string())?.is_dir() { scenarios(&entry.path(), found)?; }
     }
     Ok(())
@@ -87,6 +87,39 @@ fn suggestions(name: &str, text: &str, diagnostics: &[crate::engine::Diagnostic]
         }
     }
     blocks
+}
+
+/// Per `edits/<name>/` (edited texts of inputs, by relative path): the other
+/// inputs whose last lint read something those unsaved edits break, as an
+/// editor would re-lint them.
+fn dirtied(linter: &Linter, root: &Path, files: &[PathBuf]) -> Result<BTreeMap<PathBuf, String>, String> {
+    let edits = root.join("edits");
+    let mut out = BTreeMap::new();
+    if !edits.is_dir() { return Ok(out) }
+    for entry in entries(&edits)? {
+        if !entry.file_type().map_err(|e| e.to_string())?.is_dir() { continue }
+        let mut edited = BTreeMap::new();
+        fixed_outputs(&entry.path(), &entry.path(), &mut edited)?;
+        let run = linter.run();
+        let mut reads = Vec::new();
+        for file in files.iter().filter(|file| linter.wants(file)) {
+            let Ok(text) = fs::read_to_string(file) else { continue };
+            reads.push((file, run.lint_tracked(file, &text).1));
+        }
+        drop(run);
+        let paths: Vec<PathBuf> = edited.keys().map(|relative| root.join(relative)).collect();
+        for (path, text) in paths.iter().zip(edited.values()) { crate::engine::reads::set_buffer(path, text) }
+        let stale = linter.invalidate(&paths);
+        let mut names: Vec<String> = reads.iter()
+            .filter(|(file, reads)| !paths.contains(file) && linter.is_stale(&stale, reads))
+            .map(|(file, _)| file.strip_prefix(root).unwrap_or(file).to_string_lossy().replace('\\', "/"))
+            .collect();
+        for path in &paths { crate::engine::reads::drop_buffer(path) }
+        linter.invalidate(&paths);
+        names.sort();
+        out.insert(PathBuf::from(entry.file_name()), diagnostic_text(&names));
+    }
+    Ok(out)
 }
 
 fn collect(linter: &Linter, files: &[PathBuf], cache: Option<&Cache>, warm: bool) -> Result<Actual, String> {
@@ -223,7 +256,7 @@ fn difference(expected: &str, actual: &str) -> String {
 fn scenario(output: &mut Output<'_>, root: &Path, bless: bool) -> Result<Vec<String>, String> {
     let project = load_from_with(output, &root.join(".dx"), &Disk, true).map_err(|_| "configuration failed".to_string())?;
     if !project.config_ok { return Err("configuration failed".into()); }
-    let outputs = |entry: &ignore::DirEntry| !matches!(entry.file_name().to_str(), Some("actual" | "expected"));
+    let outputs = |entry: &ignore::DirEntry| !matches!(entry.file_name().to_str(), Some("actual" | "expected" | "edits"));
     let mut files = super::lint::walker(&[root.to_path_buf()], 1, outputs).build()
         .map(|entry| entry.map_err(|e| e.to_string())).collect::<Result<Vec<_>, _>>()?.into_iter()
         .filter(|entry| entry.file_type().is_some_and(|kind| kind.is_file()))
@@ -250,6 +283,12 @@ fn scenario(output: &mut Output<'_>, root: &Path, bless: bool) -> Result<Vec<Str
         write_actual(root, &actual, bless && replay.is_ok())?;
         replay?;
         let expected = root.join("expected");
+        let dirtied = dirtied(&project.linter, root, &files)?;
+        write_outputs(&root.join("actual/dirtied"), &dirtied)?;
+        if bless && (!dirtied.is_empty() || expected.join("dirtied").is_dir()) {
+            clear_owned(&expected.join("dirtied"))?;
+            write_outputs(&expected.join("dirtied"), &dirtied)?;
+        }
         let diagnostics = fs::read_to_string(expected.join("diagnostics")).map_err(|e| format!("expected/diagnostics: {e}"))?;
         let mut differences = Vec::new();
         let text = diagnostic_text(&actual.diagnostics);
@@ -275,6 +314,19 @@ fn scenario(output: &mut Output<'_>, root: &Path, bless: bool) -> Result<Vec<Str
                 (Some(_), None) => differences.push(format!("fixed/{}: expected change, input unchanged", relative.display())),
                 (None, Some(_)) => differences.push(format!("fixed/{}: missing expected change", relative.display())),
                 _ => {}
+            }
+        }
+        let dirtied_root = expected.join("dirtied");
+        let mut expected_dirtied = BTreeMap::new();
+        fixed_outputs(&dirtied_root, &dirtied_root, &mut expected_dirtied)?;
+        for name in expected_dirtied.keys().chain(dirtied.keys()).collect::<BTreeSet<_>>() {
+            let (wanted, got) = (expected_dirtied.get(name).map_or("", String::as_str), dirtied.get(name).map_or("", String::as_str));
+            if !dirtied.contains_key(name) {
+                differences.push(format!("dirtied/{}: no edits/{0}", name.display()));
+            } else if !expected_dirtied.contains_key(name) {
+                differences.push(format!("dirtied/{}: missing expected", name.display()));
+            } else if !same_lines(wanted, got) {
+                differences.push(format!("dirtied/{}:\n{}", name.display(), difference(wanted, got)));
             }
         }
         let preview_root = expected.join("fix-preview");

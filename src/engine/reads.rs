@@ -103,8 +103,24 @@ impl Bodies {
 
     /// Whether byte `offset` lies inside a body.
     pub fn contains(&self, offset: u32) -> bool {
+        self.body_at(offset).is_some()
+    }
+
+    /// The index of the body holding byte `offset`.
+    pub fn body_at(&self, offset: u32) -> Option<usize> {
         let after = self.ranges.partition_point(|&(start, ..)| start <= offset);
-        after > 0 && offset < self.ranges[after - 1].1
+        (after > 0 && offset < self.ranges[after - 1].1).then(|| after - 1)
+    }
+
+    pub fn len(&self) -> usize {
+        self.ranges.len()
+    }
+
+    /// The same read with body `index` read too: edits inside it no longer
+    /// hold. The other bodies keep their recorded surroundings.
+    pub fn exposing(&self, index: usize) -> Bodies {
+        let ranges = self.ranges.iter().enumerate().filter(|&(i, _)| i != index).map(|(_, &range)| range).collect();
+        Bodies { hash: self.hash, len: self.len, ranges }
     }
 
     /// How `text` differs from the recorded text: not at all (`Some(None)`),

@@ -1,0 +1,3 @@
+enters-inferred.ts:3:1-3:11 typed#0 number
+global-lookup.ts:3:1-3:12 typed#0 other
+signature-only.ts:3:1-3:12 typed#0 number

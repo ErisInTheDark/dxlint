@@ -178,6 +178,7 @@ impl Server {
                         self.out.respond(id, Value::Null);
                     }
                     "textDocument/codeAction" => self.out.respond(id, self.code_actions(params)),
+                    "codeAction/resolve" => self.out.respond(id, self.resolve_action(params)),
                     "textDocument/formatting" => self.out.respond(id, self.format(params)),
                     "textDocument/hover" => self.out.respond(id, self.hover(params)),
                     "textDocument/definition" => self.out.respond(id, self.in_config(params, |c| c.definition(params))),
@@ -395,7 +396,7 @@ impl Server {
         json!({
             "capabilities": {
                 "textDocumentSync": { "openClose": true, "change": 2, "save": { "includeText": false } },
-                "codeActionProvider": { "codeActionKinds": ["quickfix", "source.fixAll.dx"] },
+                "codeActionProvider": { "codeActionKinds": ["quickfix", "source.fixAll.dx"], "resolveProvider": true },
                 "documentFormattingProvider": true,
                 "hoverProvider": true,
                 "definitionProvider": true,
@@ -627,7 +628,7 @@ impl Server {
     }
 
     fn code_actions(&self, params: &Value) -> Value {
-        let Some((path, u)) = Self::doc_path(params) else { return json!([]) };
+        let Some((_, u)) = Self::doc_path(params) else { return json!([]) };
         let only: Vec<&str> = params["context"]["only"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
         let wants = |kind: &str| only.is_empty() || only.iter().any(|o| kind == *o || kind.starts_with(&format!("{o}.")));
         let mut actions = Vec::new();
@@ -662,17 +663,29 @@ impl Server {
                 }
             }
         }
+        // Editors ask for actions whenever the cursor rests on a problem:
+        // fixing the whole file waits until this one is chosen.
         if (fixable > 0 && wants("quickfix")) || (!only.is_empty() && wants("source.fixAll.dx")) {
-            if let Some(edit) = self.fix_all(&path) {
-                let kind = if wants("source.fixAll.dx") && !only.is_empty() { "source.fixAll.dx" } else { "quickfix" };
-                actions.push(json!({
-                    "title": "Fix all dxlint problems in this file",
-                    "kind": kind,
-                    "edit": { "changes": { u: [edit] } },
-                }));
-            }
+            let kind = if wants("source.fixAll.dx") && !only.is_empty() { "source.fixAll.dx" } else { "quickfix" };
+            actions.push(json!({
+                "title": "Fix all dxlint problems in this file",
+                "kind": kind,
+                "data": { "fixAll": u },
+            }));
         }
         Value::Array(actions)
+    }
+
+    /// Fills in a fix-all action's edit (none when nothing changes).
+    fn resolve_action(&self, action: &Value) -> Value {
+        let mut action = action.clone();
+        let Some(u) = action["data"]["fixAll"].as_str().map(str::to_owned) else { return action };
+        if let Some(path) = uri::to_path(&u) {
+            if let Some(edit) = self.fix_all(&path) {
+                action["edit"] = json!({ "changes": { u: [edit] } });
+            }
+        }
+        action
     }
 
     /// Runs `f` on the `.dx` file of a request (null elsewhere).

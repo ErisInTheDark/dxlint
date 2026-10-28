@@ -198,10 +198,12 @@ pub fn minimal_edit(source: &str, start: usize, end: usize, want: &str) -> Edit 
 
 impl Linter {
     pub fn fix(&self, path: &Path, text: &str) -> Fixed {
+        // One run for every pass: what other files say is read once.
+        let run = self.run();
         let mut current = text.to_string();
         let mut applied = 0;
         for _ in 0..MAX_PASSES {
-            let diags = self.lint(path, &current);
+            let diags = run.lint(path, &current);
             let (next, n) = apply_fixes(&current, &diags);
             if n == 0 || next == current {
                 return Fixed { text: current, applied, remaining: diags };
@@ -209,7 +211,7 @@ impl Linter {
             applied += n;
             current = next;
         }
-        let remaining = self.lint(path, &current);
+        let remaining = run.lint(path, &current);
         Fixed { text: current, applied, remaining }
     }
 }
