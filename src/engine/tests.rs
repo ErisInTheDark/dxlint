@@ -90,7 +90,7 @@ fn big_files_report_the_same_when_their_rules_run_in_groups() {
     for jobs in [1, 2, 4] {
         l.set_rule_jobs(jobs);
         let active = vec![true; l.rules.len()];
-        assert_eq!(l.rule_groups(&active, text.len()).len(), jobs);
+        assert_eq!(l.rule_groups(&active, text.len(), jobs).len(), jobs);
         let split = l.lint(path, &text);
         assert_eq!(together.iter().map(|d| (d.start, d.end, &d.rule, &d.message)).collect::<Vec<_>>(), split.iter().map(|d| (d.start, d.end, &d.rule, &d.message)).collect::<Vec<_>>());
     }

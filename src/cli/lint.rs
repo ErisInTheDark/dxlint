@@ -564,11 +564,8 @@ fn lint_project(output: &mut Output<'_>, args: &LintArgs, project: &mut Project,
         if !linter.scopes.is_empty() {
             output.err(format_args!("  files blocks: {} rule copies for their option values", linter.scopes.copies()));
         }
-        if crate::alloc::heap::on() {
-            let (owners, peak) = crate::alloc::heap::report();
-            let mib = |bytes: isize| bytes as f64 / 1048576.0;
-            let rows: Vec<String> = owners.iter().map(|(name, at_peak, now)| format!("{name} {:.1} ({:.1} at end)", mib(*at_peak), mib(*now))).collect();
-            output.err(format_args!("  heap at peak {:.1} MiB by owner: {}", mib(peak as isize), rows.join(", ")));
+        if let Some(summary) = crate::alloc::heap::summary() {
+            output.err(format_args!("  {summary}"));
         }
     }
 }

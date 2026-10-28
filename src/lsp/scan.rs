@@ -10,7 +10,8 @@
 //!
 //! Each batch (a scan, a relint queue, a burst of editor lints) shares one
 //! [`LintRun`] per linter, like a CLI run: program-wide answers are checked
-//! once per batch, not once per file.
+//! once per batch, not once per file. Editor batches go further and start
+//! from the previous editor batch's answers the edits since left standing.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -24,7 +25,7 @@ use super::projects::Linters;
 use super::transport::Outbox;
 use super::{convert, uri};
 use crate::engine::cache::Cache;
-use crate::engine::{LintRun, Linter};
+use crate::engine::{Carried, LintRun, Linter};
 use crate::engine::reads::Reads;
 
 /// State shared between the request loop and scans.
@@ -62,6 +63,8 @@ pub struct EditorLint {
 struct Editing {
     queue: Vec<EditorLint>,
     running: bool,
+    /// Each linter's last editor run, which the next one starts from.
+    carried: Vec<(Arc<Linter>, Carried)>,
 }
 
 /// Files waiting for [`relint`], the linters to use, and whether its
@@ -125,11 +128,27 @@ impl Shared {
 struct Runs<'a>(Vec<(&'a Linter, LintRun<'a>)>);
 
 impl<'a> Runs<'a> {
-    fn new(linters: impl IntoIterator<Item = &'a Linter>) -> Self {
+    /// Editor lints start from the last editor run's answers that the edits
+    /// since left standing, and may split a big file over threads: a
+    /// keystroke redoes only what the edited text could change.
+    fn editor(linters: impl IntoIterator<Item = &'a Linter>, carried: &mut Vec<(Arc<Linter>, Carried)>) -> Self {
+        Self::new(linters, |linter| {
+            let previous = carried.iter().position(|(l, _)| std::ptr::eq(&**l, linter)).map(|index| carried.swap_remove(index).1);
+            linter.run_after(previous)
+        })
+    }
+
+    /// Background lints run each file on one thread: nobody waits on one
+    /// file, and split rule groups would each hold its facts.
+    fn background(linters: impl IntoIterator<Item = &'a Linter>) -> Self {
+        Self::new(linters, |linter| linter.run().serial())
+    }
+
+    fn new(linters: impl IntoIterator<Item = &'a Linter>, mut run: impl FnMut(&'a Linter) -> LintRun<'a>) -> Self {
         let mut runs: Vec<(&Linter, LintRun<'_>)> = Vec::new();
         for linter in linters {
             if !runs.iter().any(|(l, _)| std::ptr::eq(*l, linter)) {
-                runs.push((linter, linter.run()));
+                runs.push((linter, run(linter)));
             }
         }
         Runs(runs)
@@ -171,7 +190,7 @@ pub fn relint(linters: Linters, files: Vec<PathBuf>, shared: Arc<Shared>, out: O
         let current = || shared.generation.load(Ordering::SeqCst) == generation;
         // A config change that matters rescans, which ends this batch.
         let linters = shared.relint.lock().expect("lock").linters.clone();
-        let runs = Runs::new(linters.all().map(|l| &**l));
+        let runs = Runs::background(linters.all().map(|l| &**l));
         loop {
             let path = {
                 let mut relint = shared.relint.lock().expect("lock");
@@ -209,16 +228,16 @@ pub fn edit(shared: &Arc<Shared>, out: &Outbox, lint: EditorLint) {
     }
     let (shared, out) = (shared.clone(), out.clone());
     lint_thread(move || loop {
-        let batch = {
+        let (batch, mut carried) = {
             let mut editing = shared.editing.lock().expect("lock");
             if editing.queue.is_empty() || shared.closing.load(Ordering::SeqCst) {
                 editing.queue.clear();
                 editing.running = false;
                 return;
             }
-            std::mem::take(&mut editing.queue)
+            (std::mem::take(&mut editing.queue), std::mem::take(&mut editing.carried))
         };
-        let runs = Runs::new(batch.iter().map(|lint| &*lint.linter));
+        let runs = Runs::editor(batch.iter().map(|lint| &*lint.linter), &mut carried);
         for lint in &batch {
             if shared.closing.load(Ordering::SeqCst) {
                 break;
@@ -244,6 +263,14 @@ pub fn edit(shared: &Arc<Shared>, out: &Outbox, lint: EditorLint) {
             }
             crate::alloc::trim();
         }
+        // Runs of linters a reload replaced have nobody left to serve.
+        carried.retain(|(linter, _)| Arc::strong_count(linter) > 1);
+        for (linter, run) in runs.0 {
+            if let Some(lint) = batch.iter().find(|lint| std::ptr::eq(&*lint.linter, linter)) {
+                carried.push((lint.linter.clone(), run.carried()));
+            }
+        }
+        shared.editing.lock().expect("lock").carried = carried;
     });
 }
 
@@ -412,7 +439,7 @@ impl Scan {
         }
         // With no configs there is nothing to lint; the stale sweep below
         // still clears what earlier configs reported.
-        let runs = Runs::new(self.linters.all().map(|l| &**l));
+        let runs = Runs::background(self.linters.all().map(|l| &**l));
         if !self.linters.is_empty() {
             self.drain(&[], &runs);
             let files = self.collect(roots);

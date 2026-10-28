@@ -43,9 +43,11 @@ struct ProgramMemo<'a> {
     roots: RefCell<crate::fx_hash::FxHashMap<(*const Settings, Box<str>), super::reads::Cached<Known<Vec<ScopeRef>>>>>,
     catalogs: RefCell<crate::fx_hash::FxHashMap<(*const Settings, u64), super::reads::Cached<Arc<super::program::Catalog>>>>,
     modules: RefCell<crate::fx_hash::FxHashMap<(u32, *const Settings), ModuleAnswers>>,
-    /// The linted text's hash: every run-shared answer this world computes
-    /// records it, since the linted file's own tree is not a run unit.
+    /// The linted text's hash: a run-shared answer computed from the linted
+    /// file's own tree (not a run unit) records it.
     linted_hash: std::cell::OnceCell<u64>,
+    /// Reads of the linted file's tree, text, names or index so far.
+    linted_reads: Cell<u64>,
     /// Whether the linted text is what the run reads for its path, so this
     /// world may use and add run-shared answers.
     shares: std::cell::OnceCell<bool>,
@@ -79,6 +81,10 @@ pub struct LintWorld<'a> {
 impl<'a> LintWorld<'a> {
     fn revision(&self) -> u64 {
         self.linter.invalidation.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    fn note_linted_read(&self) {
+        self.program.linted_reads.set(self.program.linted_reads.get() + 1);
     }
 
     pub fn new(linter: &'a super::Linter, path: &'a Path, ctx: Ctx<'a>) -> Self {
@@ -826,9 +832,15 @@ impl<'a> Files<'a> {
                 return Known::Yes(targets);
             }
         }
+        // Every other input is read as a run unit, which records its read;
+        // the linted file's own tree only counts when the answer read it.
         let answer = super::reads::Cached::compute(|| {
-            super::reads::note(super::reads::Dep::Text(super::reads::dep_path(self.0.path), linted));
-            compute()
+            let before = self.0.program.linted_reads.get();
+            let value = compute();
+            if self.0.program.linted_reads.get() != before {
+                super::reads::note(super::reads::Dep::Text(super::reads::dep_path(self.0.path), linted));
+            }
+            value
         });
         self.timed("modules.resolve.shared.record", || super::reads::note_group(&answer.reads));
         if let Known::Yes(targets) = &answer.value {
@@ -859,6 +871,11 @@ impl<'a> Files<'a> {
     /// not settled.
     fn module_key(self, question: super::program::StableQuestion) -> Option<super::program::ModuleKey> {
         let Known::Yes(Some(selected)) = self.timed("modules.resolve.shared.select", || self.program_selected()) else { return None };
+        if let super::program::StableQuestion::Resolve { specifier, .. } = &question {
+            if selected.resolves_from_directory(specifier) {
+                return Some(super::program::ModuleKey { revision: self.0.revision(), settings: selected as *const Settings as usize, program: 0, outside: None, question });
+            }
+        }
         let Known::Yes((program, outside)) = self.timed("modules.resolve.shared.identity", || self.program_identity(selected)) else { return None };
         Some(super::program::ModuleKey {
             revision: self.0.revision(),
@@ -925,7 +942,10 @@ impl<'a> Files<'a> {
 
     fn taken_value(self, snapshot: &super::program::Snapshot, key: &super::program::ValueKey, semantic: &Semantic<'_>) -> Option<NodeValue> {
         let found = snapshot.value_answer(key)?;
-        let value = self.local_value(&found.value, semantic)?;
+        let value = match &found.value {
+            Some(value) => self.local_value(value, semantic)?,
+            None => NodeValue::Unknown,
+        };
         if let Some(profile) = self.0.ctx.profile { super::Profile::add(&profile.shared_value_hits, 1) }
         super::reads::note_group(&found.reads);
         Some(value)
@@ -1207,16 +1227,17 @@ impl World for Files<'_> {
     }
 
     fn tree(&self, file: u32) -> Option<&Tree> {
-        if file == 0 { return Some(self.0.ctx.tree); }
+        if file == 0 { self.0.note_linted_read(); return Some(self.0.ctx.tree); }
         Some(&self.0.views.get(file.checked_sub(1)?)?.unit.parsed.tree)
     }
 
     fn text(&self, file: u32) -> Option<&str> {
-        if file == 0 { return Some(self.0.ctx.source); }
+        if file == 0 { self.0.note_linted_read(); return Some(self.0.ctx.source); }
         Some(&self.0.views.get(file.checked_sub(1)?)?.unit.text)
     }
 
     fn names(&self, file: u32) -> Option<&Resolved> {
+        if file == 0 { self.0.note_linted_read() }
         // A run unit's names resolved by any world are complete and shared:
         // read them without building this world's expression context.
         if let Some(shared) = self.0.name_cache(file).and_then(std::sync::OnceLock::get) {
@@ -1240,7 +1261,16 @@ impl World for Files<'_> {
         }
     }
 
+    fn linted_reads(&self) -> u64 {
+        self.0.program.linted_reads.get()
+    }
+
+    fn note_linted_read(&self) {
+        self.0.note_linted_read()
+    }
+
     fn index(&self, file: u32) -> Option<&ScopeIndex> {
+        if file == 0 { self.0.note_linted_read() }
         let ctx = self.0.on(file, self.tree(file)?.root)?;
         Some(ctx.names().index(ctx.tree, ctx.source, &|text| self.0.key(file, text)))
     }
@@ -1398,14 +1428,17 @@ impl World for Files<'_> {
         if let Some(value) = self.taken_value(snapshot, &key, semantic) { return value }
         let values = semantic.values();
         let before = values.root_reads();
+        let mark = values.cycle_mark();
         let answer = super::reads::Cached::compute(|| compute());
         super::reads::note_group(&answer.reads);
         // Only a value no step of which read the linted file is every
-        // linted file's (a global augmentation there would change it).
-        let stable = if answer.value == NodeValue::Unknown { Err(2) }
-            else if values.root_reads() != before { Err(3) }
+        // linted file's (a global augmentation there would change it). An
+        // unknown one is too, unless it rests on something still undecided
+        // (as in [`crate::grammar::names::values::Values::memoized`]).
+        let stable = if values.root_reads() != before { Err(3) }
             else if semantic.question.budget.limited() { Err(4) }
-            else { self.stable_value(&answer.value, semantic).ok_or(5) };
+            else if answer.value == NodeValue::Unknown { if values.cycled_since(mark) { Err(2) } else { Ok(None) } }
+            else { self.stable_value(&answer.value, semantic).map(Some).ok_or(5) };
         match stable {
             Ok(stable) => {
                 if let Some(profile) = profile { super::Profile::add(&profile.shared_value_publishes, 1) }
@@ -2078,6 +2111,31 @@ mod tests {
         linter.invalidate(&[path.to_owned()]);
         assert_eq!(&*linter.unit(path, Some(&run)).unwrap().text, "(after)", "invalidation ends the run's snapshot");
         reads::drop_buffer(path);
+    }
+
+    #[test]
+    fn a_carried_run_rereads_only_what_invalidations_since_changed() {
+        let linter = linter("in paren fits marked");
+        let (kept, edited) = (Path::new("/root/carry-kept.t"), Path::new("/root/carry-edited.t"));
+        reads::set_buffer(kept, "(kept)");
+        reads::set_buffer(edited, "(edited)");
+        let run = linter.run();
+        for path in [kept, edited] { linter.unit(path, Some(&run.programs)).unwrap(); }
+        // Only invalidated files count as changed: the carried run keeps
+        // its read of the other one.
+        reads::set_buffer(kept, "(kept, unannounced)");
+        reads::set_buffer(edited, "(edited again)");
+        linter.invalidate(&[edited.to_owned()]);
+        let next = linter.run_after(Some(run.carried()));
+        assert_eq!(&*linter.unit(kept, Some(&next.programs)).unwrap().text, "(kept)");
+        assert_eq!(&*linter.unit(edited, Some(&next.programs)).unwrap().text, "(edited again)");
+        // A run older than the invalidations still kept carries nothing.
+        let stale = next.carried();
+        for _ in 0..=super::super::INVALIDATIONS_KEPT { linter.invalidate(&[]); }
+        let fresh = linter.run_after(Some(stale));
+        assert_eq!(&*linter.unit(kept, Some(&fresh.programs)).unwrap().text, "(kept, unannounced)");
+        reads::drop_buffer(kept);
+        reads::drop_buffer(edited);
     }
 
     #[test]

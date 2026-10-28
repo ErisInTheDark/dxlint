@@ -456,6 +456,7 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
     }).collect();
     let mut linter = Linter {
         invalidation: Default::default(),
+        invalidated: Default::default(),
         units: Default::default(),
         discoveries: Default::default(),
         programs: Default::default(),

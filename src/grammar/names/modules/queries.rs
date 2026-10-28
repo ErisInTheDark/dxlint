@@ -21,8 +21,9 @@ enum Request {
 
 #[derive(Default)]
 pub(crate) struct State {
-    /// Kept answers; `None` while one is being computed.
-    answers: RefCell<BTreeMap<Request, Option<Answer>>>,
+    /// Kept answers and whether working them out read the linted file;
+    /// `None` while one is being computed.
+    answers: RefCell<BTreeMap<Request, Option<(Answer, bool)>>>,
     star_filters: RefCell<BTreeMap<(ScopeRef, Box<str>), Known<bool>>>,
     publications: RefCell<BTreeMap<ScopeRef, bool>>,
     graph: Memo,
@@ -306,8 +307,12 @@ impl<'a> Queries<'a> {
         // Asking costs one step, kept or not.
         if self.spend().is_err() { return Known::Unknown }
         let kept = self.semantic.modules.answers.borrow().get(&request).cloned();
+        let world = self.semantic.world;
         match kept {
-            Some(Some(answer)) => return answer,
+            Some(Some((answer, linted))) => {
+                if linted { world.note_linted_read() }
+                return answer;
+            }
             Some(None) => {
                 values.note_cycle_read();
                 return Known::Unknown;
@@ -316,10 +321,12 @@ impl<'a> Queries<'a> {
         }
         self.semantic.modules.answers.borrow_mut().insert(request.clone(), None);
         let mark = values.cycle_mark();
+        let linted_before = world.linted_reads();
         // Module answers are kept for the whole file (and shared run-wide):
         // facts about files, on a once-per-file allowance.
         let answer = self.semantic.question.budget.sized(super::super::question::Budget::DEFAULT, run)
             .map_or(Known::Unknown, |found| found.map_or(Known::Unknown, Known::Yes));
+        let linted = world.linted_reads() != linted_before;
         if self.semantic.world.revision() != revision {
             self.sync_revision();
             return Known::Unknown;
@@ -327,7 +334,7 @@ impl<'a> Queries<'a> {
         if matches!(answer, Known::Unknown) && values.cycled_since(mark) {
             self.semantic.modules.answers.borrow_mut().remove(&request);
         } else {
-            self.semantic.modules.answers.borrow_mut().insert(request, Some(answer.clone()));
+            self.semantic.modules.answers.borrow_mut().insert(request, Some((answer.clone(), linted)));
         }
         answer
     }
@@ -395,8 +402,11 @@ impl<'a> Queries<'a> {
 
     fn is_publication(&self, scope: ScopeRef) -> Result<bool, ()> {
         let revision = self.sync_revision();
-        if let Some(&published) = self.semantic.modules.publications.borrow().get(&scope) { return Ok(published) }
         let world = self.semantic.world;
+        if let Some(&published) = self.semantic.modules.publications.borrow().get(&scope) {
+            if scope.file == 0 { world.note_linted_read() }
+            return Ok(published);
+        }
         let info = world.names(scope.file).ok_or(())?.scopes.get(scope.scope as usize).ok_or(())?;
         let tree = world.tree(scope.file).ok_or(())?;
         let kind = self.semantic.tables.kinds.get(tree.nodes.get(info.node as usize).ok_or(())?.matcher as usize).ok_or(())?;
@@ -638,7 +648,10 @@ impl Source for Queries<'_> {
     fn star_excludes(&self, scope: ScopeRef, name: &str, _: &QueryContext) -> Known<bool> {
         let revision = self.sync_revision();
         let key = (scope, name.into());
-        if let Some(answer) = self.semantic.modules.star_filters.borrow().get(&key) { return *answer }
+        if let Some(answer) = self.semantic.modules.star_filters.borrow().get(&key) {
+            if scope.file == 0 { self.semantic.world.note_linted_read() }
+            return *answer;
+        }
         self.semantic.modules.star_filters.borrow_mut().insert(key.clone(), Known::Unknown);
         let mut answer = if self.spend().is_ok() {
             self.semantic.world.module_star_excludes(scope, name, self.semantic)

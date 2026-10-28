@@ -603,6 +603,15 @@ pub mod heap {
         (OWNERS.iter().enumerate().map(|(index, &name)| (name, AT_PEAK[index].load(Ordering::Relaxed), LIVE[index].load(Ordering::Relaxed))).collect(),
             PEAK.load(Ordering::Relaxed))
     }
+
+    /// [`report`] as one line, when accounting is on.
+    pub fn summary() -> Option<String> {
+        if !on() { return None }
+        let (owners, peak) = report();
+        let mib = |bytes: isize| bytes as f64 / 1048576.0;
+        let rows: Vec<String> = owners.iter().map(|(name, at_peak, now)| format!("{name} {:.1} ({:.1} at end)", mib(*at_peak), mib(*now))).collect();
+        Some(format!("heap at peak {:.1} MiB by owner: {}", mib(peak as isize), rows.join(", ")))
+    }
 }
 
 /// Header for accounted blocks: the owner and the requested size.

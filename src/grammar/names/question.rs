@@ -510,6 +510,12 @@ pub trait World {
     /// Records that the answer being worked out depends on `file`'s whole
     /// text: for files a scan reached that turn out to matter.
     fn depends_on_file(&self, _file: u32) {}
+    /// How often the linted file's own syntax was read so far, which no
+    /// recorded read covers: answers that read it hold for this text only.
+    fn linted_reads(&self) -> u64 { 0 }
+    /// Counts a read of the linted file's syntax: a kept answer that read it
+    /// reads it again when used.
+    fn note_linted_read(&self) {}
     /// What a name's text means in `file` (its front end's escapes).
     fn name_key<'s>(&self, file: u32, text: &'s str) -> std::borrow::Cow<'s, str>;
     /// The scope a module specifier names, asked by node `at` (its file's

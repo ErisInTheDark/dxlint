@@ -222,6 +222,8 @@ pub const WORKER_STACK: usize = 64 << 20;
 
 pub struct Linter {
     invalidation: std::sync::atomic::AtomicU64,
+    /// The recent invalidations, oldest first: (revision after it, files).
+    invalidated: std::sync::Mutex<std::collections::VecDeque<(u64, Vec<PathBuf>)>>,
     units: std::sync::Mutex<crate::fx_hash::FxHashMap<PathBuf, std::sync::Arc<units::Unit>>>,
     discoveries: std::sync::Mutex<crate::fx_hash::FxHashMap<crate::grammar::names::modules::resolution::DiscoveryRequest, reads::Cached<Option<Vec<PathBuf>>>>>,
     programs: program::Programs,
@@ -342,21 +344,65 @@ impl Stale {
 pub struct LintRun<'a> {
     linter: &'a Linter,
     programs: program::Snapshot,
+    /// Threads one big file's rule groups may use.
+    rule_jobs: usize,
 }
 
 impl LintRun<'_> {
+    /// Each file on one thread: for background work, where splitting a big
+    /// file only duplicates its facts in memory.
+    pub fn serial(self) -> Self {
+        LintRun { rule_jobs: 1, ..self }
+    }
+
     pub fn lint(&self, path: &Path, text: &str) -> Vec<Diagnostic> {
-        self.linter.lint_in(&self.programs, path, text)
+        self.linter.lint_in(&self.programs, self.rule_jobs, path, text)
     }
 
     pub fn lint_tracked(&self, path: &Path, text: &str) -> (Vec<Diagnostic>, Reads) {
         reads::track(|| self.lint(path, text))
     }
+
+    /// The run's answers, for [`Linter::run_after`].
+    pub fn carried(self) -> Carried {
+        Carried(self.programs)
+    }
 }
+
+/// A finished run's answers, which a later run of the same linter starts
+/// from ([`Linter::run_after`]).
+pub struct Carried(program::Snapshot);
+
+/// Invalidations kept for [`Linter::run_after`]: an editor's lints are a
+/// few edits apart.
+const INVALIDATIONS_KEPT: usize = 64;
 
 impl Linter {
     pub fn run(&self) -> LintRun<'_> {
-        LintRun { linter: self, programs: Default::default() }
+        let revision = self.invalidation.load(std::sync::atomic::Ordering::Acquire);
+        LintRun { linter: self, programs: program::Snapshot::new(revision), rule_jobs: self.rule_jobs }
+    }
+
+    /// A run starting from `previous`'s answers that no invalidation since
+    /// broke: the edited files' readers are redone, the rest is kept.
+    pub fn run_after(&self, previous: Option<Carried>) -> LintRun<'_> {
+        let Some(Carried(previous)) = previous else { return self.run() };
+        let revision = self.invalidation.load(std::sync::atomic::Ordering::Acquire);
+        let mut stale: crate::fx_hash::FxHashMap<u64, Option<Stale>> = Default::default();
+        let programs = previous.carry(revision, &mut |at, reads, path| {
+            let Some(stale) = stale.entry(at).or_insert_with(|| self.changed_since(at).map(|changed| Stale::new(&changed))) else { return false };
+            path.is_none_or(|path| !stale.holding.contains(path)) && reads.is_none_or(|reads| !self.is_stale(stale, reads))
+        });
+        LintRun { linter: self, programs, rule_jobs: self.rule_jobs }
+    }
+
+    /// Every file invalidated after `revision`, unless some of those
+    /// invalidations are no longer kept.
+    fn changed_since(&self, revision: u64) -> Option<Vec<PathBuf>> {
+        let invalidated = self.invalidated.lock().expect("invalidations");
+        let now = self.invalidation.load(std::sync::atomic::Ordering::Acquire);
+        let newer: Vec<&(u64, Vec<PathBuf>)> = invalidated.iter().filter(|(after, _)| *after > revision).collect();
+        (newer.len() as u64 == now.saturating_sub(revision)).then(|| newer.into_iter().flat_map(|(_, paths)| paths.iter().cloned()).collect())
     }
 
     pub(crate) fn reset_runtime(&mut self) {
@@ -365,6 +411,7 @@ impl Linter {
         self.programs.clear();
         self.profile = None;
         *self.invalidation.get_mut() = 0;
+        self.invalidated.get_mut().expect("invalidations").clear();
         self.attrs.values.clear_runtime();
     }
 
@@ -585,7 +632,12 @@ impl Linter {
     pub fn invalidate(&self, changed: &[PathBuf]) -> Stale {
         self.units.lock().expect("unit cache").retain(|path, _| !changed.contains(path));
         self.discoveries.lock().expect("unit discoveries").retain(|request, _| !changed.iter().any(|path| path.starts_with(&request.root)));
-        self.invalidation.fetch_add(1, std::sync::atomic::Ordering::Release);
+        {
+            let mut invalidated = self.invalidated.lock().expect("invalidations");
+            let revision = self.invalidation.fetch_add(1, std::sync::atomic::Ordering::AcqRel) + 1;
+            invalidated.push_back((revision, changed.to_vec()));
+            if invalidated.len() > INVALIDATIONS_KEPT { invalidated.pop_front(); }
+        }
         Stale::new(changed)
     }
 
@@ -620,7 +672,7 @@ impl Linter {
         self.run().lint(path, text)
     }
 
-    fn lint_in(&self, programs: &program::Snapshot, path: &Path, text: &str) -> Vec<Diagnostic> {
+    fn lint_in(&self, programs: &program::Snapshot, rule_jobs: usize, path: &Path, text: &str) -> Vec<Diagnostic> {
         let rel = self.relative(path);
         if self.ignores.matches(&rel) {
             return Vec::new();
@@ -718,7 +770,7 @@ impl Linter {
                 Ok(parsed) => {
                     let tree = parsed.tree;
                     let rules_started = std::time::Instant::now();
-                    let groups = self.rule_groups(&active, text.len());
+                    let groups = self.rule_groups(&active, text.len(), rule_jobs);
                     if groups.len() <= 1 {
                         let facts = self.native_facts(index, &tree, &run, (path, &rel), parsed.state);
                         self.check_tree(&tree, &run, programs, Some(&*facts), &mut out);
@@ -795,9 +847,9 @@ impl Linter {
     /// The active rules split into masks to run side by side: one group
     /// unless the file is big enough to be worth the duplicated attribute
     /// and fact work.
-    fn rule_groups(&self, active: &[bool], len: usize) -> Vec<Vec<bool>> {
+    fn rule_groups(&self, active: &[bool], len: usize, jobs: usize) -> Vec<Vec<bool>> {
         let on: Vec<usize> = (0..active.len()).filter(|&i| active[i]).collect();
-        let k = if len < self.split_at { 1 } else { (len / self.split_at.max(1)).clamp(2, 4).min(self.rule_jobs).min(on.len().max(1)) };
+        let k = if len < self.split_at { 1 } else { (len / self.split_at.max(1)).clamp(2, 4).min(jobs).min(on.len().max(1)) };
         if k <= 1 {
             return vec![active.to_vec()];
         }

@@ -189,6 +189,32 @@ impl<K: Clone + Eq + Hash, V: Clone> Memo<K, V> {
     }
 }
 
+impl<K: Eq + Hash, V> Memo<(u64, K), V> {
+    /// The finished answers `keep` accepts, moved to revision `to`.
+    fn carry(self, to: u64, keep: &mut Keep<'_>) -> Self {
+        let entries = self.entries.into_inner().expect("program cache").into_iter().filter_map(|((revision, key), entry)| match entry {
+            Entry::Ready(answer) if keep(revision, Some(&answer.reads), None) => Some(((to, key), Entry::Ready(answer))),
+            _ => None,
+        }).collect();
+        Memo { entries: Mutex::new(entries), changed: Condvar::new() }
+    }
+}
+
+/// Whether an answer kept at a revision still holds: its reads, or the
+/// file it is about.
+pub(super) type Keep<'k> = dyn FnMut(u64, Option<&Reads>, Option<&std::path::Path>) -> bool + 'k;
+
+/// The entries of a run-wide map `keep` accepts, moved to revision `to`.
+fn carried<K: Eq + Hash, V>(map: RwLock<FxHashMap<K, V>>, mut judge: impl FnMut(K, V) -> Option<(K, V)>) -> RwLock<FxHashMap<K, V>> {
+    RwLock::new(map.into_inner().expect("run map").into_iter().filter_map(|(key, value)| judge(key, value)).collect())
+}
+
+/// [`Slots`] whose finished answers `keep` accepts at `revision`.
+fn carried_slots<K: Eq + Hash, V>(slots: Slots<K, V>, revision: u64, keep: &mut Keep<'_>) -> Slots<K, V> {
+    Mutex::new(slots.into_inner().expect("run slots").into_iter()
+        .filter(|(_, slot)| slot.get().is_some_and(|answer| keep(revision, Some(&answer.reads), None))).collect())
+}
+
 struct Build<'a, K: Eq + Hash, V> {
     memo: &'a Memo<K, V>,
     key: K,
@@ -273,6 +299,9 @@ fn once<K: Eq + Hash, V: Clone>(slots: &Slots<K, V>, key: K, compute: impl FnOnc
 
 #[derive(Default)]
 pub(super) struct Snapshot {
+    /// The linter's revision when the run began: answers kept without one
+    /// ([`Slots`]) are at least this fresh.
+    revision: u64,
     paths: Memo<(u64, Context), Inputs>,
     catalogs: Memo<(u64, CatalogKey), Arc<Catalog>>,
     // Read-mostly maps every lint thread consults: read locks on hits.
@@ -305,8 +334,9 @@ pub(super) struct Snapshot {
     packages: RwLock<FxHashMap<PackageKey, Cached<PackageProbe>>>,
     /// Values of other files' nodes, by stable leaf under one program: every
     /// linted file reading a declaration in a shared module computes the
-    /// same value ([`super::world`]'s `shared_value`).
-    values: RwLock<FxHashMap<ValueKey, Cached<StableValue>>>,
+    /// same value ([`super::world`]'s `shared_value`). `None`: unknown, and
+    /// unknown for every linted file alike.
+    values: RwLock<FxHashMap<ValueKey, Cached<Option<StableValue>>>>,
     /// Frames those values are read in, interned run-wide.
     frames: RwLock<(FxHashMap<Arc<StableBinding>, u32>, Vec<Arc<StableBinding>>)>,
 }
@@ -356,9 +386,11 @@ pub(super) type PackageKey = (u64, usize, std::path::PathBuf, Box<str>, Box<[Box
 pub(super) struct ModuleKey {
     pub revision: u64,
     pub settings: usize,
-    /// The program's identity: a hash of its input paths.
+    /// The program's identity: a hash of its input paths (0 for questions
+    /// no program changes).
     pub program: u64,
-    /// The linted file when it is outside the program's inputs.
+    /// The linted file when it is outside the program's inputs (and the
+    /// question depends on the program).
     pub outside: Option<PathBuf>,
     pub question: StableQuestion,
 }
@@ -455,6 +487,43 @@ pub(super) enum StableTarget {
 type UnitSlot = std::sync::OnceLock<(u64, Option<Arc<super::units::Unit>>)>;
 
 impl Snapshot {
+    pub(super) fn new(revision: u64) -> Snapshot {
+        Snapshot { revision, ..Default::default() }
+    }
+
+    /// A run at revision `to` starting with this run's answers that still
+    /// hold: an editor's next lint after a keystroke redoes only what read
+    /// the edited files.
+    pub(super) fn carry(self, to: u64, keep: &mut Keep<'_>) -> Snapshot {
+        let Snapshot { revision, paths, catalogs, units, modules, augmentations, prefetched: _, probes, listings, texts,
+            candidates, surveys, words, configurations, metadata, packages, values, frames } = self;
+        Snapshot {
+            revision: to,
+            paths: paths.carry(to, keep),
+            catalogs: catalogs.carry(to, keep),
+            units: carried(units, |path, (at, slot)| {
+                let names = slot.get().and_then(|(_, unit)| unit.as_ref()?.names.get()).map(|names| &*names.reads);
+                keep(at, names, Some(&*path)).then(|| (path, (to, slot.clone())))
+            }),
+            modules: carried(modules, |key, answer| keep(key.revision, Some(&answer.reads), None).then(|| (ModuleKey { revision: to, ..key }, answer))),
+            augmentations: carried(augmentations, |key, answer| keep(key.revision, Some(&answer.reads), None).then(|| (ModuleKey { revision: to, ..key }, answer))),
+            prefetched: Default::default(),
+            probes: carried(probes, |path, (at, found)| keep(at, None, Some(&*path)).then_some((path, (to, found)))),
+            listings: carried(listings, |dir, (at, listing)| keep(at, None, Some(&*dir)).then_some((dir, (to, listing)))),
+            texts: carried(texts, |path, (at, text, hash)| keep(at, None, Some(&*path)).then_some((path, (to, text, hash)))),
+            candidates: carried_slots(candidates, revision, keep),
+            surveys: carried_slots(surveys, revision, keep),
+            words: carried_slots(words, revision, keep),
+            configurations: carried(configurations, |(at, settings, dir), answer| keep(at, Some(&answer.reads), None).then(|| ((to, settings, dir), answer))),
+            metadata,
+            packages: carried(packages, |(at, settings, root, subpath, conditions), answer|
+                keep(at, Some(&answer.reads), None).then(|| ((to, settings, root, subpath, conditions), answer))),
+            values: carried(values, |(at, settings, program, outside, leaf), answer|
+                keep(at, Some(&answer.reads), None).then(|| ((to, settings, program, outside, leaf), answer))),
+            frames,
+        }
+    }
+
     /// The run's unit for `path` at `revision`, loaded once even when
     /// several lint threads ask at the same time (the others wait).
     pub(super) fn unit(&self, revision: u64, path: &std::path::Path,
@@ -574,11 +643,11 @@ impl Snapshot {
         self.modules.write().expect("run modules").insert(key, answer);
     }
 
-    pub(super) fn value_answer(&self, key: &ValueKey) -> Option<Cached<StableValue>> {
+    pub(super) fn value_answer(&self, key: &ValueKey) -> Option<Cached<Option<StableValue>>> {
         self.values.read().expect("run values").get(key).cloned()
     }
 
-    pub(super) fn keep_value(&self, key: ValueKey, answer: Cached<StableValue>) {
+    pub(super) fn keep_value(&self, key: ValueKey, answer: Cached<Option<StableValue>>) {
         self.values.write().expect("run values").insert(key, answer);
     }
 

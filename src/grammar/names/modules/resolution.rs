@@ -165,11 +165,10 @@ impl<H: Host + ?Sized> Resolver<'_, H> {
     fn resolve_inner(&self, importer: u32, specifier: &str, conditions: &[&str], question: &QueryContext) -> Result<Option<ScopeRef>, ()> {
         let path = self.host.path(importer).known().ok_or(())?;
         let dir = path.parent().ok_or(())?;
-        let prefix = &*self.settings.globals.library_prefix;
-        if let Some(name) = specifier.strip_prefix(prefix).filter(|_| !prefix.is_empty()) {
+        if let Some(name) = self.settings.library_name(specifier) {
             return self.library(dir, name, question)?.map(|path| self.host.scope(&path, question).known().ok_or(())).transpose().map(Option::flatten);
         }
-        let relative = Path::new(specifier).is_absolute() || specifier.starts_with("./") || specifier.starts_with("../");
+        let relative = is_relative(specifier);
         let mut config = None;
         for search in &self.settings.search {
             spend(question)?;
@@ -374,7 +373,25 @@ pub enum Origin {
     Project,
 }
 
+fn is_relative(specifier: &str) -> bool {
+    Path::new(specifier).is_absolute() || specifier.starts_with("./") || specifier.starts_with("../")
+}
+
 impl Settings {
+    /// The default library a specifier names (`globals.library_prefix`).
+    fn library_name<'s>(&self, specifier: &'s str) -> Option<&'s str> {
+        let prefix = &*self.globals.library_prefix;
+        specifier.strip_prefix(prefix).filter(|_| !prefix.is_empty())
+    }
+
+    /// Whether `specifier` resolves from its importer's directory alone:
+    /// relative paths and default libraries never consult the program's
+    /// configuration, inputs or ambient modules, so every program (and
+    /// every linted file outside one) gets the same answer.
+    pub fn resolves_from_directory(&self, specifier: &str) -> bool {
+        is_relative(specifier) || self.library_name(specifier).is_some()
+    }
+
     pub fn origin(&self, path: &Path) -> Origin {
         let text = clean(path).to_string_lossy().replace('\\', "/");
         if self.is_library(&text) { return Origin::Library }
