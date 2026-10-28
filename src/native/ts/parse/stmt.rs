@@ -417,6 +417,7 @@ impl<'s> Parser<'s> {
             self.type_params(&mut kids)?;
         }
         if self.eat_word("extends") {
+            self.heritage = true;
             let e = self.lhs()?;
             kids.add(Field::Extends, e);
             if self.is("<") {

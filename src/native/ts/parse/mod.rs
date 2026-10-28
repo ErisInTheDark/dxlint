@@ -51,6 +51,9 @@ pub struct Parser<'s> {
     in_gen: bool,
     /// Parsing a conditional type's `extends` clause.
     no_cond: bool,
+    /// The next `lhs` is a class heritage expression: its `<...>` are the
+    /// heritage's type arguments, never an instantiation expression.
+    heritage: bool,
     pub error: Option<(u32, String)>,
 }
 
@@ -74,7 +77,7 @@ impl<'s> Parser<'s> {
     pub fn new(src: &'s str, jsx: bool) -> Self {
         let mut lx = Lexer::new(src);
         let tok = lx.next_token();
-        Parser { lx, src, tok, prev_end: 0, nodes: Vec::new(), jsx, depth: 0, no_in: false, in_gen: false, no_cond: false, error: None }
+        Parser { lx, src, tok, prev_end: 0, nodes: Vec::new(), jsx, depth: 0, no_in: false, in_gen: false, no_cond: false, heritage: false, error: None }
     }
 
     /// Parses the whole file; the root is the last node.

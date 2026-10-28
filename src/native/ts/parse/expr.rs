@@ -318,6 +318,7 @@ impl<'s> Parser<'s> {
     // ---- calls and members ---------------------------------------------
 
     pub(super) fn lhs(&mut self) -> PResult<u32> {
+        let heritage = std::mem::replace(&mut self.heritage, false);
         let start = self.start();
         let mut e = if self.is_word("new") { self.new_expr()? } else { self.primary()? };
         loop {
@@ -361,7 +362,7 @@ impl<'s> Parser<'s> {
                     let targs = self.try_parse(|p| {
                         let mut targs = Kids::default();
                         p.type_args(&mut targs, Field::TypeArg)?;
-                        if matches!(p.tok.tok, Tok::P("(") | Tok::Template | Tok::TemplateHead) || p.instantiation_ends() {
+                        if matches!(p.tok.tok, Tok::P("(") | Tok::Template | Tok::TemplateHead) || !heritage && p.instantiation_ends() {
                             Ok(targs)
                         } else {
                             p.fail("not type arguments")

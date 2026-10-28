@@ -122,6 +122,11 @@ fn declarations_and_types() {
         dump("export default class A<T = string> extends B<T> implements C { private readonly x?: T; get y(): number { return 1 } }"),
         "export(kind=default declaration=class(name=A type_parameter=type_parameter(name=T default=string) extends=B type_argument=type_reference(name=T) implements=type_reference(name=C) member=class_property(modifier=private modifier=readonly key=x optional=? type=type_reference(name=T)) member=method(kind=get key=y return_type=number body=block(body=return(argument=1)))))"
     );
+    // A line break after the heritage's type arguments keeps them its own.
+    assert_eq!(
+        dump("class A extends B<T>\n\timplements C<T> {}"),
+        "class(name=A extends=B type_argument=type_reference(name=T) implements=type_reference(name=C type_argument=type_reference(name=T)))"
+    );
     assert_eq!(
         dump("type F<T> = T extends Promise<infer U> ? U : never;"),
         "type_alias(name=F type_parameter=type_parameter(name=T) type=conditional_type(check=type_reference(name=T) extends=type_reference(name=Promise type_argument=infer(type_parameter=type_parameter(name=U))) consequent=type_reference(name=U) alternate=never))"
