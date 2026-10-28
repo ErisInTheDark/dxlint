@@ -34,4 +34,6 @@ f();
 f<string>();
 ```
 
+A type argument counts as the default only when it is the same type: a numeric enum is not `number`, and `A & { x?: T }` is not `A`, though each is assignable to the other. An inferable argument is reported only when it is the only one written, since TypeScript then needs every other one.
+
 Adapted from the [typescript-eslint](https://typescript-eslint.io/rules/no-unnecessary-type-arguments) documentation (MIT).

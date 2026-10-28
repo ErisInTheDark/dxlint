@@ -119,13 +119,12 @@ fn type_argument_widened_numeric(parts) = parts != null && count(parts) > 0
   && all(parts, arm => count(arm) > 0 && all(arm, part => type_argument_numeric_part(part)))
 fn type_argument_enum_carriers(parts) = flat_map(parts ?? [],
   arm => map(filter(arm, part => contains(part.traits, "enum")), part => part.carrier))
-# TypeScript assigns `number` to numeric enums (and unions of them); distinct
-# numeric enums stay distinct.
+# A numeric enum is no stand-in for `number` (or another enum): removing it
+# widens what the instantiation sees.
 fn type_argument_numeric_carriers_same(a, b) = {
   value ca: type_argument_enum_carriers(a)
   value cb: type_argument_enum_carriers(b)
-  value count(ca) == 0 || count(cb) == 0
-    || count(ca) == count(cb) && all(ca, carrier => contains(cb, carrier))
+  value count(ca) == count(cb) && all(ca, carrier => contains(cb, carrier))
 }
 fn type_argument_numeric_same(a, b) = type_argument_numeric(a) && type_argument_numeric(b)
   && type_argument_numeric_carriers_same(a, b)
@@ -158,9 +157,19 @@ fn type_argument_equivalent(a, b, depth) = {
   value if depth < 3 && elements_a != null && elements_a == elements_b && elements_a > 0
     then type_argument_elements_same(a, b, elements_a, 0)
     else type_argument_numeric_same(ca, cb)
-      || type_argument_known(ca) && type_argument_known(cb)
+      || type_argument_known(ca) && type_argument_known(cb) && type_argument_same_carriers(ca, cb)
         && value_accepts(a, b, "value", "value") == true
         && value_accepts(b, a, "value", "value") == true
+}
+# Each side one instantiation of the same declarations (`Map<K, V>` through
+# any alias): mutual assignability then means the same type. Without it
+# (`A & { x?: T }` against `A`), assignable both ways is not the same type.
+fn type_argument_carrier_sites(parts) = map(type_argument_parts(parts),
+  part => if part.carrier_known && part.carrier != null then part.carrier.file ":" part.carrier.node else null)
+fn type_argument_same_carriers(ca, cb) = count(ca) == 1 && count(cb) == 1 && {
+  value a: type_argument_carrier_sites(ca)
+  value b: type_argument_carrier_sites(cb)
+  value count(a) > 0 && count(a) == count(b) && all(a, site => site != null) && all(zip(a, b), pair => first(pair) == last(pair))
 }
 fn type_argument_same_handles(a, b) = {
   value ca: value_constituents(a)
@@ -235,7 +244,9 @@ fn type_argument_parameter_sites(n, site, signature) = if signature != null then
     value constructor: find(site_field(n, site, "member") ?? [], member => member.name == "constructor")
     value if constructor != null then site_field(n, constructor, "parameter") ?? [] else []
   } else site_field(n, site, "parameter") ?? []
-fn type_argument_inferred(n, site, signature, formal) = {
+# Only a lone type argument can go: TypeScript wants every one without a
+# default once any is written.
+fn type_argument_inferred(n, site, signature, formal) = count(n.parent.type_argument.nodes) == 1 && {
   value owner: n.parent.node
   value pairs: zip(type_argument_parameter_sites(n, site, signature), owner.argument.nodes)
   value pair: find(pairs, pair => pair != null && first(pair) != null && last(pair) != null
