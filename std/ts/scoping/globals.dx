@@ -23,7 +23,7 @@ fn scoping_global_bindings(n) =
 fn scoping_global_mentions(program) = {
   value mentions: {
     value ts_global_mentions(program)
-    map (mention) { name: mention.name, offset: mention.offset, comment: mention.comment }
+    map (mention) { name: "{mention.name}", offset: mention.offset, comment: mention.comment }
   }
   value roots: filter(program.scoping_lexical_scopes, scope => scoping_script_scope(scope) && scoping_value_scope(scope))
   value script: ts_source_type(program) == "script"

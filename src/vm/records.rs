@@ -25,7 +25,7 @@ const GAVE_UP: u64 = 5;
 /// Nodes, node texts and text constants: a tag in bits 32.. over a 32-bit
 /// payload. Inverted, these codes are sign-set NaNs no number encodes to.
 const NODE_TAG: u64 = 1 << 32;
-const NODE_TEXT_TAG: u64 = 2 << 32;
+const SOURCE_TAG: u64 = 2 << 32;
 const STR_TAG: u64 = 3 << 32;
 const LIST_TAG: u64 = 4 << 32;
 const RECORD_TAG: u64 = 5 << 32;
@@ -38,7 +38,7 @@ pub(super) fn encode(v: V) -> u64 {
         V::Bool(true) => TRUE,
         V::Num(n) => !(if n.is_nan() { f64::NAN } else { n }).to_bits(),
         V::Node(id) => NODE_TAG | u64::from(id),
-        V::NodeText(id) => NODE_TEXT_TAG | u64::from(id),
+        V::Source(id) => SOURCE_TAG | u64::from(id),
         V::Str(s) => STR_TAG | u64::from(intern(s).1),
         V::List(handle) => LIST_TAG | u64::from(handle.bits()),
         V::Record(shape, handle) => RECORD_TAG | (u64::from(shape) << 35) | u64::from(handle.bits()),
@@ -64,10 +64,10 @@ fn decode(cell: u64) -> Cell {
         TRUE => Cell::Ready(V::Bool(true)),
         GAVE_UP => Cell::GaveUp,
         _ if cell >> 32 == NODE_TAG >> 32 => Cell::Ready(V::Node(payload)),
-        _ if cell >> 32 == NODE_TEXT_TAG >> 32 => Cell::Ready(V::NodeText(payload)),
         _ if cell >> 32 == STR_TAG >> 32 => Cell::Ready(V::Str(interned(payload))),
         _ if cell >> 32 == LIST_TAG >> 32 => Cell::Ready(V::List(super::values::Handle::from_bits(payload))),
         _ if cell >> 32 == FILE_TEXT_TAG >> 32 => Cell::Ready(V::Text(payload)),
+        _ if cell >> 32 == SOURCE_TAG >> 32 => Cell::Ready(V::Source(payload)),
         _ if (cell >> 32) & 7 == RECORD_TAG >> 32 && cell >> 51 == 0 => {
             Cell::Ready(V::Record((cell >> 35) as u16, super::values::Handle::from_bits(payload)))
         }
@@ -486,7 +486,7 @@ mod tests {
     fn stored_values_round_trip_and_stay_distinct_from_states() {
         for v in [
             V::Null, V::Bool(false), V::Bool(true), V::Num(0.0), V::Num(-0.0), V::Num(1.5), V::Num(f64::INFINITY),
-            V::Num(f64::NEG_INFINITY), V::Num(-1e300), V::Node(0), V::Node(u32::MAX), V::NodeText(7), V::Str(intern("a").0), V::Str(intern("").0),
+            V::Num(f64::NEG_INFINITY), V::Num(-1e300), V::Node(0), V::Node(u32::MAX), V::Source(7), V::Str(intern("a").0), V::Str(intern("").0),
             V::List(super::super::values::Handle::from_bits(0x8000_0000)),
             V::Record(u16::MAX, super::super::values::Handle::from_bits(0xbfff_ffff)),
             V::Text(u32::MAX),

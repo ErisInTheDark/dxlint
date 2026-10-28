@@ -128,7 +128,7 @@ fn logical_reference(n) = n != null && !logical_chain_top(n) && (n is (ts_member
 fn logical_same_reference(a, b) = a.reference_key != null && a.reference_key == b.reference_key
 fn logical_nullish(n) = if n is ts_null then false else if n is ts_identifier && n.text == "undefined" && n.resolved == "global" || n is ts_unary && n.operator == "void" && unparenthesised_node(n.argument.node) is ts_number && unparenthesised_node(n.argument.node).literal_value.value == 0 then true else null
 fn logical_nullish_reference(reference, value) = if logical_reference(reference) && logical_nullish(value) != null then { reference: reference, undefined: logical_nullish(value), operator: "??" } else null
-fn logical_nullish_comparison(n, op) = if n is ts_binary && n.operator == op then {
+fn logical_nullish_comparison(n, op) = if n is ts_binary && "{n.operator}" == "{op}" then {
   value n.left.node
   reference: unparenthesised_node
   value n.right.node
@@ -165,7 +165,7 @@ fn logical_existence(n) = {
 } else null
 fn logical_leftmost(value) = {
   value value.left.node
-  walk (current) if current is ts_logical && current.operator == value.operator then current.left.node else null
+  walk (current) if current is ts_logical && "{current.operator}" == "{value.operator}" then current.left.node else null
   last
 }
 fn logical_assignment_value(assigned, value) = if value is ts_logical && { value value; logical_leftmost: logical_leftmost; value logical_same_reference(assigned, logical_leftmost) } then { kind: "assignment", operator: value.operator "=" } else null

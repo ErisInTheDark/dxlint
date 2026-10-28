@@ -107,11 +107,11 @@ in style_tree_node let boundary_parent_name if parent is ts_parenthesized then p
 in ts_function let boundary_function_name if return_declaration then name.nonempty ?? "" else boundary_parent_name.nonempty ?? ""
 in ts_arrow let boundary_function_name boundary_parent_name.nonempty ?? ""
 in ts_method let boundary_function_name member_static_name.nonempty ?? ""
-in ts_function, ts_method let boundary_overload_entry { name: boundary_function_name, empty: body == null, exported: parent is ts_export, default: parent.boundary_default_export == true }
+in ts_function, ts_method let boundary_overload_entry { name: "{boundary_function_name}", empty: body == null, exported: parent is ts_export, default: parent.boundary_default_export == true }
 in ts_export let boundary_default_export kind == "default"
 in ts_export let boundary_overload_entry declaration.boundary_overload_entry
 in style_tree_node let boundary_overload_entries if is ts_export then parent.boundary_overload_entries else [] children.boundary_overload_entry
-in ts_function, ts_arrow, ts_method let boundary_has_overload any(parent.boundary_overload_entries, entry => entry.empty && (parent is ts_export && entry.exported && entry.default == parent.boundary_default_export && (entry.default || entry.name == boundary_function_name) || parent not ts_export && !entry.exported && entry.name == boundary_function_name))
+in ts_function, ts_arrow, ts_method let boundary_has_overload any(parent.boundary_overload_entries, entry => entry.empty && (parent is ts_export && entry.exported && entry.default == parent.boundary_default_export && (entry.default || entry.name == "{boundary_function_name}") || parent not ts_export && !entry.exported && entry.name == "{boundary_function_name}"))
 in ts_method let boundary_empty_method body == null
 in ts_class_property let boundary_accessor contains([] modifier, "accessor")
 in ts_function, ts_arrow, ts_method let boundary_report_site

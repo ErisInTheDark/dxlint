@@ -19,10 +19,12 @@ pub enum V {
     Null,
     Bool(bool),
     Num(f64),
-    /// A node as a value (reads as its text).
+    /// A node (`node`, a field, an enclosing layer): `.x` reads on it
+    /// wherever it was passed; two nodes are equal when they are the same
+    /// node. Joined, templated or compared with text, it reads as its source.
     Node(u32),
-    /// The source text of a node, as plain text.
-    NodeText(u32),
+    /// A node's own source (`text`): plain text, nothing further to read.
+    Source(u32),
     /// A config text constant.
     Str(&'static str),
     /// Text in a VM text pool: the file's, or evaluation scratch
@@ -98,7 +100,7 @@ impl V {
     /// The value's text, when it is text or a node.
     fn text<'s>(self, tree: &Tree, source: &'s str) -> Option<&'s str> {
         match self {
-            V::Node(id) | V::NodeText(id) => {
+            V::Node(id) | V::Source(id) => {
                 let n = tree.node(id);
                 Some(&source[n.start as usize..n.end as usize])
             }
@@ -113,7 +115,7 @@ impl V {
             V::Bool(b) => b,
             V::Num(n) => n != 0.0,
             V::Node(_) => true,
-            V::NodeText(id) => {
+            V::Source(id) => {
                 let n = tree.node(id);
                 n.end > n.start
             }
@@ -151,6 +153,8 @@ impl V {
     /// [`Value::loose_eq`].
     fn loose_eq(self, other: V, tree: &Tree, source: &str) -> bool {
         match (self, other) {
+            // Nodes are equal when they are the same node; compare their
+            // source with templates (`"{a}" == "{b}"`).
             (V::Node(a), V::Node(b)) => a == b,
             (V::Null, V::Null) => true,
             (V::Bool(a), V::Bool(b)) => a == b,
@@ -174,7 +178,7 @@ impl V {
                 let n = tree.node(id);
                 Value::Node(id, crate::expr::value::Text::Borrowed(&source[n.start as usize..n.end as usize]))
             }
-            V::NodeText(id) => {
+            V::Source(id) => {
                 let n = tree.node(id);
                 Value::from(&source[n.start as usize..n.end as usize])
             }
@@ -1423,7 +1427,7 @@ fn walk_seq<H: Host>(h: &Runtime<'_, H>, node: u32, s: &Seq, f: &mut Vec<V>, eac
             }
         }
         Seq::DescendantsOf(sel, receiver) => {
-            if let V::Node(root) | V::NodeText(root) = ev(h, node, receiver, f)? {
+            if let V::Node(root) = ev(h, node, receiver, f)? {
                 for id in h.descendants(root, sel) {
                     if !each(V::Node(id), f)? {
                         return Some(false);
@@ -1583,7 +1587,7 @@ fn ev<H: Host>(h: &Runtime<'_, H>, node: u32, e: &VExpr, f: &mut Vec<V>) -> Opti
         }
         VExpr::Field(label) => match tree.field_one(node, *label) {
             FieldOne::None => V::Null,
-            FieldOne::One(one) => V::NodeText(one),
+            FieldOne::One(one) => V::Node(one),
             FieldOne::Many => return ev_rare(h, node, e, f),
         },
         VExpr::OnField(label, inner) => match tree.field_one(node, *label) {
@@ -1624,7 +1628,7 @@ fn ev<H: Host>(h: &Runtime<'_, H>, node: u32, e: &VExpr, f: &mut Vec<V>) -> Opti
         VExpr::IsNull(value) => V::Bool(ev(h, node, value, f)? == V::Null),
         VExpr::NonEmpty(value) => match ev(h, node, value, f)? {
             V::Str("") => V::Null,
-            V::NodeText(id) if tree.node(id).end == tree.node(id).start => V::Null,
+            V::Node(id) | V::Source(id) if tree.node(id).end == tree.node(id).start => V::Null,
             v @ (V::List(_) | V::Record(..) | V::Text(_)) if !h.truthy(v) => V::Null,
             v => v,
         },
@@ -1637,7 +1641,7 @@ fn ev<H: Host>(h: &Runtime<'_, H>, node: u32, e: &VExpr, f: &mut Vec<V>) -> Opti
             value => value,
         },
         VExpr::Node => V::Node(node),
-        VExpr::Text => V::NodeText(node),
+        VExpr::Text => V::Source(node),
         VExpr::Parent => parent_layer(tree, node).map_or(V::Null, V::Node),
         VExpr::Offset => V::Num(f64::from(tree.node(node).start)),
         VExpr::EndOffset => V::Num(f64::from(tree.node(node).end)),
@@ -1663,7 +1667,7 @@ fn binary_rest<H: Host>(h: &Runtime<'_, H>, op: BinOp, a: V, b: V) -> Option<V> 
             }
             V::Num(h.num(a)? % divisor)
         }
-        BinOp::Mul if !matches!((a, b), (V::NodeText(_) | V::Str(_) | V::Text(_), V::Num(_)) | (V::Num(_), V::NodeText(_) | V::Str(_) | V::Text(_))) => {
+        BinOp::Mul if !matches!((a, b), (V::Node(_) | V::Source(_) | V::Str(_) | V::Text(_), V::Num(_)) | (V::Num(_), V::Node(_) | V::Source(_) | V::Str(_) | V::Text(_))) => {
             V::Num(h.num(a)? * h.num(b)?)
         }
         BinOp::Join if matches!(a, V::List(_)) || matches!(b, V::List(_)) => {
@@ -1757,10 +1761,10 @@ fn ev_rare<H: Host>(h: &Runtime<'_, H>, node: u32, e: &VExpr, f: &mut Vec<V>) ->
             let base = eval!(node, base)?;
             if &**key == "nodes" {
                 match base {
-                    V::Node(id) | V::NodeText(id) => h.list(&[V::Node(id)])?,
+                    V::Node(id) => h.list(&[V::Node(id)])?,
                     V::Null => h.list(&[])?,
                     value => h.project(value, |value| Some(match value {
-                        V::Node(id) | V::NodeText(id) => V::Node(id),
+                        V::Node(id) => V::Node(id),
                         value => h.key(value, key),
                     }))?,
                 }
@@ -1820,7 +1824,7 @@ fn ev_rare<H: Host>(h: &Runtime<'_, H>, node: u32, e: &VExpr, f: &mut Vec<V>) ->
             // Non-node values (tokens) carry a kind: their text, or a
             // record's `kind`.
             let tagged = match value {
-                V::NodeText(_) | V::Str(_) | V::Text(_) => h.with_text(value, |text| Some(g.matcher(text))).flatten(),
+                V::Source(_) | V::Str(_) | V::Text(_) => h.with_text(value, |text| Some(g.matcher(text))).flatten(),
                 V::Record(..) => h.with_text(h.key(value, "kind"), |text| Some(g.matcher(text))).flatten(),
                 _ => None,
             };
@@ -1843,11 +1847,11 @@ fn ev_rare<H: Host>(h: &Runtime<'_, H>, node: u32, e: &VExpr, f: &mut Vec<V>) ->
         VExpr::Ancestor(matcher, field) => match tree.ancestor(h.grammar(), node, *matcher) {
             None => V::Null,
             Some(ancestor) => match field {
-                None => V::NodeText(ancestor),
+                None => V::Node(ancestor),
                 Some(label) => match tree.fields(ancestor, *label).as_slice() {
                     [] => V::Null,
-                    [one] => V::NodeText(*one),
-                    many => h.list(&many.iter().map(|&id| V::NodeText(id)).collect::<Vec<_>>())?,
+                    [one] => V::Node(*one),
+                    many => h.list(&many.iter().map(|&id| V::Node(id)).collect::<Vec<_>>())?,
                 },
             },
         },
@@ -1960,7 +1964,7 @@ fn ev_rare<H: Host>(h: &Runtime<'_, H>, node: u32, e: &VExpr, f: &mut Vec<V>) ->
             with_bound(f, *slot, &[v], |f| ev(h, node, body, f))?
         }
         // A field holding several nodes (`ev` reads none or one).
-        VExpr::Field(label) => h.list(&tree.fields(node, *label).into_iter().map(V::NodeText).collect::<Vec<_>>())?,
+        VExpr::Field(label) => h.list(&tree.fields(node, *label).into_iter().map(V::Node).collect::<Vec<_>>())?,
         VExpr::OnField(label, inner) => {
             let items = tree.fields(node, *label).into_iter().map(|id| ev(h, id, inner, f)).collect::<Option<Vec<_>>>()?;
             h.list(&items)?
@@ -1968,7 +1972,7 @@ fn ev_rare<H: Host>(h: &Runtime<'_, H>, node: u32, e: &VExpr, f: &mut Vec<V>) ->
         VExpr::IsValue(subject, kinds) => {
             let matcher = match eval!(node, subject)? {
                 V::Node(id) => Some(tree.node(id).matcher),
-                v @ (V::NodeText(_) | V::Str(_) | V::Text(_)) => h.with_text(v, |text| Some(h.grammar().matcher(text)))?,
+                v @ (V::Source(_) | V::Str(_) | V::Text(_)) => h.with_text(v, |text| Some(h.grammar().matcher(text)))?,
                 value @ V::Record(..) => h.with_text(h.key(value, "kind"), |text| Some(h.grammar().matcher(text))).flatten(),
                 _ => None,
             };
@@ -2297,13 +2301,12 @@ mod tests {
         let fallback = CExpr::Binary(BinOp::Rem, Box::new(num(1.0)), Box::new(num(0.0)));
         let invalid = lower(&fallback, &[], &mut host.values);
         let field_else = lower(&CExpr::FieldElse(0, Box::new(fallback)), &[], &mut host.values);
-        for (node, expected) in [
-            (1, Value::from("x")),
-            (4, Value::list(vec![Value::from("x"), Value::from("x")])),
-            (6, Value::from("")),
-        ] {
-            assert_eq!(eval(&host, node, &field_else).unwrap().value(&host, "x"), expected);
-        }
+        // Fields are nodes; their source is "x" (or empty).
+        let texts = |node| match eval(&host, node, &field_else).unwrap().value(&host, "x") {
+            Value::List(items) => items.iter().map(|item| item.text().into_owned()).collect::<Vec<_>>(),
+            one => vec![one.text().into_owned()],
+        };
+        assert_eq!((texts(1), texts(4), texts(6)), (vec!["x".to_owned()], vec!["x".to_owned(), "x".to_owned()], vec![String::new()]));
         let missing = lower(&CExpr::FieldElse(99, Box::new(num(9.0))), &[], &mut host.values);
         assert_eq!(eval(&host, 1, &missing).unwrap().value(&host, "x"), Value::Num(9.0));
         let composite = lower(&record(), &[], &mut host.values);

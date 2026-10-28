@@ -190,9 +190,13 @@ in ts_class_member rule member-order warn "out of order" {
 ```
 
 **Links** lead to other nodes: `declaration` (of a referencing identifier)
-and `references` (of a declaring one). A node reads as its text, `is` and
-`not` test its layer, and `.x` reads anything on it: `declaration.line`,
-`references.line`.
+and `references` (of a declaring one). A field, enclosing layer, link or
+`node` is always a node: `is` and `not` test its layer, `.x` reads anything on
+it wherever it is passed (`declaration.line`, `references.line`, a `fn`
+parameter's `.references`), and joined or templated it reads as its source.
+Two nodes are equal only when they are the same node; compare their source with
+templates: `"{left}" == "{right}"`. A node compared with text (`name == "foo"`)
+compares its source.
 
 Fixes are minimal: the common start and end of the node and its fix are left
 alone, so a rule on a whole statement that only adds `;` edits one character.
@@ -370,7 +374,8 @@ Write these inside any comment:
 | `field.node`, `field.offset`, `field.attr`, `field.fact`, `field.link` | a builtin, attribute, fact or link read on the node in one of this node's fields (a list for several) |
 | `callee.object.x`, `parent.left.x`, `previous.body.x` | longer paths walk: each field label steps into its node(s), the last part is read there |
 | `first(references).line` | `.x` on a node value (from a link, `node`, or a lambda parameter) reads on that node; longer paths walk (`n.callee.object.offset`) |
-| `node`, `right.node`, `parent.node` | the node itself as a node value (it reads as its text) |
+| `node`, `right.node`, `parent.node` | the node itself (`right` alone is the same node) |
+| `"{x}"` | a node's source as text, for comparing two nodes' source |
 | `right.nodes`, `n.callee.nodes` | the field's node values, always a list, including for zero or one match |
 | `overlapping(layer)`, `overlapping(layer, from, to)` | the nodes of a layer or group anywhere in the file whose span overlaps the node's (or bytes `from..to`), in source order: on a `ts_line`, `overlapping(ts_comment)` |
 | `descendants(layer)` | the nodes of a layer or group (specialisations too) inside the current node, in source order: `descendants(ts_export)`. Always the node being evaluated, never a piped or `value` result |
@@ -379,7 +384,7 @@ Write these inside any comment:
 | `f(a, b)` | function call |
 | `a b` | join: values side by side join as text (`text "="`), or as lists if either is one (`[a] [b]`) |
 | `!a` `-a` `a * b` `a % b` `a + b` `a - b` | arithmetic (`text * n` repeats text) |
-| `== != < <= > >=` | comparisons (numbers compare numerically, even as text; only null equals null, so a missing value is not `""`) |
+| `== != < <= > >=` | comparisons (numbers compare numerically, even as text; only null equals null, so a missing value is not `""`; two nodes are equal only when they are the same node) |
 | `a && b`, `a \|\| b` | logic, short-circuiting |
 | `a ?? b` | lazy fallback for `null` only |
 | `value ~ pattern-item` | does the whole value match? (`text ~ /[a-z_]+/`, `text ~ snake`) |
@@ -663,7 +668,10 @@ attribute: it stays next to its rule.
 
 Functions (`fn`) compute a value from their arguments, for logic several rules
 share. A body sees its parameters and nothing of the node: pass in what it
-needs. Functions may call each other and themselves.
+needs. A node passed in (`name`, `ts_function`) is still a node, so reads on it
+work as they do inline: `binding.references`, `owner.line`. `text` is only the
+source.
+Functions may call each other and themselves.
 
 ```dx
 fn indent_width(line) = {

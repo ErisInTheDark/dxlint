@@ -182,7 +182,7 @@ fn ts_constant_identity(n, operator) = {
   walk (current) {
     value bare: unparenthesised_node(current)
     value when {
-      bare is ts_logical && bare.operator == operator then [bare.left.node, bare.right.node]
+      bare is ts_logical && "{bare.operator}" == "{operator}" then [bare.left.node, bare.right.node]
       bare is ts_assignment && contains(["||=", "&&="], bare.operator)
         && slice(bare.operator, 0, 2) == operator then bare.right.node
       else then null

@@ -134,7 +134,7 @@ in ts_class let no_extraneous_class_checked true
 
 # Constructors that do nothing a missing one would not.
 in ts_identifier let constructor_forwarding_key {spread: false, name: text}
-in ts_rest, ts_spread let constructor_forwarding_key if argument is ts_identifier then {spread: true, name: argument} else null
+in ts_rest, ts_spread let constructor_forwarding_key if argument is ts_identifier then {spread: true, name: "{argument}"} else null
 in ts_parenthesized forward constructor_forwarding_key, constructor_super_call from expression
 in ts_parameter let constructor_forwarding_key if init == null then name.constructor_forwarding_key else null
 in ts_parameter let constructor_parameter_exempt is_parameter_property || count(decorator) > 0

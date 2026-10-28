@@ -124,8 +124,8 @@ in ts_type_parameter rule es-no-unnecessary-type-constraint {
   warn "Constraining the generic type `{name}` to `{constraint}` does nothing and is unnecessary."
 }
 
-in ts_function let function_declaration { name: name, node: node, body: body != null }
-in ts_method let function_declaration { name: key, node: node, body: body != null }
+in ts_function let function_declaration { name: "{name}", node: node, body: body != null }
+in ts_method let function_declaration { name: "{key}", node: node, body: body != null }
 in ts_export forward function_declaration from declaration
 in style_tree_node let function_siblings if is ts_export then parent.function_siblings else [] children.function_declaration
 in ts_function, ts_method let overload_implementation body != null && any(parent.function_siblings, d => (d.node is ts_function) == (is ts_function) && d.name == function_declaration.name && !d.body)
@@ -214,7 +214,7 @@ in ts_template {
   let enum_bitwise_operand enum_literal_value
 }
 in ts_identifier let enum_bitwise_operand contains(enum_scope.keys, text)
-in ts_member, ts_index let enum_bitwise_operand object == enum_scope.name && contains(enum_scope.keys, static_name)
+in ts_member, ts_index let enum_bitwise_operand "{object}" == "{enum_scope.name}" && contains(enum_scope.keys, static_name)
 in ts_unary {
   let enum_literal_value contains(["+", "-"], operator) && argument.enum_literal_value == true
   let enum_bitwise_value if operator == "~" then argument.enum_bitwise_operand == true else contains(["+", "-"], operator) && argument.enum_bitwise_value == true
@@ -263,10 +263,10 @@ in ts_parameter rule es-parameter-properties {
   warn "Property {name} should be declared as a class property."
 }
 in ts_member let plain_this_property object is ts_this && property is ts_identifier
-in ts_assignment let parameter_assignment_name if left.plain_this_property == true && right is ts_identifier then right else null
+in ts_assignment let parameter_assignment_name if left.plain_this_property == true && right is ts_identifier then "{right}" else null
 in ts_expression_statement let leading_parameter_assignment if expression.parameter_assignment_name != null && (previous == null || previous.leading_parameter_assignment != null) then expression.parameter_assignment_name else null
 in ts_block let leading_parameter_assignments [] body.leading_parameter_assignment
-in ts_parameter let convertible_parameter if init == null && parameter_modifiers == "" then { name: name, annotation: type } else null
+in ts_parameter let convertible_parameter if init == null && parameter_modifiers == "" then { name: "{name}", annotation: "{type}" } else null
 in ts_method let property_conversion_constructor if key == "constructor" && body != null then { parameters: [] parameter.convertible_parameter, assignments: body.leading_parameter_assignments } else null
 in ts_class let property_conversion_constructors [] member.property_conversion_constructor
 fn conversion_parameter(parameters, name) = find(parameters, p => p.name == name)
@@ -275,7 +275,7 @@ in ts_class_property rule es-parameter-properties:class {
   option prefer ("class-property" | "parameter-property") = "class-property" "Preferred property declaration."
   when parameter_properties_checked
   when prefer == "parameter-property" && key is ts_identifier && init == null
-  when property_conversion_matches(parent.property_conversion_constructors, key, type)
+  when property_conversion_matches(parent.property_conversion_constructors, "{key}", "{type}")
   warn "Property {key} should be declared as a parameter property."
 }
 

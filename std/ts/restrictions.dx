@@ -359,7 +359,7 @@ in ts_declarator rule es-sort-vars {
   } as restriction_sorted_variables(bindings, ignoreCase)
 }
 in ts_identifier let restriction_sort_key_name text
-in ts_computed_key let restriction_sort_key_name if expression is ts_identifier then expression else null
+in ts_computed_key let restriction_sort_key_name if expression is ts_identifier then "{expression}" else null
 in ts_property, ts_method {
   let restriction_sort_computed key is ts_computed_key
   let restriction_sort_key_fallback key.restriction_sort_key_name
@@ -438,7 +438,7 @@ in ts_call rule es-no-alert {
   warn "Unexpected {name}."
 }
 in ts_labeled let restriction_target body.node
-in ts_labeled let restriction_label_entry {name: label, target: restriction_target}
+in ts_labeled let restriction_label_entry {name: "{label}", target: restriction_target}
 in ts_statement, ts_case let restriction_label_targets (parent.restriction_label_targets.nonempty ?? []) (if is ts_labeled then [restriction_label_entry] else [])
 in ts_break, ts_continue let restriction_target (find_last(restriction_label_targets, target => target.name == label)).target
 in ts_labeled, ts_break, ts_continue let no_labels_checked true
@@ -639,7 +639,7 @@ in ts_property, ts_pattern_property {
   let restriction_import_attribute_group parent.restriction_import_options == true && contains(["with", "assert"], static_name)
   let restriction_name_pattern is ts_pattern_property || parent.flow_destructuring_target == true
   let restriction_name_alias restriction_name_pattern && value != null && (value not ts_assignment_pattern || value.left != null)
-  let restriction_name_same value != null && key == (value.left.nonempty ?? value)
+  let restriction_name_same value != null && "{key}" == "{value.left.nonempty ?? value}"
 }
 in ts_export_specifier {
   let restriction_name_reexport parent.from != null
@@ -658,7 +658,7 @@ in ts_identifier, ts_private_name {
   let restriction_name_assignment is ts_member.property && parent.write_site != null && parent.restriction_name_mutation
   let restriction_name_renamed is ts_import_specifier.imported && parent.local != null || is ts_export_specifier.local && parent.restriction_name_export_alias && parent.restriction_name_reexport
   let restriction_name_property is ts_node.key && (if restriction_name_pattern then !restriction_name_alias || restriction_name_same else parent is ts_property) || restriction_name_assignment
-  let restriction_name_length if parent is (ts_declarator, ts_parameter) then is (ts_declarator.name, ts_parameter.name) else if parent is ts_assignment_pattern then is ts_assignment_pattern.left else if restriction_name_pattern then (if is ts_node.key then !restriction_name_alias || restriction_name_same else !restriction_name_same) else if parent is ts_property then is ts_property.key else if parent is ts_import_specifier then is ts_import_specifier.local && (parent.imported.static_name.nonempty ?? parent.imported) != restriction_identifier_name else if parent is ts_import then is (ts_import.default_import, ts_import.namespace) else if parent is (ts_function, ts_arrow, ts_method, ts_class_property, ts_rest, ts_array_pattern) then true else if parent is ts_class then parent.restriction_name_declaration else if parent is ts_try then is ts_try.parameter else if parent is ts_member then restriction_name_assignment else false
+  let restriction_name_length if parent is (ts_declarator, ts_parameter) then is (ts_declarator.name, ts_parameter.name) else if parent is ts_assignment_pattern then is ts_assignment_pattern.left else if restriction_name_pattern then (if is ts_node.key then !restriction_name_alias || restriction_name_same else !restriction_name_same) else if parent is ts_property then is ts_property.key else if parent is ts_import_specifier then is ts_import_specifier.local && (parent.imported.static_name.nonempty ?? "{parent.imported}") != restriction_identifier_name else if parent is ts_import then is (ts_import.default_import, ts_import.namespace) else if parent is (ts_function, ts_arrow, ts_method, ts_class_property, ts_rest, ts_array_pattern) then true else if parent is ts_class then parent.restriction_name_declaration else if parent is ts_try then is ts_try.parameter else if parent is ts_member then restriction_name_assignment else false
 }
 in ts_identifier, ts_private_name rule es-id-denylist {
   option names string[] = [] "restricted identifiers"

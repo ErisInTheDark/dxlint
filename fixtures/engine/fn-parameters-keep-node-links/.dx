@@ -1,0 +1,16 @@
+import .ts
+
+# A field (`name`) or enclosing (`ts_function`) read passed to a `fn` or
+# lambda still reaches its node: `.x` reads as it does inline.
+fn constructed(binding) = any(binding.references, use => use.parent is ts_new)
+fn line_of(owner) = owner.line
+in ts_declarator rule passed-to-new warn "'{name}' is passed to new" {
+  when constructed(name)
+}
+in ts_return rule return-line warn "returns in a function starting on line {line_of(ts_function)}" {
+  when ts_function != null && line_of(ts_function) == ts_function.line
+}
+# `text` is the node's source: nothing further to read on it.
+in ts_return rule text-reads-nothing warn "text read a node" {
+  when { value text; then (source) source.line != null }
+}

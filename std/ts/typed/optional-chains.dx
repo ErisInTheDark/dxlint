@@ -18,15 +18,15 @@ in ts_call let optional_shape {
   value if callee.optional_shape != null && { value args; all (shape) shape != null }
     then ["call", callee.optional_shape, args, types] else null
 }
-in ts_unary let optional_shape if argument.optional_shape != null then ["unary", operator, argument.optional_shape] else null
-in ts_binary let optional_shape if left.optional_shape != null && right.optional_shape != null then ["binary", operator, left.optional_shape, right.optional_shape] else null
+in ts_unary let optional_shape if argument.optional_shape != null then ["unary", "{operator}", argument.optional_shape] else null
+in ts_binary let optional_shape if left.optional_shape != null && right.optional_shape != null then ["binary", "{operator}", left.optional_shape, right.optional_shape] else null
 in ts_template let optional_shape {
   value quasis: { value quasi.nodes; map (quasi) quasi.text }
   value expressions: { value expression.nodes; map (expression) expression.optional_shape }
   value ["template", quasis, expressions]
 }
 in ts_parenthesized let optional_operands expression.optional_operands
-fn optional_side(n, op) = if n is ts_logical && n.operator == op then n.optional_operands else [n]
+fn optional_side(n, op) = if n is ts_logical && "{n.operator}" == "{op}" then n.optional_operands else [n]
 in ts_logical let optional_operands {
   value lhs: unparenthesised_node(left.node)
   value rhs: unparenthesised_node(right.node)
@@ -283,7 +283,7 @@ in ts_logical rule es-prefer-optional-chain {
   option requireNullish boolean = false "Require a nullable checked operand"
   option allowPotentiallyUnsafeFixesThatModifyTheReturnTypeIKnowWhatImDoing boolean = false "Allow fixes that may add undefined to the return type"
   let enclosing { value node; walk (n) if n.parent is ts_parenthesized then n.parent.node else null; last }
-  when operator != "??" && !(enclosing.parent is ts_logical && enclosing.parent.operator == operator)
+  when operator != "??" && !(enclosing.parent is ts_logical && "{enclosing.parent.operator}" == "{operator}")
   let opts {any: checkAny, unknown: checkUnknown, string: checkString, number: checkNumber, boolean: checkBoolean,
     bigint: checkBigInt, requireNullish: requireNullish, boundary: node}
   let operands { value optional_operands; map (operand) { value operand; unparenthesised_node; optional_operand operator } }

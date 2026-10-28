@@ -162,7 +162,7 @@ in ts_member rule es-dot-notation:keyword {
 }
 
 in ts_conditional let structure_ternary_jsx if parent is ts_conditional then parent.structure_ternary_jsx else parent is ts_jsx_expression
-in ts_binary, ts_logical let structure_operator operator
+in ts_binary, ts_logical let structure_operator "{operator}"
 in ts_conditional let structure_operator "?:"
 in ts_binary, ts_logical let structure_operator_span { start: operator.offset, end: operator.end_offset }
 in ts_conditional let structure_operator_span { start: (test.space_after).end, end: (test.space_after).end + 1 }

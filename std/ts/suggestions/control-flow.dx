@@ -30,7 +30,7 @@ in ts_block let guarded_iteration count([] body) == 0 || first(body.nodes) is ts
 
 in ts_variable_declaration let async_resource_declaration kind == "await using"
 in ts_for_of let asynchronous_iteration contains([] modifier, "await")
-in ts_labeled let declared_label label
+in ts_labeled let declared_label "{label}"
 in ts_node let repeated_evaluation when {
   parent is ts_function_like || parent is ts_for_of && parent.asynchronous_iteration == true then false
   is (ts_for.body, ts_for.test, ts_for.update, ts_for_in.body, ts_for_of.body) || is (ts_for_in.left, ts_for_of.left) && async_resource_declaration == true || is (ts_while.body, ts_while.test, ts_do_while.body, ts_do_while.test) then true

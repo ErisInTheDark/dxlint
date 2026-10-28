@@ -50,7 +50,7 @@ in ts_node let arrow_callback_barrier
   else is ts_super || is ts_meta_property && starts_with(text, "new") || any(children.arrow_callback_barrier, b => b == true)
 fn arrow_callback_fix(source, n, lexical) = {
   value parameters: n.parameter.nodes
-  value names: [] n.parameter.name
+  value names: map([] n.parameter.name, name => "{name}")
   value distinct: unique(names)
   value duplicates: count(distinct) != count(names)
   value unsafe: n.body.scoping_receiver_read == true && !lexical || duplicates || first(names) == "this" || count(n.type_parameter) != 0
@@ -279,7 +279,7 @@ in ts_function rule es-func-name-matching {
   when name != null && matched != null && target != null
   when includeCommonJSModuleExports || !matched.commonjs
   when descriptor_call || ts_identifier_name_valid(target)
-  when if mode == "always" then target != name else target == name
+  when if mode == "always" then "{target}" != "{name}" else "{target}" == "{name}"
   report at matched.offset
   warn "Function name `{name}` should{if mode == 'never' then ' not' else ''} match {if matched.property then 'property' else 'variable'} name `{target}`."
 }

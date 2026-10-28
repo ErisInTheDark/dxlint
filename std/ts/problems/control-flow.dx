@@ -50,15 +50,15 @@ in ts_while.test, ts_do_while.test, ts_for.test rule es-no-constant-condition:lo
 }
 
 fn problem_condition_parts(n, operator) = {
-  value walk(unparenthesised_node(n), part => if part is ts_logical && part.operator == operator
+  value walk(unparenthesised_node(n), part => if part is ts_logical && "{part.operator}" == "{operator}"
     then [unparenthesised_node(part.left.node), unparenthesised_node(part.right.node)] else [])
-  filter (part) part not ts_logical || part.operator != operator
+  filter (part) part not ts_logical || "{part.operator}" != "{operator}"
 }
 fn problem_condition_equal(a, b) = {
   value left: unparenthesised_node(a)
   value right: unparenthesised_node(b)
   value kind_name(left) == kind_name(right) && (if left is ts_logical
-    && contains(["&&", "||"], left.operator) && left.operator == right.operator then
+    && contains(["&&", "||"], left.operator) && "{left.operator}" == "{right.operator}" then
       problem_condition_equal(left.left.node, right.left.node) && problem_condition_equal(left.right.node, right.right.node)
       || problem_condition_equal(left.left.node, right.right.node) && problem_condition_equal(left.right.node, right.left.node)
     else left.token_texts == right.token_texts)

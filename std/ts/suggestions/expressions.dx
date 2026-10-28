@@ -79,7 +79,7 @@ in ts_conditional rule es-no-unneeded-ternary {
 
 in ts_conditional rule es-no-unneeded-ternary:default-assignment {
   option defaultAssignment boolean = true "allow conditional expressions used as default assignments"
-  when !defaultAssignment && (test.unwrapped_node.nonempty ?? test.node) is ts_identifier && (consequent.unwrapped_node.nonempty ?? consequent.node) is ts_identifier && (test.unwrapped_text.nonempty ?? test) == (consequent.unwrapped_text.nonempty ?? consequent)
+  when !defaultAssignment && (test.unwrapped_node.nonempty ?? test.node) is ts_identifier && (consequent.unwrapped_node.nonempty ?? consequent.node) is ts_identifier && (test.unwrapped_text.nonempty ?? "{test}") == (consequent.unwrapped_text.nonempty ?? "{consequent}")
   warn "Unnecessary use of conditional expression for default assignment."
   let operand alternate.node
   let bare unparenthesised_node(operand)
@@ -111,7 +111,7 @@ fn suggestion_implicit_coercion(source, n) = {
   value left: unparenthesised_node(n.left.node)
   value right: unparenthesised_node(n.right.node)
   value if n is ts_unary then when {
-    contains(["!", "-"], n.operator) && argument is ts_unary && argument.operator == n.operator then {
+    contains(["!", "-"], n.operator) && argument is ts_unary && "{argument.operator}" == "{n.operator}" then {
       value inner: argument.argument.node
       value if n.operator == "!" then {kind: "boolean", operator: "!!", recommendation: "Boolean(" suggestion_coercion_operand(inner) ")"}
         else if !suggestion_coercion_numeric(inner) then {kind: "number", operator: "- -", recommendation: "Number(" suggestion_coercion_operand(inner) ")"}

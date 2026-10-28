@@ -55,7 +55,7 @@ fn conversion_operator(n) = if n is (ts_binary, ts_assignment) then {
   value inner: unparenthesised_node(n.argument.node)
   value if n.operator == "+" && conversion_primitive(n.argument.node, "number", false) then
     conversion_finding("number", "Using the unary + operator on a number", n.offset)
-  else if inner is ts_unary && inner.operator == n.operator then
+  else if inner is ts_unary && "{inner.operator}" == "{n.operator}" then
     if n.operator == "!" && conversion_primitive(inner.argument.node, "boolean", false) then
       conversion_finding("boolean", "Using !! on a boolean", n.offset)
     else if n.operator == "~" && conversion_integers(inner.argument.node) then

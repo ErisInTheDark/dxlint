@@ -1,0 +1,2 @@
+a.ts:5:8-5:18 passed-to-new#0 'passed' is passed to new
+a.ts:7:2-7:25 return-line#0 returns in a function starting on line 3

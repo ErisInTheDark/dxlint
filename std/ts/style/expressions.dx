@@ -12,20 +12,20 @@ in ts_assignment rule es-no-multi-assign {
   warn "Unexpected chained assignment."
 }
 
-in ts_member, ts_index let loop_collection_read if object not ts_this && write_site == null then object else null
+in ts_member, ts_index let loop_collection_read if object not ts_this && write_site == null then "{object}" else null
 in ts_identifier let loop_index_use { start: offset, end: end_offset, array: if is (ts_node.property, ts_node.index) then parent.loop_collection_read else null }
 in ts_identifier let loop_index_uses [] references.loop_index_use
 in ts_number let loop_zero literal_value.value == "0"
-in ts_declarator let counted_loop_binding if name is ts_identifier && init.loop_zero == true then { name: name, uses: name.loop_index_uses } else null
+in ts_declarator let counted_loop_binding if name is ts_identifier && init.loop_zero == true then { name: "{name}", uses: name.loop_index_uses } else null
 in ts_variable_declaration let counted_loop_initialisation if kind != "const" && count(declaration) == 1 then first([] declaration.counted_loop_binding) else null
-in ts_member let array_length_object if property is ts_identifier && property == "length" then object else null
-in ts_index let array_length_object if index is ts_identifier && index == "length" then object else null
-in ts_binary let counted_loop_test if operator == "<" then { name: left, array: right.array_length_object } else null
+in ts_member let array_length_object if property is ts_identifier && property == "length" then "{object}" else null
+in ts_index let array_length_object if index is ts_identifier && index == "length" then "{object}" else null
+in ts_binary let counted_loop_test if operator == "<" then { name: "{left}", array: right.array_length_object } else null
 in ts_number let loop_increment_unit literal_value.value == "1"
-in ts_binary let counted_loop_increment if operator == "+" then { left: left, right: right, left_unit: left.loop_increment_unit, right_unit: right.loop_increment_unit } else null
-in ts_update let incremented_loop_name if operator == "++" then argument else null
+in ts_binary let counted_loop_increment if operator == "+" then { left: "{left}", right: "{right}", left_unit: left.loop_increment_unit, right_unit: right.loop_increment_unit } else null
+in ts_update let incremented_loop_name if operator == "++" then "{argument}" else null
 fn increments_name(sum, name) = sum != null && (sum.left == name && sum.right_unit == true || sum.right == name && sum.left_unit == true)
-in ts_assignment let incremented_loop_name if operator == "+=" && right.loop_increment_unit == true || operator == "=" && increments_name(right.counted_loop_increment, left) then left else null
+in ts_assignment let incremented_loop_name if operator == "+=" && right.loop_increment_unit == true || operator == "=" && increments_name(right.counted_loop_increment, "{left}") then "{left}" else null
 in ts_for rule es-prefer-for-of {
   let binding init.counted_loop_initialisation
   let comparison test.counted_loop_test
@@ -37,7 +37,7 @@ in style_tree_node let assignment_node_start offset
 in style_tree_node let assignment_call_start if parent is ts_parenthesized then parent.assignment_call_start else if parent is ts_call then parent.assignment_node_start else null
 in ts_parenthesized let assignment_inner_start expression.assignment_value_start
 in style_tree_node let assignment_value_start assignment_inner_start.nonempty ?? offset
-in ts_parameter let assignment_property_name if is_parameter_property && name is ts_identifier then name else null
+in ts_parameter let assignment_property_name if is_parameter_property && name is ts_identifier then "{name}" else null
 in ts_method let assignment_constructor_properties [] parameter.assignment_property_name
 in ts_method let assignment_is_constructor key == "constructor"
 in ts_method, ts_function, ts_arrow let assignment_function_node { node: node, constructor: assignment_is_constructor == true, properties: assignment_constructor_properties.nonempty ?? [], call: if is ts_arrow then assignment_call_start else null, outer: parent.assignment_nearest_function }
@@ -47,7 +47,7 @@ in ts_class_property let assignment_property_node { init: init.assignment_value_
 in style_tree_node let assignment_nearest_property if is ts_class_property then assignment_property_node else parent.assignment_nearest_property
 in ts_identifier let assignment_parameter_value if reference_kind == "parameter" then text else null
 in ts_as, ts_non_null, ts_parenthesized let assignment_parameter_value expression.assignment_parameter_value
-in ts_member let assignment_this_name if object is ts_this then property else null
+in ts_member let assignment_this_name if object is ts_this then "{property}" else null
 in ts_index let assignment_this_name if object is ts_this then index.static_name else null
 fn assignment_constructor(owner) = owner.node is ts_method && owner.constructor
 fn assignment_field_initialiser(owner, property) = property != null && (owner == null || owner.node is ts_arrow && owner.call == property.init)

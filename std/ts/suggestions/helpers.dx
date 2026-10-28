@@ -5,7 +5,7 @@ define {
 in ts_block let statement_count count([] body)
 
 in ts_parenthesized let unwrapped_node expression.unwrapped_node.nonempty ?? expression.node
-in ts_parenthesized let unwrapped_text expression.unwrapped_text.nonempty ?? expression
+in ts_parenthesized let unwrapped_text expression.unwrapped_text.nonempty ?? "{expression}"
 
 in ts_parenthesized let inner_comparison_tokens expression.unparenthesised_tokens
 in ts_node let unparenthesised_tokens if is ts_parenthesized then inner_comparison_tokens else token_texts

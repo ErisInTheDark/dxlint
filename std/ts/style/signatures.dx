@@ -8,8 +8,8 @@ fn signature_key_shape(key, name) = when {
   key is (ts_identifier, ts_string, ts_number, ts_bigint, ts_boolean, ts_null) then if starts_with(name, '"') then "quoted" else "normal"
   else then "expression"
 }
-in ts_function let overload_identity if name != null then { name: name, shape: "normal", static: null, call: false } else null
-in ts_method, ts_method_signature let overload_identity { name: style_member_name, shape: { value key.member_key_node.nonempty ?? key.node; signature_key_shape style_member_name }, static: if is ts_method then is_static else null, call: false }
+in ts_function let overload_identity if name != null then { name: "{name}", shape: "normal", static: null, call: false } else null
+in ts_method, ts_method_signature let overload_identity { name: "{style_member_name}", shape: { value key.member_key_node.nonempty ?? key.node; signature_key_shape style_member_name }, static: if is ts_method then is_static else null, call: false }
 in ts_call_signature let overload_identity { name: if kind == "new" then "new" else "call", shape: "normal", static: null, call: kind != "new" }
 in ts_export forward overload_identity from declaration
 in ts_function, ts_method, ts_method_signature, ts_call_signature, ts_export let overload_entry { identity: overload_identity, start: offset }
@@ -43,7 +43,7 @@ in ts_method_signature rule es-no-misused-new:constructor {
   warn "Interfaces cannot be constructed, only classes."
 }
 in ts_method rule es-no-misused-new:class {
-  when key == "new" && body == null && return_type == ts_class.name
+  when key == "new" && body == null && "{return_type}" == "{ts_class.name}"
   warn "Class cannot have method named `new`."
 }
 
@@ -85,7 +85,7 @@ in style_tree_node let function_this_offset when {
   else then { value children.function_this_offset; compact; first }
 }
 in ts_type_reference let function_base name == "Function"
-in ts_interface let function_type_container { name: name, kind: "Interface", eligible: count(member) == 1 && (count(extends) == 0 || count(extends) == 1 && (first([] extends) == "Function" || first([] extends.function_base) == true)), this: function_this_offset }
+in ts_interface let function_type_container { name: "{name}", kind: "Interface", eligible: count(member) == 1 && (count(extends) == 0 || count(extends) == 1 && (first([] extends) == "Function" || first([] extends.function_base) == true)), this: function_this_offset }
 in ts_type_literal let function_type_container { name: "", kind: "Type literal", eligible: count(member) == 1, this: null }
 in ts_interface let function_type_header_end {
   value last_parameter: last(type_parameter.nodes)
@@ -209,9 +209,9 @@ in style_tree_node let unified_bare_type unified_inner_type.nonempty ?? text
 in ts_identifier, ts_this let unified_parameter_name text
 in ts_rest let unified_parameter_name argument.unified_parameter_name
 in ts_parameter let unified_parameter { index: index, offset: offset, end: end_offset, line: line, name: name.unified_parameter_name, rest: name is ts_rest, optional: optional != null, type: type.unified_bare_type, raw_type: type, union: type.unified_union_members.nonempty ?? [] }
-in ts_type_parameter let unified_type_parameter { name: name, constraint: constraint.unified_bare_type }
-in ts_type_parameter let unified_type_name name
-in ts_type_reference let unified_outer_type name
+in ts_type_parameter let unified_type_parameter { name: "{name}", constraint: constraint.unified_bare_type }
+in ts_type_parameter let unified_type_name "{name}"
+in ts_type_reference let unified_outer_type "{name}"
 in ts_array_type, ts_parenthesized_type let unified_outer_type type.unified_outer_type
 in ts_parameter let unified_outer_type type.unified_outer_type
 in ts_union let unified_union_children { value [] type.unified_union_members; fold ([]) (members, child) members child }
@@ -230,10 +230,10 @@ in ts_function, ts_method, ts_method_signature, ts_call_signature let unified_do
 in style_tree_node let unified_after_line line + { value text; split "\n"; count } - 1 + { value space_after.text.nonempty ?? ""; split "\n"; count } - 1
 in style_tree_node let unified_next_offset space_after.end
 in ts_method let unified_head { offset: key.unified_next_offset, line: key.unified_after_line }
-in ts_function let unified_key if body == null then name.nonempty ?? "default" else null
-in ts_method let unified_key if body == null && kind != "get" && kind != "set" && key != null then { kind: kind_name(key.node), name: key, static: contains([] modifier, "static") } else null
-in ts_method_signature let unified_key if kind != "get" && kind != "set" && key != null then { kind: kind_name(key.node), name: key, static: false } else null
-in ts_call_signature let unified_key kind.nonempty ?? "call"
+in ts_function let unified_key if body == null then (if name != null then "{name}" else "default") else null
+in ts_method let unified_key if body == null && kind != "get" && kind != "set" && key != null then { kind: kind_name(key.node), name: "{key}", static: contains([] modifier, "static") } else null
+in ts_method_signature let unified_key if kind != "get" && kind != "set" && key != null then { kind: kind_name(key.node), name: "{key}", static: false } else null
+in ts_call_signature let unified_key if kind != null then "{kind}" else "call"
 in ts_function, ts_method, ts_method_signature, ts_call_signature let unified_signature if unified_key == null then null else { key: unified_key, node: node, offset: offset, head: unified_head.nonempty ?? { offset: offset, line: line }, parameters: [] parameter.unified_parameter, types: [] type_parameter.unified_type_parameter, result: return_type.unified_bare_type, outer: [] parameter.unified_outer_type }
 in ts_export let unified_signature declaration.unified_signature
 in ts_program, ts_block, ts_class, ts_interface, ts_type_literal let unified_signatures [] children.unified_signature

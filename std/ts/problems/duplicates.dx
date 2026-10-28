@@ -4,7 +4,7 @@ define {
 
 # Getters and setters of one name pair up; anything else of the same name
 # (in the same object, or the same static-ness of a class) is a duplicate.
-in ts_method let accessor_kind if kind == "get" || kind == "set" then kind else "init"
+in ts_method let accessor_kind if kind == "get" || kind == "set" then "{kind}" else "init"
 in ts_property, ts_class_property let accessor_kind "init"
 @macro duplicate_of(e) (e != null && e.name == static_name && (accessor_kind == "init" || e.kind == "init" || e.kind == accessor_kind))
 # (`""` is a name: `type_of` tells it from null.)
