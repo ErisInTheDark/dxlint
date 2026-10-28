@@ -1,0 +1,25 @@
+import .ts
+
+# Suggestions are offered, never applied by --fix; a placeholder marks the
+# name left to choose. Several regions of one fix apply together.
+in ts_if.test rule complex-condition warn "Name this condition" {
+  when parent.alternate is ts_block || text == "c"
+  suggest "Put the condition into a variable" if parent.parent is (ts_block, ts_program) {
+    at parent.offset as "const " placeholder("condition") " = " text ";" @newline parent.indent
+    as placeholder("condition")
+  }
+  suggest "Wrap it in a function" if parent.parent is (ts_block, ts_program) {
+    at parent.offset as "const " placeholder("condition") " = () => " text ";" @newline parent.indent
+    as placeholder("condition") "()"
+  }
+  suggest "Negate it twice" as "!!(" text ")"
+}
+
+in ts_binary rule less-than warn "Compare with <" {
+  when operator == ">"
+  fix {
+    at left.node as right
+    at operator.node as "<"
+    at right.node as left
+  }
+}

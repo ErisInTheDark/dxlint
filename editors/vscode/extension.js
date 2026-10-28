@@ -243,6 +243,16 @@ async function start() {
   }
 }
 
+// A dxlint fix or suggestion left a name to choose (`placeholder(...)` in
+// the rule): start renaming it, so the language's own rename updates every
+// use.
+async function renamePlaceholder(uri, position) {
+  const editor = await vscode.window.showTextDocument(vscode.Uri.parse(uri));
+  const at = new vscode.Position(position.line, position.character);
+  editor.selection = new vscode.Selection(at, at);
+  await vscode.commands.executeCommand("editor.action.rename");
+}
+
 async function restart() {
   if (client && client.needsStop()) {
     await client.stop();
@@ -257,6 +267,7 @@ async function activate(context) {
     { dispose: unwatchBuilds },
     vscode.workspace.onDidChangeWorkspaceFolders(watchBuilds),
     vscode.commands.registerCommand("dxlint.restart", restart),
+    vscode.commands.registerCommand("dxlint.renamePlaceholder", renamePlaceholder),
     vscode.workspace.onDidChangeConfiguration(async (e) => {
       if (e.affectsConfiguration("dxlint")) {
         await restart();

@@ -31,6 +31,10 @@ use crate::engine::reads::{self, Reads};
 #[cfg(test)]
 mod tests;
 
+/// A client command (the VS Code extension's): `[uri, position]`, renaming
+/// from that position once a fix leaving a placeholder is applied.
+const RENAME_COMMAND: &str = "dxlint.renamePlaceholder";
+
 struct Doc {
     uri: String,
     text: String,
@@ -632,16 +636,30 @@ impl Server {
             if d["source"] != "dxlint" {
                 continue;
             }
-            let Some(fix) = d["data"]["fix"].as_array() else { continue };
-            fixable += 1;
-            if wants("quickfix") {
-                actions.push(json!({
-                    "title": format!("Fix: {}", d["message"].as_str().unwrap_or_default()),
+            // The editor starts renaming the placeholder the fix leaves.
+            let action = |title: String, edits: &Value, rename: &Value, preferred: bool| {
+                let mut action = json!({
+                    "title": title,
                     "kind": "quickfix",
                     "diagnostics": [d],
-                    "isPreferred": true,
-                    "edit": { "changes": { u.clone(): fix } },
-                }));
+                    "isPreferred": preferred,
+                    "edit": { "changes": { u.clone(): edits } },
+                });
+                if !rename.is_null() {
+                    action["command"] = json!({ "title": "Rename", "command": RENAME_COMMAND, "arguments": [u, rename] });
+                }
+                action
+            };
+            if let Some(fix) = d["data"].get("fix") {
+                fixable += 1;
+                if wants("quickfix") {
+                    actions.push(action(format!("Fix: {}", d["message"].as_str().unwrap_or_default()), fix, &d["data"]["rename"], true));
+                }
+            }
+            if wants("quickfix") {
+                for suggestion in d["data"]["suggestions"].as_array().into_iter().flatten() {
+                    actions.push(action(suggestion["title"].as_str().unwrap_or_default().to_owned(), &suggestion["edits"], &suggestion["rename"], false));
+                }
             }
         }
         if (fixable > 0 && wants("quickfix")) || (!only.is_empty() && wants("source.fixAll.dx")) {

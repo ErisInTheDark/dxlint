@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use crate::config::ast::Severity;
 use crate::config::error::ConfigError;
 use crate::config::source::SourceMap;
-use crate::engine::{Diagnostic, Edit, Linter};
+use crate::engine::{Diagnostic, Edit, Fix, Linter};
 use crate::line_index::LineIndex;
 
 pub fn range(text: &str, lines: &LineIndex, start: usize, end: usize) -> Value {
@@ -39,9 +39,54 @@ pub fn diagnostic(text: &str, lines: &LineIndex, d: &Diagnostic) -> Value {
         "message": d.message,
     });
     if let Some(fix) = &d.fix {
-        v["data"] = json!({ "fix": text_edits(text, lines, &fix.edits) });
+        v["data"]["fix"] = text_edits(text, lines, &fix.edits);
+        if let Some(at) = rename_at(text, lines, fix) {
+            v["data"]["rename"] = at;
+        }
+    }
+    if !d.suggestions.is_empty() {
+        v["data"]["suggestions"] = Value::Array(d.suggestions.iter().map(|s| {
+            let mut suggestion = json!({ "title": s.title, "edits": text_edits(text, lines, &s.fix.edits) });
+            if let Some(at) = rename_at(text, lines, &s.fix) {
+                suggestion["rename"] = at;
+            }
+            suggestion
+        }).collect());
     }
     v
+}
+
+/// Where the fix's first placeholder starts once the fix is applied: the
+/// position an editor renames from.
+fn rename_at(text: &str, lines: &LineIndex, fix: &Fix) -> Option<Value> {
+    let at = fix.placeholders.iter().map(|range| range.start).min()?;
+    let (line, character) = position_after(text, lines, &fix.edits, at);
+    Some(json!({ "line": line, "character": character }))
+}
+
+/// The UTF-16 position of `at`, an offset in `text` after `edits` (sorted,
+/// non-overlapping). Only the text from the first edit's line up to `at` is
+/// rebuilt.
+fn position_after(text: &str, lines: &LineIndex, edits: &[Edit], at: usize) -> (u32, u32) {
+    let Some(first) = edits.first().filter(|first| first.start < at) else { return lines.to_utf16(text, at) };
+    let line = lines.line_of(first.start);
+    let line_start = lines.line_start(line);
+    let mut rebuilt = String::from(&text[line_start..first.start]);
+    let mut pos = first.start;
+    let wanted = at - line_start;
+    for edit in edits {
+        if rebuilt.len() >= wanted { break; }
+        rebuilt.push_str(&text[pos..edit.start]);
+        rebuilt.push_str(&edit.text);
+        pos = edit.end;
+    }
+    if rebuilt.len() < wanted {
+        rebuilt.push_str(&text[pos..(pos + wanted - rebuilt.len()).min(text.len())]);
+    }
+    rebuilt.truncate(wanted.min(rebuilt.len()));
+    let newlines = rebuilt.matches('\n').count();
+    let column = &rebuilt[rebuilt.rfind('\n').map_or(0, |i| i + 1)..];
+    ((line + newlines) as u32, column.encode_utf16().count() as u32)
 }
 
 /// Diagnostics of one file; each rule code links to where the rule is
@@ -98,6 +143,28 @@ pub fn config_error(sources: &SourceMap, e: &ConfigError, uri_of: &dyn Fn(crate:
         v["relatedInformation"] = Value::Array(related);
     }
     v
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn positions_after_a_fix_match_the_fixed_text() {
+        let text = "x\n\tif (a && b) {\n\t\tgo(\"é\");\n\t}\n";
+        let edits = [
+            Edit { start: 3, end: 3, text: "const ok = a && b;\n\t".into() },
+            Edit { start: 7, end: 13, text: "ok".into() },
+            Edit { start: 23, end: 25, text: "ü\nü".into() },
+        ];
+        let fix = Fix { range: 3..25, edits: edits.to_vec(), placeholders: Vec::new() };
+        let after = fix.apply(text);
+        let after_lines = LineIndex::new(&after);
+        let lines = LineIndex::new(text);
+        for at in (0..=after.len()).filter(|&at| after.is_char_boundary(at)) {
+            assert_eq!(position_after(text, &lines, &edits, at), after_lines.to_utf16(&after, at), "offset {at}");
+        }
+    }
 }
 
 /// Replaces the whole document with `new_text`.

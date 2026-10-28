@@ -428,16 +428,11 @@ pub struct RuleDef {
     pub files: Vec<(String, Span)>,
     pub ignore: Vec<(String, Span)>,
     pub when: Vec<Expr>,
-    /// `fix ... as expr`: what the selected region should look like. Different text =>
-    /// diagnostic + fix.
-    pub fix: Option<Expr>,
-    /// `fix if cond as expr`: only then is the fix attached; otherwise the
-    /// diagnostic is reported without one.
-    pub fix_when: Option<Expr>,
-    /// What `fix` rewrites: the node, or the whitespace next to it.
-    pub fix_target: FixTarget,
-    /// `fix at expr as expr`: an explicit UTF-8 byte span instead of the target.
-    pub fix_at: Option<Expr>,
+    /// `fix ... as expr`: what the selected regions should look like.
+    /// Different text => diagnostic + fix.
+    pub fix: Option<FixDef>,
+    /// `suggest "title" ... as expr`: fixes applied only on request.
+    pub suggestions: Vec<SuggestDef>,
     /// `let name expr` clauses: values computed once per node, usable in
     /// the rule's other clauses (and later `let`s).
     pub locals: Vec<(Name, Expr)>,
@@ -498,7 +493,7 @@ impl RuleDef {
     /// A configuring line that changes only severity (and, beside it,
     /// options): what a `files` block may hold.
     pub fn settings_only(&self) -> bool {
-        self.message.is_none() && self.fix.is_none() && self.fix_when.is_none() && self.fix_at.is_none()
+        self.message.is_none() && self.fix.is_none() && self.suggestions.is_empty()
             && self.locals.is_empty() && self.when.is_empty() && self.item_locals.is_empty() && self.item_when.is_empty()
             && self.indents.is_empty() && self.indent_reset.is_none() && self.report.is_none() && self.report_at.is_none()
             && self.each.is_none() && self.files.is_empty() && self.ignore.is_empty()
@@ -520,9 +515,7 @@ impl RuleDef {
             ignore: Vec::new(),
             when: Vec::new(),
             fix: None,
-            fix_when: None,
-            fix_target: FixTarget::Node,
-            fix_at: None,
+            suggestions: Vec::new(),
             locals: Vec::new(),
             indents: Vec::new(),
             indent_reset: None,
@@ -546,6 +539,44 @@ pub struct ForwardDef {
     pub attrs: Vec<Name>,
     pub field: Name,
     pub library: bool,
+}
+
+/// `fix [if cond] [target] as expr`, or `fix [if cond] { [target] as expr ... }`:
+/// regions rewritten together.
+#[derive(Clone, Debug)]
+pub struct FixDef {
+    /// Only then is the fix attached; otherwise the diagnostic is reported
+    /// without it (a suggestion is left out).
+    pub when: Option<Expr>,
+    pub parts: Vec<FixPart>,
+}
+
+/// One region of a fix and what it should look like.
+#[derive(Clone, Debug)]
+pub struct FixPart {
+    pub target: FixTarget,
+    /// `at expr`: an explicit UTF-8 byte span instead of the target.
+    pub at: Option<Expr>,
+    pub text: Expr,
+}
+
+impl FixDef {
+    pub fn exprs(&self) -> impl Iterator<Item = &Expr> {
+        self.when.iter().chain(self.parts.iter().flat_map(|part| part.at.iter().chain([&part.text])))
+    }
+}
+
+/// `suggest "title" ...`: a fix offered as a choice, never applied by `--fix`.
+#[derive(Clone, Debug)]
+pub struct SuggestDef {
+    pub title: Expr,
+    pub fix: FixDef,
+}
+
+impl SuggestDef {
+    pub fn exprs(&self) -> impl Iterator<Item = &Expr> {
+        [&self.title].into_iter().chain(self.fix.exprs())
+    }
 }
 
 /// `fix as`, `fix space_before as`, `fix space_after as`.

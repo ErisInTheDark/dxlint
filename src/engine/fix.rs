@@ -2,11 +2,140 @@
 //! node inside it), so fixing runs in passes: apply every non-overlapping
 //! fix, lint again, repeat until nothing changes.
 
+use std::ops::Range;
 use std::path::Path;
 
-use super::{Diagnostic, Edit, Linter};
+use super::{Diagnostic, Edit, Fix, Linter};
+use crate::config::ast::FixTarget;
+use crate::expr::CExpr;
 
 const MAX_PASSES: usize = 10;
+
+/// A compiled `fix` or `suggest` clause.
+pub(super) struct FixPlan {
+    /// `suggest "title"`; `None` for a rule's own fix.
+    pub title: Option<Clause>,
+    pub when: Option<Clause>,
+    pub parts: Vec<PartPlan>,
+}
+
+/// One region of a [`FixPlan`].
+pub(super) struct PartPlan {
+    pub target: FixTarget,
+    pub at: Option<Clause>,
+    pub text: Clause,
+}
+
+/// An expression and its VM form ([`Linter::lower_conditions`]).
+pub(super) struct Clause {
+    pub expr: CExpr,
+    pub vm: Option<crate::vm::VExpr>,
+}
+
+impl Clause {
+    pub fn new(expr: CExpr) -> Self {
+        Clause { expr, vm: None }
+    }
+}
+
+impl FixPlan {
+    pub fn clauses(&self) -> impl Iterator<Item = &Clause> {
+        self.title.iter().chain(&self.when).chain(self.parts.iter().flat_map(|part| part.at.iter().chain([&part.text])))
+    }
+
+    pub fn clauses_mut(&mut self) -> impl Iterator<Item = &mut Clause> {
+        self.title.iter_mut().chain(&mut self.when).chain(self.parts.iter_mut().flat_map(|part| part.at.iter_mut().chain([&mut part.text])))
+    }
+}
+
+/// `placeholder(name)`: a name the user is expected to choose. Fix text
+/// carries it between two Unicode noncharacters (reserved for exactly this
+/// kind of internal use); [`Fix::from_regions`] strips them and records where
+/// each placeholder lands.
+pub mod placeholder {
+    use std::ops::Range;
+
+    const OPEN: char = '\u{FDD0}';
+    const CLOSE: char = '\u{FDD1}';
+
+    pub fn mark(name: &str) -> String {
+        format!("{OPEN}{name}{CLOSE}")
+    }
+
+    /// The text without marks, and each placeholder's range in it.
+    pub fn strip(text: &str) -> (String, Vec<Range<usize>>) {
+        if !text.contains(OPEN) {
+            return (text.to_string(), Vec::new());
+        }
+        let mut out = String::with_capacity(text.len());
+        let mut marks = Vec::new();
+        let mut open = None;
+        for c in text.chars() {
+            match c {
+                OPEN => open = Some(out.len()),
+                CLOSE => {
+                    if let Some(start) = open.take() {
+                        marks.push(start..out.len());
+                    }
+                }
+                c => out.push(c),
+            }
+        }
+        (out, marks)
+    }
+}
+
+/// One region of a fix: `source[start..end]` should read `text`, which may
+/// still carry placeholder marks.
+pub(super) struct Region {
+    pub start: usize,
+    pub end: usize,
+    pub text: String,
+}
+
+impl Fix {
+    /// Regions rewritten together, as minimal edits. Unchanged regions add
+    /// no edit; a fix with no edits changes nothing.
+    pub(super) fn from_regions(source: &str, mut regions: Vec<Region>) -> Result<Fix, String> {
+        regions.sort_by_key(|region| (region.start, region.end));
+        if regions.windows(2).any(|pair| pair[1].start < pair[0].end) {
+            return Err("fix regions overlap".to_owned());
+        }
+        let mut edits = Vec::new();
+        let mut placeholders = Vec::new();
+        let mut range: Option<Range<usize>> = None;
+        // How far text after the regions so far moves once they are applied.
+        let mut shift = 0isize;
+        for region in regions {
+            let (text, marks) = placeholder::strip(&region.text);
+            let at = region.start.wrapping_add_signed(shift);
+            placeholders.extend(marks.into_iter().map(|mark| at + mark.start..at + mark.end));
+            shift += text.len() as isize - (region.end - region.start) as isize;
+            if text != source[region.start..region.end] {
+                edits.push(minimal_edit(source, region.start, region.end, &text));
+                range = Some(match range {
+                    Some(range) => range.start..region.end,
+                    None => region.start..region.end,
+                });
+            }
+        }
+        let range = range.unwrap_or(0..0);
+        Ok(Fix { range, edits, placeholders })
+    }
+
+    /// `text` with only this fix applied.
+    pub fn apply(&self, text: &str) -> String {
+        let mut out = String::with_capacity(text.len());
+        let mut pos = 0;
+        for edit in &self.edits {
+            out.push_str(&text[pos..edit.start]);
+            out.push_str(&edit.text);
+            pos = edit.end;
+        }
+        out.push_str(&text[pos..]);
+        out
+    }
+}
 
 pub struct Fixed {
     pub text: String,
@@ -89,18 +218,27 @@ impl Linter {
 mod tests {
     use super::*;
     use crate::config::ast::Severity;
-    use crate::engine::diagnostic::Fix;
 
     fn fix(start: usize, end: usize, text: &str) -> Diagnostic {
-        Diagnostic {
-            rule: "r".into(),
-            severity: Severity::Warn,
-            message: String::new(),
-            message_index: Some(0),
-            start,
-            end,
-            fix: Some(Fix { range: start..end, edits: vec![Edit { start, end, text: text.into() }] }),
-        }
+        let fix = Fix { range: start..end, edits: vec![Edit { start, end, text: text.into() }], placeholders: Vec::new() };
+        Diagnostic { fix: Some(fix), ..Diagnostic::new("r".into(), Severity::Warn, String::new(), Some(0), start, end) }
+    }
+
+    #[test]
+    fn regions_apply_together_and_place_their_placeholders_after_the_edit() {
+        let source = "if (a && b) go();";
+        let name = placeholder::mark("ready");
+        let regions = vec![
+            Region { start: 4, end: 10, text: name.clone() },
+            Region { start: 0, end: 0, text: format!("const {name} = a && b;\n") },
+        ];
+        let fix = Fix::from_regions(source, regions).unwrap();
+        let after = fix.apply(source);
+        assert_eq!(after, "const ready = a && b;\nif (ready) go();");
+        let named: Vec<&str> = fix.placeholders.iter().map(|range| &after[range.clone()]).collect();
+        assert_eq!(named, ["ready", "ready"]);
+        assert_eq!(apply_fixes(source, &[Diagnostic { fix: Some(fix), ..Diagnostic::new("r".into(), Severity::Warn, String::new(), Some(0), 4, 10) }]).0, after);
+        assert!(Fix::from_regions(source, vec![Region { start: 0, end: 5, text: "x".into() }, Region { start: 4, end: 6, text: "y".into() }]).is_err());
     }
 
     #[test]

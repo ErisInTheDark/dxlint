@@ -6,8 +6,9 @@ use std::path::PathBuf;
 
 use super::scopes::{Change, Scoped, Scopes, Setting};
 use super::symbols::Symbols;
+use super::fix::{Clause, FixPlan, PartPlan};
 use super::{InertRule, Linter, NodeSelection, OptionSlot, Rule, Target};
-use crate::config::ast::{Config, Dropped, Expr, ExprKind, Name, Parent, RuleDef, Severity, Target as AstTarget, Use};
+use crate::config::ast::{Config, Dropped, Expr, ExprKind, FixDef, Name, Parent, RuleDef, Severity, Target as AstTarget, Use};
 use crate::config::schema::{Schema, Schemas};
 use crate::config::error::ConfigError;
 use crate::config::source::SourceMap;
@@ -800,10 +801,8 @@ fn configure(config: &mut crate::config::ast::Config, errors: &mut Vec<ConfigErr
             }
             if let Some(f) = &patch.fix {
                 def.fix = Some(f.clone());
-                def.fix_target = patch.fix_target;
-                def.fix_at = patch.fix_at.clone();
-                def.fix_when = patch.fix_when.clone();
             }
+            def.suggestions.extend(patch.suggestions.iter().cloned());
             if patch.report.is_some() {
                 def.report = patch.report;
                 def.report_at = None;
@@ -1127,9 +1126,8 @@ fn rule(def: &RuleDef, g: &Grammar, schemas: &Schemas, attrs: &AttrNames, uses: 
     }
     scope.param_read = None;
     let message = def.message.as_ref().and_then(|m| scope.compile(m, errors));
-    let fix = def.fix.as_ref().and_then(|s| scope.compile(s, errors));
-    let fix_when = def.fix_when.as_ref().and_then(|s| scope.compile(s, errors));
-    let fix_at = def.fix_at.as_ref().and_then(|s| scope.compile(s, errors));
+    let fix = def.fix.as_ref().and_then(|fix| fix_plan(&scope, None, fix, errors));
+    let suggestions = def.suggestions.iter().filter_map(|s| fix_plan(&scope, Some(&s.title), &s.fix, errors)).collect();
     let report_at = def.report_at.as_ref().and_then(|s| scope.compile(s, errors));
     // `indent X by n`: `n` reads X (its fields when X names only layers) and
     // the rule's options; X's layers must be built.
@@ -1247,9 +1245,6 @@ fn rule(def: &RuleDef, g: &Grammar, schemas: &Schemas, attrs: &AttrNames, uses: 
         node_when_vm: Vec::new(),
         when_vm: Vec::new(),
         each_vm: None,
-        fix_when_vm: None,
-        fix_vm: None,
-        fix_at_vm: None,
         report_at_vm: None,
         locals_vm: Vec::new(),
         locals,
@@ -1258,15 +1253,28 @@ fn rule(def: &RuleDef, g: &Grammar, schemas: &Schemas, attrs: &AttrNames, uses: 
         message_plan: None,
         message_vm: None,
         fix,
-        fix_when,
-        fix_at,
-        fix_target: def.fix_target,
+        suggestions,
         indents: crate::expr::IndentPlan::new(indents, g),
         indent_reset,
         report: def.report.unwrap_or_default(),
         report_at,
         each,
     })
+}
+
+/// A `fix` or `suggest` clause compiled; every expression is compiled (and
+/// its mistakes reported) even after one fails.
+fn fix_plan(scope: &Scope<'_>, title: Option<&Expr>, fix: &FixDef, errors: &mut Vec<ConfigError>) -> Option<FixPlan> {
+    let mut clause = |e: &Expr| scope.compile(e, errors).map(Clause::new);
+    let title = title.map(&mut clause);
+    let when = fix.when.as_ref().map(&mut clause);
+    let parts: Vec<_> = fix.parts.iter().map(|part| (part.target, part.at.as_ref().map(&mut clause), clause(&part.text))).collect();
+    // Written but not compiled: the whole clause is left out.
+    let compiled = |c: Option<Option<Clause>>| c.map(|c| c.ok_or(())).transpose().ok();
+    let parts = parts.into_iter()
+        .map(|(target, at, text)| Some(PartPlan { target, at: compiled(at)?, text: text? }))
+        .collect::<Option<Vec<_>>>()?;
+    Some(FixPlan { title: compiled(title)?, when: compiled(when)?, parts })
 }
 
 /// `in a forward x from field` as (matcher, attribute, label); groups give

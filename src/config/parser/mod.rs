@@ -2114,7 +2114,7 @@ impl<'a> Parser<'a> {
         self.skip(false, true);
         if self.ts.peek_raw(0).is_some_and(|t| t.is_ident("fix")) {
             self.ts.next_raw();
-            (def.fix_target, def.fix_at, def.fix_when, def.fix) = self.fix_as();
+            def.fix = self.fix_def(false);
         }
         if self.errors.len() == before {
             self.skip(false, true);
@@ -2303,8 +2303,55 @@ impl<'a> Parser<'a> {
         self.end_of_item();
     }
 
-    /// `fix [space_before|space_after|at expr] [if cond] as expr`.
-    fn fix_as(&mut self) -> (FixTarget, Option<Expr>, Option<Expr>, Option<Expr>) {
+    /// After `fix` or `suggest "title"`: `[target] [if cond] as expr`, or, in a
+    /// rule body, `[if cond] { [target] as expr ... }` (regions rewritten
+    /// together). A target is `space_before`, `space_after` or `at expr`.
+    fn fix_def(&mut self, block: bool) -> Option<FixDef> {
+        let target = self.fix_target();
+        let when = if self.ts.peek_raw(0).is_some_and(|t| t.is_ident("if")) {
+            self.ts.next_raw();
+            let cond = self.expr();
+            self.skip(false, true);
+            cond
+        } else {
+            None
+        };
+        let open = self.ts.peek_raw(0).filter(|t| t.kind == Tk::LBrace).cloned();
+        let Some(open) = open.filter(|_| block && target.0 == FixTarget::Node && target.1.is_none()) else {
+            let text = self.fix_text()?;
+            return Some(FixDef { when, parts: vec![FixPart { target: target.0, at: target.1, text }] });
+        };
+        self.ts.next_raw();
+        let mut parts = Vec::new();
+        loop {
+            match self.peek() {
+                None => {
+                    self.errors.push(ConfigError::new(open.span, "unclosed fix block"));
+                    return None;
+                }
+                Some(t) if t.kind == Tk::RBrace => {
+                    self.bump();
+                    break;
+                }
+                Some(_) => {
+                    let before = self.errors.len();
+                    let (target, at) = self.fix_target();
+                    if let Some(text) = self.fix_text() {
+                        parts.push(FixPart { target, at, text });
+                    }
+                    if self.errors.len() > before { self.recover_if_mid_line() } else { self.end_of_item() }
+                }
+            }
+        }
+        if parts.is_empty() {
+            self.errors.push(ConfigError::new(open.span, "a fix block needs `as` lines: `{ at <span> as <text> }`"));
+            return None;
+        }
+        Some(FixDef { when, parts })
+    }
+
+    /// `space_before`, `space_after`, `at expr` or nothing (the node).
+    fn fix_target(&mut self) -> (FixTarget, Option<Expr>) {
         self.skip(false, true);
         let target = match self.ts.peek_raw(0) {
             Some(t) if t.is_ident("space_before") => FixTarget::SpaceBefore,
@@ -2314,35 +2361,31 @@ impl<'a> Parser<'a> {
         if target != FixTarget::Node {
             self.ts.next_raw();
             self.skip(false, true);
+            return (target, None);
         }
-        let at = if target == FixTarget::Node && self.ts.peek_raw(0).is_some_and(|t| t.is_ident("at")) {
-            self.ts.next_raw();
-            let at = self.expr();
-            self.skip(false, true);
-            at
-        } else {
-            None
-        };
-        let when = if self.ts.peek_raw(0).is_some_and(|t| t.is_ident("if")) {
-            self.ts.next_raw();
-            let cond = self.expr();
-            self.skip(false, true);
-            cond
-        } else {
-            None
-        };
+        if !self.ts.peek_raw(0).is_some_and(|t| t.is_ident("at")) {
+            return (target, None);
+        }
+        self.ts.next_raw();
+        let at = self.expr();
+        self.skip(false, true);
+        (target, at)
+    }
+
+    /// `as expr`: what the region should look like.
+    fn fix_text(&mut self) -> Option<Expr> {
         match self.ts.peek_raw(0).cloned() {
             Some(t) if t.is_ident("as") => {
                 self.ts.next_raw();
-                (target, at, when, self.expr())
+                self.expr()
             }
             other => {
                 let span = other.map(|t| t.span).or(self.ts.last_span);
                 self.errors.push(
-                    ConfigError::new(span, "expected `as` after `fix`: `fix as <what the text should be>`")
-                        .note("`fix space_before as \" \"` / `fix space_after as \"\"` rewrite adjacent whitespace; `fix at <span> as ...` rewrites explicit bytes; `fix if <cond> as ...` fixes only when cond holds"),
+                    ConfigError::new(span, "expected `as`: `fix as <what the text should be>`")
+                        .note("`fix space_before as \" \"` / `fix space_after as \"\"` rewrite adjacent whitespace; `fix at <span> as ...` rewrites explicit bytes; `fix if <cond> as ...` fixes only when cond holds; `fix { at <span> as ... }` rewrites several regions together"),
                 );
-                (target, at, when, None)
+                None
             }
         }
     }
@@ -2456,7 +2499,17 @@ impl<'a> Parser<'a> {
                                 .note("a rule has at most one fix: the expression saying what the text should be"),
                         );
                     } else {
-                        (def.fix_target, def.fix_at, def.fix_when, def.fix) = self.fix_as();
+                        def.fix = self.fix_def(true);
+                    }
+                }
+                // `suggest "title" ...`: a fix offered as a choice.
+                (Tk::Ident, "suggest") => {
+                    self.bump();
+                    self.skip(false, true);
+                    if let Some(title) = self.e_primary() {
+                        if let Some(fix) = self.fix_def(true) {
+                            def.suggestions.push(SuggestDef { title, fix });
+                        }
                     }
                 }
                 (Tk::Ident, "@macro") => {
@@ -2596,7 +2649,7 @@ impl<'a> Parser<'a> {
                 _ => {
                     self.errors.push(
                         ConfigError::new(t.span, format!("expected a rule clause, found {}", t.describe()))
-                            .note("rule clauses: a severity and message (`warn \"...\"`), when, let, each, fix, indent, option (or set, when configuring), files, ignore, report"),
+                            .note("rule clauses: a severity and message (`warn \"...\"`), when, let, each, fix, suggest, indent, option (or set, when configuring), files, ignore, report"),
                     );
                     self.bump();
                 }
@@ -2753,7 +2806,7 @@ mod tests {
         assert_eq!(depth.indents.len(), 2);
         assert!(depth.indents[0].inside && !depth.indents[1].inside && depth.indents[1].by.is_some());
         assert!(matches!(&depth.indents[1].targets[..], [(Parent::Matcher(_), Some(f))] if f.text == "body"));
-        assert!(depth.fix_when.is_some() && depth.fix.is_some());
+        assert!(depth.fix.as_ref().is_some_and(|fix| fix.when.is_some() && fix.parts.len() == 1));
     }
 
     #[test]
@@ -2804,7 +2857,7 @@ mod tests {
             }
         "#);
         assert_eq!(c.rules[0].when.len(), 1);
-        assert!(matches!(c.rules[0].fix.as_ref().map(|e| &e.kind), Some(ExprKind::Binary(BinOp::Join, ..))));
+        assert!(matches!(c.rules[0].fix.as_ref().map(|f| &f.parts[0].text.kind), Some(ExprKind::Binary(BinOp::Join, ..))));
         assert!(c.rules[0].message.is_some());
     }
 
@@ -2824,7 +2877,7 @@ mod tests {
         let rule = &c.rules[0];
         let join = |e: &Expr| matches!(e.kind, ExprKind::Binary(BinOp::Join, ..));
         assert!(join(rule.message.as_ref().unwrap()));
-        let Some(ExprKind::If(_, then, other)) = rule.fix.as_ref().map(|e| &e.kind) else { panic!("{:?}", rule.fix) };
+        let Some(ExprKind::If(_, then, other)) = rule.fix.as_ref().map(|f| &f.parts[0].text.kind) else { panic!("{:?}", rule.fix) };
         assert!(join(then) && join(other));
         assert!(rule.options[0].default == crate::expr::Value::Num(100.0) && rule.options[0].description.is_some());
         // `len(text) + 1` is one side of the join; the join is one side of `==`.
@@ -2837,7 +2890,7 @@ mod tests {
     fn plus_adds_numbers_and_fix_needs_as() {
         let (_, errors, _) = parse_str("in x rule a fix as text + \"!\"\nin x rule b fix text\nin x rule c { fix as [a] + 1 }\n");
         let all: Vec<&str> = errors.iter().map(|e| e.message.as_str()).collect();
-        assert_eq!(all, vec!["`+` adds numbers", "expected `as` after `fix`: `fix as <what the text should be>`", "`+` adds numbers"]);
+        assert_eq!(all, vec!["`+` adds numbers", "expected `as`: `fix as <what the text should be>`", "`+` adds numbers"]);
     }
 
     #[test]

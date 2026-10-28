@@ -112,7 +112,29 @@ fix at {start:comma.offset, end:comma.end_offset} as ""
 fix at end_offset as ";"
 ```
 
-`--format jsonl` retains `fixable` and adds `fix.edits` on fixable diagnostics. Each edit is `{start, end, text}`, using zero-based, half-open UTF-8 byte offsets into the reported file text (not character or UTF-16 offsets). All edits of one diagnostic form one atomic fix; replacements apply to the same original text, not sequentially shifted offsets. Unfixable diagnostics omit `fix`.
+In a rule body, `fix [if condition] { ... }` rewrites several regions as one atomic fix: each line is `[space_before|space_after|at span] as expr`. The fix is left out when every region already reads as wanted; regions may not overlap.
+
+```dx
+fix {
+  at left.node as right
+  at operator.node as "<"
+  at right.node as left
+}
+```
+
+**Suggestions.** `suggest "title" ...` takes the same forms as `fix` (`suggest "title" [if condition] [target] as expr`, or a `{ ... }` block), any number of times per rule. A suggestion is a fix offered as a choice: `--fix`, fix-all and formatting never apply it, and it never hides the diagnostic. Editors list each one as a quick fix under its title; `dxlint suggest` lists and applies them. `placeholder(name)` in the text marks a name the user should choose: editors start renaming it once the suggestion is applied, and `dxlint suggest --apply N --name x` fills every placeholder with `x`.
+
+```dx
+in ts_if.test rule complex-condition warn "Name this condition" {
+  when too_complex
+  suggest "Put the condition into a variable" if parent.parent is (ts_block, ts_program) {
+    at parent.offset as "const " placeholder("condition") " = " text ";" @newline parent.indent
+    as placeholder("condition")
+  }
+}
+```
+
+`--format jsonl` retains `fixable` and adds `fix.edits` on fixable diagnostics. Each edit is `{start, end, text}`, using zero-based, half-open UTF-8 byte offsets into the reported file text (not character or UTF-16 offsets). All edits of one diagnostic form one atomic fix; replacements apply to the same original text, not sequentially shifted offsets. Unfixable diagnostics omit `fix`. Diagnostics with suggestions add `suggestions: [{title, edits, placeholders}]`; `placeholders` (also on `fix`, when present) are `{start, end}` byte ranges in the text with only that fix applied.
 
 `--fix-preview --format jsonl` emits one `{file, kind: "fix-preview", text}` record after each wanted file's original diagnostics, including clean files. The text applies one engine fix pass without relinting, source writes or cache reads/writes. Works with `--sources`; incompatible with `--fix`.
 
@@ -125,6 +147,8 @@ fix at end_offset as ";"
 | `let name expr` | a value computed once per node and usable by later clauses, the message and the fix |
 | `fix as expr` | what the node should be |
 | `fix at span [if condition] as expr` | replace explicit UTF-8 bytes; a numeric span inserts text |
+| `fix [if condition] { [target] as expr ... }` | several regions rewritten together |
+| `suggest "title" ...` | a fix offered as a choice, never applied by `--fix` (same forms as `fix`; any number) |
 | `option name <type> = <default> "description"` | a configurable value of that type, see [Option types](#option-types) |
 | `files "glob" ...` | only these files |
 | `ignore "glob" ...` | not these files |

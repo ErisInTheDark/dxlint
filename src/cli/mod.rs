@@ -6,6 +6,7 @@ mod fixtures;
 mod info;
 mod lint;
 mod render;
+mod suggest;
 mod workbench;
 
 #[cfg(test)]
@@ -234,6 +235,22 @@ enum Command {
         #[arg(required = true)]
         files: Vec<PathBuf>,
     },
+    /// List a file's suggestions (fixes `--fix` never applies), or apply one
+    Suggest {
+        file: PathBuf,
+        /// Only problems covering this position (`12:5`)
+        #[arg(long, value_name = "LINE:COL")]
+        at: Option<String>,
+        /// Only this rule's problems
+        #[arg(long)]
+        rule: Option<String>,
+        /// Apply suggestion N (as listed) of the one matching problem
+        #[arg(long, value_name = "N")]
+        apply: Option<usize>,
+        /// With --apply: fill the suggestion's placeholders with this name
+        #[arg(long)]
+        name: Option<String>,
+    },
     /// List the functions available in rule expressions
     Functions,
     /// Lint isolated packed projects from JSONL requests on stdin
@@ -340,6 +357,12 @@ where
             Err(code) => code,
         },
         Some(Command::Eval { target, expr, files }) => eval::run(&mut output, config, &target, &expr, &files),
+        Some(Command::Suggest { file, at, rule, apply, name }) => match load(&mut output, config) {
+            Ok(p) => suggest::run(&mut output, &p.linter, &suggest::Request {
+                file: &file, at: at.as_deref(), rule: rule.as_deref(), apply, name: name.as_deref(),
+            }),
+            Err(code) => code,
+        },
         Some(Command::Functions) => info::functions(&mut output),
         Some(Command::Conformance) => unreachable!("conformance owns its input"),
         Some(Command::Lsp) => unreachable!("LSP owns its streams"),

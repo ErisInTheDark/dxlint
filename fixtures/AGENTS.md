@@ -13,6 +13,7 @@ Rule behaviour tests. Run `dxlint fixtures [paths...]` (default `fixtures/`; `ca
 - `expected/fixed/<relpath>`: full fixpoint text, changed inputs only; absent = unchanged. Inputs are never rewritten.
 - Optional `expected/fixed-diagnostics`: reports from re-linting fixpoint text (empty file = clean).
 - Optional `expected/fix-preview/<relpath>`: one fix pass over original diagnostics (shows conflicts the fixpoint hides).
+- `expected/suggestions`: required once any suggestion is offered. Per suggestion: report identity `> title`, then the changed lines as they read after it, placeholders in `«»`.
 - A `.dxcache` marker also checks cold and warm runs agree; the runner restores its bytes.
 
 ## runs

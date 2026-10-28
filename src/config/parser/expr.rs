@@ -469,7 +469,7 @@ impl Parser<'_> {
     }
 
     /// A primary, then `.key` reads into what it gives (`find(xs, x => ...).name`).
-    fn e_primary(&mut self) -> Option<Expr> {
+    pub(super) fn e_primary(&mut self) -> Option<Expr> {
         let mut e = self.e_atom()?;
         loop {
             if self.ts.last_span.zip(self.ts.peek_raw(0)).is_some_and(|(last, q)| last.end == q.span.start) {

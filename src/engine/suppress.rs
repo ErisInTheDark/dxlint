@@ -123,7 +123,7 @@ mod tests {
 
     fn diag(rule: &str, text: &str, needle: &str) -> Diagnostic {
         let start = text.find(needle).unwrap();
-        Diagnostic { rule: rule.into(), severity: Severity::Warn, message: String::new(), message_index: Some(0), start, end: start + 1, fix: None }
+        Diagnostic::new(rule.into(), Severity::Warn, String::new(), Some(0), start, start + 1)
     }
 
     fn check(text: &str, cases: &[(&str, &str, bool)]) {

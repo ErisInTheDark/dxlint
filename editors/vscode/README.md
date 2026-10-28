@@ -8,6 +8,7 @@ Runs [dxlint](https://github.com/ErisInTheDark/dxlint) as a language server, for
 - the rest of the workspace linted in the background, streamed file by file, reusing `.dxcache`
 - an edit re-lints the other files it affects (an importer of a changed export): open ones as you type, the rest when you save
 - quick fixes, "Fix all dxlint problems", and Format Document applying every fix
+- a rule's suggestions as extra quick fixes, never applied by fix-all; one that leaves a name to choose starts renaming it right away
 - every diagnostic's rule code links to where the rule is defined
 
 **Writing `.dx` configs and rules**:

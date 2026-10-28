@@ -18,13 +18,13 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use super::{Diagnostic, Edit, Fix, Linter};
+use super::{Diagnostic, Edit, Fix, Linter, Suggestion};
 use crate::config::ast::Severity;
 use super::reads::{hash_bytes, Dep, Reads, Scan, ScanTest};
 
 pub const FILE_NAME: &str = ".dxcache";
 /// Bumped whenever the encoding changes.
-const MAGIC: &[u8; 4] = b"ZLC7";
+const MAGIC: &[u8; 4] = b"ZLC8";
 
 /// Deps, groups and scans, by index into the tables.
 #[derive(Default, Clone, PartialEq, Eq, Hash)]
@@ -577,15 +577,30 @@ impl Writer<'_> {
         match &d.fix {
             None => self.var(0),
             Some(fix) => {
-                self.var(fix.edits.len() as u64 + 1);
-                self.var(fix.range.start as u64);
-                self.var(fix.range.end as u64);
-                for e in &fix.edits {
-                    self.var(e.start as u64);
-                    self.var(e.end as u64);
-                    self.str(&e.text);
-                }
+                self.var(1);
+                self.fix(fix);
             }
+        }
+        self.var(d.suggestions.len() as u64);
+        for suggestion in &d.suggestions {
+            self.str(&suggestion.title);
+            self.fix(&suggestion.fix);
+        }
+    }
+
+    fn fix(&mut self, fix: &Fix) {
+        self.var(fix.range.start as u64);
+        self.var(fix.range.end as u64);
+        self.var(fix.edits.len() as u64);
+        for e in &fix.edits {
+            self.var(e.start as u64);
+            self.var(e.end as u64);
+            self.str(&e.text);
+        }
+        self.var(fix.placeholders.len() as u64);
+        for range in &fix.placeholders {
+            self.var(range.start as u64);
+            self.var(range.end as u64);
         }
     }
 }
@@ -754,15 +769,25 @@ impl<'a> Reader<'a> {
         let end = self.var()? as usize;
         let fix = match self.var()? {
             0 => None,
-            n => {
-                let range = self.var()? as usize..self.var()? as usize;
-                let edits = (1..n)
-                    .map(|_| Some(Edit { start: self.var()? as usize, end: self.var()? as usize, text: self.str()? }))
-                    .collect::<Option<Vec<_>>>()?;
-                Some(Fix { range, edits })
-            }
+            _ => Some(self.fix()?),
         };
-        Some(Diagnostic { rule, severity, message, message_index, start, end, fix })
+        let count = usize::try_from(self.var()?).ok()?;
+        if count > self.bytes.len().saturating_sub(self.at) { return None; }
+        let suggestions = (0..count).map(|_| Some(Suggestion { title: self.str()?, fix: self.fix()? })).collect::<Option<Vec<_>>>()?;
+        Some(Diagnostic { rule, severity, message, message_index, start, end, fix, suggestions })
+    }
+
+    fn fix(&mut self) -> Option<Fix> {
+        let range = self.var()? as usize..self.var()? as usize;
+        let count = usize::try_from(self.var()?).ok()?;
+        if count > self.bytes.len().saturating_sub(self.at) { return None; }
+        let edits = (0..count)
+            .map(|_| Some(Edit { start: self.var()? as usize, end: self.var()? as usize, text: self.str()? }))
+            .collect::<Option<Vec<_>>>()?;
+        let count = usize::try_from(self.var()?).ok()?;
+        if count > self.bytes.len().saturating_sub(self.at) { return None; }
+        let placeholders = (0..count).map(|_| Some(self.var()? as usize..self.var()? as usize)).collect::<Option<Vec<_>>>()?;
+        Some(Fix { range, edits, placeholders })
     }
 }
 

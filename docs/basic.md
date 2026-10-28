@@ -128,6 +128,8 @@ These rules need no extra configuration. Where dxlint cannot tell a type for cer
 | `dxlint` | lint the whole project |
 | `dxlint src/a.ts src/lib` | lint some files or folders |
 | `dxlint --fix` | apply fixes in place |
+| `dxlint suggest a.ts [--at 12:5] [--rule r]` | list the suggestions (fixes `--fix` never applies) there |
+| `dxlint suggest a.ts --at 12:5 --apply 2 [--name x]` | apply one; `--name` fills the names it leaves to choose |
 | `dxlint --format jsonl` | one JSON object per diagnostic, streamed |
 | `dxlint --jobs 1` | lint on one thread (default: every core) |
 | `dxlint --no-cache` | ignore and do not write `.dxcache` |
@@ -197,4 +199,4 @@ language .js {
 
 ## Editors
 
-The VS Code extension (`editors/vscode`) runs the project's own `@inthedark/dxlint` as a language server: diagnostics as you type from the unsaved buffer, quick fixes, fix-all on save, and background linting of the rest of the workspace. In `.dx` files it adds highlighting, hover, go to definition, references, completion and an outline. Any editor with LSP support can run `dxlint lsp` over stdio.
+The VS Code extension (`editors/vscode`) runs the project's own `@inthedark/dxlint` as a language server: diagnostics as you type from the unsaved buffer, quick fixes and suggestions (renaming any name a suggestion leaves to choose), fix-all on save, and background linting of the rest of the workspace. In `.dx` files it adds highlighting, hover, go to definition, references, completion and an outline. Any editor with LSP support can run `dxlint lsp` over stdio.

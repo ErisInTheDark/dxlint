@@ -11,16 +11,22 @@ pub struct Edit {
 }
 
 /// A rewrite reserves its declared range even when its edits are smaller.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Fix {
     pub range: std::ops::Range<usize>,
+    /// Sorted, non-overlapping.
     pub edits: Vec<Edit>,
+    /// Names left for the user to choose (`placeholder(...)`), as ranges of
+    /// the text with only this fix applied.
+    pub placeholders: Vec<std::ops::Range<usize>>,
 }
 
-impl Serialize for Fix {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        self.edits.serialize(serializer)
-    }
+/// A fix offered as a choice (`suggest "title" ...`), never applied by
+/// `--fix`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Suggestion {
+    pub title: String,
+    pub fix: Fix,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -34,12 +40,18 @@ pub struct Diagnostic {
     pub end: usize,
     /// All edits apply together or not at all.
     pub fix: Option<Fix>,
+    pub suggestions: Vec<Suggestion>,
 }
 
 /// Rule name for problems the engine itself reports.
 pub const ENGINE_RULE: &str = "dxlint";
 
 impl Diagnostic {
+    /// A report without fixes.
+    pub fn new(rule: String, severity: Severity, message: String, message_index: Option<usize>, start: usize, end: usize) -> Self {
+        Diagnostic { rule, severity, message, message_index, start, end, fix: None, suggestions: Vec::new() }
+    }
+
     fn key(&self) -> (usize, usize, &str, &str, Option<usize>) {
         (self.start, self.end, &self.rule, &self.message, self.message_index)
     }
@@ -52,7 +64,7 @@ impl Diagnostic {
         let mut kept: Vec<Diagnostic> = Vec::with_capacity(diags.len());
         for d in diags.drain(..) {
             // Fixes are not ordered: compare with every report at this key.
-            if !kept.iter().rev().take_while(|k| k.key() == d.key()).any(|k| k.fix == d.fix) {
+            if !kept.iter().rev().take_while(|k| k.key() == d.key()).any(|k| k.fix == d.fix && k.suggestions == d.suggestions) {
                 kept.push(d);
             }
         }
@@ -65,8 +77,8 @@ mod tests {
     use super::*;
 
     fn at(start: usize, message: &str, fix: Option<&str>) -> Diagnostic {
-        let fix = fix.map(|text| Fix { range: start..start + 1, edits: vec![Edit { start, end: start + 1, text: text.into() }] });
-        Diagnostic { rule: "r".into(), severity: Severity::Warn, message: message.into(), message_index: Some(0), start, end: start + 1, fix }
+        let fix = fix.map(|text| Fix { range: start..start + 1, edits: vec![Edit { start, end: start + 1, text: text.into() }], placeholders: Vec::new() });
+        Diagnostic { fix, ..Diagnostic::new("r".into(), Severity::Warn, message.into(), Some(0), start, start + 1) }
     }
 
     #[test]

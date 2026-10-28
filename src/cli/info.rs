@@ -39,7 +39,12 @@ pub fn rules(output: &mut Output<'_>, linter: &Linter) -> u8 {
         };
         let sev = render::severity_style(f.severity);
         let sev_text = if f.severity == Severity::Off { off(f.default_severity) } else { format!("{sev}{}{sev:#}", f.severity.as_str()) };
-        let fix = if f.has_fix() { format!(" {DIM}fixable{DIM:#}") } else { String::new() };
+        let mut fix = if f.has_fix() { format!(" {DIM}fixable{DIM:#}") } else { String::new() };
+        match f.suggestion_count() {
+            0 => {}
+            1 => fix.push_str(&format!(" {DIM}1 suggestion{DIM:#}")),
+            n => fix.push_str(&format!(" {DIM}{n} suggestions{DIM:#}")),
+        }
         output.out(format_args!("{BOLD}{}{BOLD:#} {sev_text} {DIM}in{DIM:#} {CYAN}{}{CYAN:#}{fix}", f.name, f.target_text));
         if let Some(d) = f.message_template() {
             output.out(format_args!("    {d}"));
@@ -173,7 +178,19 @@ pub fn describe(output: &mut Output<'_>, symbols: &Symbols, name: &str) -> u8 {
 }
 
 /// A file's text and the language that owns it.
-fn read_source(output: &mut Output<'_>, linter: &Linter, file: &Path) -> Result<(String, usize), u8> {
+/// `LINE:COL` (1-based, columns in characters) as line, column and byte
+/// offset; `None` outside the file.
+pub(super) fn position(text: &str, lines: &crate::line_index::LineIndex, at: &str) -> Option<(usize, usize, usize)> {
+    let (line, col) = at.split_once(':').and_then(|(l, c)| Some((l.trim().parse::<usize>().ok()?, c.trim().parse::<usize>().ok()?)))?;
+    if line < 1 || col < 1 || line > lines.line_count() {
+        return None;
+    }
+    let line_start = lines.line_start(line - 1);
+    let pos = text[line_start..].char_indices().nth(col - 1).map_or(text.len(), |(i, _)| line_start + i);
+    Some((line, col, pos))
+}
+
+pub(super) fn read_source(output: &mut Output<'_>, linter: &Linter, file: &Path) -> Result<(String, usize), u8> {
     let path = output.cwd.join(file);
     let text = match Disk.read(&path) {
         Ok(t) => t,
@@ -220,13 +237,10 @@ pub fn explain(output: &mut Output<'_>, linter: &Linter, file: &Path, at: &str) 
         Err(code) => return code,
     };
     let lines = crate::line_index::LineIndex::new(&text);
-    let parsed = at.split_once(':').and_then(|(l, c)| Some((l.trim().parse::<usize>().ok()?, c.trim().parse::<usize>().ok()?)));
-    let Some((line, col)) = parsed.filter(|&(l, c)| l >= 1 && c >= 1 && l <= lines.line_count()) else {
+    let Some((line, col, pos)) = position(&text, &lines, at) else {
         render::error(output, &format!("`--at` wants LINE:COL inside the file, got `{at}`"));
         return 2;
     };
-    let line_start = lines.line_start(line - 1);
-    let pos = text[line_start..].char_indices().nth(col - 1).map_or(text.len(), |(i, _)| line_start + i);
     let g = &linter.grammar;
     let tree = Tree::parse(g, lang, &text);
 

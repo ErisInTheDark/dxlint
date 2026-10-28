@@ -26,8 +26,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 pub use build::{build, build_for_lint, Built};
-pub use diagnostic::{Diagnostic, Edit, Fix, ENGINE_RULE};
-pub use fix::{apply_fixes, Fixed};
+pub use diagnostic::{Diagnostic, Edit, Fix, Suggestion, ENGINE_RULE};
+pub use fix::{apply_fixes, placeholder, Fixed};
+use fix::{FixPlan, Region};
 pub use profile::{EffectBuild, Profile, Query, StepSite};
 pub(crate) use profile::ValueEvaluation;
 
@@ -92,9 +93,6 @@ pub struct Rule {
     node_when_vm: Vec<crate::vm::VExpr>,
     when_vm: Vec<crate::vm::VExpr>,
     each_vm: Option<crate::vm::VExpr>,
-    fix_when_vm: Option<crate::vm::VExpr>,
-    fix_vm: Option<crate::vm::VExpr>,
-    fix_at_vm: Option<crate::vm::VExpr>,
     report_at_vm: Option<crate::vm::VExpr>,
     /// `let` values, by slot.
     locals: Vec<CExpr>,
@@ -106,12 +104,10 @@ pub struct Rule {
     message_plan: Option<message::Plan>,
     /// The message lowered to the VM as `[index, text]`.
     message_vm: Option<crate::vm::VExpr>,
-    /// What the selected fix region should look like (`fix ... as expr`).
-    fix: Option<CExpr>,
-    /// `fix if cond as ...`: without it holding, report without the fix.
-    fix_when: Option<CExpr>,
-    fix_target: FixTarget,
-    fix_at: Option<CExpr>,
+    /// What the selected fix regions should look like (`fix ... as expr`).
+    fix: Option<FixPlan>,
+    /// `suggest "title" ...`: fixes offered as choices.
+    suggestions: Vec<FixPlan>,
     /// `indent [in] X by n` lines.
     indents: crate::expr::IndentPlan,
     indent_reset: Option<CExpr>,
@@ -144,8 +140,13 @@ impl Rule {
     /// Every compiled expression of the rule's checks, message and fix.
     pub fn expressions(&self) -> impl Iterator<Item = &CExpr> {
         self.locals.iter().chain(&self.node_when).chain(&self.when).chain(
-            [&self.message, &self.fix, &self.fix_when, &self.fix_at, &self.report_at, &self.each, &self.indent_reset]
-                .into_iter().flatten())
+            [&self.message, &self.report_at, &self.each, &self.indent_reset].into_iter().flatten())
+            .chain(self.fixes().flat_map(FixPlan::clauses).map(|clause| &clause.expr))
+    }
+
+    /// The rule's fix and its suggestions.
+    fn fixes(&self) -> impl Iterator<Item = &FixPlan> {
+        self.fix.iter().chain(&self.suggestions)
     }
 
     /// The layers the rule targets or reads by name.
@@ -165,11 +166,11 @@ impl Rule {
         let options = if self.unfolded { Vec::new() } else { self.option_values() };
         let fold = |expr: &mut CExpr| crate::expr::fold::specialise(expr, &options, functions);
         self.locals.iter_mut().chain(&mut self.node_when).chain(&mut self.when).for_each(fold);
-        for expr in [
-            &mut self.fix, &mut self.fix_when, &mut self.fix_at,
-            &mut self.report_at, &mut self.each, &mut self.indent_reset,
-        ].into_iter().flatten() {
+        for expr in [&mut self.report_at, &mut self.each, &mut self.indent_reset].into_iter().flatten() {
             fold(expr);
+        }
+        for clause in self.fix.iter_mut().chain(&mut self.suggestions).flat_map(FixPlan::clauses_mut) {
+            fold(&mut clause.expr);
         }
         self.indents.specialise(&options, functions);
         self.message_plan = self.message.as_mut().map(|expr| message::Plan::new(expr, &options, functions));
@@ -183,6 +184,10 @@ impl Rule {
 
     pub fn has_fix(&self) -> bool {
         self.fix.is_some()
+    }
+
+    pub fn suggestion_count(&self) -> usize {
+        self.suggestions.len()
     }
 
     /// A condition folded to a false constant by the configured options
@@ -447,9 +452,9 @@ impl Linter {
             rule.node_when_vm = rule.node_when.iter().map(|e| lower(e, item)).collect();
             rule.when_vm = rule.when.iter().map(|e| lower(e, item)).collect();
             rule.each_vm = rule.each.as_ref().map(|e| lower(e, false));
-            rule.fix_when_vm = rule.fix_when.as_ref().map(|e| lower(e, item));
-            rule.fix_vm = rule.fix.as_ref().map(|e| lower(e, item));
-            rule.fix_at_vm = rule.fix_at.as_ref().map(|e| lower(e, item));
+            for clause in rule.fix.iter_mut().chain(&mut rule.suggestions).flat_map(FixPlan::clauses_mut) {
+                clause.vm = Some(lower(&clause.expr, item));
+            }
             rule.report_at_vm = rule.report_at.as_ref().map(|e| lower(e, item));
             rule.message_vm = rule.message_plan.as_ref().zip(rule.message.as_ref())
                 .map(|(plan, message)| lower(&plan.indexed(message, u16::from(item)), item));
@@ -528,7 +533,8 @@ impl Linter {
             }
             // Whole-file rules still read other nodes (`descendants(x).y`).
             let exprs = rule.node_when.iter().chain(&rule.when).chain(&rule.locals)
-                .chain([&rule.message, &rule.fix, &rule.fix_when, &rule.fix_at, &rule.indent_reset, &rule.report_at, &rule.each].into_iter().flatten());
+                .chain([&rule.message, &rule.indent_reset, &rule.report_at, &rule.each].into_iter().flatten())
+                .chain(rule.fixes().flat_map(FixPlan::clauses).map(|clause| &clause.expr));
             roots.extend(exprs.map(|e| (kinds.clone(), e)));
         }
         let compiled_rules = &self.rules;
@@ -1019,11 +1025,10 @@ impl Linter {
                     Err(error) => {
                         let names = rules.iter().filter(|&&fi| run.active[fi]).map(|&fi| self.rules[fi].name.as_str()).collect::<Vec<_>>().join(", ");
                         let node = tree.node(owner);
-                        out.push(Diagnostic {
-                            rule: ENGINE_RULE.into(), severity: Severity::Error,
-                            message: format!("node selection for `{names}` failed here: {error}"),
-                            message_index: None, start: node.start as usize, end: node.end as usize, fix: None,
-                        });
+                        out.push(Diagnostic::new(
+                            ENGINE_RULE.into(), Severity::Error, format!("node selection for `{names}` failed here: {error}"),
+                            None, node.start as usize, node.end as usize,
+                        ));
                     },
                 }
             }
@@ -1103,7 +1108,7 @@ impl Linter {
         let failed = |e: String| {
             let node = ctx.tree.node(ctx.node);
             let message = format!("rule `{}` failed here: {e}", f.name);
-            vec![Diagnostic { rule: f.name.clone(), severity: Severity::Error, message, message_index: None, start: node.start as usize, end: node.end as usize, fix: None }]
+            vec![Diagnostic::new(f.name.clone(), Severity::Error, message, None, node.start as usize, node.end as usize)]
         };
         if !f.node_when.is_empty() {
             // Guard lambdas are compiled after the rule's item slot even
@@ -1145,15 +1150,7 @@ impl Linter {
     fn apply_item(&self, f: &Rule, ctx: &Ctx, session: &crate::vm::Session<'_, Ctx>, item: Option<crate::vm::V>) -> Option<Diagnostic> {
         let node = ctx.tree.node(ctx.node);
         let (start, end) = (node.start as usize, node.end as usize);
-        let failed = |e: String| Diagnostic {
-            rule: f.name.clone(),
-            severity: Severity::Error,
-            message: format!("rule `{}` failed here: {e}", f.name),
-            message_index: None,
-            start,
-            end,
-            fix: None,
-        };
+        let failed = |e: String| Diagnostic::new(f.name.clone(), Severity::Error, format!("rule `{}` failed here: {e}", f.name), None, start, end);
         for i in 0..f.when.len() {
             match self.condition_holds(session, item, &f.when_vm, i) {
                 Ok(true) => {}
@@ -1161,33 +1158,23 @@ impl Linter {
                 Err(e) => return Some(failed(e)),
             }
         }
-        let fix_enabled = match &f.fix_when {
-            Some(_) => match self.clause(session, item, f.fix_when_vm.as_ref()) {
-                Ok(v) => v.truthy(),
-                Err(e) => return Some(failed(e)),
-            },
-            None => true,
+        let fix = match f.fix.as_ref().map(|plan| self.fix_here(plan, ctx, session, item, start, end)).transpose() {
+            // Already what the fix wants: nothing to report.
+            Ok(Some(Some(fix))) if fix.edits.is_empty() => return None,
+            Ok(fix) => fix.flatten(),
+            Err(e) => return Some(failed(e)),
         };
-        let fix = match (&f.fix, fix_enabled) {
-            (Some(_), true) => match self.clause(session, item, f.fix_vm.as_ref()) {
-                Ok(v) => {
-                    let want = v.text();
-                    let (from, to) = match &f.fix_at {
-                        Some(_) => match self.clause(session, item, f.fix_at_vm.as_ref()).and_then(|value| explicit_fix_region(ctx, value)) {
-                            Ok(span) => span,
-                            Err(e) => return Some(failed(e)),
-                        },
-                        None => fix_region(ctx.source, start, end, f.fix_target),
-                    };
-                    if want == ctx.source[from..to] {
-                        return None;
-                    }
-                    Some(Fix { range: from..to, edits: vec![fix::minimal_edit(ctx.source, from, to, &want)] })
-                }
+        let mut suggestions = Vec::new();
+        for plan in &f.suggestions {
+            match self.fix_here(plan, ctx, session, item, start, end) {
+                Ok(Some(fix)) if !fix.edits.is_empty() => match self.clause(session, item, plan.title.as_ref().and_then(|t| t.vm.as_ref())) {
+                    Ok(title) => suggestions.push(Suggestion { title: title.text().into_owned(), fix }),
+                    Err(e) => return Some(failed(e)),
+                },
+                Ok(_) => {}
                 Err(e) => return Some(failed(e)),
-            },
-            _ => None,
-        };
+            }
+        }
         let (start, end) = match (f.report, &fix) {
             (Report::Change, Some(fix)) => (fix.edits[0].start, fix.edits[0].end),
             (Report::End, _) => (end, end),
@@ -1239,7 +1226,26 @@ impl Linter {
             (Some(_), None) => return Some(failed(session.error())),
             (None, _) => (f.name.clone(), Some(0)),
         };
-        Some(Diagnostic { rule: f.name.clone(), severity: f.severity, message, message_index, start, end, fix })
+        Some(Diagnostic { fix, suggestions, ..Diagnostic::new(f.name.clone(), f.severity, message, message_index, start, end) })
+    }
+
+    /// A fix or suggestion at this node; `None` when its `if` does not hold.
+    fn fix_here(&self, plan: &FixPlan, ctx: &Ctx, session: &crate::vm::Session<'_, Ctx>, item: Option<crate::vm::V>, start: usize, end: usize) -> Result<Option<Fix>, String> {
+        if let Some(when) = &plan.when {
+            if !self.clause(session, item, when.vm.as_ref())?.truthy() {
+                return Ok(None);
+            }
+        }
+        let mut regions = Vec::with_capacity(plan.parts.len());
+        for part in &plan.parts {
+            let text = self.clause(session, item, part.text.vm.as_ref())?.text().into_owned();
+            let (start, end) = match &part.at {
+                Some(at) => explicit_fix_region(ctx, self.clause(session, item, at.vm.as_ref())?)?,
+                None => fix_region(ctx.source, start, end, part.target),
+            };
+            regions.push(Region { start, end, text });
+        }
+        Fix::from_regions(ctx.source, regions).map(Some)
     }
 }
 
@@ -1256,7 +1262,7 @@ struct Run<'a> {
 }
 
 fn engine_warning(at: usize, message: String) -> Diagnostic {
-    Diagnostic { rule: ENGINE_RULE.into(), severity: Severity::Warn, message, message_index: None, start: at, end: at, fix: None }
+    Diagnostic::new(ENGINE_RULE.into(), Severity::Warn, message, None, at, at)
 }
 
 /// The text a fix rewrites: the node, or the whitespace just before or

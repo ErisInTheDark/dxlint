@@ -1,0 +1,3 @@
+input.ts:12:13-12:14 complex-condition#0 Name this condition
+input.ts:16:6-16:11 less-than#0 Compare with <
+input.ts:4:6-4:12 complex-condition#0 Name this condition

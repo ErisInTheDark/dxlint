@@ -16,6 +16,8 @@ struct Actual {
     fixed_diagnostics: Vec<String>,
     fixed: BTreeMap<PathBuf, String>,
     fix_preview: BTreeMap<PathBuf, String>,
+    /// Each suggestion's changed lines, placeholders marked.
+    suggestions: Vec<String>,
     /// Warm replay must preserve messages and atomic edits too.
     identity: Vec<Vec<u8>>,
 }
@@ -49,6 +51,44 @@ fn reports(name: &str, text: &str, diagnostics: &[crate::engine::Diagnostic], lo
     }).collect()
 }
 
+/// One block per suggestion: the report's identity and the suggestion's
+/// title, then the lines it changes as they read afterwards, with each
+/// placeholder in `«»`.
+fn suggestions(name: &str, text: &str, diagnostics: &[crate::engine::Diagnostic]) -> Vec<String> {
+    let lines = LineIndex::new(text);
+    let mut blocks = Vec::new();
+    for diagnostic in diagnostics {
+        let (line, col) = lines.line_col(text, diagnostic.start);
+        let (end_line, end_col) = lines.line_col(text, diagnostic.end);
+        let index = diagnostic.message_index.map_or_else(|| "error".into(), |index| index.to_string());
+        for suggestion in &diagnostic.suggestions {
+            let fix = &suggestion.fix;
+            let (Some(first), Some(last)) = (fix.edits.first(), fix.edits.last()) else { continue };
+            let after = fix.apply(text);
+            let from = lines.line_start(lines.line_of(first.start));
+            // Text after the last edit moves by the whole fix's change in length.
+            let last_end = (last.end + after.len()).saturating_sub(text.len());
+            let to = after[last_end..].find('\n').map_or(after.len(), |i| last_end + i);
+            let mut shown = String::new();
+            let mut pos = from;
+            let mut marks: Vec<_> = fix.placeholders.iter().filter(|r| r.start >= from && r.end <= to).collect();
+            marks.sort_by_key(|r| r.start);
+            for mark in marks {
+                shown.push_str(&after[pos..mark.start]);
+                shown.push('«');
+                shown.push_str(&after[mark.clone()]);
+                shown.push('»');
+                pos = mark.end;
+            }
+            shown.push_str(&after[pos..to]);
+            let body: Vec<String> = shown.lines().map(|line| format!("  {line}")).collect();
+            blocks.push(format!("{name}:{}:{}-{}:{} {}#{index} > {}\n{}",
+                line + 1, col + 1, end_line + 1, end_col + 1, diagnostic.rule, suggestion.title, body.join("\n")));
+        }
+    }
+    blocks
+}
+
 fn collect(linter: &Linter, files: &[PathBuf], cache: Option<&Cache>, warm: bool) -> Result<Actual, String> {
     let local: BTreeSet<_> = linter.rules.iter().filter(|rule|
         linter.sources.get(rule.message_file).path.as_deref() == Some(linter.root.join(".dx").as_path()))
@@ -73,6 +113,7 @@ fn collect(linter: &Linter, files: &[PathBuf], cache: Option<&Cache>, warm: bool
         };
         actual.identity.push(serde_json::to_vec(&diagnostics).map_err(|e| e.to_string())?);
         actual.diagnostics.extend(reports(&name, &text, &diagnostics, &local));
+        actual.suggestions.extend(suggestions(&name, &text, &diagnostics));
         if diagnostics.iter().any(|diagnostic| diagnostic.fix.is_some()) {
             actual.fix_preview.insert(relative.to_path_buf(), apply_fixes(&text, &diagnostics).0);
         }
@@ -117,6 +158,7 @@ fn write_actual(root: &Path, actual: &Actual, bless: bool) -> Result<(), String>
     write_outputs(&actual_dir.join("fix-preview"), &actual.fix_preview)?;
     fs::write(actual_dir.join("diagnostics"), diagnostic_text(&actual.diagnostics)).map_err(|e| e.to_string())?;
     fs::write(actual_dir.join("fixed-diagnostics"), diagnostic_text(&actual.fixed_diagnostics)).map_err(|e| e.to_string())?;
+    fs::write(actual_dir.join("suggestions"), diagnostic_text(&actual.suggestions)).map_err(|e| e.to_string())?;
     if bless {
         let expected = root.join("expected");
         if fs::symlink_metadata(&expected).is_ok_and(|meta| meta.file_type().is_symlink()) {
@@ -127,6 +169,9 @@ fn write_actual(root: &Path, actual: &Actual, bless: bool) -> Result<(), String>
         fs::copy(actual_dir.join("diagnostics"), expected.join("diagnostics")).map_err(|e| e.to_string())?;
         if expected.join("fixed-diagnostics").is_file() {
             fs::copy(actual_dir.join("fixed-diagnostics"), expected.join("fixed-diagnostics")).map_err(|e| e.to_string())?;
+        }
+        if !actual.suggestions.is_empty() || expected.join("suggestions").is_file() {
+            fs::copy(actual_dir.join("suggestions"), expected.join("suggestions")).map_err(|e| e.to_string())?;
         }
         let preview_dir = expected.join("fix-preview");
         let opted_in = preview_dir.is_dir();
@@ -213,6 +258,12 @@ fn scenario(output: &mut Output<'_>, root: &Path, bless: bool) -> Result<Vec<Str
             let diagnostics = fs::read_to_string(expected.join("fixed-diagnostics")).map_err(|e| e.to_string())?;
             let text = diagnostic_text(&actual.fixed_diagnostics);
             if !same_lines(&diagnostics, &text) { differences.push(format!("fixed-diagnostics:\n{}", difference(&diagnostics, &text))); }
+        }
+        let text = diagnostic_text(&actual.suggestions);
+        match fs::read_to_string(expected.join("suggestions")) {
+            Ok(suggestions) if !same_lines(&suggestions, &text) => differences.push(format!("suggestions:\n{}", difference(&suggestions, &text))),
+            Err(_) if !actual.suggestions.is_empty() => differences.push("suggestions: offered, but expected/suggestions is missing".into()),
+            _ => {}
         }
         let fixed_root = expected.join("fixed");
         let mut fixed = BTreeMap::new();

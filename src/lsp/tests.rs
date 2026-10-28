@@ -258,6 +258,30 @@ fn streams_workspace_diagnostics_and_serves_fixes() {
 }
 
 #[test]
+fn suggestions_are_offered_as_quick_fixes_that_rename_their_placeholder() {
+    let dir = project("lsp-suggest");
+    std::fs::write(dir.join(".dx"), format!("{CONFIG}\nin .t match odd /\\bODD\\b/\nin odd rule no-odd warn \"odd\" {{\n  suggest \"Name it\" {{\n    at 0 as \"let \" placeholder(\"x\") \" = 1\\n\"\n    as placeholder(\"x\")\n  }}\n  suggest \"Drop it\" as \"\"\n}}\n")).expect("config");
+    let mut c = Client::start(&dir);
+    let open = dir.join("open.t");
+    c.notify("textDocument/didOpen", json!({ "textDocument": { "uri": uri(&open), "languageId": "t", "version": 1, "text": "ok ODD\n" } }));
+    let diags = c.diagnostics_for(&open);
+    let actions = c.request(
+        "textDocument/codeAction",
+        json!({ "textDocument": { "uri": uri(&open) }, "range": diags[0]["range"], "context": { "diagnostics": diags } }),
+    );
+    let titles: Vec<&str> = actions.as_array().unwrap().iter().filter_map(|a| a["title"].as_str()).collect();
+    // Suggestions never join the fix-all action.
+    assert_eq!(titles, ["Name it", "Drop it"]);
+    let named = &actions[0];
+    assert_eq!(named["isPreferred"], false);
+    assert_eq!(named["command"]["command"], "dxlint.renamePlaceholder");
+    // `let x = 1\nok x`: the rename starts at the declared name.
+    assert_eq!(named["command"]["arguments"][1], json!({ "line": 0, "character": 4 }));
+    assert!(actions[1]["command"].is_null());
+    c.shutdown();
+}
+
+#[test]
 fn rescans_leave_open_buffers_diagnostics_alone() {
     let dir = project("lsp-rescan-open");
     let config = dir.join(".dx");

@@ -83,7 +83,11 @@ pub fn diagnostics(output: &mut Output<'_>, name: &str, text: &str, diags: &[Dia
     for d in diags {
         let style = severity_style(d.severity);
         let (line, col) = lines.line_col(text, d.start);
-        let fixable = if d.fix.is_some() { format!(" {DIM}(fixable){DIM:#}") } else { String::new() };
+        let mut fixable = if d.fix.is_some() { format!(" {DIM}(fixable){DIM:#}") } else { String::new() };
+        if !d.suggestions.is_empty() {
+            let n = d.suggestions.len();
+            fixable.push_str(&format!(" {DIM}({n} suggestion{}: dxlint suggest {name} --at {}:{}){DIM:#}", if n == 1 { "" } else { "s" }, line + 1, col + 1));
+        }
         out.push_str(&format!(
             "{style}{}{style:#}{BOLD}: {}{BOLD:#} {DIM}[{}]{DIM:#}{fixable}\n  {DIM}-->{DIM:#} {name}:{}:{}\n",
             d.severity.as_str(),

@@ -11,7 +11,7 @@ use super::{load_for_lint, render, ConfigArg, Format, LintArgs, Output, Project,
 use crate::config::ast::Severity;
 use crate::config::source::normalize_path;
 use crate::engine::cache::{self, Cache};
-use crate::engine::{apply_fixes, Diagnostic, Edit, Linter, LintRun};
+use crate::engine::{apply_fixes, Diagnostic, Edit, Fix, Linter, LintRun};
 use crate::line_index::LineIndex;
 use crate::engine::reads;
 
@@ -41,6 +41,15 @@ struct JsonDiag<'a> {
     fixable: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     fix: Option<JsonFix<'a>>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    suggestions: Vec<JsonSuggestion<'a>>,
+}
+
+#[derive(Serialize)]
+struct JsonSuggestion<'a> {
+    title: &'a str,
+    #[serde(flatten)]
+    fix: JsonFix<'a>,
 }
 
 #[derive(Serialize)]
@@ -54,6 +63,15 @@ struct JsonFixPreview<'a> {
 struct JsonFix<'a> {
     #[serde(serialize_with = "serialize_edits")]
     edits: &'a [Edit],
+    /// Byte ranges in the text with only this fix applied.
+    #[serde(skip_serializing_if = "<[_]>::is_empty")]
+    placeholders: &'a [std::ops::Range<usize>],
+}
+
+impl<'a> JsonFix<'a> {
+    fn new(fix: &'a Fix) -> Self {
+        JsonFix { edits: &fix.edits, placeholders: &fix.placeholders }
+    }
 }
 
 #[derive(Serialize)]
@@ -87,7 +105,8 @@ impl<'a> JsonDiag<'a> {
             end_line: end_line + 1,
             end_col: end_col + 1,
             fixable: diagnostic.fix.is_some(),
-            fix: diagnostic.fix.as_ref().map(|fix| JsonFix { edits: &fix.edits }),
+            fix: diagnostic.fix.as_ref().map(JsonFix::new),
+            suggestions: diagnostic.suggestions.iter().map(|s| JsonSuggestion { title: &s.title, fix: JsonFix::new(&s.fix) }).collect(),
         }
     }
 }
@@ -573,7 +592,7 @@ fn lint_project(output: &mut Output<'_>, args: &LintArgs, project: &mut Project,
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::{Edit, Fix};
+    use crate::engine::Edit;
 
     #[test]
     fn results_report_in_queue_order_whatever_order_they_finish_in() {
@@ -585,16 +604,11 @@ mod tests {
     fn json_preserves_every_edit_of_an_atomic_fix() {
         let source = "\u{e9} abc";
         let diagnostic = Diagnostic {
-            rule: "replace".into(),
-            severity: Severity::Warn,
-            message: "replace".into(),
-            message_index: Some(0),
-            start: 3,
-            end: source.len(),
             fix: Some(Fix { range: 0..source.len(), edits: vec![
                 Edit { start: 0, end: 2, text: "E".into() },
                 Edit { start: 4, end: 4, text: "!".into() },
-            ] }),
+            ], placeholders: Vec::new() }),
+            ..Diagnostic::new("replace".into(), Severity::Warn, "replace".into(), Some(0), 3, source.len())
         };
         let json = serde_json::to_value(JsonDiag::new("test", source, &LineIndex::new(source), &diagnostic)).unwrap();
         let edits = json["fix"]["edits"].as_array().expect("fix edits");

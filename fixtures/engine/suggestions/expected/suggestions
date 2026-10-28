@@ -1,0 +1,10 @@
+input.ts:4:6-4:12 complex-condition#0 > Put the condition into a variable
+  	const «condition» = a && b;
+  	if («condition») {
+input.ts:4:6-4:12 complex-condition#0 > Wrap it in a function
+  	const «condition» = () => a && b;
+  	if («condition»()) {
+input.ts:4:6-4:12 complex-condition#0 > Negate it twice
+  	if (!!(a && b)) {
+input.ts:12:13-12:14 complex-condition#0 > Negate it twice
+  	} else if (!!(c)) {
