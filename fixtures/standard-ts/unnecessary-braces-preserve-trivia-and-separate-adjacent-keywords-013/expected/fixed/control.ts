@@ -1,1 +1,1 @@
-if (foo)  if (other) bar(); else baz();  else last();
+if (foo) if (other) bar(); else baz(); else last();

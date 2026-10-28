@@ -1,2 +1,2 @@
-while (foo) 
+while (foo)
  /* keep */ bar();

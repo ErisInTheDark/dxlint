@@ -1,5 +1,5 @@
 if (foo) {
- bar(); 
+  bar();
 } else {
- baz(); 
+  baz();
 }

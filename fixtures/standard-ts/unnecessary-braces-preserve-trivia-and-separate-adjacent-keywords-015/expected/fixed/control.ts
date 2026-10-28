@@ -1,1 +1,1 @@
-if (foo)  while (bar) {}  else {}
+if (foo) while (bar) {} else {}

@@ -1,4 +1,4 @@
 if (x) /* attached */ 
 {
- /* body */ work(); /* tail */ 
+  /* body */ work(); /* tail */
 }

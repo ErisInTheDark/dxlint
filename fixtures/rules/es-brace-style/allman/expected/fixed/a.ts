@@ -1,8 +1,8 @@
-if (foo) 
+if (foo)
 {
- bar(); 
+  bar();
 }
- else 
+else
 {
- baz(); 
+  baz();
 }

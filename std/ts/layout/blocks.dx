@@ -242,6 +242,12 @@ in ts_colon rule es-switch-colon-spacing:after {
   warn if after then "Expected space(s) after this colon." else "Unexpected space(s) after this colon."
 }
 
+# One level of indentation: a tab where the file indents with tabs, else the
+# file's first indentation (two spaces if it has none).
+fn layout_indent_unit(source) = if re_test(source, /\n\t/) then "\t" else {
+  value found: re_find(source, /\n +\S/)
+  value if found == null then "  " else byte_slice(found, 1, byte_len(found) - 1)
+}
 @macro layout_brace_options {
   default option style "1tbs" | "stroustrup" | "allman" = "1tbs" "brace layout"
   option allowSingleLine boolean = false "allow single-line block bodies"
@@ -252,21 +258,26 @@ in ts_open_brace rule es-brace-style:open {
   @layout_brace_options
   when previous_token != null
   when if style == "allman" then !space_before.line_break && !(allowSingleLine && parent.layout_brace_single) else space_before.line_break
-  fix at { start: if style == "allman" then offset else token_neighbours.before.end, end: offset } if style == "allman" || !space_before.comments as if style == "allman" then "\n" else " "
+  let layout_open_start if style == "allman" && space_before.comments then offset else token_neighbours.before.end
+  fix at { start: layout_open_start, end: offset } if style == "allman" || !space_before.comments as if style == "allman" then "\n" indent else " "
   warn if style == "allman" then "Opening curly brace appears on the same line as controlling statement." else "Opening curly brace does not appear on the same line as controlling statement."
 }
 in ts_open_brace rule es-brace-style:body {
   @layout_brace_options
   when next_token not ts_close_brace
   when !space_after.line_break && !(allowSingleLine && parent.layout_brace_single)
-  fix at { start: end_offset, end: end_offset } as "\n"
+  # Unlike upstream's bare line break, the statement lands indented and the
+  # space before it goes.
+  let layout_body_end end_offset + byte_len(re_find(byte_slice(source, end_offset, token(node, "after").start), /^[ \t]*/) ?? "")
+  fix at { start: end_offset, end: layout_body_end } as "\n" indent layout_indent_unit(source)
   warn "Statement inside of curly braces should be on next line."
 }
 in ts_close_brace rule es-brace-style:close {
   @layout_brace_options
   when previous_token not ts_open_brace
   when !space_before.line_break && !(allowSingleLine && parent.layout_brace_single)
-  fix at { start: offset, end: offset } as "\n"
+  let layout_close_start offset - byte_len(re_find(byte_slice(source, token(node, "before").end, offset), /[ \t]*$/) ?? "")
+  fix at { start: layout_close_start, end: offset } as "\n" (opener.indent ?? indent)
   warn "Closing curly brace should be on the same line as opening curly brace or on the line after the previous block."
 }
 in ts_close_brace rule es-brace-style:keyword {
@@ -274,7 +285,8 @@ in ts_close_brace rule es-brace-style:keyword {
   when parent.layout_brace_keyword.nonempty ?? false
   when contains(["else", "catch", "finally"], token(node, "after").text)
   when space_after.line_break == (style == "1tbs")
-  fix at { start: end_offset, end: if style == "1tbs" then token(node, "after").start else end_offset } if style != "1tbs" || !space_after.comments as if style == "1tbs" then " " else "\n"
+  let layout_keyword_end if style == "1tbs" || !space_after.comments then token(node, "after").start else end_offset
+  fix at { start: end_offset, end: layout_keyword_end } if style != "1tbs" || !space_after.comments as if style == "1tbs" then " " else "\n" indent
   warn if style == "1tbs" then "Closing curly brace does not appear on the same line as the subsequent block." else "Closing curly brace appears on the same line as the subsequent block."
 }
 

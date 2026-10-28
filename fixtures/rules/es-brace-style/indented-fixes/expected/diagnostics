@@ -1,0 +1,4 @@
+a.ts:3:35-3:47 es-curly:if#0
+a.ts:4:12-4:22 es-curly:if#0
+a.ts:5:29-5:30 es-brace-style:body#0
+a.ts:5:43-5:44 es-brace-style:close#0

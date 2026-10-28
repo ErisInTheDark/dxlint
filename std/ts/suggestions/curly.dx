@@ -98,10 +98,25 @@ fn curly_fix_allowed(n, block) = if !block then true else {
         && !starts_with(after.text, "/") && !starts_with(after.text, "`"))
 }
 
-fn curly_replacement(source, n, block) = if !block then "{{" n.text "}}" else {
-  value source
-  interior: byte_slice n.first_token.end n.last_token.start
-  value expression_fix_edges(n, interior)
+# Removing braces also takes the space before `{` (when nothing else is
+# there) and the whitespace left where `}` was, which upstream keeps.
+fn curly_removal_start(source, n) = {
+  value before: n.token_neighbours.before
+  value if before != null && re_test(byte_slice(source, before.end, n.offset), /^[ \t]*$/) then before.end else n.offset
+}
+# What follows `}` on its line (`} else`) keeps the line `}` had, at its
+# indentation.
+fn curly_removal_keeps_line(source, n) = {
+  value after: n.token_neighbours.after
+  value after != null && !after.line_break && re_test(byte_slice(source, n.end_offset, after.start), /^[ \t]*$/)
+    && re_test(byte_slice(source, n.first_token.end, n.last_token.start), /[\r\n][ \t]*$/)
+}
+fn curly_removal_end(source, n) = if curly_removal_keeps_line(source, n) then n.token_neighbours.after.start else n.end_offset
+fn curly_removal(source, n) = {
+  value raw: byte_slice(source, n.first_token.end, n.last_token.start)
+  value interior: if curly_removal_keeps_line(source, n) then raw else trim_end(raw)
+  value text: if re_test(interior, /^[ \t]*[\r\n]/) then interior else " " trim_start(interior)
+  value if curly_removal_start(source, n) == n.offset then expression_fix_edges(n, trim_start(text)) else text
 }
 
 @macro suggestion_curly_policy {
@@ -113,7 +128,9 @@ fn curly_replacement(source, n, block) = if !block then "{{" n.text "}}" else {
   let chain_required if mode == "all" || style != "consistent" then false else if mode == "multi" then curly_info.multi_consistent else if mode == "multi-line" then curly_info.multiline_consistent else curly_info.nested_consistent
   let curly_expected if style == "consistent" && mode != "all" then if chain_required then 1 else 0 else body_expected
   when curly_expected != -1 && (curly_expected == 1 && !curly_info.block || curly_expected == 0 && curly_info.block)
-  fix at node if curly_fix_allowed(node, curly_info.block) as curly_replacement(source, node, curly_info.block)
+  let curly_fix_start if curly_info.block then curly_removal_start(source, node) else offset
+  let curly_fix_end if curly_info.block then curly_removal_end(source, node) else end_offset
+  fix at { start: curly_fix_start, end: curly_fix_end } if curly_fix_allowed(node, curly_info.block) as if curly_info.block then curly_removal(source, node) else "{{" text "}}"
   warn "{if curly_expected == 1 then 'Expected' else 'Unnecessary'} {{ after '{curly_info.name}'{if curly_info.condition then ' condition' else ''}."
 }
 in ts_if.consequent rule es-curly:if { @suggestion_curly_policy }

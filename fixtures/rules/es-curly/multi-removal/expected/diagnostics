@@ -1,0 +1,4 @@
+a.ts:12:21-12:42 es-curly:if#0
+a.ts:3:18-5:4 es-curly:if#0
+a.ts:6:18-8:4 es-curly:if#0
+a.ts:8:10-10:4 es-curly:else#0

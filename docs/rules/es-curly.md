@@ -61,5 +61,6 @@ rule es-curly {
 ## Differences from upstream
 
 - Set the positional brace policy through `mode`, and the optional `consistent` flag through `style`.
+- Removing braces also removes the space before `{` and the whitespace left where `}` was; upstream keeps both. A keyword after `}` (`} else`) keeps the line and indentation `}` had.
 
 Adapted from the [ESLint](https://eslint.org/docs/latest/rules/curly) documentation (MIT).

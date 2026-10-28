@@ -1,0 +1,3 @@
+import .ts
+rule es-brace-style:* { set style "1tbs" }
+rule es-curly:*

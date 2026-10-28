@@ -1,9 +1,9 @@
 try {
   work();
 }
- catch (e) {
+catch (e) {
   recover();
 }
- finally {
+finally {
   done();
 }

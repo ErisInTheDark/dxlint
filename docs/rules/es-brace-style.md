@@ -73,5 +73,6 @@ rule es-brace-style {
 ## Differences from upstream
 
 - The upstream string option is named `style` in dxlint.
+- Fixes lay the code out: a line they break is indented to match the block, and the spaces left beside the break are removed. Upstream inserts a bare line break and leaves both to a formatter.
 
 Adapted from the [ESLint Stylistic](https://eslint.style/rules/brace-style) documentation (MIT).

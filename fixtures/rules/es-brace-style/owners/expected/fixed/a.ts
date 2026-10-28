@@ -1,13 +1,13 @@
 class C {
   static {
- work(); 
-}
+    work();
+  }
 }
 switch (x) {
   case 1: work(); break;
 }
 namespace N {
   function f() {
- work(); 
-}
+    work();
+  }
 }

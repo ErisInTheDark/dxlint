@@ -1,2 +1,2 @@
-if (foo)  bar; 
+if (foo) bar;
 ++baz;
