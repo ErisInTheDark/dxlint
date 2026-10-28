@@ -1,0 +1,4 @@
+import .ts
+rule es-no-fallthrough
+# Targets comments, so they become tree nodes.
+rule es-spaced-comment

@@ -220,15 +220,26 @@ in ts_switch {
 # whose only statement is a block.
 @macro last_comment(t) re_find(t, /(?:\/\*[^*]*\*+(?:[^\/*][^*]*\*+)*\/|\/\/[^\r\n]*)\s*$/)
 @macro block_case /^\s*(?:case\b[\s\S]*?|default\s*):\s*\{([\s\S]*)\}\s*$/
-in ts_case let case_comment_in_block { value previous_sibling.nonempty ?? ""; re_test @block_case }
+# The previous case, not the previous sibling: comments are tree nodes (and
+# siblings) when some rule targets comments.
+in ts_case let previous_case { value parent.case.nodes; slice 0 index; last }
+in ts_case let case_comment_in_block { value previous_case.text ?? ""; re_test @block_case }
 in ts_case let case_comment_block_source
-  if case_comment_in_block then re_replace(previous_sibling, /\}\s*$/, "")
+  if case_comment_in_block then re_replace(previous_case.text, /\}\s*$/, "")
   else ""
 in ts_case let case_comment_in_block_text @last_comment(case_comment_block_source)
+# Source between the previous case's last statement (or the case itself
+# when empty) and this case, read from the text, comment nodes or not.
+in ts_case let case_gap_start {
+  value previous: previous_case
+  value statement: last(previous.body.nodes)
+  value if statement != null then statement.end_offset else if previous != null then previous.end_offset else offset
+}
+in ts_case let case_gap byte_slice(source, case_gap_start, offset)
 in ts_case let case_comment_source
-  if case_comment_in_block_text != null then case_comment_block_source else gap_before.nonempty ?? ""
+  if case_comment_in_block_text != null then case_comment_block_source else case_gap
 in ts_case let case_comment @last_comment(case_comment_source)
-in ts_case let case_comment_offset offset - len(gap_before.nonempty ?? "") - (if case_comment_in_block_text != null then len(previous_sibling) else 0) + len(case_comment_source) - len(case_comment.nonempty ?? "")
+in ts_case let case_comment_offset (if case_comment_in_block_text != null then previous_case.offset else case_gap_start) + byte_len(case_comment_source) - byte_len(case_comment.nonempty ?? "")
 in ts_case rule es-no-fallthrough {
   option allowEmptyCase boolean = false "allow empty cases separated by blank lines"
   option commentPattern regex | null = null "comments that allow falling through (default: /falls?\\s?through/i)"
