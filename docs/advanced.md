@@ -375,7 +375,7 @@ Write these inside any comment:
 | `callee.object.x`, `parent.left.x`, `previous.body.x` | longer paths walk: each field label steps into its node(s), the last part is read there |
 | `first(references).line` | `.x` on a node value (from a link, `node`, or a lambda parameter) reads on that node; longer paths walk (`n.callee.object.offset`) |
 | `node`, `right.node`, `parent.node` | the node itself (`right` alone is the same node) |
-| `"{x}"` | a node's source as text, for comparing two nodes' source |
+| `"{x}"` | a node's source as text, for comparing two nodes' source; always text (a null `x` prints nothing), so fall back inside: `"{x ?? 'none'}"` |
 | `right.nodes`, `n.callee.nodes` | the field's node values, always a list, including for zero or one match |
 | `overlapping(layer)`, `overlapping(layer, from, to)` | the nodes of a layer or group anywhere in the file whose span overlaps the node's (or bytes `from..to`), in source order: on a `ts_line`, `overlapping(ts_comment)` |
 | `descendants(layer)` | the nodes of a layer or group (specialisations too) inside the current node, in source order: `descendants(ts_export)`. Always the node being evaluated, never a piped or `value` result |

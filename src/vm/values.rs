@@ -452,7 +452,8 @@ impl View<'_> {
             (a, b) if matches!(a, V::Text(_)) || matches!(b, V::Text(_)) => match (a, b) {
                 (V::Num(number), text) | (text, V::Num(number)) => self.text(text, tree, source)
                     .is_some_and(|text| text.trim().parse::<f64>().is_ok_and(|other| number == other)),
-                (V::Null, text) | (text, V::Null) => self.text(text, tree, source).is_some_and(str::is_empty),
+                // Only null equals null: empty text is present.
+                (V::Null, _) | (_, V::Null) => false,
                 (a, b) => self.text(a, tree, source).zip(self.text(b, tree, source)).is_some_and(|(a, b)| a == b),
             },
             (a, b) => a.loose_eq(b, tree, source),
@@ -538,7 +539,8 @@ mod tests {
         assert_eq!(view.value(V::Text(owned), &tree, source), Value::from("5.5"));
         assert!(view.equal(V::Text(owned), V::Num(5.5), &tree, source));
         assert!(!view.truthy(V::Text(empty), &tree));
-        assert!(view.equal(V::Text(empty), V::Null, &tree, source));
+        // Only null equals null, as for constant text and `Value::loose_eq`.
+        assert!(!view.equal(V::Text(empty), V::Null, &tree, source));
     }
 
     #[test]

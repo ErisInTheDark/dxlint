@@ -230,10 +230,10 @@ in ts_function, ts_method, ts_method_signature, ts_call_signature let unified_do
 in style_tree_node let unified_after_line line + { value text; split "\n"; count } - 1 + { value space_after.text.nonempty ?? ""; split "\n"; count } - 1
 in style_tree_node let unified_next_offset space_after.end
 in ts_method let unified_head { offset: key.unified_next_offset, line: key.unified_after_line }
-in ts_function let unified_key if body == null then (if name != null then "{name}" else "default") else null
+in ts_function let unified_key if body == null then "{name ?? 'default'}" else null
 in ts_method let unified_key if body == null && kind != "get" && kind != "set" && key != null then { kind: kind_name(key.node), name: "{key}", static: contains([] modifier, "static") } else null
 in ts_method_signature let unified_key if kind != "get" && kind != "set" && key != null then { kind: kind_name(key.node), name: "{key}", static: false } else null
-in ts_call_signature let unified_key if kind != null then "{kind}" else "call"
+in ts_call_signature let unified_key "{kind ?? 'call'}"
 in ts_function, ts_method, ts_method_signature, ts_call_signature let unified_signature if unified_key == null then null else { key: unified_key, node: node, offset: offset, head: unified_head.nonempty ?? { offset: offset, line: line }, parameters: [] parameter.unified_parameter, types: [] type_parameter.unified_type_parameter, result: return_type.unified_bare_type, outer: [] parameter.unified_outer_type }
 in ts_export let unified_signature declaration.unified_signature
 in ts_program, ts_block, ts_class, ts_interface, ts_type_literal let unified_signatures [] children.unified_signature
