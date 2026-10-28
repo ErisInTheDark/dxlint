@@ -2,7 +2,7 @@
   "name": "dxlint",
   "displayName": "dxlint",
   "description": "let you and your agents own your linter",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publisher": "ErisInTheDark",
   "license": "MIT",
   "repository": {
