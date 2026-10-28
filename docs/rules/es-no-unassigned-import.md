@@ -33,6 +33,7 @@ import should from "should";
 ## Differences from upstream
 
 - Checks ES module import declarations, not unassigned CommonJS `require()` calls.
+- `import type {} from "..."` is not reported: TypeScript erases it, so it runs nothing (it only brings in declarations such as module augmentations).
 - The upstream `allow` glob option is not available.
 - Uses the message “Imported module should be assigned”.
 

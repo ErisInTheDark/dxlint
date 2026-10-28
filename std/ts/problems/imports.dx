@@ -28,7 +28,8 @@ in ts_call rule es-no-import-assign:call {
 }
 
 in ts_import rule es-no-unassigned-import {
-  when default_import == null && namespace == null && count(specifier) == 0
+  # `import type {} from` is erased: no side effect to question.
+  when default_import == null && namespace == null && count(specifier) == 0 && kind != "type"
   warn "Imported module should be assigned"
 }
 
