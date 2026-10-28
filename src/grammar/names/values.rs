@@ -257,6 +257,7 @@ fn share_values() -> bool {
 impl Values<'_> {
     pub fn values(&self, leaf: Leaf) -> NodeValue {
         self.note_value_read();
+        self.world.note_entered(leaf);
         // File 0 is the linted file; others' values are work every file
         // that reads them repeats.
         let _foreign = match (self.world.profile(), leaf.target) {

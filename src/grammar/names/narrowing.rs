@@ -293,7 +293,17 @@ impl Narrowing<'_> {
         outer.start <= inner.start && inner.end <= outer.end
     }
 
+    /// Every guard's tested roots in `file`. A syntax scan through every
+    /// body: a guard only narrows reads in its own flow, so reading the
+    /// index does not depend on bodies the reader never enters.
     fn collect_tested_roots(&self, file: u32) -> Option<TestedRoots> {
+        let quiet = self.semantic.world.quiet_entering(true);
+        let roots = self.collect_tested_roots_inner(file);
+        self.semantic.world.quiet_entering(quiet);
+        roots
+    }
+
+    fn collect_tested_roots_inner(&self, file: u32) -> Option<TestedRoots> {
         let tree = self.semantic.world.tree(file)?;
         let names = self.semantic.world.names(file)?;
         let values = self.semantic.values();

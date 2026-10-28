@@ -510,6 +510,13 @@ pub trait World {
     /// Records that the answer being worked out depends on `file`'s whole
     /// text: for files a scan reached that turn out to matter.
     fn depends_on_file(&self, _file: u32) {}
+    /// Work is stepping onto `at`: inside another file's body, it depends on
+    /// that file's whole text, not only what lies outside its bodies.
+    fn note_entered(&self, _at: Leaf) {}
+    /// Turns [`Self::note_entered`] off (or back on) for a whole-file syntax
+    /// scan, which steps through every body although its answers only
+    /// matter where they reach; returns the previous setting.
+    fn quiet_entering(&self, _quiet: bool) -> bool { false }
     /// How often the linted file's own syntax was read so far, which no
     /// recorded read covers: answers that read it hold for this text only.
     fn linted_reads(&self) -> u64 { 0 }

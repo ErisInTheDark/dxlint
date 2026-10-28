@@ -534,6 +534,7 @@ impl Writer<'_> {
     fn dep(&mut self, d: &Dep) {
         let (tag, a) = match d {
             Dep::Text(_, h) => (0, *h),
+            Dep::Outside(_, bodies) => (7, bodies.hash),
             Dep::IsFile(_, found) => (1, u64::from(*found)),
             Dep::IsDir(_, found) => (2, u64::from(*found)),
             Dep::List(_, h) => (3, *h),
@@ -551,6 +552,17 @@ impl Writer<'_> {
             for list in [&request.include, &request.exclude, &request.extensions] {
                 self.var(list.len() as u64);
                 for value in list { self.str(value); }
+            }
+        }
+        if let Dep::Outside(_, bodies) = d {
+            let (len, ranges) = bodies.parts();
+            self.var(len as u64);
+            self.var(ranges.len() as u64);
+            for &(start, end, before, after) in ranges {
+                self.var(u64::from(start));
+                self.var(u64::from(end));
+                self.out.extend_from_slice(&before.to_le_bytes());
+                self.out.extend_from_slice(&after.to_le_bytes());
             }
         }
     }
@@ -714,6 +726,14 @@ impl<'a> Reader<'a> {
                 let name = super::reads::discovery_name(&self.str()?)?;
                 let request = crate::grammar::names::modules::resolution::DiscoveryRequest { root: raw, include: self.string_list()?, exclude: self.string_list()?, extensions: self.string_list()? };
                 Dep::Requested(name, std::sync::Arc::new(request), a)
+            }
+            7 => {
+                let len = usize::try_from(self.var()?).ok()?;
+                let count = usize::try_from(self.var()?).ok()?;
+                if count > self.bytes.len().saturating_sub(self.at) { return None; }
+                let ranges = (0..count).map(|_| Some((u32::try_from(self.var()?).ok()?, u32::try_from(self.var()?).ok()?, self.u64()?, self.u64()?)))
+                    .collect::<Option<Vec<_>>>()?;
+                Dep::Outside(path, std::sync::Arc::new(super::reads::Bodies::from_parts(a, len, ranges)))
             }
             _ => return None,
         })

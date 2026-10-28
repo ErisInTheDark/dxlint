@@ -284,6 +284,8 @@ pub struct Stale {
     /// files.
     touched: RefCell<crate::fx_hash::FxHashMap<*const Reads, (std::sync::Arc<Reads>, Box<[usize]>)>>,
     verdicts: RefCell<crate::fx_hash::FxHashMap<(*const Reads, reads::ScanTest), bool>>,
+    /// Per touched dep: whether it holds.
+    deps: RefCell<crate::fx_hash::FxHashMap<Dep, bool>>,
 }
 
 impl Stale {
@@ -295,29 +297,39 @@ impl Stale {
             groups: Default::default(),
             touched: Default::default(),
             verdicts: Default::default(),
+            deps: Default::default(),
         }
     }
 
     /// [`Dep::touches`] for any changed file.
     fn touches(&self, dep: &Dep) -> bool {
         match dep {
-            Dep::Text(..) | Dep::IsFile(..) => self.files.contains(dep.path()),
+            Dep::Text(..) | Dep::IsFile(..) | Dep::Outside(..) => self.files.contains(dep.path()),
             _ => self.holding.contains(dep.path()),
         }
     }
 
     /// Whether everything `reads` read still holds, judging only the
-    /// changed files; `passes` answers a scan's test for one of them.
-    fn holds(&self, reads: &Reads, passes: &impl Fn(&Path, &reads::ScanTest) -> bool) -> bool {
-        reads.deps.iter().all(|dep| !self.touches(dep) || dep.holds())
+    /// changed files with `held`; `passes` answers a scan's test for one
+    /// of them.
+    fn holds(&self, reads: &Reads, held: &impl Fn(&Dep) -> bool, passes: &impl Fn(&Path, &reads::ScanTest) -> bool) -> bool {
+        reads.deps.iter().all(|dep| !self.touches(dep) || self.dep_holds(dep, held))
             && reads.scans.iter().all(|scan| self.scan_holds(scan, |path| passes(path, &scan.test)))
             && reads.groups.iter().all(|group| {
                 let key = std::sync::Arc::as_ptr(group);
                 if let Some(&(_, holds)) = self.groups.borrow().get(&key) { return holds }
-                let holds = self.holds(group, passes);
+                let holds = self.holds(group, held, passes);
                 self.groups.borrow_mut().insert(key, (group.clone(), holds));
                 holds
             })
+    }
+
+    /// `held(dep)`, once per distinct dep: many lints read the same files.
+    fn dep_holds(&self, dep: &Dep, held: &impl Fn(&Dep) -> bool) -> bool {
+        if let Some(&holds) = self.deps.borrow().get(dep) { return holds }
+        let holds = held(dep);
+        self.deps.borrow_mut().insert(dep.clone(), holds);
+        holds
     }
 
     /// Whether `scan` holds, asking `passes` only about its changed files.
@@ -579,13 +591,18 @@ impl Linter {
         reads::track(|| self.lint(path, text))
     }
 
+    /// Whether `dep` still holds; a file read outside its bodies is checked
+    /// against a parse of its text now.
     pub fn holds(&self, dep: &Dep) -> bool {
-        dep.holds()
+        match dep {
+            Dep::Outside(path, bodies) => self.outside_holds(path, bodies),
+            dep => dep.holds(),
+        }
     }
 
     /// Whether everything `reads` read still holds, scans included.
     pub fn reads_hold(&self, reads: &Reads) -> bool {
-        reads.holds(&mut |dep| dep.holds(), &mut |scan| self.scan_holds(scan))
+        reads.holds(&mut |dep| self.holds(dep), &mut |scan| self.scan_holds(scan))
     }
 
     pub fn scan_holds(&self, scan: &reads::Scan) -> bool {
@@ -616,6 +633,50 @@ impl Linter {
         world::opens_scopes(&world, classes)
     }
 
+    /// The byte ranges of `unit`'s opaque bodies (`opaque` name items whose
+    /// syntax condition holds).
+    fn opaque_ranges(&self, unit: &units::Unit) -> Vec<(u32, u32)> {
+        let names = &self.grammar.names;
+        let tree = &unit.parsed.tree;
+        if !tree.nodes.iter().any(|node| names.kinds.get(node.matcher as usize).is_some_and(|kind| !kind.opaque.is_empty())) { return Vec::new() }
+        let run = Run { path: &unit.path, lang: unit.lang, text: &unit.text, lines: unit.lines(), file: &unit.rel, active: &[], settings: None };
+        let native = unit.parsed.front.map(|front| self.native_facts(front, tree, &run, (&*unit.path, Path::new(&unit.rel)), unit.parsed.state.clone()));
+        let memo = AttrMemo::default();
+        let reindented = RefCell::default();
+        let ctx = self.tree_ctx(unit.lang, tree, (&unit.text, unit.lines(), &unit.rel), &memo, &reindented, native.as_deref());
+        let mut ranges = Vec::new();
+        for (id, node) in tree.nodes.iter().enumerate() {
+            let Some(kind) = names.kinds.get(node.matcher as usize) else { continue };
+            for (path, when) in &kind.opaque {
+                let id = id as u32;
+                let holds = when.is_none_or(|condition| {
+                    let lowered = names.conditions.get(condition as usize).and_then(|condition| condition.lowered.get());
+                    lowered.is_some_and(|lowered| crate::vm::Session::new(&Ctx { node: id, ..ctx }, id, &[]).holds_on(id, lowered) == Some(true))
+                });
+                if !holds { continue }
+                let mut reached = vec![id];
+                for &label in path {
+                    reached = reached.iter().flat_map(|&at| tree.fields(at, label)).collect();
+                }
+                ranges.extend(reached.iter().filter_map(|&body| tree.nodes.get(body as usize)).map(|body| (body.start, body.end)));
+            }
+        }
+        ranges
+    }
+
+    /// Whether `bodies` (a file's text outside its opaque bodies) still
+    /// holds: the text is the same, or differs inside one body that the new
+    /// text still parses as a body spanning exactly the edit.
+    fn outside_holds(&self, path: &Path, bodies: &reads::Bodies) -> bool {
+        let (text, _) = reads::read_unrecorded(path);
+        match bodies.edit(text.as_deref()) {
+            Some(None) => true,
+            Some(Some(edited)) => self.unit_quiet(path, None).1.is_some_and(|unit| text.as_deref() == Some(&*unit.text)
+                && self.bodies(&unit).is_some_and(|now| now.spans().any(|span| span == edited))),
+            None => false,
+        }
+    }
+
     /// Whether `path`'s module index mentions `name` as a global of any
     /// class; true when it does not parse.
     fn mentions_global(&self, path: &Path, name: &str) -> bool {
@@ -644,7 +705,7 @@ impl Linter {
     /// Whether the `stale` files broke something `reads` read; only those
     /// files are looked at.
     pub fn is_stale(&self, stale: &Stale, reads: &Reads) -> bool {
-        !stale.changed.is_empty() && !stale.holds(reads, &|path, test| self.passes(path, reads::read_unrecorded(path).0.as_deref(), test))
+        !stale.changed.is_empty() && !stale.holds(reads, &|dep| self.holds(dep), &|path, test| self.passes(path, reads::read_unrecorded(path).0.as_deref(), test))
     }
 
     /// One parsed file's native facts, from front end `front`.

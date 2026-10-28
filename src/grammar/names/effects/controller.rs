@@ -340,6 +340,7 @@ impl Effects<'_> {
 
     /// `entry`'s flow graph, read events included.
     pub fn execution(&self, entry: Leaf) -> Known<Rc<Execution>> {
+        self.semantic.world.note_entered(entry);
         self.graph(entry, true)
     }
 
@@ -348,6 +349,7 @@ impl Effects<'_> {
     /// one entry's narrowing always sees the same steps).
     pub fn narrowing_execution(&self, entry: Leaf) -> Known<Rc<Execution>> {
         let Some(entry) = self.semantic.leaf(entry).known() else { return Known::Unknown };
+        self.semantic.world.note_entered(entry);
         if Self::force_reads() { return self.graph(entry, true) }
         let full = self.semantic.effects.graphs.borrow().get(&(entry, true)).cloned();
         if let Some(full @ Known::Yes(_)) = full {

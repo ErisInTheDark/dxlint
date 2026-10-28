@@ -149,6 +149,13 @@ they are declared in (other project files, `node_modules` packages and
 parsed once per run, when a question first needs them, and read like the
 linted file: `export const v = w` in another file is typed from `w`.
 
+A file that reads another one depends on that file's text outside its
+opaque bodies: function, method and arrow bodies under a declared return
+type, constructor bodies and setter bodies (`opaque body when ...` in
+`.ts/names`). Editing inside such a body re-lints (in the language server)
+or re-checks (with `.dxcache`) only the files whose questions stepped into
+it; any other edit concerns every reader, as before.
+
 The `.ts/modules` library declares publications, import links, namespaces, globals and module-resolution profiles. The [facts reference](#facts) includes queries for module exports, program options and declaration origins.
 
 ## Types and narrowing

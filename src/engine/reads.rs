@@ -55,12 +55,77 @@ pub enum Dep {
     /// A policy-filtered discovery, retaining its request for cache replay
     /// (shared: inline, it would size every dep).
     Requested(&'static str, Arc<DiscoveryRequest>, u64),
+    /// A file's content outside its declarations' bodies: work that never
+    /// entered a body holds while edits stay inside one.
+    Outside(DepPath, Arc<Bodies>),
+}
+
+/// A file's text as [`Dep::Outside`] reads it: the whole text's hash, and
+/// the bodies other files see only by entering them, each with hashes of
+/// the text before and after it.
+#[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct Bodies {
+    pub hash: u64,
+    len: usize,
+    /// (start, end, hash before start, hash after end), outermost only.
+    ranges: Box<[(u32, u32, u64, u64)]>,
+}
+
+impl Bodies {
+    pub fn new(text: &str, mut ranges: Vec<(u32, u32)>) -> Bodies {
+        ranges.sort_unstable();
+        let mut outermost: Vec<(u32, u32)> = Vec::with_capacity(ranges.len());
+        for (start, end) in ranges {
+            if outermost.last().is_some_and(|&(_, last)| start < last) { continue }
+            outermost.push((start, end));
+        }
+        let bytes = text.as_bytes();
+        let ranges = outermost.into_iter()
+            .filter_map(|(start, end)| Some((start, end, hash_bytes(bytes.get(..start as usize)?), hash_bytes(bytes.get(end as usize..)?))))
+            .collect();
+        Bodies { hash: hash_bytes(bytes), len: bytes.len(), ranges }
+    }
+
+    /// The recorded text's length and the bodies with their surroundings'
+    /// hashes, for saving ([`Bodies::from_parts`] reads them back).
+    pub fn parts(&self) -> (usize, &[(u32, u32, u64, u64)]) {
+        (self.len, &self.ranges)
+    }
+
+    pub fn from_parts(hash: u64, len: usize, ranges: Vec<(u32, u32, u64, u64)>) -> Bodies {
+        Bodies { hash, len, ranges: ranges.into() }
+    }
+
+    /// The outermost bodies' byte ranges.
+    pub fn spans(&self) -> impl Iterator<Item = (u32, u32)> + '_ {
+        self.ranges.iter().map(|&(start, end, ..)| (start, end))
+    }
+
+    /// Whether byte `offset` lies inside a body.
+    pub fn contains(&self, offset: u32) -> bool {
+        let after = self.ranges.partition_point(|&(start, ..)| start <= offset);
+        after > 0 && offset < self.ranges[after - 1].1
+    }
+
+    /// How `text` differs from the recorded text: not at all (`Some(None)`),
+    /// only inside one body (`Some(Some(range))`, the body's range in
+    /// `text`, which a parse must confirm), or elsewhere (`None`).
+    pub fn edit(&self, text: Option<&str>) -> Option<Option<(u32, u32)>> {
+        let Some(bytes) = text.map(str::as_bytes) else { return (self.hash == MISSING).then_some(None) };
+        if hash_bytes(bytes) == self.hash { return Some(None) }
+        self.ranges.iter().find(|&&(start, end, before, after)| {
+            let tail = self.len - end as usize;
+            bytes.len() >= start as usize + tail
+                && hash_bytes(&bytes[..start as usize]) == before
+                && hash_bytes(&bytes[bytes.len() - tail..]) == after
+        }).map(|&(start, end, ..)| Some((start, u32::try_from(bytes.len() - (self.len - end as usize)).unwrap_or(u32::MAX))))
+    }
 }
 
 impl Dep {
     pub fn path(&self) -> &Path {
         match self {
-            Dep::Text(p, _) | Dep::IsFile(p, _) | Dep::IsDir(p, _) | Dep::List(p, _) | Dep::Discovered(_, p, _) => p,
+            Dep::Text(p, _) | Dep::IsFile(p, _) | Dep::IsDir(p, _) | Dep::List(p, _) | Dep::Discovered(_, p, _) | Dep::Outside(p, _) => p,
             Dep::Requested(_, request, _) => &request.root,
         }
     }
@@ -79,6 +144,9 @@ impl Dep {
     pub fn holds(&self) -> bool {
         match self {
             Dep::Text(p, h) => content(p).1 == *h,
+            // An edit inside a body needs a parse to confirm: the engine's
+            // `Linter::holds` does that.
+            Dep::Outside(p, bodies) => bodies.edit(text(p).as_deref()) == Some(None),
             Dep::IsFile(p, b) => file_exists(p) == *b,
             Dep::IsDir(p, b) => directory_exists(p) == *b,
             Dep::List(p, h) => listing(p).1 == *h,

@@ -140,6 +140,37 @@ fn opener_indentation_is_corrected_in_one_fix_pass() {
     assert_eq!(fixed, "x (\n  a (\n    b\n  )\n)");
 }
 
+#[test]
+fn importers_stay_valid_while_edits_stay_inside_annotated_bodies() {
+    use super::reads::{drop_buffer, set_buffer};
+    let l = native_linter("in ts_call rule typed info \"{if node always number then 'number' else 'other'}\"");
+    let (a, signature, inferred) = (Path::new("/root/opaque-a.ts"), Path::new("/root/opaque-b.ts"), Path::new("/root/opaque-c.ts"));
+    let source = |f: &str, g: &str| format!("export function f(): number {{ {f} }}\nexport function g() {{ {g} }}\n");
+    // No default libraries: calls need a known program, nothing more.
+    let config = Path::new("/root/tsconfig.json");
+    set_buffer(config, r#"{ "compilerOptions": { "lib": [] } }"#);
+    set_buffer(a, &source("return 1;", "return 1;"));
+    let importers = [(signature, "import { f } from \"./opaque-a\";\nf();\n"), (inferred, "import { g } from \"./opaque-a\";\ng();\n")];
+    for (path, text) in importers { set_buffer(path, text) }
+    let reads: Vec<_> = importers.iter().map(|&(path, text)| {
+        let (diags, reads) = l.lint_tracked(path, text);
+        assert_eq!(diags.iter().map(|d| d.message.as_str()).collect::<Vec<_>>(), ["number"], "{}", path.display());
+        reads
+    }).collect();
+    // `f`'s body is behind its declared return type: nobody read it.
+    set_buffer(a, &source("return 2;", "return 1;"));
+    let stale = l.invalidate(&[a.to_owned()]);
+    assert!(reads.iter().all(|reads| !l.is_stale(&stale, reads)));
+    // `g`'s body is what its callers' type comes from.
+    set_buffer(a, &source("return 1;", "return \"1\";"));
+    assert!(l.is_stale(&l.invalidate(&[a.to_owned()]), &reads[1]));
+    // A `}` typed inside `f`'s body ends it early: what follows is
+    // top-level now, though the text around the old body still matches.
+    set_buffer(a, &source("return 2; } export const h = 1; {", "return 1;"));
+    assert!(l.is_stale(&l.invalidate(&[a.to_owned()]), &reads[0]));
+    for path in [config, a, signature, inferred] { drop_buffer(path) }
+}
+
 /// `rules` after `import .ts`; lint with `l.lint(Path::new("/root/file.ts"), text)`.
 pub(crate) fn native_linter(rules: &str) -> Linter {
     let src = format!("import .ts\n{rules}");

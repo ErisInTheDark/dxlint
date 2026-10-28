@@ -139,6 +139,8 @@ pub struct KindNames {
     pub calls: calls::KindCalls,
     /// `generics`: paths to the ordered formal type parameters.
     pub generics: Vec<(Vec<u16>, Option<u32>)>,
+    /// `opaque`: paths to bodies other files see only by entering them.
+    pub opaque: Vec<(Vec<u16>, Option<u32>)>,
     pub constraints: Vec<(Value, Option<u32>)>,
     pub defaults: Vec<(Value, Option<u32>)>,
     /// `enumerates <value> [in <views>]`: the alternatives a leaf of this
@@ -689,6 +691,12 @@ impl Names {
                     let Some(arguments) = path(errors, arguments) else { continue };
                     for (&m, &when) in targets.iter().zip(&when) {
                         names.add(g, m, |kind| kind.arguments.push((arguments.clone(), when)));
+                    }
+                }
+                NameItem::Opaque(field) => {
+                    let Some(field) = path(errors, field) else { continue };
+                    for (&m, &when) in targets.iter().zip(&when) {
+                        names.add(g, m, |kind| kind.opaque.push((field.clone(), when)));
                     }
                 }
                 NameItem::Indexed { path: indexed, mode, value, views, runtime } => {

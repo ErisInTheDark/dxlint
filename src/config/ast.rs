@@ -196,6 +196,10 @@ pub enum NameItem {
     /// (what inferred and explicit instantiations bind by position).
     Generics(Vec<Name>),
     Arguments(Vec<Name>),
+    /// `opaque <field> [when <syntax condition>]`: other files read what
+    /// the field leads to only by stepping inside it (a body under a
+    /// declared return type), so edits there concern only those that do.
+    Opaque(Vec<Name>),
     /// `runtime`: a member read at runtime that is no key of the type
     /// (`keys of` skips it): a numeric enum's reverse map.
     Indexed { path: Vec<Name>, mode: values::IndexedMode, value: Option<Unwrap>, views: Vec<Name>, runtime: bool },

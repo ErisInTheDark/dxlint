@@ -76,6 +76,9 @@ pub struct LintWorld<'a> {
     semantic: crate::grammar::names::semantic::Session,
     /// Name-item conditions being decided, by node and condition.
     conditions: RefCell<Vec<(Target, u32)>>,
+    /// A whole-file syntax scan is stepping through bodies
+    /// ([`World::quiet_entering`]).
+    quiet_entering: Cell<bool>,
 }
 
 impl<'a> LintWorld<'a> {
@@ -91,7 +94,7 @@ impl<'a> LintWorld<'a> {
         LintWorld {
             linter, path, views: super::arena::Arena::new(linter), files: Default::default(),
             program: Default::default(), snapshot: None, ctx: Ctx { node: ctx.tree.root, ..ctx },
-            evaluation: Cell::new(std::ptr::null()), semantic: Default::default(), conditions: Default::default(),
+            evaluation: Cell::new(std::ptr::null()), semantic: Default::default(), conditions: Default::default(), quiet_entering: Cell::new(false),
         }
     }
 
@@ -120,7 +123,7 @@ impl<'a> LintWorld<'a> {
     fn load(&'a self, path: &Path) -> (Option<u32>, super::reads::Dep) {
         if let Some(&file) = self.files.borrow().get(path) {
             let unit = &self.views.get(file - 1).expect("loaded view").unit;
-            return (Some(file), super::reads::Dep::Text(unit.path.clone(), unit.hash));
+            return (Some(file), self.unit_read(unit));
         }
         let load = || self.linter.unit_quiet(path, self.snapshot);
         let (hash, unit) = match &self.linter.profile {
@@ -128,10 +131,46 @@ impl<'a> LintWorld<'a> {
             None => load(),
         };
         let Some(unit) = unit else { return (None, super::reads::Dep::Text(super::reads::dep_path(path), hash)) };
-        let read = super::reads::Dep::Text(unit.path.clone(), unit.hash);
+        let read = self.unit_read(&unit);
         let file = self.views.insert(unit) + 1;
         self.files.borrow_mut().insert(path.to_owned(), file);
         (Some(file), read)
+    }
+
+    /// What reaching `unit` reads: its text outside its bodies, until work
+    /// steps inside one ([`LintWorld::note_entered`]).
+    fn unit_read(&self, unit: &super::units::Unit) -> super::reads::Dep {
+        match self.linter.bodies(unit) {
+            Some(bodies) => super::reads::Dep::Outside(unit.path.clone(), bodies),
+            None => super::reads::Dep::Text(unit.path.clone(), unit.hash),
+        }
+    }
+
+    /// Work steps onto `at`: inside another file's body, it reads that
+    /// file's whole text.
+    fn note_entered(&self, at: Leaf) {
+        let file = match at.target {
+            Target::Node(node) => node.file,
+            Target::Scope(scope) => scope.file,
+            _ => return,
+        };
+        let Some(view) = file.checked_sub(1).and_then(|view| self.views.get(view)) else { return };
+        let unit = &view.unit;
+        let node = match at.target {
+            Target::Scope(scope) => {
+                // A scope's names come before any question inside it.
+                let Some(names) = unit.names.get() else { return };
+                let Some(info) = names.value.scopes.get(scope.scope as usize) else { return };
+                info.node
+            }
+            Target::Node(node) => node.node,
+            _ => return,
+        };
+        let Some(bodies) = self.linter.bodies(unit) else { return };
+        let Some(syntax) = unit.parsed.tree.nodes.get(node as usize) else { return };
+        if bodies.contains(syntax.start) {
+            super::reads::note(super::reads::Dep::Text(unit.path.clone(), unit.hash));
+        }
     }
 
     pub(crate) fn name_cache(&'a self, file: u32) -> Option<&'a std::sync::OnceLock<super::reads::Cached<std::sync::Arc<Resolved>>>> {
@@ -379,6 +418,7 @@ impl<'a> LintWorld<'a> {
     }
 
     fn here(&'a self, at: Leaf) -> Option<Ctx<'a>> {
+        if !self.quiet_entering.get() { self.note_entered(at) }
         match at.target {
             Target::Node(node) => self.on(node.file, node.node),
             Target::Scope(scope) => {
@@ -1265,6 +1305,14 @@ impl World for Files<'_> {
         self.0.program.linted_reads.get()
     }
 
+    fn note_entered(&self, at: Leaf) {
+        if !self.0.quiet_entering.get() { self.0.note_entered(at) }
+    }
+
+    fn quiet_entering(&self, quiet: bool) -> bool {
+        self.0.quiet_entering.replace(quiet)
+    }
+
     fn note_linted_read(&self) {
         self.0.note_linted_read()
     }
@@ -1282,9 +1330,10 @@ impl World for Files<'_> {
     fn depends_on_file(&self, file: u32) {
         let read = match file.checked_sub(1) {
             None => super::reads::Dep::Text(super::reads::dep_path(self.0.path), self.linted_hash()),
+            // What a file declares for everyone lies outside its bodies.
             Some(view) => {
                 let Some(view) = self.0.views.get(view) else { return };
-                super::reads::Dep::Text(view.unit.path.clone(), view.unit.hash)
+                self.0.unit_read(&view.unit)
             }
         };
         super::reads::note(read);

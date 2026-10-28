@@ -32,6 +32,8 @@ pub(super) struct Unit {
     pub parsed: ParsedFile,
     pub names: OnceLock<reads::Cached<Arc<crate::grammar::names::Resolved>>>,
     lines: OnceLock<crate::line_index::LineIndex>,
+    /// The bodies other files read only by entering them.
+    bodies: OnceLock<Option<Arc<reads::Bodies>>>,
 }
 
 impl Unit {
@@ -42,6 +44,14 @@ impl Unit {
 }
 
 impl Linter {
+    /// `unit`'s opaque bodies ([`Linter::opaque_ranges`]), found once.
+    pub(super) fn bodies(&self, unit: &Unit) -> Option<Arc<reads::Bodies>> {
+        unit.bodies.get_or_init(|| {
+            let ranges = self.opaque_ranges(unit);
+            (!ranges.is_empty()).then(|| Arc::new(reads::Bodies::new(&unit.text, ranges)))
+        }).clone()
+    }
+
     pub(super) fn parse(&self, path: &Path, text: &str, plan: ParsePlan<'_>) -> Result<ParsedFile, (u32, String)> {
         let started = std::time::Instant::now();
         let (tree, state, native_done, tokens_done) = match plan.front {
@@ -142,7 +152,7 @@ impl Linter {
             let tokens = front.and_then(|index| self.unit_token_kinds.get(index)).map_or(&[][..], Vec::as_slice);
             let plan = ParsePlan { lang, front, layers: true, overlays: &self.unit_overlays, child_layers: self.unit_child_layers, tokens };
             let parsed = self.parse(path, &text, plan).ok()?;
-            let unit = Arc::new(Unit { path: reads::dep_path(path), rel: rel.to_string_lossy().replace('\\', "/"), lang, text, hash, parsed, names: OnceLock::new(), lines: OnceLock::new() });
+            let unit = Arc::new(Unit { path: reads::dep_path(path), rel: rel.to_string_lossy().replace('\\', "/"), lang, text, hash, parsed, names: OnceLock::new(), lines: OnceLock::new(), bodies: OnceLock::new() });
             self.units.lock().expect("unit cache").insert(path.to_owned(), unit.clone());
             Some(unit)
         };

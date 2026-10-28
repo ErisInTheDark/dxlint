@@ -35,7 +35,7 @@ const RESERVED: &[&str] = &[
 
 /// Items about names and effects; words only
 /// in item position on a layer.
-const NAME_ITEMS: &[&str] = &["scope", "declares", "resolves", "targets", "unwraps", "widens", "defines", "refers", "constrains", "defaults", "enumerates", "assigned", "fits", "carries", "arguments", "indexed", "members", "member", "runs", "labels", "exports", "globals", "uses", "merges",
+const NAME_ITEMS: &[&str] = &["scope", "declares", "resolves", "targets", "unwraps", "widens", "defines", "refers", "constrains", "defaults", "enumerates", "assigned", "fits", "carries", "arguments", "indexed", "members", "member", "runs", "labels", "opaque", "exports", "globals", "uses", "merges",
     "signature", "signatures", "calls", "constructs", "discards", "identity", "optional", "flag", "variance", "generics", "overloads", "pack"];
 
 /// What the lines of a `{ ... }` block (or one `in ...` line) are about:
@@ -653,6 +653,18 @@ impl<'a> Parser<'a> {
             "arguments" => {
                 let Some(arguments) = self.name_path("an ordered argument field") else { return };
                 NameItem::Arguments(arguments)
+            }
+            "opaque" => {
+                let Some(field) = self.name_path("a body field") else { return };
+                if self.word("when") {
+                    let Some(cond) = self.expr() else { return };
+                    self.end_of_item();
+                    self.conditions.push(cond);
+                    self.name_def(ctx, kw.span, &what, NameItem::Opaque(field));
+                    self.conditions.pop();
+                    return;
+                }
+                NameItem::Opaque(field)
             }
             "indexed" => {
                 let Some(item) = self.indexed_item() else { return };
