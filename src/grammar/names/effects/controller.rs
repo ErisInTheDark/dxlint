@@ -24,6 +24,20 @@ pub(crate) struct State {
     building: RefCell<FxHashSet<(Leaf, Option<bool>)>>,
 }
 
+impl State {
+    /// Drops the graphs and catalogues of places `touched` says an edit
+    /// reached, and the linted file's write catalogues.
+    pub(crate) fn forget(&mut self, touched: &dyn Fn(&Target) -> bool) {
+        self.graphs.get_mut().retain(|(leaf, _), _| !touched(&leaf.target));
+        self.variants.get_mut().retain(|(target, _), _| !touched(target));
+        self.reads.get_mut().retain(|leaf, _| !touched(&leaf.target));
+        self.entry_owners.get_mut().retain(|leaf, owner| !touched(&leaf.target) && !touched(&owner.target));
+        self.file_writes.get_mut().remove(&0);
+        self.written_bindings.get_mut().remove(&0);
+        self.building.get_mut().clear();
+    }
+}
+
 /// One built graph of a body, with the conditions its build decided (by
 /// target, all in the build's frame): another frame where they answer
 /// alike builds the same graph. `None` when a condition sat in another

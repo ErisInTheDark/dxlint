@@ -254,7 +254,9 @@ impl<'a, 'world> Run<'a, 'world> {
         state.values.insert(leaf, NodeValue::Unknown);
         // The leaf's value is a fact of its own, on its own allowance.
         let asker = self.values.question.budget.begin_fact(super::super::question::Budget::per_question());
-        state.evaluating.borrow_mut().push((leaf, self.values.cycle_mark(), asker));
+        state.evaluating.borrow_mut().push((leaf, self.values.cycle_mark(), asker, super::super::memo::begin()));
+        // Its own place counts for its value.
+        self.values.world.note_entered(leaf);
         self.opened.push((leaf, self.tasks.len(), self.answers.len()));
         let Target::Node(_) = leaf.target else {
             self.answers.push(Answer { exists: true, value: NodeValue::leaf(leaf) });
@@ -305,10 +307,13 @@ impl<'a, 'world> Run<'a, 'world> {
             match evaluating.iter().rposition(|&(active, ..)| active == leaf) {
                 Some(index) => {
                     // Leaves opened inside it and never settled end with it.
-                    for &(_, _, inner) in evaluating[index + 1..].iter().rev() { budget.end_fact(inner); }
-                    let (_, started, asker) = evaluating[index];
+                    for &(_, _, inner, outer) in evaluating[index + 1..].iter().rev() {
+                        budget.end_fact(inner);
+                        super::super::memo::end(outer);
+                    }
+                    let (_, started, asker, outer) = evaluating[index];
                     evaluating.truncate(index);
-                    Some((started, asker))
+                    Some((started, asker, outer))
                 }
                 None => None,
             }
@@ -316,13 +321,13 @@ impl<'a, 'world> Run<'a, 'world> {
         let tag = super::fact_tag(&state.values, &leaf);
         // A leaf that ran out cuts its asker, as it does every later reader
         // of its kept value.
-        if let Some((_, asker)) = opened {
+        if let Some((_, asker, _)) = opened {
             let cut = budget.end_fact(asker);
             self.values.note_ended(tag, cut);
             if cut == Some(super::super::question::Cut::RanOut) { budget.exhaust() }
         }
         match opened {
-            Some((started, asker)) if value == NodeValue::Unknown && self.values.cycled_since(started) => {
+            Some((started, asker, _)) if value == NodeValue::Unknown && self.values.cycled_since(started) => {
                 state.values.insert(leaf, value);
                 self.values.keep_provisional(tag, asker.epoch);
             }
@@ -332,6 +337,7 @@ impl<'a, 'world> Run<'a, 'world> {
                 state.values.insert(leaf, value);
             }
         }
+        if let Some((_, _, outer)) = opened { super::super::memo::end(outer); }
     }
 
     fn expression(&mut self, at: Leaf, expression: &'a Value) {

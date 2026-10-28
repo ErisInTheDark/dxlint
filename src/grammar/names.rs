@@ -13,7 +13,7 @@ use crate::config::ast::{Config, Name, NameItem};
 
 pub mod calls;
 pub mod effects;
-mod memo;
+pub(crate) mod memo;
 pub mod modules;
 pub mod narrowing;
 pub mod question;

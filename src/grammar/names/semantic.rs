@@ -73,7 +73,9 @@ impl Session {
         self.question.budget.restart();
         self.question.budget.trace(world.profile().is_some());
         let semantic = Semantic { world, tables, question: &self.question, state: self.state.borrow().clone() };
+        let outer = super::memo::begin();
         let answer = run(&semantic);
+        super::memo::end(outer);
         if let Some(profile) = world.profile() {
             profile.record_semantic_budget(
                 u64::from(super::question::Budget::per_question() - self.question.budget.remaining()),
@@ -102,6 +104,52 @@ impl Session {
             return Known::Unknown;
         }
         answer
+    }
+}
+
+impl Session {
+    /// The session's answers so far, with the ids they use, to carry into
+    /// the next lint of the same file ([`Session::carry_in`]).
+    pub(crate) fn carry_out(&self) -> (Rc<State>, super::question::Interned) {
+        (self.state.replace(Rc::default()), self.question.interned())
+    }
+
+    /// Drops answers that read `bodies` or a place `touched` says changed
+    /// (nothing when a question is still running).
+    pub(crate) fn forget(&self, bodies: u64, touched: &dyn Fn(&super::question::Target) -> bool) {
+        if let Some(state) = Rc::get_mut(&mut self.state.borrow_mut()) { state.forget(bodies, touched) }
+    }
+
+    /// Starts from carried answers that hold at world revision `revision`.
+    pub(crate) fn carry_in(&self, (state, interned): (Rc<State>, super::question::Interned), revision: u64) {
+        self.state.replace(state);
+        self.question.restore(interned);
+        self.revision.set(revision);
+    }
+}
+
+impl State {
+    /// Drops what an edit inside `bodies` of the linted file may change:
+    /// tagged answers whose computation entered them, and every untagged
+    /// cache.
+    pub(crate) fn forget(&mut self, bodies: u64, touched: &dyn Fn(&super::question::Target) -> bool) {
+        self.values.forget(bodies);
+        self.calls.forget(bodies);
+        self.narrowing_places.forget(bodies);
+        match Rc::get_mut(&mut self.effects) {
+            Some(effects) => effects.forget(touched),
+            None => self.effects = Rc::default(),
+        }
+        // Lists, records and built texts live in the lint's own value arena,
+        // which the next lint does not have.
+        self.attributes.forget_unless(bodies, |(packed, _)| !matches!(packed.get(), crate::vm::V::List(_) | crate::vm::V::Record(..) | crate::vm::V::Text(_)));
+        self.frame_free.get_mut().clear();
+        self.name_queries = Rc::default();
+        self.modules = Default::default();
+        self.defects.get_mut().clear();
+        self.generic_scopes.get_mut().clear();
+        self.single_frames.get_mut().clear();
+        self.frame_free.get_mut().clear();
     }
 }
 

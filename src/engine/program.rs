@@ -339,6 +339,8 @@ pub(super) struct Snapshot {
     values: RwLock<FxHashMap<ValueKey, Cached<Option<StableValue>>>>,
     /// Frames those values are read in, interned run-wide.
     frames: RwLock<(FxHashMap<Arc<StableBinding>, u32>, Vec<Arc<StableBinding>>)>,
+    /// An editor's run: each file's last lint, for its next one.
+    pub(super) editor: Option<super::editing::Memories>,
 }
 
 /// A leaf by file path: the same node in another world's file ids.
@@ -496,7 +498,7 @@ impl Snapshot {
     /// the edited files.
     pub(super) fn carry(self, to: u64, keep: &mut Keep<'_>) -> Snapshot {
         let Snapshot { revision, paths, catalogs, units, modules, augmentations, prefetched: _, probes, listings, texts,
-            candidates, surveys, words, configurations, metadata, packages, values, frames } = self;
+            candidates, surveys, words, configurations, metadata, packages, values, frames, editor } = self;
         Snapshot {
             revision: to,
             paths: paths.carry(to, keep),
@@ -521,6 +523,7 @@ impl Snapshot {
             values: carried(values, |(at, settings, program, outside, leaf), answer|
                 keep(at, Some(&answer.reads), None).then(|| ((to, settings, program, outside, leaf), answer))),
             frames,
+            editor,
         }
     }
 

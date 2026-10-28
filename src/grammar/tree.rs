@@ -168,6 +168,53 @@ impl Tree {
         self.layer_roots = layer_roots;
     }
 
+    /// This tree of an edited text, renumbered so every node `previous`
+    /// (the tree of the text before) also has keeps its id there: same
+    /// matcher, field label and span, positions after the edit shifted.
+    /// The edit replaced bytes `start..old_end` of the old text with
+    /// `start..new_end` of the new one. Other nodes take the ids left free,
+    /// then new ones; ids no node takes stay as empty text nodes nothing
+    /// reaches.
+    pub fn renumbered_after(self, previous: &Tree, (start, old_end, new_end): (u32, u32, u32)) -> Tree {
+        let moved = |at: u32| if at <= start { Some(at) } else if at >= old_end { Some(at - old_end + new_end) } else { None };
+        let key = |tree: &Tree, id: u32, at: (u32, u32)| (tree.nodes[id as usize].matcher, tree.label[id as usize], at.0, at.1);
+        let mut kept: FxHashMap<(u32, u16, u32, u32), std::collections::VecDeque<u32>> = FxHashMap::default();
+        for &id in &previous.order {
+            let node = previous.nodes[id as usize];
+            if let (Some(s), Some(e)) = (moved(node.start), moved(node.end)) {
+                kept.entry(key(previous, id, (s, e))).or_default().push_back(id);
+            }
+        }
+        let n = self.nodes.len();
+        let mut to = vec![NONE; n];
+        let mut taken = vec![false; previous.nodes.len()];
+        for &id in &self.order {
+            let node = self.nodes[id as usize];
+            if let Some(old) = kept.get_mut(&key(&self, id, (node.start, node.end))).and_then(|ids| ids.pop_front()) {
+                to[id as usize] = old;
+                taken[old as usize] = true;
+            }
+        }
+        let mut free = (0..previous.nodes.len() as u32).filter(|&id| !taken[id as usize]);
+        let mut next = previous.nodes.len() as u32;
+        for slot in to.iter_mut().filter(|slot| **slot == NONE) {
+            *slot = free.next().unwrap_or_else(|| { next += 1; next - 1 });
+        }
+        drop(free);
+        let total = (next as usize).max(to.iter().map(|&id| id as usize + 1).max().unwrap_or(0));
+        let mut nodes = vec![Node { matcher: TEXT, start: 0, end: 0, children: Vec::new() }; total];
+        for id in 0..n as u32 {
+            let Syntax { matcher, start, end } = self.nodes[id as usize];
+            let children = self.children(id).iter().map(|edge| Edge { label: edge.label, node: to[edge.node as usize] }).collect();
+            nodes[to[id as usize] as usize] = Node { matcher, start, end, children };
+        }
+        let mut holes: Vec<(u32, u32, u32)> = self.holes.iter().map(|&(node, s, e)| (to[node as usize], s, e)).collect();
+        holes.sort_unstable();
+        let mut tree = Tree::from_nodes(nodes, holes, to[self.root as usize], self.too_deep);
+        tree.layer_roots = self.layer_roots.iter().map(|&(root, layer)| (to[root as usize], layer)).collect();
+        tree
+    }
+
     /// The tree's nodes as building nodes, for tests that derive trees from it.
     #[cfg(test)]
     pub(crate) fn built(&self) -> Vec<Node> {

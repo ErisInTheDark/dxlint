@@ -162,6 +162,17 @@ pub(crate) struct State {
     values: Memo<(Leaf, ValueQuestion), ValueAnswer>,
 }
 
+impl State {
+    /// Drops what an edit inside `bodies` of the linted file may change.
+    pub(crate) fn forget(&self, bodies: u64) {
+        self.acceptance.forget(bodies);
+        self.headers.forget(bodies);
+        self.candidates.forget(bodies);
+        self.refined.forget(bodies);
+        self.values.forget(bodies);
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum ValueQuestion { Result, Expected }
 

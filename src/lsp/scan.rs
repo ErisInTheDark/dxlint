@@ -253,7 +253,13 @@ pub fn edit(shared: &Arc<Shared>, out: &Outbox, lint: EditorLint) {
                 None => None,
             };
             let diags = match text {
-                Some(text) => convert::diagnostics(text, &shared.lint(run, &lint.path, text), &lint.linter),
+                Some(text) => {
+                    let found = shared.lint(run, &lint.path, text);
+                    if std::env::var_os("DXLINT_EDITOR_CHECK").is_some() {
+                        check_against_fresh(&lint.linter, &lint.path, text, &found);
+                    }
+                    convert::diagnostics(text, &found, &lint.linter)
+                }
                 None => json!([]),
             };
             // A newer text is queued, or the editor let go of the file.
@@ -272,6 +278,22 @@ pub fn edit(shared: &Arc<Shared>, out: &Outbox, lint: EditorLint) {
         }
         shared.editing.lock().expect("lock").carried = carried;
     });
+}
+
+/// `DXLINT_EDITOR_CHECK=1`: every editor lint, which starts from the file's
+/// last one, is checked against a fresh lint; differences go to stderr.
+fn check_against_fresh(linter: &Linter, path: &Path, text: &str, found: &[crate::engine::Diagnostic]) {
+    let key = |d: &crate::engine::Diagnostic| format!("{}:{}-{} {} {}", d.rule, d.start, d.end, d.message, d.fix.is_some());
+    let mut fresh: Vec<String> = linter.lint(path, text).iter().map(key).collect();
+    let mut carried: Vec<String> = found.iter().map(key).collect();
+    fresh.sort();
+    carried.sort();
+    if fresh == carried {
+        eprintln!("dxlint editor check: same ({} problems)", fresh.len());
+        return;
+    }
+    for line in carried.iter().filter(|line| !fresh.contains(line)) { eprintln!("dxlint editor check: EXTRA {line}") }
+    for line in fresh.iter().filter(|line| !carried.contains(line)) { eprintln!("dxlint editor check: MISSING {line}") }
 }
 
 /// Lints a file on disk (from `cache` when it can) and publishes the

@@ -32,6 +32,16 @@ impl<'a> Arena<'a> {
         id
     }
 
+    /// Forgets every view (none may be borrowed).
+    pub fn clear(&self) {
+        self.items.borrow_mut().clear();
+    }
+
+    /// Every file's unit, by id.
+    pub fn units(&self) -> Vec<Arc<Unit>> {
+        self.items.borrow().iter().map(|item| item.unit.clone()).collect()
+    }
+
     /// The view of file `id`, without its native front-end view: trees,
     /// texts and paths need none.
     pub fn get<'v>(&'v self, id: u32) -> Option<&'v UnitView<'v>> {

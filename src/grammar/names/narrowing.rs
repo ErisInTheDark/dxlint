@@ -37,6 +37,19 @@ pub(crate) struct State {
     tested_names: super::memo::Memo<u32, Option<std::rc::Rc<crate::fx_hash::FxHashSet<Box<str>>>>>,
 }
 
+impl State {
+    /// Drops what an edit inside `bodies` of the linted file may change.
+    pub(crate) fn forget(&self, bodies: u64) {
+        self.written.forget(bodies);
+        self.tested_places.forget(bodies);
+        self.candidates.forget(bodies);
+        self.writes.forget(bodies);
+        self.guards.forget(bodies);
+        self.tested.forget(bodies);
+        self.tested_names.forget(bodies);
+    }
+}
+
 /// A fact's optional answer, and whether it was never started (an unpaid
 /// ask: nothing to keep).
 fn settled<T>(answer: Result<Option<T>, super::question::Cut>) -> (Option<T>, bool) {
@@ -248,9 +261,25 @@ impl Narrowing<'_> {
         let allowance = u32::try_from(nodes).unwrap_or(u32::MAX).saturating_mul(STEPS_PER_NODE)
             .max(super::question::Budget::DEFAULT);
         let mark = self.semantic.values().cycle_mark();
+        let outer = super::memo::begin();
         let roots = self.semantic.question.budget.sized(allowance, || self.collect_tested_roots(file).map(std::rc::Rc::new)).ok().flatten();
+        // It read every body of the file: what reads it depends on its
+        // answer, which an edit is checked against ([`Narrowing::rescan`]),
+        // not on each body.
+        super::memo::set(if file == 0 { super::memo::SCAN } else { 0 });
         if roots.is_some() || !self.semantic.values().cycled_since(mark) { memo.insert(file, roots.clone()) }
+        super::memo::end(outer);
         roots
+    }
+
+    /// After an edit of the linted file: its tested roots again, and
+    /// whether they are what the session kept (`false` when it kept none).
+    pub(crate) fn rescan(&self) -> bool {
+        let memo = &self.semantic.narrowing_places.tested;
+        let kept = memo.get(&0);
+        memo.remove(&0);
+        self.semantic.narrowing_places.tested_names.remove(&0);
+        kept.is_some_and(|kept| kept == self.tested_roots(0))
     }
 
     /// The name texts of `file`'s tested roots; `None` when the roots can't

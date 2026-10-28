@@ -670,7 +670,49 @@ impl<T: Clone + Eq + std::hash::Hash> Interner<T> {
     }
 }
 
+/// What [`QueryContext::interned`] moves: every id a session's answers use.
+pub(crate) struct Interned {
+    frames: Interner<Frame>,
+    args: Interner<Args>,
+    products: Interner<Product>,
+    modified: Interner<Modified>,
+    keys: Interner<super::values::Key>,
+    handles: Interner<NodeValue>,
+    owner: u32,
+    world_frames: crate::fx_hash::FxHashMap<FrameId, Option<u64>>,
+    frames_by_world: crate::fx_hash::FxHashMap<u64, FrameId>,
+}
+
 impl QueryContext {
+    /// Moves out everything ids answers keep refer to (frames, keys,
+    /// handles), leaving this context empty.
+    pub(crate) fn interned(&self) -> Interned {
+        Interned {
+            frames: self.frames.take(),
+            args: self.args.take(),
+            products: self.products.take(),
+            modified: self.modified.take(),
+            keys: self.keys.take(),
+            handles: self.handles.take(),
+            owner: self.owner.replace(0),
+            world_frames: self.world_frames.take(),
+            frames_by_world: self.frames_by_world.take(),
+        }
+    }
+
+    /// Takes back what [`QueryContext::interned`] moved out.
+    pub(crate) fn restore(&self, interned: Interned) {
+        self.frames.replace(interned.frames);
+        self.args.replace(interned.args);
+        self.products.replace(interned.products);
+        self.modified.replace(interned.modified);
+        self.keys.replace(interned.keys);
+        self.handles.replace(interned.handles);
+        self.owner.set(interned.owner);
+        self.world_frames.replace(interned.world_frames);
+        self.frames_by_world.replace(interned.frames_by_world);
+    }
+
     /// A context for once-per-run work (program selection, inputs, roots):
     /// on the detached floor, as a question's budget would leave it unknown
     /// and every later question would redo it.

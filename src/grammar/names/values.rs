@@ -169,7 +169,9 @@ pub(crate) struct State {
     /// Leaves whose values are being evaluated (outermost first), each with
     /// [`Values::cycle_mark`] when it started and its asker's allowance: a
     /// leaf's value is a fact of its own.
-    evaluating: std::cell::RefCell<Vec<(Leaf, u64, super::question::Asker)>>,
+    /// Each also keeps what the work around it had entered
+    /// ([`super::memo::begin`]): a leaf's value records only its own bodies.
+    evaluating: std::cell::RefCell<Vec<(Leaf, u64, super::question::Asker, u64)>>,
     /// Leaves of the linted file read ([`Values::root_reads`]).
     root_reads: std::cell::Cell<u64>,
     /// Reads of a leaf still being evaluated (its seed). An unknown value
@@ -212,6 +214,24 @@ pub(crate) struct State {
 }
 
 impl State {
+    /// Drops what an edit inside `bodies` of the linted file may change.
+    pub(crate) fn forget(&self, bodies: u64) {
+        self.values.forget(bodies);
+        self.widened.forget(bodies);
+        self.traits.forget(bodies);
+        self.optional.forget(bodies);
+        self.identities.forget(bodies);
+        self.members.forget(bodies);
+        self.member_keys.forget(bodies);
+        self.key_paths.forget(bodies);
+        self.member_closed.forget(bodies);
+        self.bound_arguments.forget(bodies);
+        self.carriers.forget(bodies);
+        self.instances.forget(bodies);
+        self.ran_out.borrow_mut().clear();
+        self.provisional.borrow_mut().clear();
+    }
+
     /// The innermost leaf still being evaluated: where a question cut short
     /// by its budget ran out ([`crate::engine::Profile::record_cut_root`]).
     pub(super) fn innermost(&self) -> Option<Leaf> {
@@ -435,6 +455,7 @@ impl Values<'_> {
             }
         }
         let _site = self.world.profile().map(|_| crate::engine::StepSite::enter(std::any::type_name::<(K, T)>()));
+        let outer = super::memo::begin();
         memo.insert(key.clone(), Known::Unknown);
         state.pending.borrow_mut().push(tag);
         let mark = self.cycle_mark();
@@ -463,6 +484,7 @@ impl Values<'_> {
             self.settle_provisional(tag);
             memo.insert(key, answer.clone());
         }
+        super::memo::end(outer);
         answer
     }
 

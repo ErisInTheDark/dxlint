@@ -171,6 +171,104 @@ fn importers_stay_valid_while_edits_stay_inside_annotated_bodies() {
     for path in [config, a, signature, inferred] { drop_buffer(path) }
 }
 
+#[test]
+fn editor_lints_after_an_edit_inside_one_body_match_fresh_lints() {
+    use super::reads::{drop_buffer, set_buffer};
+    let l = native_linter("in ts_call rule typed info \"{if node always number then 'number' else 'other'}\"");
+    let path = Path::new("/root/carried.ts");
+    let config = Path::new("/root/tsconfig.json");
+    set_buffer(config, r#"{ "compilerOptions": { "lib": [] } }"#);
+    let text = |body: &str| format!(
+        "function one(): number {{ return 1; }}\nexport class A {{\n  run(): number {{ {body} }}\n  other(): number {{ return one(); }}\n}}\nconst x = one();\n");
+    let edits = ["return one();", "return (one());", "const s = \"1\"; return one() + s.length;", "return one();"];
+    let mut carried = None;
+    for body in edits {
+        let source = text(body);
+        set_buffer(path, &source);
+        l.invalidate(&[path.to_owned()]);
+        let run = l.run_after(carried.take());
+        let found = run.lint(path, &source);
+        carried = Some(run.carried());
+        let fresh = l.lint(path, &source);
+        let key = |d: &Diagnostic| (d.start, d.end, d.message.clone());
+        assert_eq!(found.iter().map(key).collect::<Vec<_>>(), fresh.iter().map(key).collect::<Vec<_>>(), "after editing to {body}");
+    }
+    for p in [config, path] { drop_buffer(p) }
+}
+
+/// `DXLINT_EDITOR_PROBE=<project>|<file>|<text>|<replacement>`: the
+/// editor's carried lints of a real file, edit and revert, against fresh
+/// lints.
+#[test]
+#[ignore = "needs a real project"]
+fn editor_probe() {
+    let Ok(spec) = std::env::var("DXLINT_EDITOR_PROBE") else { return };
+    let parts: Vec<&str> = spec.split('|').collect();
+    let (root, file, from, to) = (PathBuf::from(parts[0]), PathBuf::from(parts[0]).join(parts[1]), parts[2], parts[3]);
+    let loaded = config::load_text(".dx", &std::fs::read_to_string(root.join(".dx")).unwrap(), &Disk);
+    let mut l = build(loaded, root.clone()).linter.unwrap();
+    let profiled = std::env::var_os("DXLINT_PROBE_PROFILE").is_some();
+    if profiled { l.enable_profile() }
+    let original = std::fs::read_to_string(&file).unwrap();
+    // `DXLINT_PROBE_AUTO=<n>`: n edits spread over the file (a local's or a
+    // returned value replaced by `undefined as any`), each from the original.
+    let auto: usize = std::env::var("DXLINT_PROBE_AUTO").ok().and_then(|n| n.parse().ok()).unwrap_or(0);
+    let mut texts = vec![original.clone()];
+    if auto > 0 {
+        let lines: Vec<&str> = original.lines().collect();
+        let candidates: Vec<usize> = (0..lines.len()).filter(|&i| {
+            let line = lines[i].trim_start();
+            lines[i].starts_with("\t\t") && line.ends_with(';') && (line.starts_with("const ") && line.contains(" = ") || line.starts_with("return ") && line.len() > 8)
+        }).collect();
+        for k in 0..auto.min(candidates.len()) {
+            let at = candidates[k * candidates.len() / auto.min(candidates.len())];
+            let line = lines[at];
+            let changed = if line.trim_start().starts_with("return ") {
+                format!("{}return undefined as any;", &line[..line.len() - line.trim_start().len()])
+            } else {
+                let eq = line.find(" = ").unwrap();
+                format!("{} = undefined as any;", &line[..eq])
+            };
+            // Line endings stay as they are: only this line changes.
+            let edited: String = original.split_inclusive('\n').enumerate()
+                .map(|(i, piece)| if i == at { piece.replacen(line, &changed, 1) } else { piece.to_owned() }).collect();
+            texts.push(edited);
+            texts.push(original.clone());
+        }
+    } else {
+        let edited = original.replacen(from, to, 1);
+        let rounds: usize = std::env::var("DXLINT_PROBE_ROUNDS").ok().and_then(|n| n.parse().ok()).unwrap_or(4);
+        texts = (0..rounds).map(|i| if i % 2 == 0 { original.clone() } else { edited.clone() }).collect();
+    }
+    let mut carried = None;
+    for (round, source) in texts.iter().enumerate() {
+        super::reads::set_buffer(&file, source);
+        l.invalidate(&[file.clone()]);
+        let started = std::time::Instant::now();
+        let run = l.run_after(carried.take());
+        let found = run.lint(&file, source);
+        carried = Some(run.carried());
+        let took = started.elapsed();
+        if std::env::var_os("DXLINT_PROBE_NO_FRESH").is_some() {
+            eprintln!("round {round}: {took:?}");
+            if let Some(p) = l.profile.as_ref().filter(|_| profiled) {
+                let mut rules: Vec<(u64, &str)> = l.rules.iter().enumerate()
+                    .map(|(i, r)| (p.rule_nanos[i].swap(0, std::sync::atomic::Ordering::Relaxed), r.name.as_str())).filter(|(n, _)| *n > 0).collect();
+                rules.sort_by_key(|r| std::cmp::Reverse(r.0));
+                for (nanos, name) in rules.iter().take(8) { eprintln!("  {:>8.1} ms {name}", *nanos as f64 / 1e6) }
+            }
+            continue;
+        }
+        let fresh = l.lint(&file, source);
+        let key = |d: &Diagnostic| format!("{}:{} {}", d.rule, d.start, d.message);
+        let (a, b): (Vec<_>, Vec<_>) = (found.iter().map(key).collect(), fresh.iter().map(key).collect());
+        eprintln!("round {round}: {took:?}, {} problems, same: {}", a.len(), a == b);
+        for line in a.iter().filter(|line| !b.contains(line)) { eprintln!("  EXTRA {line}") }
+        for line in b.iter().filter(|line| !a.contains(line)) { eprintln!("  MISSING {line}") }
+    }
+    super::reads::drop_buffer(&file);
+}
+
 /// `rules` after `import .ts`; lint with `l.lint(Path::new("/root/file.ts"), text)`.
 pub(crate) fn native_linter(rules: &str) -> Linter {
     let src = format!("import .ts\n{rules}");

@@ -126,6 +126,56 @@ impl<'a> LintWorld<'a> {
         Self { snapshot: Some(snapshot), ..Self::new(linter, path, ctx) }
     }
 
+    /// Starts from an earlier lint's answers about this file: its files keep
+    /// their numbers (while each still reads the same) and its semantic
+    /// answers stay, but those an edit inside `bodies` may change.
+    pub(super) fn carry_in(&'a self, carried: super::editing::WorldCarry, (bodies, edited): super::editing::Edited) {
+        let super::editing::WorldCarry { units, state, interned } = carried;
+        for unit in units {
+            let (hash, now) = self.linter.unit_quiet(&unit.path, self.snapshot);
+            // A file another edit changed: the answers are of another program.
+            let Some(now) = now.filter(|now| hash == unit.hash && now.parsed.tree.nodes.len() == unit.parsed.tree.nodes.len()) else {
+                self.views.clear();
+                self.files.borrow_mut().clear();
+                return;
+            };
+            let file = self.views.insert(now) + 1;
+            self.files.borrow_mut().insert(unit.path.to_path_buf(), file);
+        }
+        let mut state = state;
+        let Some(fresh) = std::rc::Rc::get_mut(&mut state) else { return };
+        // A place of the linted file the edit reached: inside the edited
+        // body, or around it.
+        let tree = self.ctx.tree;
+        let touched = |target: &Target| match *target {
+            Target::Node(NodeRef { file: 0, node }) => edited.is_some_and(|(start, end)| tree.nodes.get(node as usize)
+                .is_none_or(|n| n.start < end && start < n.end || n.start <= start && end <= n.end)),
+            Target::Scope(ScopeRef { file: 0, .. }) => edited.is_some(),
+            _ => false,
+        };
+        fresh.forget(bodies, &touched);
+        self.semantic.carry_in((state, interned), self.revision());
+        // What read the file's whole-file scan holds while the scan answers
+        // the same for the edited text.
+        if edited.is_some() {
+            let files = Files(self);
+            let at = Leaf { target: Target::Node(NodeRef { file: 0, node: self.ctx.tree.root }), frame: FrameId::ROOT };
+            let same = self.semantic.run(&files, &self.ctx.grammar.names, |semantic| {
+                self.evaluating(Some(ActiveQuestion { semantic, at }), crate::expr::queries::Uncertainty::Explicit,
+                    || Known::Yes(semantic.narrowing().rescan()))
+            });
+            if same != Known::Yes(true) {
+                self.semantic.forget(crate::grammar::names::memo::SCAN, &|_| false);
+            }
+        }
+    }
+
+    /// What [`LintWorld::carry_in`] starts the next lint from.
+    pub(super) fn carry_out(&self) -> super::editing::WorldCarry {
+        let (state, interned) = self.semantic.carry_out();
+        super::editing::WorldCarry { units: self.views.units(), state, interned }
+    }
+
     /// `path`'s file, its text read recorded on every lookup: work in any
     /// frame that reaches the file depends on its text, not only the frame
     /// that loaded it.
@@ -173,7 +223,7 @@ impl<'a> LintWorld<'a> {
     /// Work steps onto `at`: inside a file's body, it reads that body too.
     /// The linted file counts through the run's unit of the same text, for
     /// run-shared answers that read it.
-    fn note_entered(&self, at: Leaf) {
+    fn note_entered(&'a self, at: Leaf, quiet: bool) {
         let file = match at.target {
             Target::Node(node) => node.file,
             Target::Scope(scope) => scope.file,
@@ -184,12 +234,20 @@ impl<'a> LintWorld<'a> {
             None => match self.linted_unit() { Some(unit) => unit, None => return },
         };
         let node = match at.target {
-            Target::Scope(scope) => {
-                // A scope's names come before any question inside it.
-                let Some(names) = unit.names.get() else {
-                    if file == 0 { super::reads::note(super::reads::Dep::Text(unit.path.clone(), unit.hash)) }
+            // A scope's names come before any question inside it.
+            Target::Scope(scope) if file == 0 => {
+                // Never resolves names while they are being resolved.
+                let names = self.on(0, self.ctx.tree.root).filter(|ctx| !ctx.names_resolving()).map(|ctx| ctx.names());
+                let Some(names) = names else {
+                    crate::grammar::names::memo::enter(crate::grammar::names::memo::ALL);
+                    if !quiet { super::reads::note(super::reads::Dep::Text(unit.path.clone(), unit.hash)) }
                     return;
                 };
+                let Some(info) = names.scopes.get(scope.scope as usize) else { return };
+                info.node
+            }
+            Target::Scope(scope) => {
+                let Some(names) = unit.names.get() else { return };
                 let Some(info) = names.value.scopes.get(scope.scope as usize) else { return };
                 info.node
             }
@@ -198,6 +256,13 @@ impl<'a> LintWorld<'a> {
         };
         let tree = if file == 0 { self.ctx.tree } else { &unit.parsed.tree };
         let Some(syntax) = tree.nodes.get(node as usize) else { return };
+        // The session's answers record the bodies they entered.
+        if file == 0 {
+            if let Some(index) = self.linter.bodies(unit).and_then(|bodies| bodies.body_at(syntax.start)) {
+                crate::grammar::names::memo::enter(crate::grammar::names::memo::body(index));
+            }
+        }
+        if quiet { return }
         if let Some(entered) = self.linter.entered(unit, syntax.start) {
             super::reads::note(super::reads::Dep::Outside(unit.path.clone(), entered));
         }
@@ -448,7 +513,7 @@ impl<'a> LintWorld<'a> {
     }
 
     fn here(&'a self, at: Leaf) -> Option<Ctx<'a>> {
-        if !self.quiet_entering.get() { self.note_entered(at) }
+        self.note_entered(at, self.quiet_entering.get());
         match at.target {
             Target::Node(node) => self.on(node.file, node.node),
             Target::Scope(scope) => {
@@ -1335,7 +1400,7 @@ impl World for Files<'_> {
     }
 
     fn note_entered(&self, at: Leaf) {
-        if !self.0.quiet_entering.get() { self.0.note_entered(at) }
+        self.0.note_entered(at, self.0.quiet_entering.get())
     }
 
     fn quiet_entering(&self, quiet: bool) -> bool {
