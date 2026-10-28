@@ -4,14 +4,18 @@ import .ts/values/inspection
 
 define {
 
-# A primitive intersected with an object type stays (a branded `string &
-# { tag }`, `string & number[]`); only nullish values exclude objects.
-exclusive null, undefined, string, number, boolean, bigint, symbol
-exclusive null, undefined, object
+# Runtime categories: no value is two of them, so `typeof x === "object"`
+# rules every primitive out. Types are objects only by implication (below),
+# which never makes an intersection impossible: a branded `string & { tag }`
+# or `string & number[]` stays a string.
+exclusive null, undefined, string, number, boolean, bigint, symbol, object
 exclusive falsy, truthy
 exclusive thenable, nonthenable
 # TypeScript's `object` keyword takes every non-primitive: a shape with members is one.
 trait shaped implies object
+trait array implies object
+trait tuple implies object
+trait callable implies object
 top unknown
 dynamic any
 keys text string, nonthenable
@@ -24,8 +28,8 @@ apparent boolean inherits instance "Boolean"
 apparent bigint inherits instance "BigInt"
 apparent symbol inherits instance "Symbol"
 apparent callable inherits instance "Function"
-product ts_tuple items fits object, truthy, tuple as { kind: "tuple" } inherits instance "Array" of ...items readonly inherits instance "ReadonlyArray" of ...items optional trait undefined, nullable, falsy, nonthenable count "length"
-product ts_array items fits object, truthy, array as { kind: "array" } inherits instance "Array" of ...items readonly inherits instance "ReadonlyArray" of ...items
+product ts_tuple items fits truthy, tuple as { kind: "tuple" } inherits instance "Array" of ...items readonly inherits instance "ReadonlyArray" of ...items optional trait undefined, nullable, falsy, nonthenable count "length"
+product ts_array items fits truthy, array as { kind: "array" } inherits instance "Array" of ...items readonly inherits instance "ReadonlyArray" of ...items
 
 in ts_program { fits object, truthy in module }
 in ts_namespace {
@@ -844,12 +848,12 @@ in ts_index {
   }
 }
 in ts_function, ts_arrow, ts_function_type, ts_call_signature {
-  fits callable, object, truthy
+  fits callable, truthy
 }
 in ts_function { fits constructible when !any(modifier.nodes, modifier => modifier.text == "async") }
 in ts_method, ts_method_signature {
   optional when optional != null
-  when kind != "get" && kind != "set" { fits callable, object, truthy }
+  when kind != "get" && kind != "set" { fits callable, truthy }
   when kind == "get" { unwraps it.result }
   when kind == "set" { unwraps parameter.type }
 }
@@ -930,7 +934,7 @@ in ts_class, ts_interface {
   carries type_parameter as { kind: "named", name: name.text }
   when (name.text == "Array" || name.text == "ReadonlyArray") && ts_value_global_declaration(node, name.text) {
     indexed repeated type_parameter strings
-    fits object, truthy in members
+    fits truthy in members
   }
 }
 in ts_type_reference {
