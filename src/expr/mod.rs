@@ -338,7 +338,8 @@ pub enum FactOf {
 pub struct AttrMemo<'a> {
     /// VM-lowered attributes' values ([`crate::vm`]).
     vm: crate::vm::FileVm,
-    locals: RefCell<FxHashMap<(u32, u32, u16), Value<'a>>>,
+    /// With what computing each read of the editor's file.
+    locals: RefCell<FxHashMap<(u32, u32, u16), (Value<'a>, crate::footprint::Footprint)>>,
     /// Native fact reads without arguments, per (node, fact).
     facts: RefCell<FxHashMap<(u32, u16), Value<'a>>>,
     /// Where JavaScript lines start (also after U+2028 and U+2029), for
@@ -363,9 +364,28 @@ pub struct AttrMemo<'a> {
     names: std::cell::OnceCell<crate::engine::reads::Cached<std::sync::Arc<crate::grammar::names::Resolved>>>,
     /// Names are being resolved: native reads meanwhile get no names.
     resolving_names: std::cell::Cell<bool>,
+    /// An editor's file: the names of its last lint, whose scope numbers
+    /// these keep ([`crate::grammar::names::Resolved::renumber_scopes`]).
+    pub(crate) previous_names: RefCell<Option<std::sync::Arc<crate::grammar::names::Resolved>>>,
+    /// An editor's file: name conditions' answers by (node, condition),
+    /// with what each read; the last lint's that the edit left standing.
+    pub(crate) name_conditions: RefCell<NameConditions>,
 }
 
+/// Name conditions' answers by (node, condition), with what each read.
+pub(crate) type NameConditions = FxHashMap<(u32, u32), (bool, crate::footprint::Footprint)>;
+
 impl AttrMemo<'_> {
+    /// The VM's cells for the file.
+    pub(crate) fn file_vm(&self) -> &crate::vm::FileVm {
+        &self.vm
+    }
+
+    /// The tree's names, when resolved.
+    pub(crate) fn names_resolved(&self) -> Option<std::sync::Arc<crate::grammar::names::Resolved>> {
+        self.names.get().map(|cached| cached.value.clone())
+    }
+
     /// Rules are about to run on `node`.
     pub fn enter_node(&self, node: u32) {
         self.visit.set(self.visit.get() + 1);
@@ -1640,6 +1660,7 @@ impl Ctx<'_> {
         let (line, column) = self.lines.line_col(self.source, at);
         let starts = self.memo.js_lines.get_or_init(|| js_line_starts(self.source));
         let js_line = starts.partition_point(|&s| s <= at);
+        crate::footprint::positions(starts[js_line - 1], at);
         let js_column = self.source[starts[js_line - 1]..at].encode_utf16().count();
         Position { line: line + 1, column: column + 1, js_line, js_column: js_column + 1, js_line_start: starts[js_line - 1] }
     }
@@ -1702,8 +1723,14 @@ impl<'a> Ctx<'a> {
     }
 
     fn node_text(&self, id: u32) -> &'a str {
-        let n = self.tree.node(id);
-        &self.source[n.start as usize..n.end as usize]
+        self.tree.text(self.source, id)
+    }
+
+    /// Bytes `from..to` of the file, read as text between nodes (gaps,
+    /// lines): what they hold and where.
+    fn source_between(&self, from: usize, to: usize) -> &'a str {
+        crate::footprint::positions(from, to);
+        &self.source[from..to]
     }
 
     /// The layer node this node sits in, looking through labelled text.
@@ -1805,12 +1832,16 @@ impl<'a> Ctx<'a> {
             return Ok(v);
         }
         let key = (self.node, rule, i);
-        if let Some(v) = self.memo.locals.borrow().get(&key) {
+        if let Some((v, read)) = self.memo.locals.borrow().get(&key) {
+            crate::footprint::enter(read);
             return Ok(v.clone());
         }
         let session = crate::vm::Session::new(self, self.node, exprs);
-        let v = session.value(&exprs[slot], None).ok_or_else(|| self.memo.vm.error())?.into_static();
-        self.memo.locals.borrow_mut().insert(key, v.clone());
+        let outer = crate::footprint::begin();
+        let v = session.value(&exprs[slot], None).map(Value::into_static);
+        let read = crate::footprint::end(outer);
+        let v = v.ok_or_else(|| self.memo.vm.error())?;
+        self.memo.locals.borrow_mut().insert(key, (v.clone(), read));
         Ok(v)
     }
 

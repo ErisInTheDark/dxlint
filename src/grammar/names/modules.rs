@@ -48,11 +48,13 @@ pub struct Memo {
     state: RefCell<MemoState>,
 }
 
+/// Frames and targets are kept with what the publication walk that found
+/// them had read of the editor's file so far ([`crate::footprint`]).
 #[derive(Default)]
 struct MemoState {
     revision: Option<u64>,
-    frames: BTreeMap<(index::PublicationKind, Key), Frame>,
-    targets: BTreeMap<(index::PublicationKind, Key), Vec<Target>>,
+    frames: BTreeMap<(index::PublicationKind, Key), (Frame, crate::footprint::Footprint)>,
+    targets: BTreeMap<(index::PublicationKind, Key), (Vec<Target>, crate::footprint::Footprint)>,
     pending: BTreeSet<(index::PublicationKind, Key)>,
 }
 
@@ -90,11 +92,19 @@ impl<S: Source> Modules<'_, S> {
         if !class.is_power_of_two() {
             return Known::Unknown;
         }
+        let outer = crate::footprint::begin();
+        let answer = self.publication_walk(scope, name, class, question, retained);
+        crate::footprint::resume(outer);
+        answer
+    }
+
+    fn publication_walk(&self, scope: ScopeRef, name: &str, class: u64, question: &QueryContext, retained: &Memo) -> Known<Vec<Target>> {
         let revision = self.source.revision();
         let kind = self.source.publication_kind();
         retained.sync_revision(revision);
         let root = Key { scope, name: name.into(), class };
-        if let Some(targets) = retained.state.borrow().targets.get(&(kind, root.clone())) {
+        if let Some((targets, read)) = retained.state.borrow().targets.get(&(kind, root.clone())) {
+            crate::footprint::enter(read);
             return if self.source.revision() == revision { Known::Yes(targets.clone()) } else { Known::Unknown };
         }
         let Some(_pending) = retained.enter(kind, &root, revision) else { return Known::Unknown };
@@ -122,7 +132,8 @@ impl<S: Source> Modules<'_, S> {
                         None => {
                             let key = key.clone();
                             let known = retained.state.borrow().targets.get(&(kind, key.clone())).cloned();
-                            if let Some(targets) = known {
+                            if let Some((targets, read)) = known {
+                                crate::footprint::enter(&read);
                                 memo.insert(key, Answer::Done(Known::Yes(targets)));
                                 continue;
                             }
@@ -150,7 +161,7 @@ impl<S: Source> Modules<'_, S> {
             }
             let frame = stack.pop().expect("last frame");
             if self.source.revision() != revision || question.budget.limited() { return Known::Unknown }
-            retained.state.borrow_mut().targets.insert((kind, frame.key.clone()), frame.targets.clone());
+            retained.state.borrow_mut().targets.insert((kind, frame.key.clone()), (frame.targets.clone(), crate::footprint::current()));
             memo.insert(frame.key, Answer::Done(Known::Yes(frame.targets)));
         }
         match memo.remove(&root) {
@@ -160,7 +171,10 @@ impl<S: Source> Modules<'_, S> {
     }
 
     fn frame(&self, key: Key, question: &QueryContext, retained: &Memo, kind: index::PublicationKind, revision: u64) -> Frame {
-        if let Some(frame) = retained.state.borrow().frames.get(&(kind, key.clone())) { return frame.clone() }
+        if let Some((frame, read)) = retained.state.borrow().frames.get(&(kind, key.clone())) {
+            crate::footprint::enter(read);
+            return frame.clone();
+        }
         let class = key.class;
         let mut frame = Frame { key, links: Vec::new(), targets: Vec::new(), stars: false, unknown: false };
         if question.budget.limited() || !question.budget.step() {
@@ -210,7 +224,7 @@ impl<S: Source> Modules<'_, S> {
         if self.source.revision() != revision || question.budget.limited() {
             frame.unknown = true;
         } else if !frame.unknown {
-            retained.state.borrow_mut().frames.insert((kind, frame.key.clone()), frame.clone());
+            retained.state.borrow_mut().frames.insert((kind, frame.key.clone()), (frame.clone(), crate::footprint::current()));
         }
         frame
     }

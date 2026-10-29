@@ -169,9 +169,9 @@ pub(crate) struct State {
     /// Leaves whose values are being evaluated (outermost first), each with
     /// [`Values::cycle_mark`] when it started and its asker's allowance: a
     /// leaf's value is a fact of its own.
-    /// Each also keeps what the work around it had entered
-    /// ([`super::memo::begin`]): a leaf's value records only its own bodies.
-    evaluating: std::cell::RefCell<Vec<(Leaf, u64, super::question::Asker, u64)>>,
+    /// Each also keeps what the work around it had read
+    /// ([`crate::footprint::begin`]): a leaf's value records only its own reads.
+    evaluating: std::cell::RefCell<Vec<(Leaf, u64, super::question::Asker, crate::footprint::Reading)>>,
     /// Leaves of the linted file read ([`Values::root_reads`]).
     root_reads: std::cell::Cell<u64>,
     /// Reads of a leaf still being evaluated (its seed). An unknown value
@@ -214,20 +214,20 @@ pub(crate) struct State {
 }
 
 impl State {
-    /// Drops what an edit inside `bodies` of the linted file may change.
-    pub(crate) fn forget(&self, bodies: u64) {
-        self.values.forget(bodies);
-        self.widened.forget(bodies);
-        self.traits.forget(bodies);
-        self.optional.forget(bodies);
-        self.identities.forget(bodies);
-        self.members.forget(bodies);
-        self.member_keys.forget(bodies);
-        self.key_paths.forget(bodies);
-        self.member_closed.forget(bodies);
-        self.bound_arguments.forget(bodies);
-        self.carriers.forget(bodies);
-        self.instances.forget(bodies);
+    /// Drops what an edit of the linted file may change.
+    pub(crate) fn forget(&self, dirty: &crate::footprint::Dirty) {
+        self.values.forget(dirty);
+        self.widened.forget(dirty);
+        self.traits.forget(dirty);
+        self.optional.forget(dirty);
+        self.identities.forget(dirty);
+        self.members.forget(dirty);
+        self.member_keys.forget(dirty);
+        self.key_paths.forget(dirty);
+        self.member_closed.forget(dirty);
+        self.bound_arguments.forget(dirty);
+        self.carriers.forget(dirty);
+        self.instances.forget(dirty);
         self.ran_out.borrow_mut().clear();
         self.provisional.borrow_mut().clear();
     }
@@ -295,9 +295,11 @@ impl Values<'_> {
         if !share_values() { return eval::values(self, leaf) }
         let Known::Yes(leaf) = self.semantic.leaf(leaf) else { return NodeValue::Unknown };
         if let Some(value) = eval::kept_value(self, leaf) { return value }
+        let outer = crate::footprint::begin();
         let value = self.world.shared_value(leaf, self.semantic, &mut || eval::values(self, leaf));
+        let read = crate::footprint::end(outer);
         if value != NodeValue::Unknown {
-            self.semantic.values.values.insert(leaf, value.clone());
+            self.semantic.values.values.insert_read(leaf, value.clone(), read);
         }
         value
     }
@@ -455,7 +457,7 @@ impl Values<'_> {
             }
         }
         let _site = self.world.profile().map(|_| crate::engine::StepSite::enter(std::any::type_name::<(K, T)>()));
-        let outer = super::memo::begin();
+        let outer = crate::footprint::begin();
         memo.insert(key.clone(), Known::Unknown);
         state.pending.borrow_mut().push(tag);
         let mark = self.cycle_mark();
@@ -484,7 +486,7 @@ impl Values<'_> {
             self.settle_provisional(tag);
             memo.insert(key, answer.clone());
         }
-        super::memo::end(outer);
+        crate::footprint::resume(outer);
         answer
     }
 
@@ -736,9 +738,11 @@ impl Values<'_> {
         if let Some(key) = request.as_ref().and_then(|request| self.semantic.values.key_paths.get(request)) {
             return Known::Yes(key);
         }
+        let outer = crate::footprint::begin();
         let answer = self.direct_key(at, expression);
+        let read = crate::footprint::end(outer);
         if let (Some(request), Known::Yes(key)) = (request, &answer) {
-            self.semantic.values.key_paths.insert(request, key.clone());
+            self.semantic.values.key_paths.insert_read(request, key.clone(), read);
         }
         answer
     }
@@ -962,23 +966,34 @@ impl Values<'_> {
         let Some(importer) = self.importer(at) else { return NodeValue::Unknown };
         let kept = arguments.is_empty().then(|| (importer, Box::<str>::from(name), classes));
         if let Some(value) = kept.as_ref().and_then(|key| self.semantic.values.instances.get(key)) { return value }
-        let Known::Yes(targets) = self.semantic.modules().global(importer, name, classes) else {
-            return NodeValue::Unknown;
-        };
-        if targets.is_empty() { return NodeValue::Unknown }
+        let outer = crate::footprint::begin();
+        let (value, site_free) = self.new_instance(at, importer, name, classes, arguments);
+        let read = crate::footprint::end(outer);
+        if let (Some(key), true) = (kept, site_free && value != NodeValue::Unknown) {
+            self.semantic.values.instances.insert_read(key, value.clone(), read);
+        }
+        value
+    }
+
+    /// The value of global `name` instantiated with `arguments`, and whether
+    /// it reads nothing of where it was named.
+    fn new_instance(&self, at: Leaf, importer: u32, name: &str, classes: u64, arguments: &[Value]) -> (NodeValue, bool) {
+        const UNKNOWN: (NodeValue, bool) = (NodeValue::Unknown, false);
+        let Known::Yes(targets) = self.semantic.modules().global(importer, name, classes) else { return UNKNOWN };
+        if targets.is_empty() { return UNKNOWN }
         let type_class = self.tables.vocabulary.declaration_class("type");
-        if targets.len() > 1 && (type_class == 0 || classes & type_class == 0) { return NodeValue::Unknown }
+        if targets.len() > 1 && (type_class == 0 || classes & type_class == 0) { return UNKNOWN }
         let mut args = Vec::new();
         for argument in arguments {
-            if !self.question.budget.step() { return NodeValue::Unknown }
+            if !self.question.budget.step() { return UNKNOWN }
             args.push(self.evaluate(at, argument));
         }
         let mut values = Vec::new();
         let mut site_free = true;
         for target in targets {
-            if !self.question.budget.step() { return NodeValue::Unknown }
-            let Target::Node(node) = target else { return NodeValue::Unknown };
-            let Known::Yes(owner) = self.declaration_owner(node) else { return NodeValue::Unknown };
+            if !self.question.budget.step() { return UNKNOWN }
+            let Target::Node(node) = target else { return UNKNOWN };
+            let Known::Yes(owner) = self.declaration_owner(node) else { return UNKNOWN };
             let shared = if args.is_empty() { self.shared_frame(owner, classes) } else { None };
             let frame = shared.unwrap_or_else(|| {
                 // A declaration generic only in its own formals, given every
@@ -994,11 +1009,7 @@ impl Values<'_> {
             });
             values.push(self.values(Leaf { target: Target::Node(owner), frame }));
         }
-        let value = eval::combine(self, values, true);
-        if let (Some(key), true) = (kept, site_free && value != NodeValue::Unknown) {
-            self.semantic.values.instances.insert(key, value.clone());
-        }
-        value
+        (eval::combine(self, values, true), site_free)
     }
 
     fn definitions(&self, leaf: Leaf, through: Leaf) -> Known<Vec<Leaf>> {

@@ -11,12 +11,29 @@ enum ClassKind {
     Declaration,
 }
 
+/// Answers kept for the lint, each with what working it out read of the
+/// editor's file ([`crate::footprint`]), handed to every later reader.
 #[derive(Default)]
 pub(crate) struct Memo {
     classes: std::cell::RefCell<crate::fx_hash::FxHashMap<(u32, ClassKind, u64), Value<'static>>>,
-    scopes: std::cell::RefCell<crate::fx_hash::FxHashMap<ScopeRef, Value<'static>>>,
-    ancestors: std::cell::RefCell<crate::fx_hash::FxHashMap<(ScopeRef, Option<u32>), Value<'static>>>,
-    bindings: std::cell::RefCell<crate::fx_hash::FxHashMap<NodeRef, Value<'static>>>,
+    scopes: Kept<ScopeRef>,
+    ancestors: Kept<(ScopeRef, Option<u32>)>,
+    bindings: Kept<NodeRef>,
+}
+
+type Kept<K> = std::cell::RefCell<crate::fx_hash::FxHashMap<K, (Value<'static>, crate::footprint::Footprint)>>;
+
+/// `key`'s kept answer in `memo`, or `compute`'s (kept when it has one).
+fn kept<K: Eq + std::hash::Hash>(memo: &Kept<K>, key: K, compute: impl FnOnce() -> Option<Value<'static>>) -> Option<Value<'static>> {
+    if let Some((value, read)) = memo.borrow().get(&key) {
+        crate::footprint::enter(read);
+        return Some(value.clone());
+    }
+    let outer = crate::footprint::begin();
+    let value = compute();
+    let read = crate::footprint::end(outer);
+    if let Some(value) = &value { memo.borrow_mut().insert(key, (value.clone(), read)); }
+    value
 }
 
 pub(super) static FUNCTIONS: &[QueryFunction] = &[
@@ -150,16 +167,12 @@ impl<'a, 's> Context<'a, 's> {
 
     fn scope(&self, id: u32, scope: &ScopeInfo) -> Option<Value<'static>> {
         let key = ScopeRef { file: self.node.file, scope: id };
-        let memo = &self.semantic.name_queries.scopes;
-        if let Some(scope) = memo.borrow().get(&key) { return Some(scope.clone()) }
-        let value = Value::record(vec![
+        kept(&self.semantic.name_queries.scopes, key, || Some(Value::record(vec![
             ("id".into(), self.scope_id(id)),
             ("parent".into(), scope.parent.map_or(Value::Null, |parent| self.scope_id(parent))),
             ("owner".into(), self.node(scope.node)?),
             ("classes".into(), self.classes(scope.classes, ClassKind::Scope)?),
-        ]);
-        memo.borrow_mut().insert(key, value.clone());
-        Some(value)
+        ])))
     }
 }
 
@@ -172,18 +185,15 @@ fn scopes(semantic: &Semantic<'_>, at: Leaf, args: &[Value<'static>]) -> Known<V
         _ => ReferenceLookup { scope: id, classes: 0, outside: None },
     };
     let key = (ScopeRef { file: context.node.file, scope: id }, lookup.outside);
-    let memo = &semantic.name_queries.ancestors;
-    if let Some(chain) = memo.borrow().get(&key) { return Known::Yes(chain.clone()) }
-    let mut chain = Vec::new();
-    for id in context.names.lookup_scopes(lookup) {
-        if !semantic.question.budget.step() { return Known::Unknown }
-        let Some(scope) = context.names.scopes.get(id as usize) else { return Known::Unknown };
-        let Some(value) = context.scope(id, scope) else { return Known::Unknown };
-        chain.push(value);
-    }
-    let chain = Value::list(chain);
-    memo.borrow_mut().insert(key, chain.clone());
-    Known::Yes(chain)
+    let chain = kept(&semantic.name_queries.ancestors, key, || {
+        let mut chain = Vec::new();
+        for id in context.names.lookup_scopes(lookup) {
+            if !semantic.question.budget.step() { return None }
+            chain.push(context.scope(id, context.names.scopes.get(id as usize)?)?);
+        }
+        Some(Value::list(chain))
+    });
+    chain.map_or(Known::Unknown, Known::Yes)
 }
 
 fn declarations(semantic: &Semantic<'_>, at: Leaf, args: &[Value<'static>]) -> Known<Value<'static>> {
@@ -235,54 +245,47 @@ fn binding(semantic: &Semantic<'_>, at: Leaf, _: &[Value<'static>]) -> Known<Val
     let declaration = names.merged.get(&declaration).copied().unwrap_or(declaration);
     if names.implicit.contains_key(&declaration) { return Known::Yes(Value::Null) }
     let cache_key = NodeRef { file: context.node.file, node: declaration };
-    let memo = &semantic.name_queries.bindings;
-    if let Some(binding) = memo.borrow().get(&cache_key) { return Known::Yes(binding.clone()) }
-    let Some(&(scope, ..)) = names.declared.get(&declaration) else { return Known::Unknown };
-    let Some(tree) = semantic.world.tree(context.node.file) else { return Known::Unknown };
+    kept(&semantic.name_queries.bindings, cache_key, || binding_of(semantic, &context, declaration)).map_or(Known::Unknown, Known::Yes)
+}
+
+/// The record [`binding`] answers for `declaration`.
+fn binding_of(semantic: &Semantic<'_>, context: &Context<'_, '_>, declaration: u32) -> Option<Value<'static>> {
+    let names = context.names;
+    let &(scope, ..) = names.declared.get(&declaration)?;
+    let tree = semantic.world.tree(context.node.file)?;
     let key = match names.keys.get(&declaration) {
         Some(Some(key)) => key.to_string(),
-        Some(None) => return Known::Unknown,
+        Some(None) => return None,
         None => {
-            let Some(node) = tree.nodes.get(declaration as usize) else { return Known::Unknown };
-            let Some(text) = semantic.world.text(context.node.file)
-                .and_then(|text| text.get(node.start as usize..node.end as usize)) else { return Known::Unknown };
-            semantic.world.name_key(context.node.file, text).into_owned()
+            let text = semantic.world.text(context.node.file)?;
+            semantic.world.name_key(context.node.file, tree.text(text, declaration)).into_owned()
         }
     };
-    let Some(index) = semantic.world.index(context.node.file) else { return Known::Unknown };
+    let index = semantic.world.index(context.node.file)?;
     let mut declarations = Vec::new();
     let mut reference_nodes = Vec::new();
     for &node in index.declared(scope, &key) {
-        if !semantic.question.budget.step() { return Known::Unknown }
+        if !semantic.question.budget.step() { return None }
         if names.merged.get(&node).copied().unwrap_or(node) != declaration { continue }
         for &reference in names.references.get(&node).into_iter().flatten() {
-            if !semantic.question.budget.step() { return Known::Unknown }
-            if tree.nodes.get(reference as usize).is_none() { return Known::Unknown }
+            if !semantic.question.budget.step() { return None }
+            tree.nodes.get(reference as usize)?;
             reference_nodes.push(reference);
         }
-        let Some(node) = context.node(node) else { return Known::Unknown };
-        declarations.push(node);
+        declarations.push(context.node(node)?);
     }
-    if declarations.is_empty() { return Known::Unknown }
+    if declarations.is_empty() { return None }
     reference_nodes.sort_unstable_by_key(|&node| (tree.node(node).start, node));
     reference_nodes.dedup();
-    let mut references = Vec::new();
-    for node in reference_nodes {
-        let Some(node) = context.node(node) else { return Known::Unknown };
-        references.push(node);
-    }
-    let Some(scope_info) = names.scopes.get(scope as usize) else { return Known::Unknown };
-    let Some(scope) = context.scope(scope, scope_info) else { return Known::Unknown };
-    let Some(node) = context.node(declaration) else { return Known::Unknown };
-    let value = Value::record(vec![
-        ("node".into(), node),
+    let references = reference_nodes.into_iter().map(|node| context.node(node)).collect::<Option<Vec<_>>>()?;
+    let scope = context.scope(scope, names.scopes.get(scope as usize)?)?;
+    Some(Value::record(vec![
+        ("node".into(), context.node(declaration)?),
         ("key".into(), Value::from(key)),
         ("scope".into(), scope),
         ("declarations".into(), Value::list(declarations)),
         ("references".into(), Value::list(references)),
-    ]);
-    memo.borrow_mut().insert(cache_key, value.clone());
-    Known::Yes(value)
+    ]))
 }
 
 #[cfg(test)]

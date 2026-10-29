@@ -364,7 +364,6 @@ impl Adjacency {
 struct ReadSet {
     sites: crate::fx_hash::FxHashSet<(NodeRef, NodeRef)>,
     steps: crate::fx_hash::FxHashSet<StepId>,
-    external: OnceCell<bool>,
     used: RefCell<FxHashMap<StepId, bool>>,
 }
 
@@ -663,17 +662,14 @@ impl Execution {
         }
         let Some(binding) = binding else { return Known::Unknown };
         let Some(reads) = self.binding_reads.get(&binding) else { return Known::Unknown };
-        let external = match reads.external.get() {
-            Some(external) => *external,
-            None => {
-                let mut external = false;
-                for site in catalogue.get(&binding).into_iter().flatten() {
-                    if !budget.step() { return Known::Unknown }
-                    if !reads.sites.contains(site) { external = true; break }
-                }
-                *reads.external.get_or_init(|| external)
-            }
-        };
+        // The catalogue is the file's: an editor keeps graphs across edits
+        // elsewhere in the file, so this is asked of it every time.
+        if binding.file == 0 { crate::footprint::table(crate::footprint::tables::READS, binding.node) }
+        let mut external = false;
+        for site in catalogue.get(&binding).into_iter().flatten() {
+            if !budget.step() { return Known::Unknown }
+            if !reads.sites.contains(site) { external = true; break }
+        }
         let Some(reachable) = self.reachable_steps(budget).known() else { return Known::Unknown };
         let Some(overwrites) = self.binding_writes.get(&binding) else { return Known::Unknown };
         let mut has_reachable_write = false;

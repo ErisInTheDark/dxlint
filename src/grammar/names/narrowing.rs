@@ -38,15 +38,15 @@ pub(crate) struct State {
 }
 
 impl State {
-    /// Drops what an edit inside `bodies` of the linted file may change.
-    pub(crate) fn forget(&self, bodies: u64) {
-        self.written.forget(bodies);
-        self.tested_places.forget(bodies);
-        self.candidates.forget(bodies);
-        self.writes.forget(bodies);
-        self.guards.forget(bodies);
-        self.tested.forget(bodies);
-        self.tested_names.forget(bodies);
+    /// Drops what an edit of the linted file may change.
+    pub(crate) fn forget(&self, dirty: &crate::footprint::Dirty) {
+        self.written.forget(dirty);
+        self.tested_places.forget(dirty);
+        self.candidates.forget(dirty);
+        self.writes.forget(dirty);
+        self.guards.forget(dirty);
+        self.tested.forget(dirty);
+        self.tested_names.forget(dirty);
     }
 }
 
@@ -224,6 +224,8 @@ impl Narrowing<'_> {
         }
         let budget = &self.semantic.question.budget;
         let mark = values.cycle_mark();
+        let outer = crate::footprint::begin();
+        let _ = self.semantic.effects().narrowing_execution(entry);
         let guards = values.fact(tag, super::question::Budget::per_question(), || {
             let mut guards = Vec::new();
             for &node in execution.guard_owners(|execution| self.guard_owners(execution)) {
@@ -242,8 +244,9 @@ impl Narrowing<'_> {
             }
             Some(std::rc::Rc::<[Guard]>::from(guards))
         });
+        let read = crate::footprint::end(outer);
         let (guards, unpaid) = settled(guards);
-        if guards.is_some() || !(unpaid || values.cycled_since(mark)) { memo.insert(entry, guards.clone()) }
+        if guards.is_some() || !(unpaid || values.cycled_since(mark)) { memo.insert_read(entry, guards.clone(), read) }
         guards
     }
 
@@ -261,20 +264,29 @@ impl Narrowing<'_> {
         let allowance = u32::try_from(nodes).unwrap_or(u32::MAX).saturating_mul(STEPS_PER_NODE)
             .max(super::question::Budget::DEFAULT);
         let mark = self.semantic.values().cycle_mark();
-        let outer = super::memo::begin();
+        let outer = crate::footprint::begin();
         let roots = self.semantic.question.budget.sized(allowance, || self.collect_tested_roots(file).map(std::rc::Rc::new)).ok().flatten();
-        // It read every body of the file: what reads it depends on its
-        // answer, which an edit is checked against ([`Narrowing::rescan`]),
-        // not on each body.
-        super::memo::set(if file == 0 { super::memo::SCAN } else { 0 });
+        // It read the whole file: what reads it depends on its answer,
+        // which an edit is checked against ([`Narrowing::rescan`]), not on
+        // each part of the file.
+        use crate::footprint::{Atom, Reading, tables};
+        crate::footprint::set(if file == 0 { Reading::NONE.with_atom(Atom::whole(tables::SCAN)) } else { Reading::NONE });
         if roots.is_some() || !self.semantic.values().cycled_since(mark) { memo.insert(file, roots.clone()) }
-        super::memo::end(outer);
+        crate::footprint::resume(outer);
         roots
     }
 
-    /// After an edit of the linted file: its tested roots again, and
-    /// whether they are what the session kept (`false` when it kept none).
-    pub(crate) fn rescan(&self) -> bool {
+    /// After an edit of the linted file (whose root leaf is `root`): its
+    /// whole-file scans again, adding to `changed` the answers that differ
+    /// from the kept ones.
+    pub(crate) fn recheck(&self, root: Leaf, changed: &mut crate::footprint::Dirty) {
+        if !self.rescan() { changed.add_atom(crate::footprint::Atom::whole(crate::footprint::tables::SCAN)) }
+        self.semantic.effects().recheck(root, &|target| self.write_declaration(target), changed);
+    }
+
+    /// Its tested roots again, and whether they are what the session kept
+    /// (`false` when it kept none).
+    fn rescan(&self) -> bool {
         let memo = &self.semantic.narrowing_places.tested;
         let kept = memo.get(&0);
         memo.remove(&0);
@@ -289,6 +301,7 @@ impl Narrowing<'_> {
         let memo = &self.semantic.narrowing_places.tested_names;
         if let Some(names) = memo.get(&file) { return names }
         let mark = self.semantic.values().cycle_mark();
+        let outer = crate::footprint::begin();
         let names = (|| {
             let roots = self.tested_roots(file)?;
             let tree = self.semantic.world.tree(file)?;
@@ -303,7 +316,8 @@ impl Narrowing<'_> {
             }
             Some(std::rc::Rc::new(names))
         })();
-        if names.is_some() || !self.semantic.values().cycled_since(mark) { memo.insert(file, names.clone()) }
+        let read = crate::footprint::end(outer);
+        if names.is_some() || !self.semantic.values().cycled_since(mark) { memo.insert_read(file, names.clone(), read) }
         names
     }
 
@@ -311,6 +325,7 @@ impl Narrowing<'_> {
     fn mentions(&self, read: NodeRef, names: &crate::fx_hash::FxHashSet<Box<str>>) -> bool {
         if names.is_empty() { return false }
         let (Some(tree), Some(text)) = (self.semantic.world.tree(read.file), self.semantic.world.text(read.file)) else { return true };
+        tree.read_text(read.node);
         let Some(text) = tree.nodes.get(read.node as usize).and_then(|data| text.get(data.start as usize..data.end as usize)) else { return true };
         text.split(|c: char| !word_char(c)).any(|word| names.contains(word))
     }
@@ -433,6 +448,9 @@ impl Narrowing<'_> {
         }
         let budget = &self.semantic.question.budget;
         let mark = values.cycle_mark();
+        let outer = crate::footprint::begin();
+        // What reading `execution` read counts for the candidates.
+        let _ = self.semantic.effects().narrowing_execution(entry);
         let candidates = values.fact(tag, super::question::Budget::per_question(), || {
             let mut candidates = Vec::new();
             let index = self.write_index(execution, entry)?;
@@ -449,8 +467,9 @@ impl Narrowing<'_> {
             candidates.sort_unstable();
             Some(std::rc::Rc::<[StepId]>::from(candidates))
         });
+        let read = crate::footprint::end(outer);
         let (candidates, unpaid) = settled(candidates);
-        if candidates.is_some() || !(unpaid || values.cycled_since(mark)) { memo.insert(key, candidates.clone()) }
+        if candidates.is_some() || !(unpaid || values.cycled_since(mark)) { memo.insert_read(key, candidates.clone(), read) }
         candidates
     }
 
@@ -461,6 +480,8 @@ impl Narrowing<'_> {
         if let Some(index) = memo.get(&entry) { return index }
         let mark = self.semantic.values().cycle_mark();
         let budget = &self.semantic.question.budget;
+        let outer = crate::footprint::begin();
+        let _ = self.semantic.effects().narrowing_execution(entry);
         // Once per execution, kept for every later read in it: on the
         // graph's allowance, not the first asking read's budget.
         let index = budget.sized(execution.walk_allowance(), || {
@@ -477,8 +498,9 @@ impl Narrowing<'_> {
             }
             Some(index)
         });
+        let read = crate::footprint::end(outer);
         let index = index.ok().flatten().map(std::rc::Rc::new);
-        if index.is_some() || !self.semantic.values().cycled_since(mark) { memo.insert(entry, index.clone()) }
+        if index.is_some() || !self.semantic.values().cycled_since(mark) { memo.insert_read(entry, index.clone(), read) }
         index
     }
 

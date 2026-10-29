@@ -2,7 +2,13 @@
 //! per-file attribute escapes. A handle never owns or borrows a payload.
 
 use super::V;
-use crate::expr::{value::Key, Value};
+use crate::expr::{value::Key, value::Text, Value};
+
+/// A stored text's header byte: a borrow of the file's text, one whose
+/// reading was recorded already ([`Text::Read`]), or its own bytes.
+const BORROWED_TEXT: u8 = 0;
+const OWNED_TEXT: u8 = 1;
+const READ_TEXT: u8 = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Handle(u32);
@@ -98,7 +104,16 @@ impl Arena {
 
     /// Stores `text` (a borrow when it lies in `source`); its offset, below
     /// [`SCRATCH_TEXT`].
+    #[cfg(test)]
     pub(super) fn try_text(&mut self, text: &str, source: &str) -> Result<u32, PackError> {
+        self.try_text_read(text, source, false)
+    }
+
+    /// Stores `text` (a borrow when it lies in `source`); `read` when
+    /// reading the text was recorded already
+    /// ([`crate::expr::value::Text::Read`]): reading the borrow records
+    /// nothing again.
+    pub(super) fn try_text_read(&mut self, text: &str, source: &str, read: bool) -> Result<u32, PackError> {
         let len = u32::try_from(text.len()).map_err(|_| PackError::Text)?;
         let source_offset = (text.as_ptr() as usize).checked_sub(source.as_ptr() as usize)
             .filter(|&start| start.checked_add(text.len()).is_some_and(|end| end <= source.len()))
@@ -106,7 +121,11 @@ impl Arena {
         let entry_len = 5usize.checked_add(source_offset.map_or(text.len(), |_| 4)).ok_or(PackError::Text)?;
         let offset = u32::try_from(self.texts.len()).map_err(|_| PackError::Text)?;
         text_end(self.texts.len(), entry_len)?;
-        self.texts.push(u8::from(source_offset.is_none()));
+        self.texts.push(match source_offset {
+            None => OWNED_TEXT,
+            Some(_) if read => READ_TEXT,
+            Some(_) => BORROWED_TEXT,
+        });
         self.texts.extend_from_slice(&len.to_le_bytes());
         match source_offset {
             Some(start) => self.texts.extend_from_slice(&start.to_le_bytes()),
@@ -118,7 +137,7 @@ impl Arena {
     fn text_range(&self, handle: u32) -> (bool, std::ops::Range<usize>) {
         let at = handle as usize;
         let len = u32::from_le_bytes(self.texts[at + 1..at + 5].try_into().expect("text header holds a length")) as usize;
-        if self.texts[at] == 0 {
+        if self.texts[at] != OWNED_TEXT {
             let start = u32::from_le_bytes(self.texts[at + 5..at + 9].try_into().expect("source text holds an offset")) as usize;
             (true, start..start + len)
         } else {
@@ -126,9 +145,18 @@ impl Arena {
         }
     }
 
+    /// Whether the borrow at `handle` was read when it was stored.
+    fn text_read(&self, handle: u32) -> bool {
+        self.texts[handle as usize] == READ_TEXT
+    }
+
     fn text_value<'a>(&'a self, handle: u32, source: &'a str) -> &'a str {
         let (borrowed, range) = self.text_range(handle);
-        if borrowed { &source[range] } else { std::str::from_utf8(&self.texts[range]).expect("stored text is UTF-8") }
+        if borrowed {
+            let text = &source[range];
+            if !self.text_read(handle) { crate::footprint::source_text(text) }
+            text
+        } else { std::str::from_utf8(&self.texts[range]).expect("stored text is UTF-8") }
     }
 
     /// Copies a text entry as stored (a borrow stays a borrow).
@@ -252,7 +280,7 @@ impl Config {
     pub(super) fn try_fact_value(&self, value: &Value, fact: usize, listed: bool, arena: &mut Arena, source: &str) -> Result<V, PackError> {
         fn convert(config: &Config, value: &Value, shape: &FactShape, arena: &mut Arena, source: &str) -> Result<V, PackError> {
             Ok(match value {
-                Value::Str(text) => V::Text(arena.try_text(text, source)?),
+                Value::Str(text) => V::Text(arena.try_text_read(text, source, matches!(text, Text::Read(_)))?),
                 Value::Node(node, _) => V::Node(*node),
                 Value::Record(entries) => match shape {
                     FactShape::Record(shape, fields) if {
@@ -291,7 +319,7 @@ impl Config {
     /// A value packed into `arena` (scratch or the file's).
     pub(super) fn try_value_into(&self, value: &Value, arena: &mut Arena, region: Region, source: &str) -> Result<V, PackError> {
         Ok(match value {
-            Value::Str(text) => V::Text(arena.try_text(text, source)? | if region == Region::Scratch { SCRATCH_TEXT } else { 0 }),
+            Value::Str(text) => V::Text(arena.try_text_read(text, source, matches!(text, Text::Read(_)))? | if region == Region::Scratch { SCRATCH_TEXT } else { 0 }),
             Value::Node(node, _) => V::Node(*node),
             Value::List(items) => {
                 let items = items.iter().map(|item| self.try_value_into(item, arena, region, source)).collect::<Result<Vec<_>, _>>()?;
@@ -485,7 +513,11 @@ impl View<'_> {
             V::Text(handle) => {
                 let (pool, at) = self.text_pool(handle);
                 let (borrowed, range) = pool.text_range(at);
-                if borrowed { Value::from(&source[range]) } else { Value::text_copy(pool.text_value(at, source)) }
+                match (borrowed, pool.text_read(at)) {
+                    (true, true) => Value::Str(Text::Read(&source[range])),
+                    (true, false) => Value::from(&source[range]),
+                    _ => Value::text_copy(pool.text_value(at, source)),
+                }
             }
             scalar => scalar.value(tree, source),
         }

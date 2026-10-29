@@ -11,6 +11,7 @@ use std::sync::OnceLock;
 mod records;
 mod values;
 pub use records::{Begin, FileVm};
+pub(crate) use records::wall_atom;
 pub use values::Config as Values;
 
 /// A VM value. Config text is interned; native text belongs to the file.
@@ -100,10 +101,7 @@ impl V {
     /// The value's text, when it is text or a node.
     fn text<'s>(self, tree: &Tree, source: &'s str) -> Option<&'s str> {
         match self {
-            V::Node(id) | V::Source(id) => {
-                let n = tree.node(id);
-                Some(&source[n.start as usize..n.end as usize])
-            }
+            V::Node(id) | V::Source(id) => Some(tree.text(source, id)),
             V::Str(s) => Some(s),
             _ => None,
         }
@@ -116,6 +114,7 @@ impl V {
             V::Num(n) => n != 0.0,
             V::Node(_) => true,
             V::Source(id) => {
+                tree.read_text(id);
                 let n = tree.node(id);
                 n.end > n.start
             }
@@ -178,10 +177,7 @@ impl V {
                 let n = tree.node(id);
                 Value::Node(id, crate::expr::value::Text::Borrowed(&source[n.start as usize..n.end as usize]))
             }
-            V::Source(id) => {
-                let n = tree.node(id);
-                Value::from(&source[n.start as usize..n.end as usize])
-            }
+            V::Source(id) => Value::Str(crate::expr::value::Text::Read(tree.text(source, id))),
             V::Str(s) => Value::from(s),
             V::List(_) | V::Record(..) | V::Text(_) => unreachable!("file values need their arena"),
         }

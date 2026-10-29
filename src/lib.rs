@@ -13,6 +13,7 @@ pub mod cli;
 pub mod config;
 pub mod engine;
 pub mod expr;
+pub mod footprint;
 pub mod fx_hash;
 pub mod grammar;
 pub mod levers;

@@ -4,7 +4,9 @@ use crate::grammar::{Tree, ROOT};
 impl NodeSel {
     pub(crate) fn descendants<'a>(&self, tree: &'a Tree, node: u32) -> impl Iterator<Item = u32> + 'a {
         let indexed = (!self.kinds.is_empty()).then(|| tree.descendant_nodes(node, &self.kinds, self.field)).flatten();
-        let fallback = (indexed.is_none() && !self.kinds.is_empty()).then(|| self.walk(tree, node));
+        // The walk reads what the indexed search records itself
+        // ([`Tree::descendant_nodes`]), not each node it passes.
+        let fallback = (indexed.is_none() && !self.kinds.is_empty()).then(|| crate::footprint::quiet(|| self.walk(tree, node)));
         indexed.into_iter().flatten().chain(fallback.into_iter().flatten())
     }
 

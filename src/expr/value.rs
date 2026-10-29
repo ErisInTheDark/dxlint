@@ -23,9 +23,12 @@ pub enum Value<'s> {
 
 /// Text of a value: borrowed from the linted file, or shared, so copying a
 /// value (a memoised fact's `space_before.text`) never copies the text.
+/// `Read` text is borrowed too, but reading it was recorded already
+/// ([`crate::footprint`]): a node's text, recorded as the node's.
 #[derive(Clone)]
 pub enum Text<'s> {
     Borrowed(&'s str),
+    Read(&'s str),
     Shared(Arc<str>),
 }
 
@@ -33,7 +36,7 @@ impl std::ops::Deref for Text<'_> {
     type Target = str;
     fn deref(&self) -> &str {
         match self {
-            Text::Borrowed(s) => s,
+            Text::Borrowed(s) | Text::Read(s) => s,
             Text::Shared(s) => s,
         }
     }
@@ -60,17 +63,32 @@ impl From<String> for Text<'_> {
 impl<'s> Text<'s> {
     /// `part` must be a subslice of this text. Only source text can stay borrowed.
     pub(super) fn subslice(&self, part: &str) -> Self {
-        let Text::Borrowed(source) = self else {
+        let (Text::Borrowed(source) | Text::Read(source)) = self else {
             return part.to_string().into();
         };
         let start = (part.as_ptr() as usize).checked_sub(source.as_ptr() as usize).expect("text subslice precedes source");
         let end = start.checked_add(part.len()).expect("text subslice overflow");
-        Text::Borrowed(source.get(start..end).expect("text subslice outside source"))
+        let part = source.get(start..end).expect("text subslice outside source");
+        match self {
+            Text::Read(_) => Text::Read(part),
+            _ => Text::Borrowed(part),
+        }
+    }
+
+    /// The text, its reading recorded ([`crate::footprint::source_text`]).
+    #[inline]
+    pub fn read(&self) -> &str {
+        if let Text::Borrowed(s) = self { crate::footprint::source_text(s) }
+        self
     }
 
     fn into_static(self) -> Text<'static> {
         match self {
-            Text::Borrowed(s) => Text::Shared(s.into()),
+            Text::Borrowed(s) => {
+                crate::footprint::source_text(s);
+                Text::Shared(s.into())
+            }
+            Text::Read(s) => Text::Shared(s.into()),
             Text::Shared(s) => Text::Shared(s),
         }
     }
@@ -102,6 +120,13 @@ impl fmt::Debug for Text<'_> {
 
 /// Literal keys borrow; compiled names share their allocation across evaluations.
 pub type Key = Text<'static>;
+
+/// Node `id`'s `text`, read ([`crate::footprint::value_text`]).
+#[inline]
+fn node_text<'t>(id: u32, text: &'t Text<'_>) -> &'t str {
+    crate::footprint::value_text(id, text);
+    text
+}
 
 impl<'s> Value<'s> {
     pub fn list(items: Vec<Value<'s>>) -> Self {
@@ -149,7 +174,7 @@ impl<'s> Value<'s> {
 
     pub fn nonempty(self) -> Self {
         match &self {
-            Value::Str(text) if text.is_empty() => Value::Null,
+            Value::Str(text) if text.read().is_empty() => Value::Null,
             Value::List(items) if items.is_empty() => Value::Null,
             Value::Record(entries) if entries.is_empty() => Value::Null,
             _ => self,
@@ -159,7 +184,8 @@ impl<'s> Value<'s> {
     /// A node as the text it stands for (outside `.x` reads and `is`).
     fn as_text(&self) -> Option<&str> {
         match self {
-            Value::Str(s) | Value::Node(_, s) => Some(s),
+            Value::Str(s) => Some(s.read()),
+            Value::Node(id, s) => Some(node_text(*id, s)),
             _ => None,
         }
     }
@@ -173,8 +199,39 @@ impl<'s> Value<'s> {
             Value::Str(s) => Value::Str(s.into_static()),
             Value::List(items) => Value::List(items.iter().cloned().map(Value::into_static).collect()),
             Value::Record(entries) => Value::Record(entries.iter().map(|(k, v)| (k.clone(), v.clone().into_static())).collect()),
-            Value::Node(id, s) => Value::Node(id, s.into_static()),
+            // A node's text is read (as the node's) where it is used.
+            Value::Node(id, s) => Value::Node(id, Text::Shared(Arc::from(&*s))),
         }
+    }
+
+    /// A hash of what the value says to its readers: nodes by identity (a
+    /// reader of a node's text records that read itself), text unrecorded.
+    pub fn fingerprint(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        fn feed(value: &Value, state: &mut std::collections::hash_map::DefaultHasher) {
+            std::mem::discriminant(value).hash(state);
+            match value {
+                Value::Null => {}
+                Value::Bool(b) => b.hash(state),
+                Value::Num(n) => n.to_bits().hash(state),
+                Value::Str(s) => (**s).hash(state),
+                Value::List(items) => {
+                    items.len().hash(state);
+                    for item in items.iter() { feed(item, state) }
+                }
+                Value::Record(entries) => {
+                    entries.len().hash(state);
+                    for (key, value) in entries.iter() {
+                        (**key).hash(state);
+                        feed(value, state);
+                    }
+                }
+                Value::Node(id, _) => id.hash(state),
+            }
+        }
+        let mut state = std::collections::hash_map::DefaultHasher::new();
+        feed(self, &mut state);
+        state.finish()
     }
 
     /// A record's value for `key` (null when missing, or not a record).
@@ -189,7 +246,8 @@ impl<'s> Value<'s> {
     pub fn literal(&self) -> String {
         match self {
             Value::Null => "null".into(),
-            Value::Str(s) | Value::Node(_, s) => format!("{:?}", &**s),
+            Value::Str(s) => format!("{:?}", s.read()),
+            Value::Node(id, s) => format!("{:?}", node_text(*id, s)),
             Value::List(items) => format!("[{}]", items.iter().map(Value::literal).collect::<Vec<_>>().join(", ")),
             Value::Record(entries) => {
                 if entries.is_empty() {
@@ -207,12 +265,21 @@ impl<'s> Value<'s> {
         match self {
             Value::Null => true,
             Value::Bool(_) | Value::Num(_) | Value::Record(_) => false,
-            Value::Str(s) | Value::Node(_, s) => s.is_empty(),
+            Value::Str(s) => s.read().is_empty(),
+            Value::Node(id, s) => node_text(*id, s).is_empty(),
             Value::List(items) => match &items[..] {
                 [] => true,
                 [item] => item.text_is_empty(),
                 _ => false,
             },
+        }
+    }
+
+    /// [`Self::text`] for slicing it: only the part kept is read (when used).
+    pub(super) fn text_unread(&self) -> Cow<'_, str> {
+        match self {
+            Value::Str(s) | Value::Node(_, s) => Cow::Borrowed(s),
+            _ => self.text(),
         }
     }
 
@@ -228,7 +295,11 @@ impl<'s> Value<'s> {
     /// A part returned by `self.text()`, retaining file-source ownership only.
     pub(super) fn text_part(&self, part: &str) -> Self {
         match self {
-            Value::Str(text) | Value::Node(_, text) => Value::Str(text.subslice(part)),
+            Value::Str(text) => Value::Str(text.subslice(part)),
+            Value::Node(id, text) => {
+                node_text(*id, text);
+                Value::Str(text.subslice(part))
+            }
             _ => Value::from(part.to_string()),
         }
     }
@@ -241,7 +312,11 @@ impl<'s> Value<'s> {
         match self {
             Value::Num(n) => Ok(*n),
             Value::Bool(b) => Ok(f64::from(u8::from(*b))),
-            Value::Str(s) | Value::Node(_, s) => s.trim().parse().map_err(|_| format!("expected a number, got \"{s}\"")),
+            Value::Str(s) => s.read().trim().parse().map_err(|_| format!("expected a number, got \"{s}\"")),
+            Value::Node(id, s) => {
+                let s = node_text(*id, s);
+                s.trim().parse().map_err(|_| format!("expected a number, got \"{s}\""))
+            }
             Value::Null => Ok(0.0),
             Value::List(_) => Err("expected a number, got a list".into()),
             Value::Record(_) => Err("expected a number, got a record".into()),
@@ -273,9 +348,9 @@ impl<'s> Value<'s> {
             (Value::Node(a, _), Value::Node(b, _)) => a == b,
             // A node is present even when its text is empty (an array hole).
             (Value::Node(..), Value::Null) | (Value::Null, Value::Node(..)) => false,
-            (Value::Node(_, s), v) | (v, Value::Node(_, s)) => Value::Str(Text::Borrowed(s)).loose_eq(v),
-            (Value::Num(a), Value::Str(s)) | (Value::Str(s), Value::Num(a)) => s.trim().parse::<f64>().is_ok_and(|b| b == *a),
-            (Value::Str(a), Value::Str(b)) => a == b,
+            (Value::Node(id, s), v) | (v, Value::Node(id, s)) => Value::Str(Text::Read(node_text(*id, s))).loose_eq(v),
+            (Value::Num(a), Value::Str(s)) | (Value::Str(s), Value::Num(a)) => s.read().trim().parse::<f64>().is_ok_and(|b| b == *a),
+            (Value::Str(a), Value::Str(b)) => a.read() == b.read(),
             (Value::List(a), Value::List(b)) => a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| x.loose_eq(y)),
             (Value::Record(a), Value::Record(b)) => {
                 a.len() == b.len() && a.iter().all(|(k, v)| b.iter().any(|(k2, v2)| k == k2 && v.loose_eq(v2)))
@@ -304,7 +379,8 @@ impl fmt::Display for Value<'_> {
             Value::Bool(b) => write!(f, "{b}"),
             Value::Num(n) if n.fract() == 0.0 && n.abs() < 1e15 => write!(f, "{}", *n as i64),
             Value::Num(n) => write!(f, "{n}"),
-            Value::Str(s) | Value::Node(_, s) => f.write_str(s),
+            Value::Str(s) => f.write_str(s.read()),
+            Value::Node(id, s) => f.write_str(node_text(*id, s)),
             Value::List(items) => {
                 for (i, item) in items.iter().enumerate() {
                     if i > 0 {

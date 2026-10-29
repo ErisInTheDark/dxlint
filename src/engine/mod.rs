@@ -228,8 +228,12 @@ pub const WORKER_STACK: usize = 64 << 20;
 
 pub struct Linter {
     invalidation: std::sync::atomic::AtomicU64,
-    /// The recent invalidations, oldest first: (revision after it, files).
-    invalidated: std::sync::Mutex<std::collections::VecDeque<(u64, Vec<PathBuf>)>>,
+    /// The recent invalidations, oldest first: (revision after it, files,
+    /// and per file whether it existed before as it does now).
+    invalidated: std::sync::Mutex<std::collections::VecDeque<(u64, Vec<PathBuf>, Vec<bool>)>>,
+    /// Whether each invalidated file existed when it was last invalidated:
+    /// an edit of a file that stays changes no directory listing.
+    existed: std::sync::Mutex<crate::fx_hash::FxHashMap<PathBuf, bool>>,
     units: std::sync::Mutex<crate::fx_hash::FxHashMap<PathBuf, std::sync::Arc<units::Unit>>>,
     discoveries: std::sync::Mutex<crate::fx_hash::FxHashMap<crate::grammar::names::modules::resolution::DiscoveryRequest, reads::Cached<Option<Vec<PathBuf>>>>>,
     programs: program::Programs,
@@ -279,10 +283,16 @@ static NO_INDENTS: crate::expr::IndentPlan = crate::expr::IndentPlan::EMPTY;
 /// shared answer's reads, and each scan's file list and test.
 pub struct Stale {
     changed: Vec<PathBuf>,
-    /// The changed files and every directory holding one: a build or a
-    /// checkout changes thousands of files at once.
+    /// The changed files that appeared or disappeared (or may have): only
+    /// they change existence checks and directory listings.
+    listed: Vec<PathBuf>,
+    /// The changed files and every directory holding a listed one: a build
+    /// or a checkout changes thousands of files at once.
     files: crate::fx_hash::FxHashSet<PathBuf>,
     holding: crate::fx_hash::FxHashSet<PathBuf>,
+    /// The changed and listed files' names, as [`reads::Names`] blooms.
+    changed_names: u64,
+    listed_names: u64,
     /// Per group of reads (kept, so its address stays its key): whether it
     /// holds.
     groups: RefCell<crate::fx_hash::FxHashMap<*const Reads, (std::sync::Arc<Reads>, bool)>>,
@@ -295,11 +305,18 @@ pub struct Stale {
 }
 
 impl Stale {
-    fn new(changed: &[PathBuf]) -> Self {
+    /// `stayed[i]`: `changed[i]` existed before as it does now.
+    fn new(changed: &[PathBuf], stayed: &[bool]) -> Self {
+        let listed: Vec<PathBuf> = changed.iter().zip(stayed.iter().chain(std::iter::repeat(&false)))
+            .filter(|(_, &stayed)| !stayed).map(|(path, _)| path.clone()).collect();
+        let names = |paths: &[PathBuf]| paths.iter().fold(0, |bloom, path| bloom | reads::Names::bit(path));
         Stale {
             changed: changed.to_vec(),
             files: changed.iter().cloned().collect(),
-            holding: changed.iter().flat_map(|path| path.ancestors()).map(Path::to_path_buf).collect(),
+            holding: listed.iter().flat_map(|path| path.ancestors()).map(Path::to_path_buf).collect(),
+            changed_names: names(changed),
+            listed_names: names(&listed),
+            listed,
             groups: Default::default(),
             touched: Default::default(),
             verdicts: Default::default(),
@@ -309,9 +326,21 @@ impl Stale {
 
     /// [`Dep::touches`] for any changed file.
     fn touches(&self, dep: &Dep) -> bool {
+        let path = dep.path();
+        // An editor's few changed files: the file name rules out nearly
+        // every other path before whole paths are compared or hashed.
+        if self.changed.len() <= 4 {
+            let name = path.file_name();
+            return match dep {
+                Dep::Text(..) | Dep::Outside(..) => self.changed.iter().any(|changed| changed.file_name() == name && changed == path),
+                Dep::IsFile(..) => self.listed.iter().any(|changed| changed.file_name() == name && changed == path),
+                _ => self.listed.iter().any(|changed| changed.starts_with(path)),
+            };
+        }
         match dep {
-            Dep::Text(..) | Dep::IsFile(..) | Dep::Outside(..) => self.files.contains(dep.path()),
-            _ => self.holding.contains(dep.path()),
+            Dep::Text(..) | Dep::Outside(..) => self.files.contains(path),
+            Dep::IsFile(..) => self.listed.iter().any(|changed| changed == path),
+            _ => self.holding.contains(path),
         }
     }
 
@@ -319,6 +348,8 @@ impl Stale {
     /// changed files with `held`; `passes` answers a scan's test for one
     /// of them.
     fn holds(&self, reads: &Reads, held: &impl Fn(&Dep) -> bool, passes: &impl Fn(&Path, &reads::ScanTest) -> bool) -> bool {
+        let names = reads.names();
+        if names.texts & self.changed_names == 0 && names.files & self.listed_names == 0 && !(names.dirs && !self.listed.is_empty()) { return true }
         reads.deps.iter().all(|dep| !self.touches(dep) || self.dep_holds(dep, held))
             && reads.scans.iter().all(|scan| self.scan_holds(scan, |path| passes(path, &scan.test)))
             && reads.groups.iter().all(|group| {
@@ -412,38 +443,44 @@ impl Linter {
         let revision = self.invalidation.load(std::sync::atomic::Ordering::Acquire);
         let mut stale: crate::fx_hash::FxHashMap<u64, Option<Stale>> = Default::default();
         let mut programs = previous.carry(revision, &mut |at, reads, path| {
-            let Some(stale) = stale.entry(at).or_insert_with(|| self.changed_since(at).map(|changed| Stale::new(&changed))) else { return false };
-            path.is_none_or(|path| !stale.holding.contains(path)) && reads.is_none_or(|reads| !self.is_stale(stale, reads))
+            let Some(stale) = stale.entry(at).or_insert_with(|| self.changed_since(at).map(|changed| {
+                let (paths, stayed): (Vec<_>, Vec<_>) = changed.into_iter().unzip();
+                Stale::new(&paths, &stayed)
+            })) else { return false };
+            path.is_none_or(|path| !stale.files.contains(path) && !stale.holding.contains(path)) && reads.is_none_or(|reads| !self.is_stale(stale, reads))
         });
         programs.editor.get_or_insert_with(Default::default);
         LintRun { linter: self, programs, rule_jobs: self.rule_jobs }
     }
 
-    /// The editor's memory of `path` and the bodies (bits) whose answers it
-    /// must drop, when nothing but an edit of `path` inside one of its
-    /// bodies came since: no other file changed, and `text` differs from
-    /// the remembered text only inside one body that still parses as one.
-    fn editor_memory(&self, programs: &program::Snapshot, path: &Path, text: &str) -> Option<(editing::FileMemory, editing::Edited)> {
+    /// The editor's memory of `path`, when nothing but edits of `path`
+    /// came since its last lint, and its tree's ids are still mostly in use.
+    fn editor_memory(&self, programs: &program::Snapshot, path: &Path) -> Option<editing::FileMemory> {
         let memory = programs.editor.as_ref()?.take(path)?;
         let changed = self.changed_since(memory.revision)?;
-        if changed.iter().any(|changed| changed != path) { return None }
-        if *memory.text == *text { return Some((memory, (0, None))) }
-        let before = memory.bodies.as_ref()?;
-        let (start, end) = before.edit(Some(text))??;
-        let index = before.body_at(start)?;
-        let unit = self.unit_quiet(path, Some(programs)).1.filter(|unit| &*unit.text == text)?;
-        let now = self.bodies(&unit)?;
-        if now.len() != before.len() || now.body_at(start) != Some(index) || !now.spans().any(|span| span == (start, end)) { return None }
-        Some((memory, (crate::grammar::names::memo::body(index), Some((start, end)))))
+        if changed.iter().any(|(changed, _)| changed != path) || editing::sparse(&memory.tree) { return None }
+        Some(memory)
     }
 
     /// Every file invalidated after `revision`, unless some of those
     /// invalidations are no longer kept.
-    fn changed_since(&self, revision: u64) -> Option<Vec<PathBuf>> {
+    /// Each with whether it existed throughout (its edits changed no
+    /// directory listing).
+    fn changed_since(&self, revision: u64) -> Option<Vec<(PathBuf, bool)>> {
         let invalidated = self.invalidated.lock().expect("invalidations");
         let now = self.invalidation.load(std::sync::atomic::Ordering::Acquire);
-        let newer: Vec<&(u64, Vec<PathBuf>)> = invalidated.iter().filter(|(after, _)| *after > revision).collect();
-        (newer.len() as u64 == now.saturating_sub(revision)).then(|| newer.into_iter().flat_map(|(_, paths)| paths.iter().cloned()).collect())
+        let newer: Vec<_> = invalidated.iter().filter(|(after, ..)| *after > revision).collect();
+        if newer.len() as u64 != now.saturating_sub(revision) { return None }
+        let mut changed: Vec<(PathBuf, bool)> = Vec::new();
+        for (_, paths, stayed) in newer {
+            for (path, &stayed) in paths.iter().zip(stayed) {
+                match changed.iter_mut().find(|(seen, _)| seen == path) {
+                    Some((_, all)) => *all &= stayed,
+                    None => changed.push((path.clone(), stayed)),
+                }
+            }
+        }
+        Some(changed)
     }
 
     pub(crate) fn reset_runtime(&mut self) {
@@ -704,7 +741,7 @@ impl Linter {
     /// text still parses as a body spanning exactly the edit.
     fn outside_holds(&self, path: &Path, bodies: &reads::Bodies) -> bool {
         let (text, _) = reads::read_unrecorded(path);
-        match bodies.edit(text.as_deref()) {
+        match bodies.edit(text.as_ref()) {
             Some(None) => true,
             Some(Some(edited)) => self.unit_quiet(path, None).1.is_some_and(|unit| text.as_deref() == Some(&*unit.text)
                 && self.bodies(&unit).is_some_and(|now| now.spans().any(|span| span == edited))),
@@ -731,15 +768,23 @@ impl Linter {
     /// Forgets what the `changed` files said; [`Linter::is_stale`] then
     /// tells which recorded deps they broke.
     pub fn invalidate(&self, changed: &[PathBuf]) -> Stale {
+        let stayed: Vec<bool> = {
+            let mut existed = self.existed.lock().expect("existence");
+            changed.iter().map(|path| {
+                let exists = reads::exists_unrecorded(path);
+                existed.insert(path.clone(), exists) == Some(exists)
+            }).collect()
+        };
         self.units.lock().expect("unit cache").retain(|path, _| !changed.contains(path));
-        self.discoveries.lock().expect("unit discoveries").retain(|request, _| !changed.iter().any(|path| path.starts_with(&request.root)));
+        self.discoveries.lock().expect("unit discoveries")
+            .retain(|request, _| !changed.iter().zip(&stayed).any(|(path, &stayed)| !stayed && path.starts_with(&request.root)));
         {
             let mut invalidated = self.invalidated.lock().expect("invalidations");
             let revision = self.invalidation.fetch_add(1, std::sync::atomic::Ordering::AcqRel) + 1;
-            invalidated.push_back((revision, changed.to_vec()));
+            invalidated.push_back((revision, changed.to_vec(), stayed.clone()));
             if invalidated.len() > INVALIDATIONS_KEPT { invalidated.pop_front(); }
         }
-        Stale::new(changed)
+        Stale::new(changed, &stayed)
     }
 
     /// Whether the `stale` files broke something `reads` read; only those
@@ -874,19 +919,29 @@ impl Linter {
                     let rules_started = std::time::Instant::now();
                     let groups = self.rule_groups(&active, text.len(), rule_jobs);
                     // An editor's lint starts from the last one of this file
-                    // when only an edit inside one of its bodies came between.
-                    let (mut carries, forget) = match self.editor_memory(programs, path, text) {
-                        Some((memory, forget)) if memory.groups.len() == groups.len() => {
-                            tree = tree.renumbered_after(&memory.tree, editing::changed_span(&memory.text, text));
-                            (memory.groups, forget)
+                    // when only an edit of it came between: the tree keeps
+                    // its ids, and every read records what it read.
+                    let mut carries: Vec<_> = (0..groups.len()).map(|_| None).collect();
+                    let mut dirty = crate::footprint::Dirty::default();
+                    if programs.editor.is_some() {
+                        match self.editor_memory(programs, path).filter(|memory| memory.groups.len() == groups.len()) {
+                            Some(memory) => {
+                                let edit = editing::changed_span(&memory.text, text);
+                                tree = tree.renumbered_after(&memory.tree, edit);
+                                tree.track();
+                                if let Some(changed) = tree.changed_since(&memory.tree, edit) {
+                                    if *memory.text != *text { dirty = changed }
+                                    carries = memory.groups;
+                                }
+                            }
+                            None => tree.track(),
                         }
-                        _ => ((0..groups.len()).map(|_| None).collect(), (0, None)),
-                    };
+                    }
                     let mut kept = Vec::with_capacity(groups.len());
                     if groups.len() <= 1 {
                         let facts = self.native_facts(index, &tree, &run, (path, &rel), parsed.state);
                         let carry = carries.get_mut(0).and_then(Option::take);
-                        let (world, own) = reads::track(|| self.check_tree(&tree, &run, programs, Some(&*facts), &mut out, carry, forget));
+                        let (world, own) = reads::track(|| self.check_tree(&tree, &run, programs, Some(&*facts), &mut out, carry, dirty));
                         let own = std::sync::Arc::new(own);
                         reads::note_group(&own);
                         kept.push(world.map(|world| (world, own)));
@@ -904,6 +959,7 @@ impl Linter {
                                     let state = parsed.state.clone();
                                     let run = Run { active: mask, ..run };
                                     let carry = editing::Handed(carry.take());
+                                    let dirty = dirty.clone();
                                     // Reads are tracked per thread: pass them on.
                                     std::thread::Builder::new().stack_size(WORKER_STACK).spawn_scoped(s, move || {
                                         let _pool = crate::alloc::own_pool();
@@ -911,7 +967,7 @@ impl Linter {
                                         let ((part, world), reads) = reads::track(|| {
                                             let facts = self.native_facts(index, tree, &run, (path, rel), state);
                                             let mut part = Vec::new();
-                                            let world = self.check_tree(tree, &run, programs, Some(&*facts), &mut part, carry.0, forget);
+                                            let world = self.check_tree(tree, &run, programs, Some(&*facts), &mut part, carry.0, dirty);
                                             (part, world)
                                         });
                                         let reads = std::sync::Arc::new(reads);
@@ -936,15 +992,8 @@ impl Linter {
                     }
                     if let Some(memories) = &programs.editor {
                         let fit = kept.iter().all(|group| group.as_ref().is_some_and(|(_, reads)| !editing::overgrown(reads)));
-                        let unit = self.unit_quiet(path, Some(programs)).1.filter(|unit| &*unit.text == text);
-                        if fit {
-                            memories.keep(path.to_path_buf(), editing::FileMemory {
-                                text: text.into(),
-                                bodies: unit.as_ref().and_then(|unit| self.bodies(unit)),
-                                tree,
-                                revision: lint_revision,
-                                groups: kept,
-                            });
+                        if fit && tree.regions().is_some() {
+                            memories.keep(path.to_path_buf(), editing::FileMemory { text: text.into(), tree, revision: lint_revision, groups: kept });
                         }
                     }
                     pattern_tree = false;
@@ -962,7 +1011,7 @@ impl Linter {
             let run = Run { active: fallback_active.as_deref().unwrap_or(&active), ..run };
             let tree = self.parse(path, text, units::ParsePlan { lang, front: None, layers: true, overlays: &overlays, child_layers: false, tokens: &[] }).expect("pattern parse").tree;
             let rules_started = std::time::Instant::now();
-            self.check_tree(&tree, &run, programs, None, &mut out, None, (0, None));
+            self.check_tree(&tree, &run, programs, None, &mut out, None, crate::footprint::Dirty::default());
             if tree.too_deep {
                 out.push(engine_warning(0, "nesting is too deep to follow; some structure in this file was skipped".into()));
             }
@@ -1043,11 +1092,16 @@ impl Linter {
     }
 
     /// Runs every active rule on the nodes of `tree` they target.
-    /// In an editor's run, starts from `carry` (with what an edit inside
-    /// `forget`'s bodies may change dropped) and returns what the next lint
-    /// of the file starts from.
+    /// In an editor's run (the tree tracked), starts from `carry`, keeping
+    /// every answer and node's diagnostics what `dirty` changed leaves
+    /// standing, and returns what the next lint of the file starts from.
     fn check_tree<'a>(&'a self, tree: &'a Tree, run: &Run<'a>, programs: &'a program::Snapshot, native: Option<&'a (dyn Native + 'a)>, out: &mut Vec<Diagnostic>,
-        carry: Option<(editing::WorldCarry, std::sync::Arc<Reads>)>, forget: editing::Edited) -> Option<editing::WorldCarry> {
+        carry: Option<(editing::WorldCarry, std::sync::Arc<Reads>)>, dirty: crate::footprint::Dirty) -> Option<editing::WorldCarry> {
+        crate::footprint::tracking(tree, run.text, || self.check_tracked(tree, run, programs, native, out, carry, dirty))
+    }
+
+    fn check_tracked<'a>(&'a self, tree: &'a Tree, run: &Run<'a>, programs: &'a program::Snapshot, native: Option<&'a (dyn Native + 'a)>, out: &mut Vec<Diagnostic>,
+        carry: Option<(editing::WorldCarry, std::sync::Arc<Reads>)>, mut dirty: crate::footprint::Dirty) -> Option<editing::WorldCarry> {
         let _owner = crate::alloc::heap::Owner::enter(crate::alloc::heap::RULES);
         // Nodes run in document order, so a rule's indentation fix of a line
         // is known before it checks the lines below. Per rule: what one rule
@@ -1057,10 +1111,47 @@ impl Linter {
         let no_reindent = RefCell::default();
         let tree_ctx = self.tree_ctx(run.lang, tree, (run.text, run.lines, run.file), &memo, &no_reindent, native);
         let world = world::LintWorld::in_run(self, run.path, tree_ctx, programs);
-        if let Some((carried, previous)) = carry {
+        let editor = programs.editor.is_some() && tree.regions().is_some();
+        memo.file_vm().set_firewall(editor.then_some(tree.root));
+        let root_ctx = Ctx { node: tree.root, world: Some(&world), ..tree_ctx };
+        let wall_value = |attr: u16| crate::vm::Host::attr(&root_ctx, tree.root, attr).map(|value| value.to_value(&root_ctx, run.text).fingerprint());
+        let mut walls = Vec::new();
+        let mut kept: Vec<Option<editing::NodeResult>> = Vec::new();
+        if let Some((mut carried, previous)) = carry {
             editing::replay(&previous, run.path);
-            world.carry_in(carried, forget);
+            // The names, numbered as before, and what changed in them. Name
+            // conditions read only the tree.
+            let mut conditions = std::mem::take(&mut carried.conditions);
+            conditions.retain(|&(node, _), (_, read)| {
+                let kept = tree.regions().is_some_and(|regions| regions.chunk(node).is_some()) && !read.meets(&dirty);
+                if kept { read.shift(&dirty) }
+                kept
+            });
+            *memo.name_conditions.borrow_mut() = conditions;
+            *memo.previous_names.borrow_mut() = carried.names.take();
+            if let Some(before) = memo.previous_names.borrow().as_deref() {
+                let names = Ctx { world: Some(&world), ..tree_ctx }.names();
+                if !names.same_shape(before) {
+                    dirty.union(&crate::footprint::Dirty::all());
+                } else if let Some(regions) = tree.regions() {
+                    let (changed, uses) = names.changed_since(before);
+                    for node in uses { dirty.add_atom(crate::footprint::Atom::table(crate::footprint::tables::USES, node)) }
+                    for node in changed {
+                        if regions.chunk(node).is_some() { dirty.add(&regions.atom(crate::footprint::Read::Names, node)) }
+                    }
+                }
+            }
+            kept = std::mem::take(&mut carried.results);
+            walls = std::mem::take(&mut carried.walls);
+            world.carry_in(carried, &mut dirty);
+            // A wall the edit reached changes for its readers only when its
+            // value does.
+            for (attr, before, read) in &mut walls {
+                if read.meets(&dirty) && wall_value(*attr) != Some(*before) { dirty.add_atom(crate::vm::wall_atom(*attr)) }
+            }
         }
+        let mut results: Vec<Option<editing::NodeResult>> = Vec::new();
+        if editor { results.resize_with(tree.nodes.len(), || None) }
         // Resolve reachability before dispatch: a reference may select a
         // declaration earlier in the tree, and several owners can reach it.
         let mut linked: crate::fx_hash::FxHashMap<u32, Vec<usize>> = Default::default();
@@ -1112,11 +1203,29 @@ impl Linter {
         for rules in linked.values_mut() { rules.sort_unstable(); }
         for &id in &tree.order {
             let node = tree.node(id);
+            let linked_here = linked.get(&id).cloned().unwrap_or_default();
+            // A node whose diagnostics read nothing the edit changed keeps
+            // them (none of its rules reads indentation fixes above it).
+            if let Some(previous) = kept.get_mut(id as usize).and_then(Option::take) {
+                let found = (previous.linked == linked_here && !previous.read.meets(&dirty))
+                    .then(|| editing::shifted(&previous.found, &dirty)).flatten();
+                if let Some(found) = found {
+                    out.extend(found.iter().cloned());
+                    results[id as usize] = Some(editing::NodeResult { read: previous.read.shifted(&dirty), linked: linked_here, found });
+                    continue;
+                }
+            }
+            let outer = crate::footprint::begin();
+            let before = out.len();
+            let mut applied = false;
+            let mut indented = false;
             let field_rules = tree.label(id).zip(tree.owner(id))
                 .and_then(|(label, owner)| self.by_field.get(&(tree.node(owner).matcher, label)));
             memo.enter_node(id);
             let mut apply = |fi: usize| {
                 if run.active[fi] {
+                    applied = true;
+                    indented |= !self.rules[fi].indents.is_empty();
                     memo.enter_rule(fi as u32);
                     let ctx = Ctx {
                         grammar: &self.grammar,
@@ -1162,19 +1271,33 @@ impl Linter {
             if let Some(list) = field_rules {
                 list.iter().for_each(|&fi| apply(fi));
             }
-            if let Some(list) = linked.get(&id) {
-                for &fi in list {
-                    let direct = match node.matcher {
-                        ROOT => self.by_lang.iter().any(|&(rule, lang)| rule == fi && lang.is_none_or(|lang| lang == run.lang)),
-                        TEXT => false,
-                        m => self.by_matcher[m as usize].contains(&fi),
-                    };
-                    if !direct && field_rules.is_none_or(|rules| !rules.contains(&fi)) { apply(fi); }
-                }
+            for &fi in &linked_here {
+                let direct = match node.matcher {
+                    ROOT => self.by_lang.iter().any(|&(rule, lang)| rule == fi && lang.is_none_or(|lang| lang == run.lang)),
+                    TEXT => false,
+                    m => self.by_matcher[m as usize].contains(&fi),
+                };
+                if !direct && field_rules.is_none_or(|rules| !rules.contains(&fi)) { apply(fi); }
+            }
+            let read = crate::footprint::end(outer);
+            if editor && applied && !indented {
+                results[id as usize] = Some(editing::NodeResult { read, linked: linked_here, found: out[before..].to_vec() });
             }
         }
         self.attrs.report_vm_stats(&memo, tree, run.file);
-        programs.editor.is_some().then(|| world.carry_out())
+        programs.editor.is_some().then(|| {
+            // Walls computed now, with their values; the others as kept.
+            let computed = memo.file_vm().walls();
+            let mut kept_walls: Vec<_> = walls.into_iter().filter(|(attr, ..)| !computed.iter().any(|(now, _)| now == attr))
+                .map(|(attr, value, read)| (attr, value, read.shifted(&dirty))).collect();
+            kept_walls.extend(computed.into_iter().filter_map(|(attr, read)| Some((attr, wall_value(attr)?, read))));
+            let mut carry = world.carry_out();
+            carry.names = memo.names_resolved();
+            carry.conditions = memo.name_conditions.take();
+            carry.results = results;
+            carry.walls = kept_walls;
+            carry
+        })
     }
 
     /// The rule's diagnostics on one node: one, or one per `each` item.

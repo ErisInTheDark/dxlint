@@ -320,46 +320,198 @@ pub struct Names {
 }
 
 /// One tree's resolved names.
+///
+/// For an editor's file ([`Resolved::track`]), every read of a node's
+/// entries is recorded ([`crate::footprint::names`]); scopes keep their
+/// numbers across edits ([`Resolved::renumber_scopes`]).
 #[derive(Default)]
 pub struct Resolved {
     pub complete: bool,
     /// What the class bits and effect indexes below mean.
     pub vocabulary: std::sync::Arc<Vocabulary>,
-    pub keys: FxHashMap<u32, Option<Box<str>>>,
+    pub keys: Table<Option<Box<str>>>,
     pub failures: Vec<(u32, Box<str>)>,
     /// Using name -> the name node that declares it (the first of merged
     /// declarations); a later merged declaration -> the first.
-    pub declaration: FxHashMap<u32, u32>,
+    pub declaration: Table<u32>,
     /// Later declarations of a merged name (`var a; var a;`, `class X` +
     /// `interface X`) -> the first, which owns the binding.
-    pub merged: FxHashMap<u32, u32>,
+    pub merged: Table<u32>,
     /// The first of merged declarations -> the later ones, in order.
-    merged_later: FxHashMap<u32, Vec<u32>>,
+    merged_later: Table<Vec<u32>>,
     /// Declaring name (the first of merged ones) -> using names, in order.
-    pub references: FxHashMap<u32, Vec<u32>>,
+    pub references: Table<Vec<u32>>,
     /// Node an effect targets (and every `targets` node on the way) ->
     /// the effect ([`Names::effects`]) and the node whose evaluation has it.
     /// The first effect on a node wins.
-    pub effects: FxHashMap<u32, (u16, u32)>,
+    pub effects: Table<(u16, u32)>,
     /// Scopes in document order; the first is the outermost opened.
-    pub scopes: Vec<ScopeInfo>,
+    pub scopes: Scopes,
     /// Declared name -> the scope it lands in, the node whose `declares`
     /// item declares it, its classes and whether it is hoisted.
-    pub declared: FxHashMap<u32, (u32, u32, u64, bool)>,
+    pub declared: Table<(u32, u32, u64, bool)>,
     /// Further scopes the same name also lands in, as in `declared` (a
     /// constructor parameter property: a parameter and a class member).
     /// `declared` keeps the first: the name's own lexical binding.
-    pub also_declared: FxHashMap<u32, Vec<(u32, u32, u64, bool)>>,
+    pub also_declared: Table<Vec<(u32, u32, u64, bool)>>,
     /// Semantic descriptors stay separate from declarations' lexical owners.
-    pub bindings: FxHashMap<u32, u32>,
+    pub bindings: Table<u32>,
     /// Implicit declarations (`declares value "arguments"`): node -> names.
-    pub implicit: FxHashMap<u32, Vec<Box<str>>>,
-    pub asked: FxHashMap<u32, ReferenceLookup>,
+    pub implicit: Table<Vec<Box<str>>>,
+    pub asked: Table<ReferenceLookup>,
     /// Declarations by scope and name, built on first ask ([`Resolved::index`]).
     index: std::sync::OnceLock<ScopeIndex>,
     /// Node -> the innermost scope it sits in (its own when it opens one),
     /// `within` fields respected; [`NO_SCOPE`] outside every scope.
     scope_of: Vec<u32>,
+    tracked: bool,
+}
+
+/// One of a tree's name tables, by node: reads of an editor's file record
+/// the node they read the entry of.
+#[derive(Clone, Debug)]
+pub struct Table<V> {
+    entries: FxHashMap<u32, V>,
+    tracked: Tracked,
+}
+
+/// How reads of a [`Table`] are recorded.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Tracked {
+    #[default]
+    No,
+    /// As the names of the chunk holding the node read.
+    Chunk,
+    /// As the node's own entry in table `t` ([`crate::footprint::tables`]):
+    /// for entries edits elsewhere change (a declaration's uses).
+    Own(u8),
+}
+
+impl<V> Default for Table<V> {
+    fn default() -> Self {
+        Self { entries: FxHashMap::default(), tracked: Tracked::No }
+    }
+}
+
+impl<V> Table<V> {
+    #[inline]
+    fn read(&self, node: u32) {
+        match self.tracked {
+            Tracked::No => {}
+            Tracked::Chunk => crate::footprint::names(node),
+            Tracked::Own(table) => crate::footprint::table(table, node),
+        }
+    }
+
+    pub fn get(&self, node: &u32) -> Option<&V> {
+        self.read(*node);
+        self.entries.get(node)
+    }
+
+    pub fn contains_key(&self, node: &u32) -> bool {
+        self.read(*node);
+        self.entries.contains_key(node)
+    }
+
+    pub fn insert(&mut self, node: u32, value: V) -> Option<V> {
+        self.entries.insert(node, value)
+    }
+
+    pub fn entry(&mut self, node: u32) -> std::collections::hash_map::Entry<'_, u32, V> {
+        self.entries.entry(node)
+    }
+
+    pub fn values_mut(&mut self) -> impl Iterator<Item = &mut V> {
+        self.entries.values_mut()
+    }
+
+    pub fn get_mut(&mut self, node: &u32) -> Option<&mut V> {
+        self.entries.get_mut(node)
+    }
+
+    pub fn remove(&mut self, node: &u32) -> Option<V> {
+        self.entries.remove(node)
+    }
+
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
+
+    /// Every entry, unrecorded: for building and comparing tables.
+    pub fn iter(&self) -> impl Iterator<Item = (&u32, &V)> {
+        self.entries.iter()
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+
+impl<V> Extend<(u32, V)> for Table<V> {
+    fn extend<I: IntoIterator<Item = (u32, V)>>(&mut self, entries: I) {
+        self.entries.extend(entries);
+    }
+}
+
+impl Extend<ScopeInfo> for Scopes {
+    fn extend<I: IntoIterator<Item = ScopeInfo>>(&mut self, scopes: I) {
+        self.list.extend(scopes);
+    }
+}
+
+impl<V> std::ops::Index<&u32> for Table<V> {
+    type Output = V;
+    fn index(&self, node: &u32) -> &V {
+        self.get(node).expect("table entry")
+    }
+}
+
+/// A tree's scopes by number: reads of an editor's file record the node
+/// opening the scope read.
+#[derive(Clone, Debug, Default)]
+pub struct Scopes {
+    list: Vec<ScopeInfo>,
+    tracked: bool,
+}
+
+impl Scopes {
+    pub fn get(&self, scope: usize) -> Option<&ScopeInfo> {
+        let info = self.list.get(scope)?;
+        if self.tracked { crate::footprint::names(info.node) }
+        Some(info)
+    }
+
+    pub fn first(&self) -> Option<&ScopeInfo> {
+        self.get(0)
+    }
+
+    pub fn push(&mut self, info: ScopeInfo) {
+        self.list.push(info);
+    }
+
+    /// Every scope, unrecorded: for building and comparing scopes.
+    pub fn iter(&self) -> impl Iterator<Item = &ScopeInfo> {
+        self.list.iter()
+    }
+
+    pub fn len(&self) -> usize {
+        self.list.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.list.is_empty()
+    }
+}
+
+impl std::ops::Index<usize> for Scopes {
+    type Output = ScopeInfo;
+    fn index(&self, scope: usize) -> &ScopeInfo {
+        self.get(scope).expect("scope")
+    }
 }
 
 /// What a name's text means as a key (a language's escapes):
@@ -385,21 +537,32 @@ pub struct ScopeIndex {
     declared: Vec<FxHashMap<Box<str>, Vec<u32>>>,
     /// Node -> the scopes it opens, outermost first.
     opened: FxHashMap<u32, (u32, u32)>,
+    /// For an editor's file: each scope's opening node, whose entries a
+    /// read of the scope's declarations reads.
+    tracked: Option<Vec<u32>>,
 }
 
 impl ScopeIndex {
+    #[inline]
+    fn read(&self, scope: u32) {
+        if let Some(node) = self.tracked.as_ref().and_then(|nodes| nodes.get(scope as usize)) { crate::footprint::names(*node) }
+    }
+
     /// The scopes `node` opens, outermost first.
     pub fn opened(&self, node: u32) -> std::ops::Range<u32> {
+        if self.tracked.is_some() { crate::footprint::names(node) }
         self.opened.get(&node).map_or(0..0, |&(first, end)| first..end)
     }
 
     /// What declares `key` in `scope`, in document order.
     pub fn declared(&self, scope: u32, key: &str) -> &[u32] {
+        self.read(scope);
         self.declared.get(scope as usize).and_then(|names| names.get(key)).map_or(&[], Vec::as_slice)
     }
 
     /// Every name declared in `scope`, with its declarations.
     pub fn names(&self, scope: u32) -> impl Iterator<Item = (&str, &[u32])> {
+        self.read(scope);
         self.declared.get(scope as usize).into_iter().flat_map(|names| names.iter().map(|(key, decls)| (&**key, decls.as_slice())))
     }
 }
@@ -1279,7 +1442,124 @@ impl Resolved {
     /// respecting `within`. Names are syntax-only, so this holds in every
     /// generic frame.
     pub fn scope_of(&self, node: u32) -> Option<u32> {
+        if self.tracked { crate::footprint::names(node) }
         self.scope_of.get(node as usize).copied().filter(|&s| s != NO_SCOPE)
+    }
+
+    /// Records reads of these names from now on: an editor's file.
+    pub fn track(&mut self) {
+        self.tracked = true;
+        self.keys.tracked = Tracked::Chunk;
+        self.declaration.tracked = Tracked::Chunk;
+        self.merged.tracked = Tracked::Chunk;
+        self.merged_later.tracked = Tracked::Chunk;
+        self.references.tracked = Tracked::Own(crate::footprint::tables::USES);
+        self.effects.tracked = Tracked::Chunk;
+        self.scopes.tracked = true;
+        self.declared.tracked = Tracked::Chunk;
+        self.also_declared.tracked = Tracked::Chunk;
+        self.bindings.tracked = Tracked::Chunk;
+        self.implicit.tracked = Tracked::Chunk;
+        self.asked.tracked = Tracked::Chunk;
+    }
+
+    /// Renumbers the scopes so each one `previous` (the names of the tree
+    /// before an edit, renumbered alike) also has keeps its number: the
+    /// scopes a kept node opens, when it opens as many. Other scopes take
+    /// new numbers; numbers no scope takes stay as empty scopes nothing
+    /// reaches.
+    pub fn renumber_scopes(&mut self, previous: &Resolved) {
+        let opened_by = |scopes: &[ScopeInfo]| {
+            let mut by: FxHashMap<u32, Vec<u32>> = FxHashMap::default();
+            for (i, scope) in scopes.iter().enumerate().filter(|(_, scope)| scope.node != NO_SCOPE) { by.entry(scope.node).or_default().push(i as u32) }
+            by
+        };
+        let (before, now) = (opened_by(&previous.scopes.list), opened_by(&self.scopes.list));
+        let mut to = vec![NO_SCOPE; self.scopes.list.len()];
+        for (node, scopes) in &now {
+            if let Some(old) = before.get(node).filter(|old| old.len() == scopes.len()) {
+                for (&new, &old) in scopes.iter().zip(old) { to[new as usize] = old }
+            }
+        }
+        let mut next = previous.scopes.list.len() as u32;
+        for slot in to.iter_mut().filter(|slot| **slot == NO_SCOPE) {
+            *slot = next;
+            next += 1;
+        }
+        if to.iter().enumerate().all(|(i, &s)| s == i as u32) && next as usize == self.scopes.list.len() { return }
+        let mut list = vec![ScopeInfo { node: NO_SCOPE, classes: 0, parent: None }; next as usize];
+        for (i, scope) in self.scopes.list.drain(..).enumerate() {
+            list[to[i] as usize] = ScopeInfo { parent: scope.parent.map(|p| to[p as usize]), ..scope };
+        }
+        self.scopes.list = list;
+        let map = |scope: &mut u32| *scope = to[*scope as usize];
+        self.declared.values_mut().for_each(|(scope, ..)| map(scope));
+        self.also_declared.values_mut().flatten().for_each(|(scope, ..)| map(scope));
+        self.asked.values_mut().for_each(|lookup| map(&mut lookup.scope));
+        self.scope_of.iter_mut().filter(|scope| **scope != NO_SCOPE).for_each(map);
+    }
+
+    /// What differs between `self` and `previous` (the names of the tree
+    /// before an edit, scopes renumbered alike): the nodes whose entries
+    /// differ (every read of them may differ), and the declarations whose
+    /// uses differ (read as their own atoms, [`Table`]).
+    pub fn changed_since(&self, previous: &Resolved) -> (Vec<u32>, Vec<u32>) {
+        fn table<V: PartialEq>(now: &Table<V>, before: &Table<V>, out: &mut Vec<u32>) {
+            out.extend(now.entries.iter().filter(|(node, value)| before.entries.get(node) != Some(value)).map(|(&node, _)| node));
+            out.extend(before.entries.keys().filter(|node| !now.entries.contains_key(node)));
+        }
+        let mut uses = Vec::new();
+        table(&self.references, &previous.references, &mut uses);
+        let mut out = Vec::new();
+        table(&self.keys, &previous.keys, &mut out);
+        table(&self.declaration, &previous.declaration, &mut out);
+        table(&self.merged, &previous.merged, &mut out);
+        table(&self.merged_later, &previous.merged_later, &mut out);
+        table(&self.effects, &previous.effects, &mut out);
+        table(&self.bindings, &previous.bindings, &mut out);
+        table(&self.implicit, &previous.implicit, &mut out);
+        table(&self.asked, &previous.asked, &mut out);
+        // A declaration's entry, and the scope it lands in (whose
+        // declarations a lookup reads).
+        let mut scopes = Vec::new();
+        for (declared, other) in [(&self.declared, &previous.declared), (&previous.declared, &self.declared)] {
+            for (&node, value) in declared.entries.iter().filter(|(node, value)| other.entries.get(node) != Some(value)) {
+                out.push(node);
+                scopes.push(value.0);
+            }
+        }
+        for (also, other) in [(&self.also_declared, &previous.also_declared), (&previous.also_declared, &self.also_declared)] {
+            for (&node, values) in also.entries.iter().filter(|(node, values)| other.entries.get(node) != Some(values)) {
+                out.push(node);
+                scopes.extend(values.iter().map(|value| value.0));
+            }
+        }
+        let count = self.scopes.list.len().max(previous.scopes.list.len());
+        for scope in 0..count {
+            let (now, before) = (self.scopes.list.get(scope), previous.scopes.list.get(scope));
+            let same = match (now, before) {
+                (Some(a), Some(b)) => a.node == b.node && a.classes == b.classes && a.parent == b.parent,
+                (None, None) => true,
+                _ => false,
+            };
+            if !same { scopes.push(scope as u32) }
+        }
+        for scope in scopes {
+            for list in [&self.scopes.list, &previous.scopes.list] {
+                if let Some(info) = list.get(scope as usize).filter(|info| info.node != NO_SCOPE) { out.push(info.node) }
+            }
+        }
+        let nodes = self.scope_of.len().max(previous.scope_of.len());
+        out.extend((0..nodes).filter(|&node| self.scope_of.get(node) != previous.scope_of.get(node)).map(|node| node as u32));
+        out.sort_unstable();
+        out.dedup();
+        (out, uses)
+    }
+
+    /// Whether every read of these names reads alike in `previous`'s:
+    /// the whole tables, not one entry.
+    pub fn same_shape(&self, previous: &Resolved) -> bool {
+        self.complete == previous.complete && self.failures == previous.failures
     }
 
     pub fn lookup_scopes(&self, lookup: ReferenceLookup) -> impl Iterator<Item = u32> + '_ {
@@ -1290,9 +1570,11 @@ impl Resolved {
     /// The tree's declarations by scope and name. `key` must be the file's
     /// name key: the index is built once, with the first caller's.
     pub fn index(&self, tree: &Tree, text: &str, key: &NameKey<'_>) -> &ScopeIndex {
-        self.index.get_or_init(|| {
-            let mut index = ScopeIndex { declared: vec![FxHashMap::default(); self.scopes.len()], opened: FxHashMap::default() };
-            for (i, scope) in self.scopes.iter().enumerate() {
+        // Readers record the scopes they read, not the whole build.
+        self.index.get_or_init(|| crate::footprint::quiet(|| {
+            let tracked = self.tracked.then(|| self.scopes.iter().map(|scope| scope.node).collect());
+            let mut index = ScopeIndex { declared: vec![FxHashMap::default(); self.scopes.len()], opened: FxHashMap::default(), tracked };
+            for (i, scope) in self.scopes.iter().enumerate().filter(|(_, scope)| scope.node != NO_SCOPE) {
                 let i = i as u32;
                 index.opened.entry(scope.node).or_insert((i, i)).1 = i + 1;
             }
@@ -1317,7 +1599,7 @@ impl Resolved {
                 names.values_mut().for_each(|decls| decls.sort_by_key(|&d| (tree.node(d).start, d)));
             }
             index
-        })
+        }))
     }
 
     /// How `name` is declared in `scope` (`declared` or one of

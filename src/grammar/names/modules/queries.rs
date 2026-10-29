@@ -19,15 +19,19 @@ enum Request {
     Global(u32, Box<str>, u64),
 }
 
+/// Each kept answer also keeps what working it out read of the editor's
+/// file ([`crate::footprint`]), handed to every later reader.
 #[derive(Default)]
 pub(crate) struct State {
     /// Kept answers and whether working them out read the linted file;
     /// `None` while one is being computed.
-    answers: RefCell<BTreeMap<Request, Option<(Answer, bool)>>>,
-    star_filters: RefCell<BTreeMap<(ScopeRef, Box<str>), Known<bool>>>,
-    publications: RefCell<BTreeMap<ScopeRef, bool>>,
+    answers: RefCell<BTreeMap<Request, Option<(Answer, bool, Footprint)>>>,
+    star_filters: RefCell<BTreeMap<(ScopeRef, Box<str>), (Known<bool>, Footprint)>>,
+    publications: RefCell<BTreeMap<ScopeRef, (bool, Footprint)>>,
     graph: Memo,
 }
+
+use crate::footprint::Footprint;
 
 /// Module queries timed in `--profile` (inclusive, nested calls overlap).
 pub(crate) const PROFILE_QUERIES: &[&str] = &[
@@ -309,7 +313,8 @@ impl<'a> Queries<'a> {
         let kept = self.semantic.modules.answers.borrow().get(&request).cloned();
         let world = self.semantic.world;
         match kept {
-            Some(Some((answer, linted))) => {
+            Some(Some((answer, linted, read))) => {
+                crate::footprint::enter(&read);
                 if linted { world.note_linted_read() }
                 return answer;
             }
@@ -324,8 +329,10 @@ impl<'a> Queries<'a> {
         let linted_before = world.linted_reads();
         // Module answers are kept for the whole file (and shared run-wide):
         // facts about files, on a once-per-file allowance.
+        let outer = crate::footprint::begin();
         let answer = self.semantic.question.budget.sized(super::super::question::Budget::DEFAULT, run)
             .map_or(Known::Unknown, |found| found.map_or(Known::Unknown, Known::Yes));
+        let read = crate::footprint::end(outer);
         let linted = world.linted_reads() != linted_before;
         if self.semantic.world.revision() != revision {
             self.sync_revision();
@@ -334,7 +341,7 @@ impl<'a> Queries<'a> {
         if matches!(answer, Known::Unknown) && values.cycled_since(mark) {
             self.semantic.modules.answers.borrow_mut().remove(&request);
         } else {
-            self.semantic.modules.answers.borrow_mut().insert(request, Some((answer.clone(), linted)));
+            self.semantic.modules.answers.borrow_mut().insert(request, Some((answer.clone(), linted, read)));
         }
         answer
     }
@@ -403,26 +410,35 @@ impl<'a> Queries<'a> {
     fn is_publication(&self, scope: ScopeRef) -> Result<bool, ()> {
         let revision = self.sync_revision();
         let world = self.semantic.world;
-        if let Some(&published) = self.semantic.modules.publications.borrow().get(&scope) {
+        if let Some((published, read)) = self.semantic.modules.publications.borrow().get(&scope) {
+            let published = *published;
+            crate::footprint::enter(read);
             if scope.file == 0 { world.note_linted_read() }
             return Ok(published);
         }
+        let outer = crate::footprint::begin();
+        let published = self.find_publication(scope);
+        let read = crate::footprint::end(outer);
+        let published = published?;
+        if self.semantic.world.revision() != revision { self.sync_revision(); return Err(()) }
+        if self.semantic.question.budget.limited() { return Err(()) }
+        self.semantic.modules.publications.borrow_mut().insert(scope, (published, read));
+        Ok(published)
+    }
+
+    fn find_publication(&self, scope: ScopeRef) -> Result<bool, ()> {
+        let world = self.semantic.world;
         let info = world.names(scope.file).ok_or(())?.scopes.get(scope.scope as usize).ok_or(())?;
         let tree = world.tree(scope.file).ok_or(())?;
         let kind = self.semantic.tables.kinds.get(tree.nodes.get(info.node as usize).ok_or(())?.matcher as usize).ok_or(())?;
-        let mut published = false;
         for item in &kind.modules.items {
             let marks = matches!(item.action, Action::Uses(_))
                 || matches!(item.action, Action::Scope { classes, .. } if classes & info.classes != 0);
             if marks && self.holds(NodeRef { file: scope.file, node: info.node }, item.when)? {
-                published = true;
-                break;
+                return Ok(true);
             }
         }
-        if self.semantic.world.revision() != revision { self.sync_revision(); return Err(()) }
-        if self.semantic.question.budget.limited() { return Err(()) }
-        self.semantic.modules.publications.borrow_mut().insert(scope, published);
-        Ok(published)
+        Ok(false)
     }
 
     fn named_targets(&self, at: NodeRef, value: &Value<'_>, alias: Option<u32>, name: &str, class: u64, asks: u64) -> Result<Option<Vec<Target>>, ()> {
@@ -504,7 +520,14 @@ impl<'a> Queries<'a> {
 fn leaf(node: NodeRef) -> Leaf { Leaf { target: Target::Node(node), frame: FrameId::ROOT } }
 
 fn text<'a>(value: &'a Value<'_>) -> Option<&'a str> {
-    match value { Value::Str(text) | Value::Node(_, text) => Some(text), _ => None }
+    match value {
+        Value::Str(text) => Some(text),
+        Value::Node(node, text) => {
+            crate::footprint::value_text(*node, text);
+            Some(text)
+        }
+        _ => None,
+    }
 }
 
 fn nodes(value: &Value<'_>) -> Vec<u32> {
@@ -648,20 +671,24 @@ impl Source for Queries<'_> {
     fn star_excludes(&self, scope: ScopeRef, name: &str, _: &QueryContext) -> Known<bool> {
         let revision = self.sync_revision();
         let key = (scope, name.into());
-        if let Some(answer) = self.semantic.modules.star_filters.borrow().get(&key) {
+        if let Some((answer, read)) = self.semantic.modules.star_filters.borrow().get(&key) {
+            let answer = *answer;
+            crate::footprint::enter(read);
             if scope.file == 0 { self.semantic.world.note_linted_read() }
-            return *answer;
+            return answer;
         }
-        self.semantic.modules.star_filters.borrow_mut().insert(key.clone(), Known::Unknown);
+        self.semantic.modules.star_filters.borrow_mut().insert(key.clone(), (Known::Unknown, Footprint::NONE));
+        let outer = crate::footprint::begin();
         let mut answer = if self.spend().is_ok() {
             self.semantic.world.module_star_excludes(scope, name, self.semantic)
         } else {
             Known::Unknown
         };
+        let read = crate::footprint::end(outer);
         if self.semantic.world.revision() != revision { self.sync_revision(); return Known::Unknown }
         if self.semantic.question.budget.limited() { answer = Known::Unknown; }
         match answer {
-            Known::Yes(_) => { self.semantic.modules.star_filters.borrow_mut().insert(key, answer); }
+            Known::Yes(_) => { self.semantic.modules.star_filters.borrow_mut().insert(key, (answer, read)); }
             Known::Unknown => { self.semantic.modules.star_filters.borrow_mut().remove(&key); }
         }
         answer

@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use crate::footprint::{self, tables, Atom, Dirty, Footprint};
 use crate::fx_hash::FxHashMap;
 use crate::fx_hash::FxHashSet;
 
@@ -10,12 +11,15 @@ use crate::grammar::names::semantic::Semantic;
 
 #[derive(Default)]
 pub(crate) struct State {
-    /// Graphs by entry and whether they carry read events.
-    graphs: RefCell<FxHashMap<(Leaf, bool), Known<Rc<Execution>>>>,
+    /// Graphs by entry and whether they carry read events, with what
+    /// building them read of the editor's file.
+    graphs: RefCell<FxHashMap<(Leaf, bool), (Known<Rc<Execution>>, Footprint)>>,
     /// Each body's distinct graphs, shared by the frames that build alike.
     variants: RefCell<FxHashMap<(Target, bool), Vec<Variant>>>,
+    /// Per file (by root leaf), every read of each binding: whole-file
+    /// catalogues, whose readers record the bindings they look up.
     reads: RefCell<FxHashMap<Leaf, Known<Rc<Reads>>>>,
-    entry_owners: RefCell<FxHashMap<Leaf, Leaf>>,
+    entry_owners: RefCell<FxHashMap<Leaf, (Leaf, Footprint)>>,
     /// Per file, every write's target in tree order (for `unwritten`).
     file_writes: RefCell<FxHashMap<u32, Known<Rc<[FileWrite]>>>>,
     /// Per file, those writes resolved to the bindings they replace.
@@ -25,15 +29,22 @@ pub(crate) struct State {
 }
 
 impl State {
-    /// Drops the graphs and catalogues of places `touched` says an edit
-    /// reached, and the linted file's write catalogues.
-    pub(crate) fn forget(&mut self, touched: &dyn Fn(&Target) -> bool) {
-        self.graphs.get_mut().retain(|(leaf, _), _| !touched(&leaf.target));
-        self.variants.get_mut().retain(|(target, _), _| !touched(target));
+    /// Drops the graphs whose footprint `dirty` meets or whose places
+    /// `touched` says are gone. The linted file's whole-file catalogues
+    /// stay for [`Effects::recheck`] to compare with the edited file's.
+    pub(crate) fn forget(&mut self, dirty: &Dirty, touched: &dyn Fn(&Target) -> bool) {
+        let stays = |read: &mut Footprint| {
+            let stays = !read.meets(dirty);
+            if stays { read.shift(dirty) }
+            stays
+        };
+        self.graphs.get_mut().retain(|(leaf, _), (_, read)| !touched(&leaf.target) && stays(read));
+        self.variants.get_mut().retain(|(target, _), variants| {
+            variants.retain_mut(|variant| stays(&mut variant.read));
+            !touched(target) && !variants.is_empty()
+        });
+        self.entry_owners.get_mut().retain(|leaf, (owner, read)| !touched(&leaf.target) && !touched(&owner.target) && stays(read));
         self.reads.get_mut().retain(|leaf, _| !touched(&leaf.target));
-        self.entry_owners.get_mut().retain(|leaf, owner| !touched(&leaf.target) && !touched(&owner.target));
-        self.file_writes.get_mut().remove(&0);
-        self.written_bindings.get_mut().remove(&0);
         self.building.get_mut().clear();
     }
 }
@@ -45,6 +56,7 @@ impl State {
 struct Variant {
     graph: Rc<Execution>,
     decided: Option<Rc<[(Target, u32, bool)]>>,
+    read: Footprint,
 }
 
 /// One write found walking a file: its target, or a node whose writes
@@ -59,6 +71,17 @@ enum FileWrite {
 struct WrittenBindings {
     first: FxHashMap<NodeRef, usize>,
     unknown: Option<usize>,
+}
+
+impl WrittenBindings {
+    /// Whether no write replaces `binding`.
+    fn unwritten(&self, binding: NodeRef) -> Known<bool> {
+        match (self.first.get(&binding), self.unknown) {
+            (Some(&first), unknown) if unknown.is_none_or(|unknown| first < unknown) => Known::Yes(false),
+            (_, Some(_)) => Known::Unknown,
+            _ => Known::Yes(true),
+        }
+    }
 }
 
 pub(super) type Reads = FxHashMap<NodeRef, FxHashSet<(NodeRef, NodeRef)>>;
@@ -95,7 +118,9 @@ impl Effects<'_> {
         let Target::Node(node) = at.target else { return Known::Unknown };
         let runtime = super::source::Runtime::new(self.semantic);
         let Some(Some(binding)) = runtime.binding(at, node).known() else { return Known::Unknown };
+        footprint::whole(tables::READS);
         let Some(reads) = self.reads(at).known() else { return Known::Unknown };
+        if binding.file == 0 { footprint::table(tables::READS, binding.node) }
         Known::Yes(reads.get(&binding).is_some_and(|reads| !reads.is_empty()))
     }
 
@@ -105,6 +130,7 @@ impl Effects<'_> {
         let Some(entry) = self.entry_for(at).known() else { return Known::Unknown };
         let Some(graph) = self.execution(entry).known() else { return Known::Unknown };
         if graph.write_steps(node).is_empty() { return Known::Unknown }
+        footprint::whole(tables::READS);
         let Some(reads) = self.reads(at).known() else { return Known::Unknown };
         graph.value_used(node, &reads, &self.semantic.question.budget)
     }
@@ -129,8 +155,9 @@ impl Effects<'_> {
         // for the file's size.
         let allowance = u32::try_from(tree.nodes.len()).unwrap_or(u32::MAX).saturating_mul(Self::BUILD_STEPS_PER_NODE)
             .max(crate::grammar::names::question::Budget::DEFAULT);
-        let collect = || self.semantic.question.budget.sized(allowance, || self.collect_reads(at, node, tree, effect))
-            .unwrap_or(Known::Unknown);
+        // Readers record the bindings they look up, not the whole walk.
+        let collect = || footprint::quiet(|| self.semantic.question.budget.sized(allowance, || self.collect_reads(at, node, tree, effect))
+            .unwrap_or(Known::Unknown));
         let reads = match self.semantic.world.profile() {
             Some(profile) => profile.time_effect_build(crate::engine::EffectBuild::ReadCatalogue, false, collect, |reads, _| matches!(reads, Known::Yes(_))),
             None => collect(),
@@ -199,11 +226,52 @@ impl Effects<'_> {
         let Some(tree) = self.semantic.world.tree(node.file) else { return Known::Unknown };
         let Some(names) = self.semantic.world.names(node.file) else { return Known::Unknown };
         if !names.declared.contains_key(&node.node) { return Known::Unknown }
+        // A whole-file catalogue: readers record the binding they look up
+        // ([`Effects::recheck`]).
+        if node.file == 0 {
+            footprint::whole(tables::WRITTEN);
+            footprint::table(tables::WRITTEN, node.node);
+        }
         let Known::Yes(written) = self.written_bindings(binding, tree.nodes.len(), declaration) else { return Known::Unknown };
-        match (written.first.get(&node), written.unknown) {
-            (Some(&first), unknown) if unknown.is_none_or(|unknown| first < unknown) => Known::Yes(false),
-            (_, Some(_)) => Known::Unknown,
-            _ => Known::Yes(true),
+        written.unwritten(node)
+    }
+
+    /// After an edit of the linted file (whose root leaf is `root`): its
+    /// whole-file catalogues again, adding to `changed` the answers that
+    /// differ from the kept ones. `declaration` is what [`Self::unwritten`]
+    /// is given.
+    pub(crate) fn recheck(&self, root: Leaf, declaration: &impl Fn(Leaf) -> Known<Option<NodeRef>>, changed: &mut Dirty) {
+        let Some(root) = self.semantic.leaf(root).known() else { *changed = Dirty::all(); return };
+        let Target::Node(file) = root.target else { return };
+        let Some(tree) = self.semantic.world.tree(file.file) else { return };
+        let state = &self.semantic.effects;
+        state.file_writes.borrow_mut().remove(&file.file);
+        let written = state.written_bindings.borrow_mut().remove(&file.file);
+        if let Some(before) = written {
+            let after = self.written_bindings(root, tree.nodes.len(), declaration);
+            match (before, after) {
+                (Known::Yes(before), Known::Yes(after)) => {
+                    for binding in before.first.keys().chain(after.first.keys()) {
+                        if before.unwritten(*binding) != after.unwritten(*binding) { changed.add_atom(Atom::table(tables::WRITTEN, binding.node)) }
+                    }
+                    if before.unknown.is_some() != after.unknown.is_some() { changed.add_atom(Atom::whole(tables::WRITTEN)) }
+                }
+                (Known::Unknown, Known::Unknown) => {}
+                _ => changed.add_atom(Atom::whole(tables::WRITTEN)),
+            }
+        }
+        let root_reads = state.reads.borrow_mut().remove(&root);
+        if let Some(before) = root_reads {
+            let after = self.reads(root);
+            match (before, after) {
+                (Known::Yes(before), Known::Yes(after)) => {
+                    for binding in before.keys().chain(after.keys()) {
+                        if before.get(binding) != after.get(binding) { changed.add_atom(Atom::table(tables::READS, binding.node)) }
+                    }
+                }
+                (Known::Unknown, Known::Unknown) => {}
+                _ => changed.add_atom(Atom::whole(tables::READS)),
+            }
         }
     }
 
@@ -240,7 +308,8 @@ impl Effects<'_> {
         let values = self.semantic.values();
         if let Some(answer) = memo.borrow().get(&file).cloned() { return answer }
         let mark = values.cycle_mark();
-        let answer = self.semantic.question.budget.sized(allowance, compute).ok().flatten().map_or(Known::Unknown, Known::Yes);
+        // Readers record what they look up in it, not the whole walk.
+        let answer = footprint::quiet(|| self.semantic.question.budget.sized(allowance, compute).ok().flatten().map_or(Known::Unknown, Known::Yes));
         if matches!(answer, Known::Yes(_)) || !values.cycled_since(mark) {
             memo.borrow_mut().insert(file, answer.clone());
         }
@@ -266,11 +335,17 @@ impl Effects<'_> {
         // every question that asked).
         let allowance = u32::try_from(nodes).unwrap_or(u32::MAX).saturating_mul(Self::FILE_WALK_STEPS_PER_NODE)
             .max(super::super::question::Budget::per_question());
+        let Some(tree) = self.semantic.world.tree(file.file) else { return Known::Unknown };
         self.file_fact(&self.semantic.effects.file_writes, file.file, allowance, || {
+            let writing: Vec<bool> = self.semantic.tables.kinds.iter()
+                .map(|kind| kind.effects.iter().any(|item| self.semantic.tables.effect_roles.get(item.effect as usize) == Some(&super::EffectRole::Event { writes: true })))
+                .collect();
             let mut visited = FxHashSet::default();
             let mut writes = Vec::new();
             'nodes: for id in 0..nodes {
                 if !budget.step() { return None }
+                // Only kinds with write events write.
+                if !tree.nodes.get(id).is_some_and(|syntax| writing.get(syntax.matcher as usize).copied().unwrap_or(false)) { continue }
                 let node = Leaf { target: Target::Node(NodeRef { node: id as u32, ..file }), ..at };
                 let Some(node) = self.semantic.leaf(node).known() else { writes.push(FileWrite::Unreadable); break };
                 if !visited.insert(node) { continue }
@@ -321,9 +396,14 @@ impl Effects<'_> {
 
     fn find_entry(&self, at: Leaf) -> Known<Leaf> {
         let Some(at) = self.semantic.leaf(at).known() else { return Known::Unknown };
-        if let Some(&entry) = self.semantic.effects.entry_owners.borrow().get(&at) { return Known::Yes(entry) }
+        if let Some((entry, read)) = self.semantic.effects.entry_owners.borrow().get(&at) {
+            footprint::enter(read);
+            return Known::Yes(*entry);
+        }
+        let outer = footprint::begin();
         let entry = self.search_entry(at);
-        if let Known::Yes(entry) = entry { self.semantic.effects.entry_owners.borrow_mut().insert(at, entry); }
+        if let Known::Yes(entry) = entry { self.semantic.effects.entry_owners.borrow_mut().insert(at, (entry, footprint::current())); }
+        footprint::resume(outer);
         entry
     }
 
@@ -366,9 +446,12 @@ impl Effects<'_> {
         self.semantic.world.note_entered(entry);
         if Self::force_reads() { return self.graph(entry, true) }
         let full = self.semantic.effects.graphs.borrow().get(&(entry, true)).cloned();
-        if let Some(full @ Known::Yes(_)) = full {
+        if let Some(full @ (Known::Yes(_), _)) = full {
             let mut graphs = self.semantic.effects.graphs.borrow_mut();
-            return graphs.entry((entry, false)).or_insert(full).clone();
+            let (graph, read) = graphs.entry((entry, false)).or_insert(full);
+            footprint::enter(read);
+            let graph = graph.clone();
+            return graph;
         }
         self.graph(entry, false)
     }
@@ -389,21 +472,36 @@ impl Effects<'_> {
         let Some(entry) = self.semantic.leaf(entry).known() else { return Known::Unknown };
         let state = &self.semantic.effects.graphs;
         let kept = state.borrow().get(&(entry, reads)).cloned();
-        if let Some(graph) = kept {
+        if let Some((graph, read)) = kept {
+            footprint::enter(&read);
             if self.semantic.effects.building.borrow().contains(&(entry, Some(reads))) { self.semantic.values().note_cycle_read() }
             return graph;
         }
+        let outer = footprint::begin();
+        let graph = self.build_graph(entry, reads);
+        let read = footprint::end(outer);
+        match graph {
+            Some(graph) => {
+                state.borrow_mut().insert((entry, reads), (graph.clone(), read));
+                graph
+            }
+            None => Known::Unknown,
+        }
+    }
+
+    /// Builds `entry`'s graph (`None`: an unknown not to keep).
+    fn build_graph(&self, entry: Leaf, reads: bool) -> Option<Known<Rc<Execution>>> {
+        let state = &self.semantic.effects.graphs;
         // A body built in another frame builds alike when the conditions its
         // build decided answer alike here (graphs read written values
         // through `Execution::owner`, so the rest doesn't depend on frames).
         if !Self::per_frame() {
             if let Some(graph) = self.replayed(entry, reads) {
                 if let Some(profile) = self.semantic.world.profile() { crate::engine::Profile::add(&profile.effect_graph_frame_reuses, 1) }
-                state.borrow_mut().insert((entry, reads), Known::Yes(graph.clone()));
-                return Known::Yes(graph);
+                return Some(Known::Yes(graph));
             }
         }
-        state.borrow_mut().insert((entry, reads), Known::Unknown);
+        state.borrow_mut().insert((entry, reads), (Known::Unknown, Footprint::NONE));
         self.semantic.effects.building.borrow_mut().insert((entry, Some(reads)));
         let mark = self.semantic.values().cycle_mark();
         let source = if reads { super::source::Runtime::new(self.semantic) } else { super::source::Runtime::without_reads(self.semantic) };
@@ -448,10 +546,9 @@ impl Effects<'_> {
         self.semantic.effects.building.borrow_mut().remove(&(entry, Some(reads)));
         if matches!(graph, Known::Unknown) && self.semantic.values().cycled_since(mark) {
             state.borrow_mut().remove(&(entry, reads));
-        } else {
-            state.borrow_mut().insert((entry, reads), graph.clone());
+            return None;
         }
-        graph
+        Some(graph)
     }
 
     /// `graph`, or the same graph another frame's build of the body already
@@ -467,7 +564,7 @@ impl Effects<'_> {
             return same.graph.clone();
         }
         let graph = Rc::new(graph);
-        variants.push(Variant { graph: graph.clone(), decided });
+        variants.push(Variant { graph: graph.clone(), decided, read: footprint::current() });
         graph
     }
 
@@ -484,8 +581,8 @@ impl Effects<'_> {
     /// conditions answer alike in `entry`'s frame.
     fn replayed(&self, entry: Leaf, reads: bool) -> Option<Rc<Execution>> {
         let built: Vec<_> = self.semantic.effects.variants.borrow().get(&(entry.target, reads))?.iter()
-            .filter_map(|variant| Some((variant.graph.clone(), variant.decided.clone()?))).collect();
-        'variants: for (graph, decided) in built {
+            .filter_map(|variant| Some((variant.graph.clone(), variant.decided.clone()?, variant.read.clone()))).collect();
+        'variants: for (graph, decided, read) in built {
             for &(target, condition, holds) in decided.iter() {
                 let at = self.semantic.leaf(Leaf { target, frame: entry.frame }).known()?;
                 match self.semantic.world.condition(at, condition, self.semantic) {
@@ -494,6 +591,7 @@ impl Effects<'_> {
                     Known::Unknown => return None,
                 }
             }
+            footprint::enter(&read);
             return Some(graph);
         }
         None

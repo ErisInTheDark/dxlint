@@ -28,9 +28,9 @@ pub struct State {
     defects: RefCell<Vec<Defect>>,
     /// [`Semantic::generic_scope`] by owner: syntax alone decides it, and
     /// frames ask it for every leaf they reach.
-    generic_scopes: RefCell<crate::fx_hash::FxHashMap<NodeRef, Option<u32>>>,
+    generic_scopes: super::memo::Memo<NodeRef, Option<u32>>,
     /// [`Semantic::shares_one_frame`] by owner.
-    single_frames: RefCell<crate::fx_hash::FxHashMap<NodeRef, bool>>,
+    single_frames: super::memo::Memo<NodeRef, bool>,
     /// Attributes (keyed at the root frame) whose answer asked no value
     /// question: the same in every frame.
     frame_free: RefCell<crate::fx_hash::FxHashSet<AttributeKey>>,
@@ -73,9 +73,9 @@ impl Session {
         self.question.budget.restart();
         self.question.budget.trace(world.profile().is_some());
         let semantic = Semantic { world, tables, question: &self.question, state: self.state.borrow().clone() };
-        let outer = super::memo::begin();
+        let outer = crate::footprint::begin();
         let answer = run(&semantic);
-        super::memo::end(outer);
+        crate::footprint::resume(outer);
         if let Some(profile) = world.profile() {
             profile.record_semantic_budget(
                 u64::from(super::question::Budget::per_question() - self.question.budget.remaining()),
@@ -114,10 +114,10 @@ impl Session {
         (self.state.replace(Rc::default()), self.question.interned())
     }
 
-    /// Drops answers that read `bodies` or a place `touched` says changed
-    /// (nothing when a question is still running).
-    pub(crate) fn forget(&self, bodies: u64, touched: &dyn Fn(&super::question::Target) -> bool) {
-        if let Some(state) = Rc::get_mut(&mut self.state.borrow_mut()) { state.forget(bodies, touched) }
+    /// Drops answers that read something `dirty` changed or sit at a place
+    /// `touched` says is gone (nothing when a question is still running).
+    pub(crate) fn forget(&self, dirty: &crate::footprint::Dirty, touched: &dyn Fn(&super::question::Target) -> bool) {
+        if let Some(state) = Rc::get_mut(&mut self.state.borrow_mut()) { state.forget(dirty, touched) }
     }
 
     /// Starts from carried answers that hold at world revision `revision`.
@@ -129,26 +129,24 @@ impl Session {
 }
 
 impl State {
-    /// Drops what an edit inside `bodies` of the linted file may change:
-    /// tagged answers whose computation entered them, and every untagged
-    /// cache.
-    pub(crate) fn forget(&mut self, bodies: u64, touched: &dyn Fn(&super::question::Target) -> bool) {
-        self.values.forget(bodies);
-        self.calls.forget(bodies);
-        self.narrowing_places.forget(bodies);
+    /// Drops what an edit of the linted file may change: answers whose
+    /// footprint it meets, and every per-lint cache.
+    pub(crate) fn forget(&mut self, dirty: &crate::footprint::Dirty, touched: &dyn Fn(&super::question::Target) -> bool) {
+        self.values.forget(dirty);
+        self.calls.forget(dirty);
+        self.narrowing_places.forget(dirty);
         match Rc::get_mut(&mut self.effects) {
-            Some(effects) => effects.forget(touched),
+            Some(effects) => effects.forget(dirty, touched),
             None => self.effects = Rc::default(),
         }
         // Lists, records and built texts live in the lint's own value arena,
         // which the next lint does not have.
-        self.attributes.forget_unless(bodies, |(packed, _)| !matches!(packed.get(), crate::vm::V::List(_) | crate::vm::V::Record(..) | crate::vm::V::Text(_)));
-        self.frame_free.get_mut().clear();
+        self.attributes.forget_unless(dirty, |(packed, _)| !matches!(packed.get(), crate::vm::V::List(_) | crate::vm::V::Record(..) | crate::vm::V::Text(_)));
+        self.generic_scopes.forget(dirty);
+        self.single_frames.forget(dirty);
         self.name_queries = Rc::default();
         self.modules = Default::default();
         self.defects.get_mut().clear();
-        self.generic_scopes.get_mut().clear();
-        self.single_frames.get_mut().clear();
         self.frame_free.get_mut().clear();
     }
 }
@@ -203,10 +201,12 @@ impl<'a> Semantic<'a> {
     /// the formals an instantiation of `owner` binds are visible. `None`
     /// when there is none (or the tree is not loaded).
     pub(crate) fn generic_scope(&self, owner: NodeRef) -> Option<u32> {
-        if let Some(&scope) = self.generic_scopes.borrow().get(&owner) { return scope }
+        if let Some(scope) = self.generic_scopes.get(&owner) { return scope }
+        let outer = crate::footprint::begin();
         let scope = self.find_generic_scope(owner);
         // Unloaded trees aren't remembered: they may load later.
-        if self.world.tree(owner.file).is_some() { self.generic_scopes.borrow_mut().insert(owner, scope); }
+        if self.world.tree(owner.file).is_some() { self.generic_scopes.insert(owner, scope); }
+        crate::footprint::resume(outer);
         scope
     }
 
@@ -242,7 +242,15 @@ impl<'a> Semantic<'a> {
     /// no ancestor declaring formals in syntax (a local of a non-generic
     /// function or class).
     pub(crate) fn shares_one_frame(&self, owner: NodeRef) -> bool {
-        if let Some(&shared) = self.single_frames.borrow().get(&owner) { return shared }
+        if let Some(shared) = self.single_frames.get(&owner) { return shared }
+        let outer = crate::footprint::begin();
+        let shared = self.find_one_frame(owner);
+        self.single_frames.insert(owner, shared);
+        crate::footprint::resume(outer);
+        shared
+    }
+
+    fn find_one_frame(&self, owner: NodeRef) -> bool {
         let Some(tree) = self.world.tree(owner.file) else { return false };
         let instantiable = |id: u32| tree.nodes.get(id as usize)
             .and_then(|data| self.tables.kinds.get(data.matcher as usize))
@@ -253,7 +261,6 @@ impl<'a> Semantic<'a> {
             if self.declares_formals(NodeRef { node: id, ..owner }) { shared = false }
             cursor = tree.parent(id);
         }
-        self.single_frames.borrow_mut().insert(owner, shared);
         shared
     }
 
@@ -328,8 +335,9 @@ impl<'a> Semantic<'a> {
         self.attributes.get(key).map(|(value, unknown)| (value.get(), unknown))
     }
 
-    pub(crate) fn remember_attribute(&self, key: AttributeKey, value: crate::vm::V, unknown: bool) {
-        self.attributes.insert(key, (crate::vm::Packed::new(value), unknown));
+    /// Keeps an attribute answer with what computing it read.
+    pub(crate) fn remember_attribute(&self, key: AttributeKey, value: crate::vm::V, unknown: bool, read: crate::footprint::Footprint) {
+        self.attributes.insert_read(key, (crate::vm::Packed::new(value), unknown), read);
     }
 
     /// Whether the attribute at `key` (whatever its frame) was found to ask
@@ -339,10 +347,10 @@ impl<'a> Semantic<'a> {
     }
 
     /// Keeps an attribute that asked no value question for every frame.
-    pub(crate) fn remember_frame_free(&self, key: AttributeKey, value: crate::vm::V, unknown: bool) {
+    pub(crate) fn remember_frame_free(&self, key: AttributeKey, value: crate::vm::V, unknown: bool, read: crate::footprint::Footprint) {
         let root = AttributeKey { frame: FrameId::ROOT, ..key };
         self.frame_free.borrow_mut().insert(root);
-        if key.frame != FrameId::ROOT { self.remember_attribute(root, value, unknown) }
+        if key.frame != FrameId::ROOT { self.remember_attribute(root, value, unknown, read) }
     }
 
     pub fn defect(&self, item: u32, at: Leaf, message: impl Into<Box<str>>) {

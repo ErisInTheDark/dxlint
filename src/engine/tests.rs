@@ -196,6 +196,29 @@ fn editor_lints_after_an_edit_inside_one_body_match_fresh_lints() {
     for p in [config, path] { drop_buffer(p) }
 }
 
+/// This process's CPU time so far (user + kernel), for timing probes on a
+/// busy machine.
+#[cfg(windows)]
+fn process_cpu() -> std::time::Duration {
+    #[repr(C)]
+    #[derive(Default)]
+    struct FileTime { low: u32, high: u32 }
+    extern "system" {
+        fn GetCurrentProcess() -> isize;
+        fn GetProcessTimes(process: isize, creation: *mut FileTime, exit: *mut FileTime, kernel: *mut FileTime, user: *mut FileTime) -> i32;
+    }
+    let (mut creation, mut exit, mut kernel, mut user) = Default::default();
+    // SAFETY: plain out-parameters of this process's times.
+    unsafe { GetProcessTimes(GetCurrentProcess(), &mut creation, &mut exit, &mut kernel, &mut user) };
+    let ticks = |t: &FileTime| (u64::from(t.high) << 32) | u64::from(t.low);
+    std::time::Duration::from_nanos((ticks(&kernel) + ticks(&user)) * 100)
+}
+
+#[cfg(not(windows))]
+fn process_cpu() -> std::time::Duration {
+    std::time::Duration::ZERO
+}
+
 /// `DXLINT_EDITOR_PROBE=<project>|<file>|<text>|<replacement>`: the
 /// editor's carried lints of a real file, edit and revert, against fresh
 /// lints.
@@ -210,28 +233,46 @@ fn editor_probe() {
     let profiled = std::env::var_os("DXLINT_PROBE_PROFILE").is_some();
     if profiled { l.enable_profile() }
     let original = std::fs::read_to_string(&file).unwrap();
-    // `DXLINT_PROBE_AUTO=<n>`: n edits spread over the file (a local's or a
-    // returned value replaced by `undefined as any`), each from the original.
+    // `DXLINT_PROBE_AUTO=<n>`: n edits spread over the file, each from the
+    // original. `DXLINT_PROBE_KIND`: `body` (a local's or a returned value
+    // replaced by `undefined as any`), `signature` (a method gains a first
+    // parameter), `member` (a field declared before a method), `enter` (a
+    // blank line before a statement), `delete` (a statement removed).
     let auto: usize = std::env::var("DXLINT_PROBE_AUTO").ok().and_then(|n| n.parse().ok()).unwrap_or(0);
+    let kind = std::env::var("DXLINT_PROBE_KIND").unwrap_or_else(|_| "body".into());
     let mut texts = vec![original.clone()];
     if auto > 0 {
         let lines: Vec<&str> = original.lines().collect();
-        let candidates: Vec<usize> = (0..lines.len()).filter(|&i| {
-            let line = lines[i].trim_start();
-            lines[i].starts_with("\t\t") && line.ends_with(';') && (line.starts_with("const ") && line.contains(" = ") || line.starts_with("return ") && line.len() > 8)
+        let statement = |line: &str| {
+            let trimmed = line.trim_start();
+            line.starts_with("\t\t") && trimmed.ends_with(';') && (trimmed.starts_with("const ") && trimmed.contains(" = ") || trimmed.starts_with("return ") && trimmed.len() > 8)
+        };
+        let method = |line: &str| line.starts_with("\tpublic ") && line.ends_with(" {") && line.contains('(');
+        let candidates: Vec<usize> = (0..lines.len()).filter(|&i| match kind.as_str() {
+            "signature" | "member" => method(lines[i]),
+            _ => statement(lines[i]),
         }).collect();
         for k in 0..auto.min(candidates.len()) {
             let at = candidates[k * candidates.len() / auto.min(candidates.len())];
             let line = lines[at];
-            let changed = if line.trim_start().starts_with("return ") {
-                format!("{}return undefined as any;", &line[..line.len() - line.trim_start().len()])
-            } else {
-                let eq = line.find(" = ").unwrap();
-                format!("{} = undefined as any;", &line[..eq])
-            };
+            let indent = &line[..line.len() - line.trim_start().len()];
             // Line endings stay as they are: only this line changes.
-            let edited: String = original.split_inclusive('\n').enumerate()
-                .map(|(i, piece)| if i == at { piece.replacen(line, &changed, 1) } else { piece.to_owned() }).collect();
+            let edited: String = original.split_inclusive('\n').enumerate().map(|(i, piece)| {
+                if i != at { return piece.to_owned() }
+                let ending = &piece[line.len()..];
+                match kind.as_str() {
+                    "signature" => {
+                        let open = line.find('(').unwrap();
+                        let parameter = if line[open + 1..].starts_with(')') { "probe?: number" } else { "probe?: number, " };
+                        format!("{}{parameter}{}{ending}", &line[..=open], &line[open + 1..])
+                    }
+                    "member" => format!("\tprivate probeField{k} = 1;{ending}{piece}"),
+                    "enter" => format!("{ending}{piece}"),
+                    "delete" => String::new(),
+                    _ if line.trim_start().starts_with("return ") => format!("{indent}return undefined as any;{ending}"),
+                    _ => format!("{} = undefined as any;{ending}", &line[..line.find(" = ").unwrap()]),
+                }
+            }).collect();
             texts.push(edited);
             texts.push(original.clone());
         }
@@ -241,16 +282,21 @@ fn editor_probe() {
         texts = (0..rounds).map(|i| if i % 2 == 0 { original.clone() } else { edited.clone() }).collect();
     }
     let mut carried = None;
+    // `DXLINT_SAMPLE`: samples every round but the first (cold) one.
+    let mut sampler = None;
     for (round, source) in texts.iter().enumerate() {
+        if round == usize::from(std::env::var_os("DXLINT_PROBE_COLD").is_none()) { sampler = Some(crate::sampler::start_from_env()) }
         super::reads::set_buffer(&file, source);
         l.invalidate(&[file.clone()]);
         let started = std::time::Instant::now();
+        let cpu = process_cpu();
         let run = l.run_after(carried.take());
         let found = run.lint(&file, source);
         carried = Some(run.carried());
         let took = started.elapsed();
+        let cpu = process_cpu() - cpu;
         if std::env::var_os("DXLINT_PROBE_NO_FRESH").is_some() {
-            eprintln!("round {round}: {took:?}");
+            eprintln!("round {round}: {took:?} (cpu {cpu:?})");
             if let Some(p) = l.profile.as_ref().filter(|_| profiled) {
                 let mut rules: Vec<(u64, &str)> = l.rules.iter().enumerate()
                     .map(|(i, r)| (p.rule_nanos[i].swap(0, std::sync::atomic::Ordering::Relaxed), r.name.as_str())).filter(|(n, _)| *n > 0).collect();
@@ -262,10 +308,11 @@ fn editor_probe() {
         let fresh = l.lint(&file, source);
         let key = |d: &Diagnostic| format!("{}:{} {}", d.rule, d.start, d.message);
         let (a, b): (Vec<_>, Vec<_>) = (found.iter().map(key).collect(), fresh.iter().map(key).collect());
-        eprintln!("round {round}: {took:?}, {} problems, same: {}", a.len(), a == b);
+        eprintln!("round {round}: {took:?} (cpu {cpu:?}), {} problems, same: {}", a.len(), a == b);
         for line in a.iter().filter(|line| !b.contains(line)) { eprintln!("  EXTRA {line}") }
         for line in b.iter().filter(|line| !a.contains(line)) { eprintln!("  MISSING {line}") }
     }
+    drop(sampler);
     super::reads::drop_buffer(&file);
 }
 

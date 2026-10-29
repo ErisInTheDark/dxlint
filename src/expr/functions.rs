@@ -141,7 +141,7 @@ fn slice<'s>(a: &[Value<'s>]) -> Result<Value<'s>, String> {
 /// `byte_slice(text, from, to?)`: by byte offsets (what `offset` and native
 /// spans count), not characters; negative counts from the end.
 fn byte_slice<'s>(a: &[Value<'s>]) -> Result<Value<'s>, String> {
-    let s = a[0].text();
+    let s = a[0].text_unread();
     let len = s.len();
     let resolve = |i: f64| if i < 0.0 { len.saturating_sub((-i) as usize) } else { (i as usize).min(len) };
     let from = resolve(a[1].num()?);
@@ -153,7 +153,7 @@ fn byte_slice<'s>(a: &[Value<'s>]) -> Result<Value<'s>, String> {
 }
 
 fn byte_char<'s>(a: &[Value<'s>]) -> Result<Value<'s>, String> {
-    let text = a[0].text();
+    let text = a[0].text_unread();
     let offset = a[1].num()?;
     if !offset.is_finite() || offset < 0.0 || offset.fract() != 0.0 || offset > text.len() as f64 {
         return Err("byte_char: offset must be an integer within text".into());
@@ -346,7 +346,7 @@ pub static FUNCTIONS: &[Function] = &[
                 Value::Num(n) => Some(*n),
                 Value::Bool(b) => Some(f64::from(u8::from(*b))),
                 Value::Null => Some(0.0),
-                Value::Str(s) | Value::Node(_, s) => Some(javascript_number_text(s)),
+                Value::Str(_) | Value::Node(..) => Some(javascript_number_text(&a[0].text())),
                 Value::Record(_) => javascript_literal_number(&a[0].key("type").text(), &a[0].key("value").text()),
                 _ => None,
             };

@@ -28,6 +28,11 @@ impl LineIndex {
 
     /// Zero-based line containing `offset`.
     pub fn line_of(&self, offset: usize) -> usize {
+        crate::footprint::line(offset);
+        self.line_at(offset)
+    }
+
+    fn line_at(&self, offset: usize) -> usize {
         match self.starts.binary_search(&(offset as u32)) {
             Ok(line) => line,
             Err(next) => next - 1,
@@ -35,12 +40,15 @@ impl LineIndex {
     }
 
     pub fn line_start(&self, line: usize) -> usize {
-        self.starts.get(line).copied().unwrap_or(self.len) as usize
+        let start = self.starts.get(line).copied().unwrap_or(self.len) as usize;
+        crate::footprint::positions(start, start);
+        start
     }
 
     /// End of the line's content, excluding `\n` / `\r\n` / `\r`.
     pub fn line_end(&self, text: &str, line: usize) -> usize {
         let next = self.starts.get(line + 1).map(|&s| s as usize).unwrap_or(text.len());
+        crate::footprint::positions(next, next);
         let bytes = text.as_bytes();
         let mut end = next;
         if end > self.line_start(line) && bytes.get(end - 1) == Some(&b'\n') {

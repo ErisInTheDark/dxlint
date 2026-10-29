@@ -103,7 +103,30 @@ pub struct FileVm {
     /// Attributes whose answers read something unknown, kept like complete
     /// ones: what they asked are facts that answer the same on every ask.
     incomplete: RefCell<crate::fx_hash::FxHashMap<(u32, u16), Option<V>>>,
+    /// For an editor's file, what computing each kept cell and kept
+    /// attribute read of it ([`crate::footprint`]): handed to every reader.
+    /// Per cell: 1 + its footprint's index in `cell_footprints` (0: none).
+    cell_reads: RefCell<Vec<u32>>,
+    cell_footprints: RefCell<Vec<Footprint>>,
+    kept_reads: RefCell<crate::fx_hash::FxHashMap<(u32, u16), Footprint>>,
+    /// What the work around each cell being computed had read, and the
+    /// wall it computes (if one), innermost last.
+    computing: RefCell<Vec<(footprint::Reading, Option<u16>)>>,
+    /// For an editor's file, its root: the root's attributes (whole-file
+    /// catalogues) are walls. Readers record the wall, not what computing
+    /// it read; the next lint recomputes a wall the edit reached and
+    /// changes it only when its value changed.
+    firewall: std::cell::Cell<Option<u32>>,
+    /// Each wall's own reads, by attribute.
+    walls: RefCell<crate::fx_hash::FxHashMap<u16, Footprint>>,
 }
+
+/// What reading wall `attr` reads.
+pub(crate) fn wall_atom(attr: u16) -> footprint::Atom {
+    footprint::Atom::table(footprint::tables::WALLS, u32::from(attr))
+}
+
+use crate::footprint::{self, Footprint};
 
 // Whole-node reads use their target node. Multi-field wrappers stay distinct,
 // because their first-read payload sizes need not agree.
@@ -192,6 +215,9 @@ impl FileVm {
                 self.kept.borrow_mut().clear();
                 self.shared_queries.borrow_mut().clear();
                 self.incomplete.borrow_mut().clear();
+                self.cell_reads.borrow_mut().clear();
+                self.cell_footprints.borrow_mut().clear();
+                self.kept_reads.borrow_mut().clear();
                 self.attr_errors.borrow_mut().clear();
                 self.clear_error();
             }
@@ -250,11 +276,19 @@ impl FileVm {
     /// A read while it is being computed (a cycle) or after it failed is
     /// `None`.
     pub(crate) fn memo(&self, node: u32, attr: u16, compute: impl FnOnce() -> Known<Option<V>>) -> Option<V> {
-        if let Some(&kept) = self.kept.borrow().get(&(node, attr)) { return kept; }
+        if let Some(&kept) = self.kept.borrow().get(&(node, attr)) {
+            self.reread(node, attr);
+            return kept;
+        }
         self.kept.borrow_mut().insert((node, attr), None);
-        match compute() {
+        let wall = self.wall(node, attr);
+        let outer = footprint::begin();
+        let answer = compute();
+        let read = self.end_reading(outer, wall, matches!(answer, Known::Yes(_)));
+        match answer {
             Known::Yes(kept) => {
                 self.kept.borrow_mut().insert((node, attr), kept);
+                if footprint::is_tracking() && wall.is_none() { self.kept_reads.borrow_mut().insert((node, attr), read); }
                 kept
             }
             Known::Unknown => {
@@ -266,12 +300,57 @@ impl FileVm {
 
     /// The kept incomplete answer of (node, attribute), if it has one.
     pub(crate) fn kept_incomplete(&self, node: u32, attr: u16) -> Option<Option<V>> {
-        self.incomplete.borrow().get(&(node, attr)).copied()
+        let kept = self.incomplete.borrow().get(&(node, attr)).copied()?;
+        self.reread(node, attr);
+        Some(kept)
     }
 
-    /// Keeps an incomplete answer of (node, attribute).
+    /// Keeps an incomplete answer of (node, attribute), computed by the
+    /// work in progress (what it read so far stands for what computing
+    /// the answer read).
     pub(crate) fn keep_incomplete(&self, node: u32, attr: u16, value: Option<V>) {
         self.incomplete.borrow_mut().insert((node, attr), value);
+        if footprint::is_tracking() && self.wall(node, attr).is_none() {
+            let read = footprint::current();
+            let mut kept = self.kept_reads.borrow_mut();
+            match kept.get_mut(&(node, attr)) {
+                Some(before) => *before = before.with(&read),
+                None => { kept.insert((node, attr), read); }
+            }
+        }
+    }
+
+    /// A kept answer of (node, attribute) was read: so was what computing it
+    /// read (a wall's reader reads only the wall).
+    fn reread(&self, node: u32, attr: u16) {
+        if self.wall(node, attr).is_some() { return footprint::enter_atom(wall_atom(attr)) }
+        if let Some(read) = self.kept_reads.borrow().get(&(node, attr)) { footprint::enter(read) }
+    }
+
+    /// Makes `root`'s attributes walls (`None`: none, outside editors).
+    pub(crate) fn set_firewall(&self, root: Option<u32>) {
+        self.firewall.set(root);
+    }
+
+    /// `attr` when (node, attribute) is a wall.
+    fn wall(&self, node: u32, attr: u16) -> Option<u16> {
+        (self.firewall.get() == Some(node)).then_some(attr)
+    }
+
+    /// Ends the computation of a kept answer begun at `outer`, returning
+    /// what it read. For a wall (kept when `keep`), the work around reads
+    /// only the wall, and the wall keeps its own reads.
+    fn end_reading(&self, outer: footprint::Reading, wall: Option<u16>, keep: bool) -> Footprint {
+        let Some(attr) = wall else { return footprint::end(outer) };
+        let own = footprint::current();
+        footprint::set(outer.with_atom(wall_atom(attr)));
+        if keep { self.walls.borrow_mut().insert(attr, own.clone()); }
+        own
+    }
+
+    /// Each wall computed so far, with its own reads.
+    pub(crate) fn walls(&self) -> Vec<(u16, Footprint)> {
+        self.walls.borrow().iter().map(|(&attr, read)| (attr, read.clone())).collect()
     }
 
     /// Evaluates (node, attribute) without a memo, as attributes read inside
@@ -374,6 +453,13 @@ impl FileVm {
     }
 
     pub fn begin(&self, tree: &Tree, layout: &[u16], node: u32, slot: u16) -> Begin {
+        self.begin_attr(tree, layout, node, slot, None)
+    }
+
+    /// [`FileVm::begin`] of attribute `attr` (when known: a root attribute
+    /// is then a wall).
+    pub fn begin_attr(&self, tree: &Tree, layout: &[u16], node: u32, slot: u16, attr: Option<u16>) -> Begin {
+        let wall = attr.and_then(|attr| self.wall(node, attr));
         let mut storage = self.storage.borrow_mut();
         if storage.offsets.is_empty() {
             storage.offsets = vec![NO_RECORD; tree.nodes.len()];
@@ -392,18 +478,40 @@ impl FileVm {
         }
         let at = block as usize + slot as usize % BLOCK;
         match decode(storage.cells.get(at)) {
-            Cell::Ready(v) => Begin::Ready(v),
+            Cell::Ready(v) => {
+                match wall {
+                    Some(attr) => footprint::enter_atom(wall_atom(attr)),
+                    None => match self.cell_reads.borrow().get(at) {
+                        Some(&id) if id != 0 => footprint::enter(&self.cell_footprints.borrow()[id as usize - 1]),
+                        _ => {}
+                    },
+                }
+                Begin::Ready(v)
+            }
             Cell::Busy | Cell::GaveUp => Begin::GiveUp,
             Cell::Unset => {
                 storage.cells.set(at, BUSY);
+                self.computing.borrow_mut().push((footprint::begin(), wall));
                 Begin::Compute(at)
             }
         }
     }
 
+    /// Ends the computation [`FileVm::begin`] started at cell `at`.
     pub fn finish(&self, at: usize, answer: Known<Option<V>>) {
+        let (outer, wall) = self.computing.borrow_mut().pop().unwrap_or_default();
+        let read = self.end_reading(outer, wall, matches!(answer, Known::Yes(_)));
         let value = match answer {
-            Known::Yes(value) => value.map_or(GAVE_UP, encode),
+            Known::Yes(value) => {
+                if footprint::is_tracking() && wall.is_none() && !read.is_none() {
+                    let mut footprints = self.cell_footprints.borrow_mut();
+                    footprints.push(read);
+                    let mut reads = self.cell_reads.borrow_mut();
+                    if reads.len() <= at { reads.resize(at + 1, 0) }
+                    reads[at] = footprints.len() as u32;
+                }
+                value.map_or(GAVE_UP, encode)
+            }
             Known::Unknown => UNSET,
         };
         self.storage.borrow_mut().cells.set(at, value);

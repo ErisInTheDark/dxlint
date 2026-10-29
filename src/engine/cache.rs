@@ -24,7 +24,7 @@ use super::reads::{hash_bytes, Dep, Reads, Scan, ScanTest};
 
 pub const FILE_NAME: &str = ".dxcache";
 /// Bumped whenever the encoding changes.
-const MAGIC: &[u8; 4] = b"ZLC8";
+const MAGIC: &[u8; 4] = b"ZLC9";
 
 /// Deps, groups and scans, by index into the tables.
 #[derive(Default, Clone, PartialEq, Eq, Hash)]
@@ -200,6 +200,7 @@ impl Cache {
                 let scan = &self.saved.scans[i as usize];
                 Arc::new(Scan { files: self.group_reads(scan.files), test: scan.test.clone() })
             }).clone()).collect(),
+            ..Default::default()
         }
     }
 

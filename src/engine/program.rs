@@ -209,6 +209,18 @@ fn carried<K: Eq + Hash, V>(map: RwLock<FxHashMap<K, V>>, mut judge: impl FnMut(
     RwLock::new(map.into_inner().expect("run map").into_iter().filter_map(|(key, value)| judge(key, value)).collect())
 }
 
+/// The answers of a map holding each with its revision that `keep`
+/// accepts, moved to revision `to` where they lie.
+fn carried_in_place<K, V>(map: RwLock<FxHashMap<K, (u64, Cached<V>)>>, to: u64, keep: &mut Keep<'_>) -> RwLock<FxHashMap<K, (u64, Cached<V>)>> {
+    let mut map = map.into_inner().expect("run map");
+    map.retain(|_, (at, answer)| {
+        let kept = keep(*at, Some(&answer.reads), None);
+        *at = to;
+        kept
+    });
+    RwLock::new(map)
+}
+
 /// [`Slots`] whose finished answers `keep` accepts at `revision`.
 fn carried_slots<K: Eq + Hash, V>(slots: Slots<K, V>, revision: u64, keep: &mut Keep<'_>) -> Slots<K, V> {
     Mutex::new(slots.into_inner().expect("run slots").into_iter()
@@ -306,10 +318,11 @@ pub(super) struct Snapshot {
     catalogs: Memo<(u64, CatalogKey), Arc<Catalog>>,
     // Read-mostly maps every lint thread consults: read locks on hits.
     units: RwLock<FxHashMap<PathBuf, (u64, Arc<UnitSlot>)>>,
-    modules: RwLock<FxHashMap<ModuleKey, Cached<Arc<[StableTarget]>>>>,
+    /// Shared module answers, with the revision each holds at.
+    modules: RwLock<FxHashMap<ModuleKey, (u64, Cached<Arc<[StableTarget]>>)>>,
     /// Per program and scope classes, the augmentations each module scope
     /// (by path and scope) receives.
-    augmentations: RwLock<FxHashMap<ModuleKey, Cached<Arc<Augmentations>>>>,
+    augmentations: RwLock<FxHashMap<ModuleKey, (u64, Cached<Arc<Augmentations>>)>>,
     /// Program inputs (by input list hash) whose units were loaded in parallel.
     prefetched: Mutex<FxHashMap<u64, Arc<std::sync::OnceLock<()>>>>,
     /// Module resolution's file probes and reads, once per path and revision.
@@ -383,10 +396,9 @@ type PackageProbe = crate::grammar::names::modules::resolution::Probe<std::path:
 pub(super) type PackageKey = (u64, usize, std::path::PathBuf, Box<str>, Box<[Box<str>]>);
 
 /// A shared module question ([`crate::grammar::names::modules::SharedQuestion`])
-/// with files by path, under one program and revision.
+/// with files by path, under one program.
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub(super) struct ModuleKey {
-    pub revision: u64,
     pub settings: usize,
     /// The program's identity: a hash of its input paths (0 for questions
     /// no program changes).
@@ -507,8 +519,8 @@ impl Snapshot {
                 let names = slot.get().and_then(|(_, unit)| unit.as_ref()?.names.get()).map(|names| &*names.reads);
                 keep(at, names, Some(&*path)).then(|| (path, (to, slot.clone())))
             }),
-            modules: carried(modules, |key, answer| keep(key.revision, Some(&answer.reads), None).then(|| (ModuleKey { revision: to, ..key }, answer))),
-            augmentations: carried(augmentations, |key, answer| keep(key.revision, Some(&answer.reads), None).then(|| (ModuleKey { revision: to, ..key }, answer))),
+            modules: carried_in_place(modules, to, keep),
+            augmentations: carried_in_place(augmentations, to, keep),
             prefetched: Default::default(),
             probes: carried(probes, |path, (at, found)| keep(at, None, Some(&*path)).then_some((path, (to, found)))),
             listings: carried(listings, |dir, (at, listing)| keep(at, None, Some(&*dir)).then_some((dir, (to, listing)))),
@@ -630,20 +642,20 @@ impl Snapshot {
         slot.get_or_init(load);
     }
 
-    pub(super) fn augmentations(&self, key: &ModuleKey) -> Option<Cached<Arc<Augmentations>>> {
-        self.augmentations.read().expect("run augmentations").get(key).cloned()
+    pub(super) fn augmentations(&self, revision: u64, key: &ModuleKey) -> Option<Cached<Arc<Augmentations>>> {
+        self.augmentations.read().expect("run augmentations").get(key).filter(|(at, _)| *at == revision).map(|(_, answer)| answer.clone())
     }
 
-    pub(super) fn keep_augmentations(&self, key: ModuleKey, answer: Cached<Arc<Augmentations>>) {
-        self.augmentations.write().expect("run augmentations").insert(key, answer);
+    pub(super) fn keep_augmentations(&self, revision: u64, key: ModuleKey, answer: Cached<Arc<Augmentations>>) {
+        self.augmentations.write().expect("run augmentations").insert(key, (revision, answer));
     }
 
-    pub(super) fn module_answer(&self, key: &ModuleKey) -> Option<Cached<Arc<[StableTarget]>>> {
-        self.modules.read().expect("run modules").get(key).cloned()
+    pub(super) fn module_answer(&self, revision: u64, key: &ModuleKey) -> Option<Cached<Arc<[StableTarget]>>> {
+        self.modules.read().expect("run modules").get(key).filter(|(at, _)| *at == revision).map(|(_, answer)| answer.clone())
     }
 
-    pub(super) fn keep_module_answer(&self, key: ModuleKey, answer: Cached<Arc<[StableTarget]>>) {
-        self.modules.write().expect("run modules").insert(key, answer);
+    pub(super) fn keep_module_answer(&self, revision: u64, key: ModuleKey, answer: Cached<Arc<[StableTarget]>>) {
+        self.modules.write().expect("run modules").insert(key, (revision, answer));
     }
 
     pub(super) fn value_answer(&self, key: &ValueKey) -> Option<Cached<Option<StableValue>>> {

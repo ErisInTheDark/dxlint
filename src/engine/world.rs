@@ -128,9 +128,10 @@ impl<'a> LintWorld<'a> {
 
     /// Starts from an earlier lint's answers about this file: its files keep
     /// their numbers (while each still reads the same) and its semantic
-    /// answers stay, but those an edit inside `bodies` may change.
-    pub(super) fn carry_in(&'a self, carried: super::editing::WorldCarry, (bodies, edited): super::editing::Edited) {
-        let super::editing::WorldCarry { units, state, interned } = carried;
+    /// answers stay, but those `dirty`'s edit may change. Rechecking the
+    /// file's whole-file scans may find more changed: added to `dirty`.
+    pub(super) fn carry_in(&'a self, carried: super::editing::WorldCarry, dirty: &mut crate::footprint::Dirty) {
+        let super::editing::WorldCarry { units, state, interned, .. } = carried;
         for unit in units {
             let (hash, now) = self.linter.unit_quiet(&unit.path, self.snapshot);
             // A file another edit changed: the answers are of another program.
@@ -144,36 +145,40 @@ impl<'a> LintWorld<'a> {
         }
         let mut state = state;
         let Some(fresh) = std::rc::Rc::get_mut(&mut state) else { return };
-        // A place of the linted file the edit reached: inside the edited
-        // body, or around it.
+        // Answers kept at nodes the edit removed are never asked again.
         let tree = self.ctx.tree;
-        let touched = |target: &Target| match *target {
-            Target::Node(NodeRef { file: 0, node }) => edited.is_some_and(|(start, end)| tree.nodes.get(node as usize)
-                .is_none_or(|n| n.start < end && start < n.end || n.start <= start && end <= n.end)),
-            Target::Scope(ScopeRef { file: 0, .. }) => edited.is_some(),
+        let gone = |target: &Target| match *target {
+            Target::Node(NodeRef { file: 0, node }) => tree.regions().is_some_and(|regions| regions.chunk(node).is_none()),
             _ => false,
         };
-        fresh.forget(bodies, &touched);
+        fresh.forget(dirty, &gone);
         self.semantic.carry_in((state, interned), self.revision());
-        // What read the file's whole-file scan holds while the scan answers
-        // the same for the edited text.
-        if edited.is_some() {
-            let files = Files(self);
-            let at = Leaf { target: Target::Node(NodeRef { file: 0, node: self.ctx.tree.root }), frame: FrameId::ROOT };
-            let same = self.semantic.run(&files, &self.ctx.grammar.names, |semantic| {
-                self.evaluating(Some(ActiveQuestion { semantic, at }), crate::expr::queries::Uncertainty::Explicit,
-                    || Known::Yes(semantic.narrowing().rescan()))
-            });
-            if same != Known::Yes(true) {
-                self.semantic.forget(crate::grammar::names::memo::SCAN, &|_| false);
-            }
+        if dirty.edit.is_none() { return }
+        // The file's whole-file scans, again: what read them holds while
+        // their answers for what it read stay the same.
+        let files = Files(self);
+        let at = Leaf { target: Target::Node(NodeRef { file: 0, node: self.ctx.tree.root }), frame: FrameId::ROOT };
+        let changed = self.semantic.run(&files, &self.ctx.grammar.names, |semantic| {
+            self.evaluating(Some(ActiveQuestion { semantic, at }), crate::expr::queries::Uncertainty::Explicit, || {
+                let mut changed = crate::footprint::Dirty::default();
+                semantic.narrowing().recheck(at, &mut changed);
+                Known::Yes(changed)
+            })
+        });
+        let changed = match changed {
+            Known::Yes(changed) => changed,
+            Known::Unknown => crate::footprint::Dirty::all(),
+        };
+        if changed.has_atoms() {
+            self.semantic.forget(&changed, &|_| false);
+            dirty.union(&changed);
         }
     }
 
     /// What [`LintWorld::carry_in`] starts the next lint from.
     pub(super) fn carry_out(&self) -> super::editing::WorldCarry {
         let (state, interned) = self.semantic.carry_out();
-        super::editing::WorldCarry { units: self.views.units(), state, interned }
+        super::editing::WorldCarry { units: self.views.units(), state, interned, names: None, results: Default::default(), conditions: Default::default(), walls: Vec::new() }
     }
 
     /// `path`'s file, its text read recorded on every lookup: work in any
@@ -239,7 +244,7 @@ impl<'a> LintWorld<'a> {
                 // Never resolves names while they are being resolved.
                 let names = self.on(0, self.ctx.tree.root).filter(|ctx| !ctx.names_resolving()).map(|ctx| ctx.names());
                 let Some(names) = names else {
-                    crate::grammar::names::memo::enter(crate::grammar::names::memo::ALL);
+                    crate::footprint::enter_all();
                     if !quiet { super::reads::note(super::reads::Dep::Text(unit.path.clone(), unit.hash)) }
                     return;
                 };
@@ -256,12 +261,6 @@ impl<'a> LintWorld<'a> {
         };
         let tree = if file == 0 { self.ctx.tree } else { &unit.parsed.tree };
         let Some(syntax) = tree.nodes.get(node as usize) else { return };
-        // The session's answers record the bodies they entered.
-        if file == 0 {
-            if let Some(index) = self.linter.bodies(unit).and_then(|bodies| bodies.body_at(syntax.start)) {
-                crate::grammar::names::memo::enter(crate::grammar::names::memo::body(index));
-            }
-        }
         if quiet { return }
         if let Some(entered) = self.linter.entered(unit, syntax.start) {
             super::reads::note(super::reads::Dep::Outside(unit.path.clone(), entered));
@@ -386,16 +385,18 @@ impl<'a> LintWorld<'a> {
         let reads = values.value_reads();
         let mark = values.cycle_mark();
         let mut value = None;
+        let outer = crate::footprint::begin();
         let answer = values.fact(crate::grammar::names::values::fact_tag(&ATTRIBUTES, &key), Budget::per_question(),
             || self.complete_attribute(|| { value = compute(); value }));
+        let read = crate::footprint::end(outer);
         let unpaid = answer == Err(crate::grammar::names::question::Cut::Unpaid);
         let unknown = !matches!(answer, Ok(Known::Yes(Some(_))));
         if unknown { self.mark_unknown() }
         // Unknown only because something further up is still undecided, or
         // never started: a later ask may know more.
         if let Some(found) = value.filter(|_| !(unknown && (unpaid || values.cycled_since(mark)))) {
-            semantic.remember_attribute(key, found, unknown);
-            if values.value_reads() == reads { semantic.remember_frame_free(key, found, unknown) }
+            if values.value_reads() == reads { semantic.remember_frame_free(key, found, unknown, read.clone()) }
+            semantic.remember_attribute(key, found, unknown, read);
         }
         value
     }
@@ -874,7 +875,7 @@ impl<'a> Files<'a> {
         let Some(snapshot) = self.0.snapshot else { return Known::Yes(None) };
         let question = super::program::StableQuestion::Augmentations { classes };
         let (true, Some(run_key)) = (self.shares(snapshot), self.module_key(question)) else { return Known::Yes(None) };
-        let shared = match snapshot.augmentations(&run_key) {
+        let shared = match snapshot.augmentations(self.0.revision(), &run_key) {
             Some(shared) => Some(shared),
             None => {
                 let built = super::reads::Cached::compute(|| {
@@ -886,7 +887,7 @@ impl<'a> Files<'a> {
                     Known::Yes(None) => None,
                     Known::Yes(Some(index)) => {
                         let shared = super::reads::Cached { value: Arc::new(index), reads: built.reads };
-                        snapshot.keep_augmentations(run_key, shared.clone());
+                        snapshot.keep_augmentations(self.0.revision(), run_key, shared.clone());
                         Some(shared)
                     }
                 }
@@ -959,7 +960,7 @@ impl<'a> Files<'a> {
         // Shared answers see every file as the run reads it; a world whose
         // linted text differs (a fix pass, an unsaved edit) keeps its own.
         let (true, Some(key)) = self.timed("modules.resolve.shared.key", || (self.shares(snapshot), self.module_key(question))) else { return compute() };
-        if let Some(shared) = self.timed("modules.resolve.shared.lookup", || snapshot.module_answer(&key)) {
+        if let Some(shared) = self.timed("modules.resolve.shared.lookup", || snapshot.module_answer(self.0.revision(), &key)) {
             if let Some(targets) = self.timed("modules.resolve.shared.targets", || self.local_targets(&shared.value)) {
                 self.timed("modules.resolve.shared.record", || super::reads::note_group(&shared.reads));
                 self.0.program.shared_local.borrow_mut().insert(local, super::reads::Cached { value: targets.clone(), reads: shared.reads.clone() });
@@ -993,7 +994,7 @@ impl<'a> Files<'a> {
                         super::Profile::add(&profile.shared_answer_deps[kind], answer.reads.deps.len() as u64);
                         super::Profile::add(&profile.shared_answer_groups[kind], answer.reads.groups.len() as u64);
                     }
-                    snapshot.keep_module_answer(key, super::reads::Cached { value: stable, reads: answer.reads.clone() });
+                    snapshot.keep_module_answer(self.0.revision(), key, super::reads::Cached { value: stable, reads: answer.reads.clone() });
                 }
             });
             self.0.program.shared_local.borrow_mut().insert(local, super::reads::Cached { value: targets.clone(), reads: answer.reads.clone() });
@@ -1007,12 +1008,11 @@ impl<'a> Files<'a> {
         let Known::Yes(Some(selected)) = self.timed("modules.resolve.shared.select", || self.program_selected()) else { return None };
         if let super::program::StableQuestion::Resolve { specifier, .. } = &question {
             if selected.resolves_from_directory(specifier) {
-                return Some(super::program::ModuleKey { revision: self.0.revision(), settings: selected as *const Settings as usize, program: 0, outside: None, question });
+                return Some(super::program::ModuleKey { settings: selected as *const Settings as usize, program: 0, outside: None, question });
             }
         }
         let Known::Yes((program, outside)) = self.timed("modules.resolve.shared.identity", || self.program_identity(selected)) else { return None };
         Some(super::program::ModuleKey {
-            revision: self.0.revision(),
             settings: selected as *const Settings as usize,
             program,
             outside,
@@ -1309,7 +1309,10 @@ impl<'a> Files<'a> {
             let Known::Yes(name) = self.operand(at, name, semantic) else { return Known::Unknown };
             let name = match name {
                 Value::Str(name) => name.to_string(),
-                Value::Node(_, name) => self.name_key(scope.file, &name).into_owned(),
+                Value::Node(node, name) => {
+                    crate::footprint::value_text(node, &name);
+                    self.name_key(scope.file, &name).into_owned()
+                }
                 _ => return Known::Unknown,
             };
             let source = match module {

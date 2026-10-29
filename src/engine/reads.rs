@@ -63,12 +63,67 @@ pub enum Dep {
 /// A file's text as [`Dep::Outside`] reads it: the whole text's hash, and
 /// the bodies other files see only by entering them, each with hashes of
 /// the text before and after it.
-#[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Bodies {
     pub hash: u64,
     len: usize,
     /// (start, end, hash before start, hash after end), outermost only.
     ranges: Box<[(u32, u32, u64, u64)]>,
+    /// `ranges` hashed once: reads note bodies per step into one, and
+    /// hashing every range each time dominated editor lints.
+    digest: u64,
+}
+
+impl Hash for Bodies {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.hash.hash(state);
+        self.digest.hash(state);
+    }
+}
+
+fn digest(ranges: &[(u32, u32, u64, u64)]) -> u64 {
+    use std::hash::BuildHasher;
+    crate::fx_hash::FxBuild::default().hash_one(ranges)
+}
+
+/// A text's whole hash and the hashes of all its prefixes and suffixes, so
+/// [`Bodies::edit`] checks any body's surroundings without rehashing them.
+struct TextHashes {
+    whole: u64,
+    /// `prefix[i]`: the bytes before `i`.
+    prefix: Vec<u64>,
+    /// `suffix[i]`: the bytes from `i`.
+    suffix: Vec<u64>,
+}
+
+const SURROUNDING: u64 = 0x9E37_79B9_7F4A_7C15;
+
+impl TextHashes {
+    fn new(bytes: &[u8]) -> TextHashes {
+        let mut prefix = Vec::with_capacity(bytes.len() + 1);
+        prefix.push(0u64);
+        for &b in bytes { prefix.push(prefix[prefix.len() - 1].wrapping_mul(SURROUNDING).wrapping_add(u64::from(b) + 1)) }
+        let mut suffix = vec![0u64; bytes.len() + 1];
+        for i in (0..bytes.len()).rev() { suffix[i] = suffix[i + 1].wrapping_mul(SURROUNDING).wrapping_add(u64::from(bytes[i]) + 1) }
+        TextHashes { whole: hash_bytes(bytes), prefix, suffix }
+    }
+
+    /// `text`'s hashes, kept for the last text asked on this thread (an
+    /// editor's checks ask about one file's text many times).
+    fn of(text: &Arc<str>) -> std::rc::Rc<TextHashes> {
+        thread_local! {
+            static LAST: RefCell<Option<(Arc<str>, std::rc::Rc<TextHashes>)>> = const { RefCell::new(None) };
+        }
+        LAST.with(|last| {
+            let mut last = last.borrow_mut();
+            if let Some((kept, hashes)) = &*last {
+                if Arc::ptr_eq(kept, text) { return hashes.clone() }
+            }
+            let hashes = std::rc::Rc::new(TextHashes::new(text.as_bytes()));
+            *last = Some((text.clone(), hashes.clone()));
+            hashes
+        })
+    }
 }
 
 impl Bodies {
@@ -80,10 +135,12 @@ impl Bodies {
             outermost.push((start, end));
         }
         let bytes = text.as_bytes();
-        let ranges = outermost.into_iter()
-            .filter_map(|(start, end)| Some((start, end, hash_bytes(bytes.get(..start as usize)?), hash_bytes(bytes.get(end as usize..)?))))
+        let hashes = TextHashes::new(bytes);
+        let ranges: Box<[_]> = outermost.into_iter()
+            .filter(|&(start, end)| start <= end && end as usize <= bytes.len())
+            .map(|(start, end)| (start, end, hashes.prefix[start as usize], hashes.suffix[end as usize]))
             .collect();
-        Bodies { hash: hash_bytes(bytes), len: bytes.len(), ranges }
+        Bodies { hash: hashes.whole, len: bytes.len(), digest: digest(&ranges), ranges }
     }
 
     /// The recorded text's length and the bodies with their surroundings'
@@ -93,7 +150,7 @@ impl Bodies {
     }
 
     pub fn from_parts(hash: u64, len: usize, ranges: Vec<(u32, u32, u64, u64)>) -> Bodies {
-        Bodies { hash, len, ranges: ranges.into() }
+        Bodies { hash, len, digest: digest(&ranges), ranges: ranges.into() }
     }
 
     /// The outermost bodies' byte ranges.
@@ -119,22 +176,22 @@ impl Bodies {
     /// The same read with body `index` read too: edits inside it no longer
     /// hold. The other bodies keep their recorded surroundings.
     pub fn exposing(&self, index: usize) -> Bodies {
-        let ranges = self.ranges.iter().enumerate().filter(|&(i, _)| i != index).map(|(_, &range)| range).collect();
-        Bodies { hash: self.hash, len: self.len, ranges }
+        let ranges: Box<[_]> = self.ranges.iter().enumerate().filter(|&(i, _)| i != index).map(|(_, &range)| range).collect();
+        Bodies { hash: self.hash, len: self.len, digest: digest(&ranges), ranges }
     }
 
     /// How `text` differs from the recorded text: not at all (`Some(None)`),
     /// only inside one body (`Some(Some(range))`, the body's range in
     /// `text`, which a parse must confirm), or elsewhere (`None`).
-    pub fn edit(&self, text: Option<&str>) -> Option<Option<(u32, u32)>> {
-        let Some(bytes) = text.map(str::as_bytes) else { return (self.hash == MISSING).then_some(None) };
-        if hash_bytes(bytes) == self.hash { return Some(None) }
+    pub fn edit(&self, text: Option<&Arc<str>>) -> Option<Option<(u32, u32)>> {
+        let Some(text) = text else { return (self.hash == MISSING).then_some(None) };
+        let hashes = TextHashes::of(text);
+        if hashes.whole == self.hash { return Some(None) }
+        let len = text.len();
         self.ranges.iter().find(|&&(start, end, before, after)| {
             let tail = self.len - end as usize;
-            bytes.len() >= start as usize + tail
-                && hash_bytes(&bytes[..start as usize]) == before
-                && hash_bytes(&bytes[bytes.len() - tail..]) == after
-        }).map(|&(start, end, ..)| Some((start, u32::try_from(bytes.len() - (self.len - end as usize)).unwrap_or(u32::MAX))))
+            len >= start as usize + tail && hashes.prefix[start as usize] == before && hashes.suffix[len - tail] == after
+        }).map(|&(start, end, ..)| Some((start, u32::try_from(len - (self.len - end as usize)).unwrap_or(u32::MAX))))
     }
 }
 
@@ -162,7 +219,7 @@ impl Dep {
             Dep::Text(p, h) => content(p).1 == *h,
             // An edit inside a body needs a parse to confirm: the engine's
             // `Linter::holds` does that.
-            Dep::Outside(p, bodies) => bodies.edit(text(p).as_deref()) == Some(None),
+            Dep::Outside(p, bodies) => bodies.edit(text(p).as_ref()) == Some(None),
             Dep::IsFile(p, b) => file_exists(p) == *b,
             Dep::IsDir(p, b) => directory_exists(p) == *b,
             Dep::List(p, h) => listing(p).1 == *h,
@@ -190,6 +247,28 @@ pub struct Reads {
     pub deps: Vec<Dep>,
     pub groups: Vec<Arc<Reads>>,
     pub scans: Vec<Arc<Scan>>,
+    /// [`Reads::names`], once.
+    pub(super) names: std::sync::OnceLock<Names>,
+}
+
+/// The file names some reads (their groups and scans too) read, as blooms:
+/// a check against a few changed files skips reads that name none of them.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Names {
+    /// Names of files whose text was read.
+    pub texts: u64,
+    /// Names of files whose existence was read.
+    pub files: u64,
+    /// Whether a directory's listing (or a walk below it) was read.
+    pub dirs: bool,
+}
+
+impl Names {
+    /// The bloom bit of file name `name`.
+    pub fn bit(path: &Path) -> u64 {
+        use std::hash::BuildHasher;
+        1 << (crate::fx_hash::FxBuild::default().hash_one(path.file_name()) % 64)
+    }
 }
 
 /// A lookup over many files that asked each one only `test` (a program's
@@ -251,6 +330,26 @@ impl Reads {
         self.deps.is_empty() && self.groups.is_empty() && self.scans.is_empty()
     }
 
+    /// The file names these reads read.
+    pub fn names(&self) -> Names {
+        *self.names.get_or_init(|| {
+            let mut names = Names::default();
+            for dep in &self.deps {
+                match dep {
+                    Dep::Text(path, _) | Dep::Outside(path, _) => names.texts |= Names::bit(path),
+                    Dep::IsFile(path, _) => names.files |= Names::bit(path),
+                    Dep::IsDir(..) | Dep::List(..) | Dep::Discovered(..) | Dep::Requested(..) => names.dirs = true,
+                }
+            }
+            for inner in self.groups.iter().map(|group| group.names()).chain(self.scans.iter().map(|scan| scan.files.names())) {
+                names.texts |= inner.texts;
+                names.files |= inner.files;
+                names.dirs |= inner.dirs;
+            }
+            names
+        })
+    }
+
     /// Whether `f` is true for any dep, looking into each group once (and
     /// into no scan: a scan's files are read only for its test).
     pub fn any(&self, f: &mut impl FnMut(&Dep) -> bool) -> bool {
@@ -307,7 +406,7 @@ pub fn track<R>(f: impl FnOnce() -> R) -> (R, Reads) {
     unwinding.0 = false;
     let frame = FRAMES.with(|f| f.borrow_mut().pop()).unwrap_or_default();
     let deps: Vec<Dep> = frame.deps.into_iter().collect();
-    (r, Reads { deps, groups: frame.groups, scans: frame.scans })
+    (r, Reads { deps, groups: frame.groups, scans: frame.scans, ..Default::default() })
 }
 
 /// Records a read for the innermost `track`, if any.
@@ -466,9 +565,40 @@ fn text(path: &Path) -> Option<Arc<str>> {
 
 /// A file's text and its hash ([`MISSING`] when unreadable).
 fn content(path: &Path) -> (Option<Arc<str>>, u64) {
-    let text = text(path);
-    let hash = text.as_deref().map_or(MISSING, |t| hash_bytes(t.as_bytes()));
-    (text, hash)
+    match overlay(path) {
+        Overlay::Text(text) => {
+            let hash = buffer_hash(&text);
+            (Some(text), hash)
+        }
+        Overlay::Hidden => (None, MISSING),
+        Overlay::Disk => {
+            let text: Option<Arc<str>> = std::fs::read_to_string(path).ok().map(Into::into);
+            let hash = text.as_deref().map_or(MISSING, |t| hash_bytes(t.as_bytes()));
+            (text, hash)
+        }
+    }
+}
+
+/// An open buffer's text hash, kept for the last buffer asked on this
+/// thread (an editor's checks ask about the edited file's many times).
+fn buffer_hash(text: &Arc<str>) -> u64 {
+    thread_local! {
+        static LAST: RefCell<Option<(Arc<str>, u64)>> = const { RefCell::new(None) };
+    }
+    LAST.with(|last| {
+        let mut last = last.borrow_mut();
+        if let Some((kept, hash)) = &*last {
+            if Arc::ptr_eq(kept, text) { return *hash }
+        }
+        let hash = hash_bytes(text.as_bytes());
+        *last = Some((text.clone(), hash));
+        hash
+    })
+}
+
+/// Whether a file exists (an open buffer counts), unrecorded.
+pub fn exists_unrecorded(path: &Path) -> bool {
+    file_exists(path)
 }
 
 fn file_exists(path: &Path) -> bool {

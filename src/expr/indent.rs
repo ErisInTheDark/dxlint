@@ -70,6 +70,11 @@ impl IndentPlan {
         }
     }
 
+    /// Whether the rule has no `indent` lines.
+    pub fn is_empty(&self) -> bool {
+        self.rules.is_empty()
+    }
+
     /// Rule line `i`'s lowered `by`.
     pub(super) fn lowered_by(&self, i: usize) -> Option<&VExpr> {
         self.lowered.get(i).and_then(|l| l.1.as_ref())

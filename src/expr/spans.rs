@@ -89,22 +89,43 @@ impl LayerSpans {
 }
 
 impl<'a> Ctx<'a> {
+    /// The whole file's `sel` nodes by span; built unrecorded, as readers
+    /// record the range they ask about ([`Ctx::read_range`]).
     fn layer_spans(&self, sel: &NodeSel) -> std::rc::Rc<LayerSpans> {
         if let Some(spans) = self.memo.spans.borrow().get(sel) {
             return spans.clone();
         }
-        let mut nodes = Vec::new();
-        let mut stack = vec![self.tree.root];
-        while let Some(id) = stack.pop() {
-            let node = self.tree.node(id);
-            if sel.matches(self.tree, id) {
-                nodes.push((node.start, node.end, id));
+        let spans = crate::footprint::quiet(|| {
+            let mut nodes = Vec::new();
+            let mut stack = vec![self.tree.root];
+            while let Some(id) = stack.pop() {
+                let node = self.tree.node(id);
+                if sel.matches(self.tree, id) {
+                    nodes.push((node.start, node.end, id));
+                }
+                stack.extend(self.tree.children(id).iter().map(|edge| edge.node));
             }
-            stack.extend(self.tree.children(id).iter().map(|edge| edge.node));
-        }
-        let spans = std::rc::Rc::new(LayerSpans::new(nodes));
+            std::rc::Rc::new(LayerSpans::new(nodes))
+        });
         self.memo.spans.borrow_mut().insert(sel.clone(), spans.clone());
         spans
+    }
+
+    /// Records what the nodes holding bytes `start..end` depend on: the
+    /// children of every node holding it (where a node spanning it could
+    /// appear; kept nodes keep their spans).
+    fn read_around(&self, start: u32, end: u32) {
+        if crate::footprint::is_tracking() {
+            self.tree.innermost_with_text(self.grammar, start, u32::MAX);
+            self.tree.innermost_with_text(self.grammar, end, u32::MAX);
+        }
+    }
+
+    /// [`Ctx::read_around`], and the range itself: a node inside it could
+    /// appear anywhere there.
+    fn read_range(&self, start: u32, end: u32) {
+        crate::footprint::positions(start as usize, end as usize);
+        self.read_around(start, end);
     }
 
     /// One node query, timed under `--profile`.
@@ -120,6 +141,7 @@ impl<'a> Ctx<'a> {
         self.query(Query::Containing, || {
             let spans = self.layer_spans(sel);
             let node = self.tree.node(self.node);
+            self.read_around(node.start, node.end);
             spans.containing(node.start, node.end, self.node, |a, b| self.is_ancestor(a, b))
         }, |found| usize::from(found.is_some()))
     }
@@ -137,6 +159,7 @@ impl<'a> Ctx<'a> {
                 (node.start, node.end)
             }
         };
+        self.read_range(start, end);
         self.query(Query::Overlapping, || self.layer_spans(sel).overlapping(start, end, self.node), Vec::len)
     }
 

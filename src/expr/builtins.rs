@@ -83,7 +83,7 @@ impl<'a> Ctx<'a> {
                 || Value::record(vec![("settings".into(), Value::list(Vec::new()))]),
                 |options| options.environment(self.lang, std::path::Path::new(self.file)),
             ),
-            Builtin::Text => Value::from(self.node_text(self.node)),
+            Builtin::Text => Value::Str(value::Text::Read(self.node_text(self.node))),
             Builtin::Indent => Value::from(self.indent_at(start)),
             Builtin::ParentIndent => match self.parent_layer() {
                 Some(id) if !self.tree.is_root(id) => self.line_indent(self.lines.line_of(self.tree.node(id).start as usize)),
@@ -116,7 +116,7 @@ impl<'a> Ctx<'a> {
             Builtin::IndentHangs => Value::Bool(self.indent_hit()?.is_some_and(|hit| {
                 hit.inside.is_some_and(|(inside, _)| {
                     let line_end = self.lines.line_end(self.source, self.lines.line_of(inside));
-                    !self.source[inside..line_end.max(inside)].trim().is_empty()
+                    !self.source_between(inside, line_end.max(inside)).trim().is_empty()
                 })
             })),
             Builtin::ParentLine => match self.parent_layer() {
@@ -129,18 +129,20 @@ impl<'a> Ctx<'a> {
                     self.tree.children(p).iter().map(|e| e.node).filter(|&c| self.tree.node(c).end as usize <= start && c != self.node).max_by_key(|&c| self.tree.node(c).end)
                 });
                 match prev {
-                    Some(c) => Value::from(&self.source[self.tree.node(c).end as usize..start]),
+                    Some(c) => Value::from(self.source_between(self.tree.node(c).end as usize, start)),
                     None => Value::Null,
                 }
             }
             Builtin::Line => Value::from(self.lines.line_of(start) + 1),
             Builtin::Column => Value::from(self.lines.line_col(self.source, start).1 + 1),
+            // Offsets of kept nodes keep their order across edits; what lies
+            // between two is read as text (and recorded) when it matters.
             Builtin::Offset => Value::from(start),
             Builtin::EndOffset => Value::from(self.tree.node(self.node).end as usize),
             Builtin::File => Value::from(self.file),
             Builtin::Before => {
                 let line_start = self.lines.line_start(self.lines.line_of(start));
-                Value::from(&self.source[line_start..start])
+                Value::from(self.source_between(line_start, start))
             }
             Builtin::After => {
                 let end = self.tree.node(self.node).end as usize;
@@ -150,7 +152,7 @@ impl<'a> Ctx<'a> {
                 if end > start && self.source.as_bytes()[end - 1] == b'\n' || end > line_end {
                     Value::from("")
                 } else {
-                    Value::from(&self.source[end..line_end])
+                    Value::from(self.source_between(end, line_end))
                 }
             }
             Builtin::PreviousLine => match self.lines.line_of(start) {
@@ -167,38 +169,39 @@ impl<'a> Ctx<'a> {
                 }
             }
             Builtin::Parent => match self.parent_layer() {
-                Some(id) => Value::Node(id, value::Text::Borrowed(self.node_text(id))),
+                Some(id) => self.node_value(id),
                 None => Value::Null,
             },
-            Builtin::TextBefore => Value::from(&self.source[..start]),
-            Builtin::TextAfter => Value::from(&self.source[self.tree.node(self.node).end as usize..]),
+            Builtin::TextBefore => Value::from(self.source_between(0, start)),
+            Builtin::TextAfter => Value::from(self.source_between(self.tree.node(self.node).end as usize, self.source.len())),
             Builtin::PreviousSibling => match self.prev_sibling() {
-                Some(id) => Value::from(self.node_text(id)),
+                Some(id) => Value::Str(value::Text::Read(self.node_text(id))),
                 None => Value::Null,
             },
             Builtin::PreviousGap => match self.prev_sibling() {
-                Some(id) => Value::from(&self.source[self.tree.node(id).end as usize..start]),
+                Some(id) => Value::from(self.source_between(self.tree.node(id).end as usize, start)),
                 None => Value::Null,
             },
             Builtin::ParentText => match self.parent_layer() {
-                Some(id) => Value::from(self.node_text(id)),
+                Some(id) => Value::Str(value::Text::Read(self.node_text(id))),
                 None => Value::Null,
             },
             Builtin::ParentBefore => match self.parent_layer() {
-                Some(id) => Value::from(&self.source[self.tree.node(id).start as usize..start]),
+                Some(id) => Value::from(self.source_between(self.tree.node(id).start as usize, start)),
                 None => Value::Null,
             },
+            // Read where used: a slice of it reads only that slice.
             Builtin::Source => Value::from(self.source),
-            Builtin::Node => Value::Node(self.node, value::Text::Borrowed(self.node_text(self.node))),
+            Builtin::Node => self.node_value(self.node),
             Builtin::ScopeDeclaration => match self.names().declaration.get(&self.node) {
-                Some(&id) => Value::Node(id, value::Text::Borrowed(self.node_text(id))),
+                Some(&id) => self.node_value(id),
                 None => Value::Null,
             },
             Builtin::ScopeReferences => Value::list(
                 self.names()
                     .references
                     .get(&self.node)
-                    .map(|refs| refs.iter().map(|&id| Value::Node(id, value::Text::Borrowed(self.node_text(id)))).collect())
+                    .map(|refs| refs.iter().map(|&id| self.node_value(id)).collect())
                     .unwrap_or_default(),
             ),
             Builtin::ScopeEffect => match self.names().effects.get(&self.node) {
@@ -206,10 +209,16 @@ impl<'a> Ctx<'a> {
                 None => Value::Null,
             },
             Builtin::ScopeEffectSite => match self.names().effects.get(&self.node) {
-                Some(&(_, site)) => Value::Node(site, value::Text::Borrowed(self.node_text(site))),
+                Some(&(_, site)) => self.node_value(site),
                 None => Value::Null,
             },
         })
+    }
+
+    /// Node `id` as a value: its text is read only when used as text.
+    pub(crate) fn node_value(&self, id: u32) -> Value<'a> {
+        let n = self.tree.node(id);
+        Value::Node(id, value::Text::Borrowed(&self.source[n.start as usize..n.end as usize]))
     }
 
     /// Whether this tree's names are being resolved right now (their
@@ -230,15 +239,29 @@ impl<'a> Ctx<'a> {
                 let incomplete = std::cell::Cell::new(false);
                 let names = &self.grammar.names;
                 let session = crate::vm::Session::new(self, self.node, &[]);
-                let holds = |node: u32, e: &crate::vm::VExpr| match session.holds_on(node, e) {
-                    Some(held) => held,
-                    None => { incomplete.set(true); self.memo.vm.clear_error(); false }
+                // An editor's file keeps each answer with what it read, for
+                // the next lint's names ([`AttrMemo::name_conditions`]).
+                let tracked = self.tree.regions().is_some();
+                let holds = |node: u32, condition: u32, e: &crate::vm::VExpr| {
+                    if tracked {
+                        if let Some(&(held, _)) = self.memo.name_conditions.borrow().get(&(node, condition)) { return held }
+                    }
+                    let outer = tracked.then(crate::footprint::begin);
+                    let held = session.holds_on(node, e);
+                    let read = outer.map(crate::footprint::end);
+                    match held {
+                        Some(held) => {
+                            if let Some(read) = read { self.memo.name_conditions.borrow_mut().insert((node, condition), (held, read)); }
+                            held
+                        }
+                        None => { incomplete.set(true); self.memo.vm.clear_error(); false }
+                    }
                 };
                 let when = |node: u32, condition: u32| {
                     let Some(e) = names.conditions[condition as usize].lowered.get() else { incomplete.set(true); return false };
                     match self.profile {
-                        Some(profile) => profile.time_name_condition(|| holds(node, e)),
-                        None => holds(node, e),
+                        Some(profile) => profile.time_name_condition(|| holds(node, condition, e)),
+                        None => holds(node, condition, e),
                     }
                 };
                 let key = |text: &'a str| match self.native {
@@ -263,12 +286,17 @@ impl<'a> Ctx<'a> {
                         None => resolve(),
                     });
                 };
-                let complete = match self.world {
+                // Readers record the entries they read, not the whole build.
+                let complete = crate::footprint::quiet(|| match self.world {
                     Some(world) => world.complete_attribute(run).known().is_some(),
                     None => { run(); true }
-                };
+                });
                 let mut resolved = resolved.expect("name resolution ran");
                 resolved.complete &= complete && !incomplete.get();
+                if tracked {
+                    if let Some(previous) = self.memo.previous_names.borrow().as_deref() { resolved.renumber_scopes(previous) }
+                    resolved.track();
+                }
                 self.memo.resolving_names.set(false);
                 std::sync::Arc::new(resolved)
             };

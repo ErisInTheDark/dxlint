@@ -42,6 +42,10 @@ pub struct Tree {
     /// `default` keyword lies inside the decorated class), sorted. Lookups
     /// by position search all their children.
     overlapping: Vec<u32>,
+    /// An editor's file: reads of children, parents and subtrees are
+    /// recorded ([`crate::footprint`]). Kinds, labels and spans are not:
+    /// a node keeps its id across edits only while those stay the same.
+    regions: Option<Box<crate::footprint::Regions>>,
 }
 
 impl Tree {
@@ -150,12 +154,53 @@ impl Tree {
             }
         }
         parent[root as usize] = NONE;
-        Tree { nodes, first, edges, parent, label, field_indices: OnceLock::new(), descendants: OnceLock::new(), module_index: OnceLock::new(), order, root, holes, too_deep, layer_roots: Vec::new(), overlapping }
+        Tree { nodes, first, edges, parent, label, field_indices: OnceLock::new(), descendants: OnceLock::new(), module_index: OnceLock::new(), order, root, holes, too_deep, layer_roots: Vec::new(), overlapping, regions: None }
+    }
+
+    /// Records reads of this tree from now on: it is an editor's file.
+    pub fn track(&mut self) {
+        let regions = crate::footprint::Regions::new(&self.order, self.nodes.len(), |id| self.parent_of(id));
+        self.regions = Some(Box::new(regions));
+    }
+
+    /// Its chunks, when reads of it are recorded.
+    pub fn regions(&self) -> Option<&crate::footprint::Regions> {
+        self.regions.as_deref()
+    }
+
+    #[inline]
+    fn read(&self, read: crate::footprint::Read, id: u32) {
+        if let Some(regions) = &self.regions { regions.note(read, id) }
+    }
+
+    /// Records a read of `id`'s whole text (its `start..end` slice). A
+    /// leaf's text is part of what it is: an edit of it gives it a new id.
+    #[inline]
+    pub fn read_text(&self, id: u32) {
+        if let Some(regions) = &self.regions {
+            if !self.edges_of(id).is_empty() { regions.note_subtree(id) }
+        }
+    }
+
+    /// `id`'s text in `source`, recorded.
+    pub fn text<'s>(&self, source: &'s str, id: u32) -> &'s str {
+        self.read_text(id);
+        let node = &self.nodes[id as usize];
+        &source[node.start as usize..node.end as usize]
     }
 
     /// The node's children in document order.
     pub fn children(&self, id: u32) -> &[Edge] {
+        self.read(crate::footprint::Read::Structure, id);
+        self.edges_of(id)
+    }
+
+    fn edges_of(&self, id: u32) -> &[Edge] {
         &self.edges[self.first[id as usize] as usize..self.first[id as usize + 1] as usize]
+    }
+
+    fn parent_of(&self, id: u32) -> Option<u32> {
+        Some(self.parent[id as usize]).filter(|&p| p != NONE)
     }
 
     /// Rebuilds the tree after `change` edits its nodes (tests shape trees by hand).
@@ -170,49 +215,145 @@ impl Tree {
 
     /// This tree of an edited text, renumbered so every node `previous`
     /// (the tree of the text before) also has keeps its id there: same
-    /// matcher, field label and span, positions after the edit shifted.
-    /// The edit replaced bytes `start..old_end` of the old text with
-    /// `start..new_end` of the new one. Other nodes take the ids left free,
-    /// then new ones; ids no node takes stay as empty text nodes nothing
-    /// reaches.
-    pub fn renumbered_after(self, previous: &Tree, (start, old_end, new_end): (u32, u32, u32)) -> Tree {
-        let moved = |at: u32| if at <= start { Some(at) } else if at >= old_end { Some(at - old_end + new_end) } else { None };
+    /// matcher, field label and span, positions after the edit moved, and
+    /// (for a node without children) the same text. Other nodes take new
+    /// ids, so an id never names two different nodes; ids no node takes
+    /// stay as empty text nodes nothing reaches.
+    pub fn renumbered_after(self, previous: &Tree, edit: crate::footprint::Edit) -> Tree {
+        let crate::footprint::Edit { start, old_end, .. } = edit;
+        let moved = |at: u32| (at <= start || at >= old_end).then(|| edit.moved(at));
         let key = |tree: &Tree, id: u32, at: (u32, u32)| (tree.nodes[id as usize].matcher, tree.label[id as usize], at.0, at.1);
-        let mut kept: FxHashMap<(u32, u16, u32, u32), std::collections::VecDeque<u32>> = FxHashMap::default();
+        // Per key, the first old node not yet taken; `later` chains the
+        // others with that key in document order.
+        let mut kept: FxHashMap<(u32, u16, u32, u32), (u32, u32)> = FxHashMap::default();
+        kept.reserve(previous.order.len());
+        let mut later = vec![NONE; previous.nodes.len()];
         for &id in &previous.order {
             let node = previous.nodes[id as usize];
-            if let (Some(s), Some(e)) = (moved(node.start), moved(node.end)) {
-                kept.entry(key(previous, id, (s, e))).or_default().push_back(id);
+            // A leaf holding the edit keeps its span but not its text.
+            let rewritten = previous.edges_of(id).is_empty() && node.start <= start && old_end <= node.end
+                && node.start < node.end && (start < old_end || node.start < start && start < node.end);
+            if let (Some(s), Some(e), false) = (moved(node.start), moved(node.end), rewritten) {
+                match kept.entry(key(previous, id, (s, e))) {
+                    std::collections::hash_map::Entry::Occupied(mut ids) => {
+                        later[ids.get().1 as usize] = id;
+                        ids.get_mut().1 = id;
+                    }
+                    std::collections::hash_map::Entry::Vacant(slot) => { slot.insert((id, id)); }
+                }
             }
         }
         let n = self.nodes.len();
         let mut to = vec![NONE; n];
-        let mut taken = vec![false; previous.nodes.len()];
         for &id in &self.order {
             let node = self.nodes[id as usize];
-            if let Some(old) = kept.get_mut(&key(&self, id, (node.start, node.end))).and_then(|ids| ids.pop_front()) {
-                to[id as usize] = old;
-                taken[old as usize] = true;
+            if let Some(ids) = kept.get_mut(&key(&self, id, (node.start, node.end))) {
+                if ids.0 != NONE {
+                    to[id as usize] = ids.0;
+                    ids.0 = if ids.0 == ids.1 { NONE } else { later[ids.0 as usize] };
+                }
             }
         }
-        let mut free = (0..previous.nodes.len() as u32).filter(|&id| !taken[id as usize]);
         let mut next = previous.nodes.len() as u32;
         for slot in to.iter_mut().filter(|slot| **slot == NONE) {
-            *slot = free.next().unwrap_or_else(|| { next += 1; next - 1 });
+            *slot = next;
+            next += 1;
         }
-        drop(free);
         let total = (next as usize).max(to.iter().map(|&id| id as usize + 1).max().unwrap_or(0));
-        let mut nodes = vec![Node { matcher: TEXT, start: 0, end: 0, children: Vec::new() }; total];
-        for id in 0..n as u32 {
-            let Syntax { matcher, start, end } = self.nodes[id as usize];
-            let children = self.children(id).iter().map(|edge| Edge { label: edge.label, node: to[edge.node as usize] }).collect();
-            nodes[to[id as usize] as usize] = Node { matcher, start, end, children };
+        // The same tree with every id `id` moved to `to[id]`.
+        let mut from = vec![NONE; total];
+        let mut nodes = vec![Syntax { matcher: TEXT, start: 0, end: 0 }; total];
+        let (mut parent, mut label) = (vec![NONE; total], vec![NO_LABEL; total]);
+        for id in 0..n {
+            let new = to[id] as usize;
+            from[new] = id as u32;
+            nodes[new] = self.nodes[id];
+            parent[new] = self.parent_of(id as u32).map_or(NONE, |p| to[p as usize]);
+            label[new] = self.label[id];
         }
+        let mut first = Vec::with_capacity(total + 1);
+        let mut edges = Vec::with_capacity(self.edges.len());
+        for &old in &from {
+            first.push(edges.len() as u32);
+            if old != NONE {
+                edges.extend(self.edges_of(old).iter().map(|edge| Edge { label: edge.label, node: to[edge.node as usize] }));
+            }
+        }
+        first.push(edges.len() as u32);
+        let mut overlapping: Vec<u32> = self.overlapping.iter().map(|&id| to[id as usize]).collect();
+        overlapping.sort_unstable();
         let mut holes: Vec<(u32, u32, u32)> = self.holes.iter().map(|&(node, s, e)| (to[node as usize], s, e)).collect();
         holes.sort_unstable();
-        let mut tree = Tree::from_nodes(nodes, holes, to[self.root as usize], self.too_deep);
-        tree.layer_roots = self.layer_roots.iter().map(|&(root, layer)| (to[root as usize], layer)).collect();
-        tree
+        Tree {
+            nodes, first, edges, parent, label,
+            field_indices: OnceLock::new(), descendants: OnceLock::new(), module_index: OnceLock::new(),
+            order: self.order.iter().map(|&id| to[id as usize]).collect(),
+            root: to[self.root as usize], holes, too_deep: self.too_deep,
+            layer_roots: self.layer_roots.iter().map(|&(root, layer)| (to[root as usize], layer)).collect(),
+            overlapping, regions: None,
+        }
+    }
+
+    /// What `edit` changed between `previous` (the tracked tree of the old
+    /// text) and this tracked tree renumbered after it
+    /// ([`Tree::renumbered_after`]): the chunks whose nodes were removed,
+    /// got other children or parents, moved to another chunk, or hold the
+    /// edit; and the edited range. `None` when either is not tracked.
+    pub fn changed_since(&self, previous: &Tree, edit: crate::footprint::Edit) -> Option<crate::footprint::Dirty> {
+        use crate::footprint::Read;
+        let (now, before) = (self.regions()?, previous.regions()?);
+        let mut dirty = crate::footprint::Dirty::edit(edit);
+        // The edited text lies in the own text of the innermost node holding
+        // it, and beneath each chunk root holding it.
+        let holds = |id: &u32| {
+            let node = previous.nodes[*id as usize];
+            node.start <= edit.start && edit.old_end <= node.end
+        };
+        for &id in previous.order.iter().filter(|id| holds(id)) {
+            if before.chunk(id) == Some(id) { dirty.add_atom(crate::footprint::Atom::subtree(id)) }
+        }
+        // In document order, a node holding the edit after another is inside it.
+        if let Some(innermost) = previous.order.iter().filter(|id| holds(id)).last() {
+            dirty.add(&before.atom(Read::Text, *innermost));
+        }
+        let kind = |tree: &Tree, id: u32| crate::footprint::Atom::table(crate::footprint::tables::KINDS, tree.nodes[id as usize].matcher);
+        let len = self.nodes.len().max(previous.nodes.len());
+        for id in 0..len as u32 {
+            // A node removed (or added) was reached only through reads its
+            // removal changes (its parent's children, the names tables), or
+            // a search for its kind.
+            let (old, new) = match (before.chunk(id), now.chunk(id)) {
+                (Some(old), Some(new)) => (old, new),
+                (Some(_), None) => {
+                    dirty.add_atom(kind(previous, id));
+                    continue
+                }
+                (None, Some(_)) => {
+                    dirty.add_atom(kind(self, id));
+                    continue
+                }
+                (None, None) => continue,
+            };
+            if old != new {
+                dirty.add(&before.all_of(id));
+                dirty.add(&now.all_of(id));
+                continue;
+            }
+            if self.edges_of(id) != previous.edges_of(id) {
+                dirty.add(&before.atom(Read::Structure, id));
+            }
+            if self.parent_of(id) != previous.parent_of(id) {
+                dirty.add(&before.atom(Read::Link, id));
+                dirty.add_atom(kind(self, id));
+            }
+        }
+        Some(dirty)
+    }
+
+    /// Ids this tree holds beyond its reachable nodes: renumbering after
+    /// edits leaves the ids of removed nodes empty.
+    pub fn spare_ids(&self) -> usize {
+        self.nodes.len() - self.order.len()
     }
 
     /// The tree's nodes as building nodes, for tests that derive trees from it.
@@ -225,17 +366,24 @@ impl Tree {
     }
 
     pub(crate) fn descendant_nodes(&self, node: u32, kinds: &[u32], field: Option<u16>) -> Option<impl Iterator<Item = u32> + '_> {
-        self.descendants.get_or_init(|| descendants::Index::new(self)).iter(self, node, kinds, field)
+        // Nodes of these kinds: kept ones keep their kind and place, so only
+        // an edit adding, removing or moving one changes the answer.
+        match (field, &self.regions) {
+            (None, Some(_)) => for &kind in kinds { crate::footprint::table(crate::footprint::tables::KINDS, kind) },
+            _ => self.read_text(node),
+        }
+        self.descendants.get_or_init(|| crate::footprint::quiet(|| descendants::Index::new(self))).iter(self, node, kinds, field)
     }
 
     pub fn module_index(&self, tables: &super::names::Names, text: &str, key: &super::names::NameKey<'_>, profile: Option<&crate::engine::Profile>) -> &super::names::modules::index::Index {
-        self.module_index.get_or_init(|| {
+        if self.regions.is_some() { crate::footprint::enter_atom(crate::footprint::Atom::whole(crate::footprint::tables::MODULE)) }
+        self.module_index.get_or_init(|| crate::footprint::quiet(|| {
             let build = || super::names::modules::index::Index::build(tables, self, text, key);
             match profile {
                 Some(profile) => profile.time_module_index(build),
                 None => build(),
             }
-        })
+        }))
     }
 
     pub fn semantic_node(&self, node: u32) -> Option<u32> {
@@ -299,6 +447,7 @@ impl Tree {
 
     /// Where a node's inside (its `*`) starts and ends, if its pattern has one.
     pub fn hole(&self, id: u32) -> Option<(u32, u32)> {
+        self.read(crate::footprint::Read::Structure, id);
         let i = self.holes.binary_search_by_key(&id, |h| h.0).ok()?;
         Some((self.holes[i].1, self.holes[i].2))
     }
@@ -308,7 +457,8 @@ impl Tree {
     }
 
     pub fn parent(&self, id: u32) -> Option<u32> {
-        Some(self.parent[id as usize]).filter(|&p| p != NONE)
+        self.read(crate::footprint::Read::Link, id);
+        self.parent_of(id)
     }
 
     /// The field label this node has inside its parent.
@@ -338,16 +488,17 @@ impl Tree {
     }
 
     fn field_index_with(&self, id: u32, mut inspected: impl FnMut()) -> Option<usize> {
-        self.parent(id)?;
+        let parent = self.parent(id)?;
         if self.label(id).is_none() {
             return Some(0);
         }
+        self.read(crate::footprint::Read::Structure, parent);
         let indices = self.field_indices.get_or_init(|| {
             let mut indices = vec![usize::MAX; self.nodes.len()];
             let mut counts = FxHashMap::<u16, usize>::default();
             for &parent in &self.order {
                 counts.clear();
-                for edge in self.children(parent) {
+                for edge in self.edges_of(parent) {
                     inspected();
                     let child = edge.node as usize;
                     // A shared node belongs to its resolved parent; duplicate edges

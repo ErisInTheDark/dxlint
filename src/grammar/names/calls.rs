@@ -163,13 +163,13 @@ pub(crate) struct State {
 }
 
 impl State {
-    /// Drops what an edit inside `bodies` of the linted file may change.
-    pub(crate) fn forget(&self, bodies: u64) {
-        self.acceptance.forget(bodies);
-        self.headers.forget(bodies);
-        self.candidates.forget(bodies);
-        self.refined.forget(bodies);
-        self.values.forget(bodies);
+    /// Drops what an edit of the linted file may change.
+    pub(crate) fn forget(&self, dirty: &crate::footprint::Dirty) {
+        self.acceptance.forget(dirty);
+        self.headers.forget(dirty);
+        self.candidates.forget(dirty);
+        self.refined.forget(dirty);
+        self.values.forget(dirty);
     }
 }
 
@@ -318,6 +318,7 @@ impl Calls<'_> {
             // are part of its coinductive search: on its allowance, not a
             // fresh one each (that multiplied work with every level).
             let mut unpaid = false;
+            let reading = crate::footprint::begin();
             let answer = if depth == 0 {
                 values.fact(tag, super::question::Budget::per_question(), || accepts::accepts(expected, actual, &values))
                     .unwrap_or_else(|cut| {
@@ -327,6 +328,7 @@ impl Calls<'_> {
             } else {
                 accepts::accepts(expected, actual, &values)
             };
+            let read = crate::footprint::end(reading);
             state.accepting.borrow_mut().pop();
             let rests_on = state.assumed.get().filter(|&at| at < depth);
             state.assumed.set(match (outer, rests_on) {
@@ -338,7 +340,7 @@ impl Calls<'_> {
             let provisional = answer == Known::Yes(true) && rests_on.is_some()
                 || answer == Known::Unknown && (unpaid || depth > 0 || values.cycled_since(mark));
             if !provisional {
-                state.acceptance.insert(key, answer);
+                state.acceptance.insert_read(key, answer, read);
             }
             answer
         })

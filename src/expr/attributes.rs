@@ -634,7 +634,7 @@ impl<'a> Ctx<'a> {
             }
             return value;
         }
-        match self.memo.vm.begin(self.tree, &self.attrs.layout, node, slot) {
+        match self.memo.vm.begin_attr(self.tree, &self.attrs.layout, node, slot, Some(attr)) {
             Begin::Ready(v) => Some(v),
             Begin::GiveUp => {
                 self.memo.vm.attr_failure(node, attr, &self.attrs.attrs[attr as usize].name);

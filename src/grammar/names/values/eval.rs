@@ -228,7 +228,9 @@ impl<'a, 'world> Run<'a, 'world> {
         }
         if !root && super::share_values() {
             if let Some(value) = self.values.world.shared_value_kept(leaf, self.values.semantic) {
-                state.values.insert(leaf, value.clone());
+                // Worked out by another file's lint, where this file's
+                // reads were not this lint's.
+                state.values.insert_read(leaf, value.clone(), crate::footprint::Footprint::NONE);
                 self.answers.push(Answer { exists: true, value });
                 return;
             }
@@ -251,10 +253,10 @@ impl<'a, 'world> Run<'a, 'world> {
             self.answers.push(Answer::unknown());
             return;
         }
-        state.values.insert(leaf, NodeValue::Unknown);
+        state.values.insert_read(leaf, NodeValue::Unknown, crate::footprint::Footprint::NONE);
         // The leaf's value is a fact of its own, on its own allowance.
         let asker = self.values.question.budget.begin_fact(super::super::question::Budget::per_question());
-        state.evaluating.borrow_mut().push((leaf, self.values.cycle_mark(), asker, super::super::memo::begin()));
+        state.evaluating.borrow_mut().push((leaf, self.values.cycle_mark(), asker, crate::footprint::begin()));
         // Its own place counts for its value.
         self.values.world.note_entered(leaf);
         self.opened.push((leaf, self.tasks.len(), self.answers.len()));
@@ -307,12 +309,11 @@ impl<'a, 'world> Run<'a, 'world> {
             match evaluating.iter().rposition(|&(active, ..)| active == leaf) {
                 Some(index) => {
                     // Leaves opened inside it and never settled end with it.
-                    for &(_, _, inner, outer) in evaluating[index + 1..].iter().rev() {
+                    for (_, _, inner, outer) in evaluating.drain(index + 1..).rev() {
                         budget.end_fact(inner);
-                        super::super::memo::end(outer);
+                        crate::footprint::resume(outer);
                     }
-                    let (_, started, asker, outer) = evaluating[index];
-                    evaluating.truncate(index);
+                    let (_, started, asker, outer) = evaluating.pop().expect("the settled leaf");
                     Some((started, asker, outer))
                 }
                 None => None,
@@ -337,7 +338,7 @@ impl<'a, 'world> Run<'a, 'world> {
                 state.values.insert(leaf, value);
             }
         }
-        if let Some((_, _, outer)) = opened { super::super::memo::end(outer); }
+        if let Some((_, _, outer)) = opened { crate::footprint::resume(outer); }
     }
 
     fn expression(&mut self, at: Leaf, expression: &'a Value) {
@@ -648,15 +649,17 @@ fn widened(values: &Values<'_>, leaf: Leaf) -> NodeValue {
         values.read_kept(tag);
         return answer;
     }
-    values.semantic.values.widened.insert(leaf, NodeValue::Unknown);
+    values.semantic.values.widened.insert_read(leaf, NodeValue::Unknown, crate::footprint::Footprint::NONE);
     let mark = values.cycle_mark();
+    let outer = crate::footprint::begin();
     let answer = values.fact(tag, super::super::question::Budget::per_question(), || widen(values, leaf));
+    let read = crate::footprint::end(outer);
     let unpaid = answer.as_ref().err() == Some(&super::super::question::Cut::Unpaid);
     let answer = answer.unwrap_or(NodeValue::Unknown);
     if answer == NodeValue::Unknown && (unpaid || values.cycled_since(mark)) {
         values.semantic.values.widened.remove(&leaf);
     } else {
-        values.semantic.values.widened.insert(leaf, answer.clone());
+        values.semantic.values.widened.insert_read(leaf, answer.clone(), read);
     }
     answer
 }
