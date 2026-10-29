@@ -19,3 +19,9 @@ choice<[string], [1, 2]>(["x"], [1, 2]);
 
 // The default itself still goes.
 export class Plain extends Manager {}
+
+// A literal argument for a type parameter returned at top level is inferred
+// as itself (`Sort.Date`, `"a"`), narrower than the written type argument.
+export function orDefault<T = any>(key: string, fallback: T): T { return key ? fallback : fallback; }
+export const sort = orDefault<Sort>("sort", Sort.Date);
+export const text = orDefault<string>("text", "a");

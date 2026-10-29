@@ -227,8 +227,8 @@ fn type_argument_unresolved(n) = {
   value parts: value_constituents(n)
   value parts != null && !type_argument_known(parts)
 }
-fn type_argument_parameter_direct(n, parameter, formal) = {
-  value annotation: first(site_field(n, parameter, "type") ?? [])
+# Whether `annotation` names `formal` itself (alone or as a union member).
+fn type_argument_names_formal(n, annotation, formal) = {
   value candidates: if annotation != null && annotation.kind == "ts_union"
     then site_field(n, annotation, "type") ?? [] else [annotation]
   value any(candidates, candidate => candidate != null && candidate.kind == "ts_type_reference"
@@ -236,6 +236,25 @@ fn type_argument_parameter_direct(n, parameter, formal) = {
     && { value name: first(site_field(n, candidate, "name") ?? [])
          value found: if name != null then site_text(n, name) else null
          value found != null && found.text == formal.name })
+}
+fn type_argument_parameter_direct(n, parameter, formal) =
+  type_argument_names_formal(n, first(site_field(n, parameter, "type") ?? []), formal)
+# TypeScript infers a literal argument's own type (`E.A`, `"a"`) for a type
+# parameter its signature returns at top level, and widens it elsewhere.
+fn type_argument_returned(n, site, formal) = site != null
+  && type_argument_names_formal(n, first(site_field(n, site, "return_type") ?? []), formal)
+# Whether the argument's type is a literal widening would change.
+fn type_argument_literal(argument) = {
+  value raw: value_constituents(argument)
+  value widened: value_widened(argument)
+  value raw != null && widened != null && raw != widened
+}
+# Whether `parameter`'s annotation mentions `formal` anywhere (another
+# inference site for it).
+fn type_argument_mentions(n, parameter, formal) = {
+  value annotation: first(site_field(n, parameter, "type") ?? [])
+  value text: if annotation != null then site_text(n, annotation).text else null
+  value text != null && contains(split({ value text; re_replace /[^A-Za-z0-9_$]+/ ' ' }, " "), formal.name)
 }
 fn type_argument_parameter_sites(n, site, signature) = if signature != null then
     map(signature.parameters ?? [], parameter => parameter.site)
@@ -248,11 +267,16 @@ fn type_argument_parameter_sites(n, site, signature) = if signature != null then
 # default once any is written.
 fn type_argument_inferred(n, site, signature, formal) = count(n.parent.type_argument.nodes) == 1 && {
   value owner: n.parent.node
-  value pairs: zip(type_argument_parameter_sites(n, site, signature), owner.argument.nodes)
+  value parameters: type_argument_parameter_sites(n, site, signature)
+  value pairs: zip(parameters, owner.argument.nodes)
   value pair: find(pairs, pair => pair != null && first(pair) != null && last(pair) != null
     && last(pair) not (ts_this, ts_spread)
     && type_argument_parameter_direct(n, first(pair), formal))
-  value pair != null && type_argument_same(n, last(pair), true)
+  # A literal the only inference site of a returned type parameter stays
+  # literal: the written (wider) type argument is needed.
+  value literal_only: pair != null && type_argument_returned(n, site, formal) && type_argument_literal(last(pair))
+    && !any(parameters, parameter => parameter != null && parameter != first(pair) && type_argument_mentions(n, parameter, formal))
+  value pair != null && !literal_only && type_argument_same(n, last(pair), true)
 }
 fn type_argument_redundancy(n) = {
   value owner: n.parent.node
