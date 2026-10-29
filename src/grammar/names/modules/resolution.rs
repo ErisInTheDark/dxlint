@@ -665,6 +665,18 @@ mod tests {
     }
 
     #[test]
+    fn a_package_named_base_config_is_found_in_node_modules_above_the_config() {
+        let mut files = Files::default();
+        let importer = files.add("/app/main.ts", "");
+        files.add("/app/tsconfig.json", r#"{"extends":"@scope/types/tsconfig.base.json"}"#);
+        files.add("/node_modules/@scope/types/tsconfig.base.json", r#"{"compilerOptions":{"baseUrl":"./src",},}"#);
+        let preferred = files.add("/node_modules/@scope/types/src/leaf.ts", "");
+        files.add("/app/leaf.ts", "");
+        let settings = configured();
+        assert_eq!(Resolver { host: &files, settings: &settings }.resolve(importer.file, "leaf", &[], &QueryContext::default()), Known::Yes(Some(preferred)));
+    }
+
+    #[test]
     fn overriding_base_relocates_inherited_path_targets_but_not_the_base_option() {
         let mut files = Files::default();
         let importer = files.add("/app/main.ts", "");

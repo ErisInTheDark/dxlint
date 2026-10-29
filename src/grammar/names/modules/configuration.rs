@@ -103,22 +103,33 @@ impl Frame {
             for value in inherited {
                 spend(question)?;
                 let name = value.text().ok_or(())?;
-                let candidate = clean(&directory.join(name));
-                let mut choices = vec![candidate.clone()];
-                for config in &resolver.settings.config.files {
-                    if candidate.extension().is_none() {
-                        if let Some(extension) = Path::new(&**config).extension() {
-                            choices.push(candidate.with_extension(extension));
-                        }
-                    }
-                    choices.push(candidate.join(&**config));
-                }
+                // A relative or rooted name is a path from this file; any
+                // other names a package's file, looked up in `node_modules`
+                // like an import.
+                let relative = Path::new(name).is_absolute() || [".", ".."].iter()
+                    .any(|dots| name == *dots || name.strip_prefix(dots).is_some_and(|rest| rest.starts_with(['/', '\\'])));
+                let candidates: Vec<PathBuf> = if relative {
+                    vec![clean(&directory.join(name))]
+                } else {
+                    directory.ancestors().map(|ancestor| clean(&ancestor.join("node_modules").join(name))).collect()
+                };
                 let mut found = None;
-                for choice in choices {
-                    spend(question)?;
-                    if resolver.host.is_file(&choice, question).known().ok_or(())? {
-                        found = Some(choice);
-                        break;
+                'candidates: for candidate in candidates {
+                    let mut choices = vec![candidate.clone()];
+                    for config in &resolver.settings.config.files {
+                        if candidate.extension().is_none() {
+                            if let Some(extension) = Path::new(&**config).extension() {
+                                choices.push(candidate.with_extension(extension));
+                            }
+                        }
+                        choices.push(candidate.join(&**config));
+                    }
+                    for choice in choices {
+                        spend(question)?;
+                        if resolver.host.is_file(&choice, question).known().ok_or(())? {
+                            found = Some(choice);
+                            break 'candidates;
+                        }
                     }
                 }
                 parents.push(found.ok_or(())?);
