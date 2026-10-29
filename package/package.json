@@ -1,6 +1,6 @@
 {
   "name": "@inthedark/dxlint",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "let you and your agents own your linter",
   "license": "MIT",
   "repository": {
