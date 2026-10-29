@@ -259,13 +259,13 @@ impl Dirty {
         self.insert(&other.atoms);
     }
 
-    /// Each changed atom alone, for diagnosing what met a footprint.
-    pub fn each(&self) -> Vec<Dirty> {
-        self.atoms.iter().map(|&atom| {
-            let mut one = Dirty::default();
-            one.insert(&[atom]);
-            one
-        }).collect()
+    /// The atoms of this that `other` lacks (no edit).
+    pub fn minus(&self, other: &Dirty) -> Dirty {
+        if other.all { return Dirty::default() }
+        let mut rest = Dirty { all: self.all, ..Dirty::default() };
+        let atoms: Vec<u32> = self.atoms.iter().copied().filter(|atom| other.atoms.binary_search(atom).is_err()).collect();
+        rest.insert(&atoms);
+        rest
     }
 
     /// Changed atoms (`u32::MAX`: every one).
@@ -277,7 +277,8 @@ impl Dirty {
 /// What part of a chunk a read looked at.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Read {
-    /// Its text: a node's, its gaps', a name's.
+    /// The text of one of its nodes below its root (the root's whole text
+    /// is [`Atom::subtree`]).
     Text = 0,
     /// Its nodes' children.
     Structure = 1,
@@ -293,15 +294,13 @@ pub enum Read {
 pub struct Atom(u64);
 
 impl Atom {
-    /// Part `read` of the chunk rooted at `root`. Its text and children are
-    /// one atom (they mostly change together); its parents another (walks
-    /// up read every chunk they pass, and nodes seldom move); its names a
-    /// third (they change only with declarations and uses).
+    /// Part `read` of the chunk rooted at `root`.
     pub fn chunk(read: Read, root: u32) -> Atom {
         let part = match read {
-            Read::Text | Read::Structure => 0,
+            Read::Text => 0,
             Read::Link => 1,
             Read::Names => 2,
+            Read::Structure => 4,
         };
         Atom(u64::from(root) << 3 | part)
     }
@@ -347,6 +346,8 @@ pub mod tables {
     pub const KINDS: u8 = 5;
     /// A whole-file catalogue: a root attribute's value (by attribute).
     pub const WALLS: u8 = 6;
+    /// A value's member by key (by hash of value leaf and key).
+    pub const MEMBER_KEYS: u8 = 7;
 }
 
 /// The editor's file this thread tracks: its tree (with regions) and text.
@@ -446,6 +447,16 @@ pub fn end(outer: Reading) -> Footprint {
 pub fn resume(outer: Reading) {
     let own = READ.with(|read| read.replace(outer));
     reading(|read| read.absorb(own));
+}
+
+/// Ends the computation [`begin`] started, whose answer is kept behind
+/// `atom`: the work around it read only that atom (and nothing, when the
+/// computation read nothing of the file).
+#[inline]
+pub fn resume_behind(outer: Reading, atom: Atom) {
+    let own = READ.with(|read| read.replace(outer));
+    if own.atoms.is_empty() && !own.all && own.from > own.to && own.lines_from > own.lines_to { return }
+    enter_atom(atom);
 }
 
 /// Runs `run` without recording its reads anywhere: work whose answer is

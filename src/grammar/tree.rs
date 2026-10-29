@@ -312,9 +312,11 @@ impl Tree {
         for &id in previous.order.iter().filter(|id| holds(id)) {
             if before.chunk(id) == Some(id) { dirty.add_atom(crate::footprint::Atom::subtree(id)) }
         }
-        // In document order, a node holding the edit after another is inside it.
-        if let Some(innermost) = previous.order.iter().filter(|id| holds(id)).last() {
-            dirty.add(&before.atom(Read::Text, *innermost));
+        // In document order, a node holding the edit after another is inside
+        // it. Only it and the holders between it and its chunk's root are
+        // nodes below a root whose text changed (none roots a chunk).
+        if let Some(&innermost) = previous.order.iter().filter(|id| holds(id)).last() {
+            if before.chunk(innermost) != Some(innermost) { dirty.add(&before.atom(Read::Text, innermost)) }
         }
         let kind = |tree: &Tree, id: u32| crate::footprint::Atom::table(crate::footprint::tables::KINDS, tree.nodes[id as usize].matcher);
         let len = self.nodes.len().max(previous.nodes.len());
@@ -401,9 +403,10 @@ impl Tree {
     }
 
     pub(crate) fn capture_child(&self, node: u32) -> Option<u32> {
-        let syntax = self.nodes.get(node as usize)?;
+        // Only text captures: other nodes' children are not read.
+        if self.nodes.get(node as usize)?.matcher != TEXT { return None }
         match self.children(node) {
-            [child] if syntax.matcher == TEXT && child.label == NO_LABEL => Some(child.node),
+            [child] if child.label == NO_LABEL => Some(child.node),
             _ => None,
         }
     }
@@ -592,15 +595,25 @@ impl Tree {
 
     /// As [`Tree::innermost_at`], but labelled text (a native node's `?.`,
     /// a field of text) counts as a node.
+    ///
+    /// Reads (for an editor's file) the found node's span and each node's
+    /// parent on the way: a node newly holding `pos` either lies inside
+    /// that span or now parents a node on the way.
     pub fn innermost_with_text(&self, g: &Grammar, pos: u32, skip: u32) -> u32 {
         let mut id = self.root;
         'descend: loop {
-            let children = self.children(id);
+            self.read(crate::footprint::Read::Link, id);
             // Children are sorted by start and mostly disjoint: the container
             // can only be a late child starting at or before `pos`. Where
-            // they overlap, an earlier one may hold `pos` past a later one.
+            // they overlap, an earlier one may hold `pos` past a later one
+            // (and a new sibling could too: where `pos` lies among
+            // overlapping children, they are read whole).
             let overlap = self.overlapping.binary_search(&id).is_ok();
+            let children = self.edges_of(id);
             let upto = children.partition_point(|e| self.nodes[e.node as usize].start <= pos);
+            if overlap && children[..upto].iter().filter(|e| pos < self.nodes[e.node as usize].end).count() > 1 {
+                self.read(crate::footprint::Read::Structure, id);
+            }
             for e in children[..upto].iter().rev() {
                 let n = &self.nodes[e.node as usize];
                 // Named layers (their roots, their nodes) are other trees.
@@ -617,6 +630,10 @@ impl Tree {
                 }
             }
             break;
+        }
+        if self.regions.is_some() {
+            let found = self.nodes[id as usize];
+            crate::footprint::positions(found.start as usize, found.end as usize);
         }
         id
     }

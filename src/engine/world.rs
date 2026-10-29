@@ -154,24 +154,30 @@ impl<'a> LintWorld<'a> {
         fresh.forget(dirty, &gone);
         self.semantic.carry_in((state, interned), self.revision());
         if dirty.edit.is_none() { return }
-        // The file's whole-file scans, again: what read them holds while
-        // their answers for what it read stay the same.
+        // The file's whole-file scans and the walled answers the edit
+        // reached, again: what read them holds while they answer the same.
+        // A changed one may reach more walled answers: until none.
         let files = Files(self);
         let at = Leaf { target: Target::Node(NodeRef { file: 0, node: self.ctx.tree.root }), frame: FrameId::ROOT };
-        let changed = self.semantic.run(&files, &self.ctx.grammar.names, |semantic| {
-            self.evaluating(Some(ActiveQuestion { semantic, at }), crate::expr::queries::Uncertainty::Explicit, || {
-                let mut changed = crate::footprint::Dirty::default();
-                semantic.narrowing().recheck(at, &mut changed);
-                Known::Yes(changed)
-            })
-        });
-        let changed = match changed {
-            Known::Yes(changed) => changed,
-            Known::Unknown => crate::footprint::Dirty::all(),
-        };
-        if changed.has_atoms() {
+        let mut scans = true;
+        loop {
+            let rescan = std::mem::take(&mut scans);
+            let changed = self.semantic.run(&files, &self.ctx.grammar.names, |semantic| {
+                self.evaluating(Some(ActiveQuestion { semantic, at }), crate::expr::queries::Uncertainty::Explicit, || {
+                    let mut changed = crate::footprint::Dirty::default();
+                    if rescan { semantic.narrowing().recheck(at, &mut changed) }
+                    semantic.values().recheck_members(&mut changed);
+                    Known::Yes(changed)
+                })
+            });
+            let changed = match changed {
+                Known::Yes(changed) => changed.minus(dirty),
+                Known::Unknown => crate::footprint::Dirty::all(),
+            };
+            if !changed.has_atoms() { return }
             self.semantic.forget(&changed, &|_| false);
             dirty.union(&changed);
+            if dirty.count() == u32::MAX { return }
         }
     }
 

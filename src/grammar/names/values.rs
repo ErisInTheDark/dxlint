@@ -203,7 +203,7 @@ pub(crate) struct State {
     optional: Memo<Leaf, Known<bool>>,
     identities: Memo<Leaf, Known<Option<Identity>>>,
     members: Memo<Leaf, Known<Vec<Member>>>,
-    member_keys: Memo<(Leaf, Key), Known<Option<Member>>>,
+    member_keys: super::memo::Walled<(Leaf, Key), Known<Option<Member>>, { crate::footprint::tables::MEMBER_KEYS }>,
     key_paths: Memo<(Leaf, Vec<u16>), Key>,
     member_closed: Memo<Leaf, Known<bool>>,
     bound_arguments: Memo<Leaf, Known<Option<NodeValue>>>,
@@ -457,6 +457,8 @@ impl Values<'_> {
             }
         }
         let _site = self.world.profile().map(|_| crate::engine::StepSite::enter(std::any::type_name::<(K, T)>()));
+        // A walled answer's readers read only the answer.
+        let wall = memo.entry_atom(&key);
         let outer = crate::footprint::begin();
         memo.insert(key.clone(), Known::Unknown);
         state.pending.borrow_mut().push(tag);
@@ -486,7 +488,10 @@ impl Values<'_> {
             self.settle_provisional(tag);
             memo.insert(key, answer.clone());
         }
-        crate::footprint::resume(outer);
+        match wall {
+            Some(atom) => crate::footprint::resume_behind(outer, atom),
+            None => crate::footprint::resume(outer),
+        }
         answer
     }
 

@@ -342,6 +342,22 @@ impl Values<'_> {
         Known::Yes(rows)
     }
 
+    /// After an edit of the linted file: the member lookups it reached,
+    /// computed again; adds to `changed` those whose member differs (their
+    /// readers read only the member, [`super::super::memo::Walled`]).
+    pub(crate) fn recheck_members(&self, changed: &mut crate::footprint::Dirty) {
+        let memo = &self.semantic.values.member_keys;
+        for ((at, key), before) in memo.take_suspects() {
+            let now = match memo.peek(&(at, key.clone())) {
+                Some(now) => now,
+                None => crate::footprint::quiet(|| self.leaf_member(at, &key)),
+            };
+            if now != before {
+                if let Some(atom) = memo.entry_atom(&(at, key)) { changed.add_atom(atom) }
+            }
+        }
+    }
+
     fn leaf_member(&self, at: Leaf, key: &Key) -> Known<Option<Member>> {
         let Known::Yes(at) = self.semantic.leaf(at) else { return Known::Unknown };
         self.memoized(&self.semantic.values.member_keys, (at, key.clone()), || match self.direct_members(at, MemberRequest::Key(key)) {
