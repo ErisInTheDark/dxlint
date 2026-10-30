@@ -40,6 +40,7 @@ in ts_class_property rule es-explicit-member-accessibility:property {
   option accessibility ("explicit" | "no-public" | "off") = "explicit" "Required accessibility."
   option ignoredMethodNames string[] = [] "Ignored method names."
   option overrides { properties?: string; methods?: string; accessors?: string; constructors?: string; parameterProperties?: string } = {} "Requirements by member kind."
+  when ts_program.typescript_source
   let check overrides.properties.nonempty ?? accessibility
   let shape style_member
   when !re_test(key, /^#/) && (check == "explicit" && !{ value @modifiers; has_accessibility } || check == "no-public" && contains([] modifier, "public"))
@@ -52,6 +53,7 @@ in ts_method rule es-explicit-member-accessibility:method {
   option accessibility ("explicit" | "no-public" | "off") = "explicit" "Required accessibility."
   option ignoredMethodNames string[] = [] "Ignored method names."
   option overrides { properties?: string; methods?: string; accessors?: string; constructors?: string; parameterProperties?: string } = {} "Requirements by member kind."
+  when ts_program.typescript_source
   let check {
     value (if class_constructor then overrides.constructors else if kind == "get" || kind == "set" then overrides.accessors else overrides.methods)
     nonempty
@@ -68,6 +70,7 @@ in ts_parameter rule es-explicit-member-accessibility:parameter {
   option accessibility ("explicit" | "no-public" | "off") = "explicit" "Required accessibility."
   option ignoredMethodNames string[] = [] "Ignored method names."
   option overrides { properties?: string; methods?: string; accessors?: string; constructors?: string; parameterProperties?: string } = {} "Requirements by member kind."
+  when ts_program.typescript_source
   let check overrides.parameterProperties.nonempty ?? accessibility
   let shape style_member
   when contains([] modifier, "readonly") && parent is ts_method

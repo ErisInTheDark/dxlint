@@ -67,6 +67,7 @@ in ts_function, ts_arrow, ts_method let explicit_return_shape {
     option allowHigherOrderFunctions boolean = true "Allow functions returning only functions."
     option allowIIFEs boolean = false "Allow functions directly within calls."
     option allowTypedFunctionExpressions boolean = true "Allow contextually typed function expressions."
+    when ts_program.typescript_source
     let shape explicit_return_shape
     when !shape.valid && !contains(allowedNames, shape.name)
     when !(allowFunctionsWithoutTypeParameters && count(type_parameter) == 0 || allowIIFEs && shape.iife || allowHigherOrderFunctions && shape.higher_order || allowConciseArrowFunctionExpressionsStartingWithVoid && shape.void_arrow)
@@ -133,6 +134,7 @@ in ts_parameter let boundary_argument {
     option allowHigherOrderFunctions boolean = true "Allow functions returning only functions."
     option allowTypedFunctionExpressions boolean = true "Allow contextually typed functions."
     option allowOverloadFunctions boolean = false "Allow implementations with overload signatures."
+    when ts_program.typescript_source
     let boundary_shape if parameter_check then parent.explicit_return_shape else explicit_return_shape
     let boundary_name if parameter_check then parent.boundary_function_name else boundary_function_name
     let empty_method if parameter_check then parent.boundary_empty_method else boundary_empty_method
