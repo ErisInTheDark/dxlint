@@ -19,9 +19,9 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const packageDir = path.join(root, "package");
 const manifestPath = path.join(packageDir, "package.json");
 const copied = ["std", "rules", "README.md", "LICENSE"];
-const binaries = ["dxlint-win32-x64.exe", "dxlint-linux-x64"];
-// Tarball entries that must be executable: the launcher and the Linux binary.
-const executables = ["package/bin/dxlint", "package/bin/dxlint-linux-x64"];
+const binaries = ["dxlint-win32-x64.exe", "dxlint-linux-x64", "dxlint-darwin-arm64"];
+// Tarball entries that must be executable: the launcher and the Unix binaries.
+const executables = ["package/bin/dxlint", "package/bin/dxlint-linux-x64", "package/bin/dxlint-darwin-arm64"];
 const BLOCK = 512;
 
 function stableVersion(value) {

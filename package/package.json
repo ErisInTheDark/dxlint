@@ -24,10 +24,12 @@
   },
   "os": [
     "win32",
-    "linux"
+    "linux",
+    "darwin"
   ],
   "cpu": [
-    "x64"
+    "x64",
+    "arm64"
   ],
   "bin": {
     "dxlint": "bin/dxlint"
