@@ -7,6 +7,10 @@
 //! Output protocol: leading `dxlint-input <path>` lines name what the run
 //! read (relative to the root); the rest of stdout is the payload. A
 //! non-zero exit, output that is not UTF-8, or the time limit is an error.
+//! A `batch` command runs once, without arguments, for every argument list:
+//! its payload holds a section per list, each starting with a
+//! `dxlint-payload <args>` (or `dxlint-error <args>`, the rest being why)
+//! line.
 //!
 //! A language server runs commands off its lint threads ([`Commands::run_in_background`]):
 //! until a run finishes, its answer is pending, and the lints that asked
@@ -22,6 +26,8 @@ use super::reads;
 
 const TIME_LIMIT: Duration = Duration::from_secs(60);
 const INPUT_PREFIX: &str = "dxlint-input ";
+const PAYLOAD_PREFIX: &str = "dxlint-payload ";
+const ERROR_PREFIX: &str = "dxlint-error ";
 /// Lines of stderr an error keeps.
 const STDERR_TAIL: usize = 8;
 
@@ -54,10 +60,16 @@ enum Slot {
 /// Called with a finished background run's marker path.
 type Finished = dyn Fn(PathBuf) + Send + Sync;
 
+/// A command as the root config declares it.
+pub struct Declared {
+    pub argv: Vec<String>,
+    pub batch: bool,
+}
+
 #[derive(Default)]
 pub struct Commands {
     root: PathBuf,
-    declared: FxHashMap<String, Vec<String>>,
+    declared: FxHashMap<String, Declared>,
     runs: Mutex<FxHashMap<Key, Slot>>,
     mode: Mutex<Mode>,
 }
@@ -72,7 +84,7 @@ enum Mode {
 }
 
 impl Commands {
-    pub fn new(root: PathBuf, declared: impl IntoIterator<Item = (String, Vec<String>)>) -> Commands {
+    pub fn new(root: PathBuf, declared: impl IntoIterator<Item = (String, Declared)>) -> Commands {
         Commands { root, declared: declared.into_iter().collect(), ..Default::default() }
     }
 
@@ -104,9 +116,20 @@ impl Commands {
 
     /// `name`'s output for `args`, recording what it depends on.
     pub fn answer(self: &Arc<Self>, name: &str, args: &[String]) -> Answer {
-        let Some(argv) = self.declared.get(name) else {
+        let Some(declared) = self.declared.get(name) else {
             return Answer::Failed(format!("no command `{name}` in the root config").into());
         };
+        if !declared.batch { return self.run_answer(name, &declared.argv, args) }
+        match self.run_answer(name, &declared.argv, &[]) {
+            Answer::Ready(payload) => section(&payload, &args.join(" "))
+                .unwrap_or_else(|| Answer::Failed(format!("`{name}` printed no section for `{}`", args.join(" ")).into())),
+            other => other,
+        }
+    }
+
+    /// The run of `argv` plus `args` (named `name`), recording what it
+    /// depends on.
+    fn run_answer(self: &Arc<Self>, name: &str, argv: &[String], args: &[String]) -> Answer {
         let key: Key = (name.to_owned(), args.to_vec());
         let marker = self.marker(&key);
         let mode = match &*self.mode.lock().expect("command mode") {
@@ -134,7 +157,7 @@ impl Commands {
                 reads::read(&marker);
                 if !matches!(runs.get(&key), Some(Slot::Running)) {
                     runs.insert(key.clone(), Slot::Running);
-                    let (commands, argv) = (self.clone(), argv.clone());
+                    let (commands, argv) = (self.clone(), argv.to_vec());
                     std::thread::spawn(move || {
                         let run = Arc::new(commands.run(&argv, &key.1));
                         let done = format!("{:?}", run.result.as_ref().map(|payload| reads::hash_bytes(payload.as_bytes())));
@@ -180,6 +203,23 @@ impl Commands {
             Err(error) => Run { result: Err(error.into()), inputs: Vec::new() },
         }
     }
+}
+
+/// A batch payload's section for `args`: its text, or the error it gives.
+fn section(payload: &str, args: &str) -> Option<Answer> {
+    let mut found: Option<(bool, String)> = None;
+    for line in payload.split_inclusive('\n') {
+        let header = line.trim_end_matches(['\r', '\n']);
+        let starts = header.strip_prefix(PAYLOAD_PREFIX).map(|of| (true, of)).or_else(|| header.strip_prefix(ERROR_PREFIX).map(|of| (false, of)));
+        match (starts, &mut found) {
+            (Some(_), Some(_)) => break,
+            (Some((ok, of)), None) if of == args => found = Some((ok, String::new())),
+            (Some(_), None) => {}
+            (None, Some((_, text))) => text.push_str(line),
+            (None, None) => {}
+        }
+    }
+    found.map(|(ok, text)| if ok { Answer::Ready(text.into()) } else { Answer::Failed(text.trim_end().to_owned().into()) })
 }
 
 /// The paths a run reported reading, and its payload.
@@ -239,13 +279,22 @@ mod tests {
     }
 
     #[test]
+    fn batch_payloads_answer_each_argument_list_from_its_own_section() {
+        let payload = "dxlint-payload a 1\nx\r\ny\ndxlint-error b\nunknown version b\ndxlint-payload c\n";
+        assert_eq!(section(payload, "a 1"), Some(Answer::Ready("x\r\ny\n".into())));
+        assert_eq!(section(payload, "b"), Some(Answer::Failed("unknown version b".into())));
+        assert_eq!(section(payload, "c"), Some(Answer::Ready("".into())));
+        assert_eq!(section(payload, "d"), None);
+    }
+
+    #[test]
     fn runs_again_only_when_a_reported_input_changes_and_failures_say_why() {
         let dir = crate::config::source::normalize_path(&std::env::temp_dir().join("dxlint-commands-test"));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("dir");
         std::fs::write(dir.join("input.txt"), "a").expect("input");
         let script = "const fs = require('fs'); fs.appendFileSync('runs.txt', 'x'); process.stdout.write('dxlint-input input.txt\\n' + fs.readFileSync('input.txt', 'utf8'))";
-        let node = |code: &str| vec!["node".to_owned(), "-e".to_owned(), code.to_owned()];
+        let node = |code: &str| Declared { argv: vec!["node".to_owned(), "-e".to_owned(), code.to_owned()], batch: false };
         let commands = Arc::new(Commands::new(dir.clone(), [("read".to_owned(), node(script)), ("fail".to_owned(), node("console.error('boom'); process.exit(3)"))]));
         let runs = || std::fs::read_to_string(dir.join("runs.txt")).map_or(0, |runs| runs.len());
         assert_eq!(commands.answer("read", &[]), Answer::Ready("a".into()));

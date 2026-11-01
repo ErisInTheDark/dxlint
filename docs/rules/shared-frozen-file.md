@@ -45,9 +45,11 @@ Changing any other line reports `Frozen file changed since it was sealed.` The o
 A seal may name a [command](../advanced.md#commands) the root config declares, plus its arguments: it then covers what that command prints, not the file's text.
 
 ```dx
-command mapgen "node node_modules/tsx/dist/cli.mjs task/mapgen-snapshot.ts"
+command mapgen batch "node node_modules/tsx/dist/cli.mjs task/mapgen-snapshot.ts"
 rule shared-frozen-file
 ```
+
+A `batch` command runs once for every seal naming it and prints a section per argument list; without `batch`, each seal's arguments get a run of their own.
 
 ```ts
 // dxlint-frozen mapgen beta2.15.0 8c1e…

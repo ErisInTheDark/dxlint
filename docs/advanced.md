@@ -704,6 +704,10 @@ The program first prints a `dxlint-input <path>` line per file it read
 (relative to the root); everything after is the payload. dxlint keeps each
 run with those files' contents and runs it again only when one changes;
 lints record them as reads, so caches and the language server follow them.
+`command name batch "..."` runs once, without arguments, for every argument
+list: after its `dxlint-input` lines it prints a section per list, starting
+with a `dxlint-payload <args joined by spaces>` line, or `dxlint-error <args>`
+followed by why that one failed. Each `command_output` call gets its section.
 The language server runs commands in the background: until a run finishes the
 answer is `pending`, and the files that asked are linted again once it does.
 Editors show each `command` line as information, and VS Code runs none in

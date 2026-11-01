@@ -1,4 +1,5 @@
 import .ts
 command snapshot "node snapshot.mjs"
 command broken "node broken.mjs"
+command all batch "node all.mjs"
 rule shared-frozen-file

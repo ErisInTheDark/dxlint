@@ -25,6 +25,9 @@ pub struct CommandDef {
     /// The program and its arguments, split like a shell would (no
     /// expansion).
     pub argv: Vec<String>,
+    /// `command name batch "..."`: one run, without arguments, prints a
+    /// section per argument list.
+    pub batch: bool,
     pub span: Span,
 }
 

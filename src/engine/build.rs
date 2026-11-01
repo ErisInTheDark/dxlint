@@ -459,10 +459,11 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
         wanted
     }).collect();
     let notices = config.commands.iter()
-        .map(|command| ConfigError::new(command.span, format!("runs `{}` when a rule asks for command `{}`", command.argv.join(" "), command.name.text)))
+        .map(|command| ConfigError::new(command.span, format!("runs `{}` when a rule asks for command `{}`{}", command.argv.join(" "), command.name.text,
+            if command.batch { " (once for every argument list)" } else { "" })))
         .collect();
     let commands = std::sync::Arc::new(super::commands::Commands::new(root.clone(),
-        config.commands.iter().map(|command| (command.name.text.clone(), command.argv.clone()))));
+        config.commands.iter().map(|command| (command.name.text.clone(), super::commands::Declared { argv: command.argv.clone(), batch: command.batch }))));
     let mut linter = Linter {
         commands,
         invalidation: Default::default(),

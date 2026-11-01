@@ -1,3 +1,5 @@
+batch-error.ts:1:1-1:44 shared-frozen-file#0
+batch.ts:1:1-1:27 shared-frozen-file#2
 blank.ts:1:1-1:32 shared-frozen-file#2
 changed.ts:1:1-1:48 shared-frozen-file#3
 failing.ts:1:1-1:41 shared-frozen-file#0

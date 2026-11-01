@@ -2673,12 +2673,15 @@ impl<'a> Parser<'a> {
         self.end_of_item();
     }
 
-    /// `command name "program args"`. Only the root config (the file loading
-    /// starts from) may run programs: never an import, a library file or a
-    /// folded nested config.
+    /// `command name [batch] "program args"`. Only the root config (the file
+    /// loading starts from) may run programs: never an import, a library
+    /// file or a folded nested config.
     fn command(&mut self) {
         let kw = self.bump().expect("peeked");
         let Some(name) = self.ident("a command name") else { return };
+        self.skip(false, true);
+        let batch = self.ts.peek_raw(0).is_some_and(|t| t.is_ident("batch"));
+        if batch { self.ts.next_raw(); }
         let Some((line, line_span)) = self.string("the command line") else { return };
         let span = kw.span.to(line_span);
         if kw.span.file != super::source::FileId(0) || self.defining > 0 {
@@ -2695,7 +2698,7 @@ impl<'a> Parser<'a> {
             self.errors.push(ConfigError::new(line_span, "a command needs a program to run"));
             return;
         }
-        self.config.commands.push(CommandDef { name, argv, span });
+        self.config.commands.push(CommandDef { name, argv, batch, span });
         self.end_of_item();
     }
 }
@@ -2743,9 +2746,10 @@ mod tests {
 
     #[test]
     fn commands_split_like_a_shell_and_stay_out_of_definitions() {
-        let (config, errors, _) = parse_str("command gen \"node \\\"a b.mjs\\\" --x\"\ndefine {\n  command inner \"x\"\n}\ncommand gen \"y\"\n");
-        assert_eq!(config.commands.len(), 1);
+        let (config, errors, _) = parse_str("command gen \"node \\\"a b.mjs\\\" --x\"\ndefine {\n  command inner \"x\"\n}\ncommand gen \"y\"\ncommand all batch \"z\"\n");
+        assert_eq!(config.commands.len(), 2);
         assert_eq!(config.commands[0].argv, ["node", "a b.mjs", "--x"]);
+        assert!(!config.commands[0].batch && config.commands[1].batch);
         assert!(errors.iter().any(|e| e.message.contains("only the root config")), "{errors:#?}");
         assert!(errors.iter().any(|e| e.message.contains("already declared")), "{errors:#?}");
     }
