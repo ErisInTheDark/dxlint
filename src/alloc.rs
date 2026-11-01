@@ -23,10 +23,59 @@
 //! when a page is taken again (wasm memory cannot shrink: there it stays).
 
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::cell::Cell;
+use std::cell::{Cell, UnsafeCell};
 use std::ptr::null_mut;
-use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
+
+/// The allocator's lock. std's `Mutex` cannot guard it: on macOS it boxes a
+/// pthread mutex on first lock, and that allocation would lock again.
+struct Lock<T> {
+    held: AtomicBool,
+    value: UnsafeCell<T>,
+}
+
+// SAFETY: the value is only reached through a guard, one holder at a time.
+unsafe impl<T: Send> Sync for Lock<T> {}
+
+impl<T> Lock<T> {
+    const fn new(value: T) -> Lock<T> {
+        Lock { held: AtomicBool::new(false), value: UnsafeCell::new(value) }
+    }
+
+    fn lock(&self) -> Held<'_, T> {
+        let mut spins = 0u32;
+        while self.held.swap(true, Ordering::Acquire) {
+            while self.held.load(Ordering::Relaxed) {
+                spins += 1;
+                if spins < 64 { std::hint::spin_loop() } else { std::thread::yield_now() }
+            }
+        }
+        Held(self)
+    }
+}
+
+struct Held<'a, T>(&'a Lock<T>);
+
+impl<T> std::ops::Deref for Held<'_, T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        // SAFETY: this guard holds the lock.
+        unsafe { &*self.0.value.get() }
+    }
+}
+
+impl<T> std::ops::DerefMut for Held<'_, T> {
+    fn deref_mut(&mut self) -> &mut T {
+        // SAFETY: this guard holds the lock.
+        unsafe { &mut *self.0.value.get() }
+    }
+}
+
+impl<T> Drop for Held<'_, T> {
+    fn drop(&mut self) {
+        self.0.held.store(false, Ordering::Release);
+    }
+}
 
 /// Blocks up to this size (in 16-byte classes) are pooled.
 const SMALL: usize = 2048;
@@ -138,13 +187,15 @@ struct Store {
 // The store is only touched under its mutex.
 unsafe impl Send for Store {}
 
-static STORE: Mutex<Store> = Mutex::new(Store { kept: null_mut(), released: null_mut() });
+static STORE: Lock<Store> = Lock::new(Store { kept: null_mut(), released: null_mut() });
 /// Each store page's first system page holds its link: it is never released.
-const LINK: usize = 4096;
+/// 16 KiB is the largest system page in use (Apple Silicon): releases must
+/// start on a system page.
+const LINK: usize = 16 * 1024;
 
 impl Store {
-    fn lock() -> std::sync::MutexGuard<'static, Store> {
-        STORE.lock().unwrap_or_else(|e| e.into_inner())
+    fn lock() -> Held<'static, Store> {
+        STORE.lock()
     }
 
     /// Pops the head of `list`.
@@ -278,8 +329,12 @@ mod system {
             extern "C" {
                 fn madvise(address: *mut std::ffi::c_void, size: usize, advice: i32) -> i32;
             }
-            const MADV_DONTNEED: i32 = 4;
-            unsafe { madvise(at.cast(), size, MADV_DONTNEED) };
+            // macOS keeps MADV_DONTNEED pages resident; MADV_FREE frees them.
+            #[cfg(target_vendor = "apple")]
+            const ADVICE: i32 = 5;
+            #[cfg(not(target_vendor = "apple"))]
+            const ADVICE: i32 = 4;
+            unsafe { madvise(at.cast(), size, ADVICE) };
         }
 
         #[cfg(not(unix))]
@@ -461,11 +516,11 @@ impl Pool {
     }
 }
 
-static POOLS: [Mutex<Pool>; SHARDS] = [const { Mutex::new(Pool::new()) }; SHARDS];
+static POOLS: [Lock<Pool>; SHARDS] = [const { Lock::new(Pool::new()) }; SHARDS];
 
 /// The pool for what a long-lived host keeps ([`lasting`]), and its address
 /// once used, so frees find it without locking.
-static LASTING: Mutex<Pool> = Mutex::new(Pool::new());
+static LASTING: Lock<Pool> = Lock::new(Pool::new());
 static LASTING_POOL: AtomicPtr<Pool> = AtomicPtr::new(null_mut());
 
 /// Small allocations made inside `f` come from the lasting pool: data a
@@ -495,8 +550,8 @@ fn in_lasting() -> bool {
     LASTING_SCOPE.try_with(Cell::get).unwrap_or(false)
 }
 
-fn lasting_pool() -> std::sync::MutexGuard<'static, Pool> {
-    let mut pool = LASTING.lock().unwrap_or_else(|e| e.into_inner());
+fn lasting_pool() -> Held<'static, Pool> {
+    let mut pool = LASTING.lock();
     LASTING_POOL.store(&raw mut *pool, Ordering::Relaxed);
     pool
 }
@@ -507,12 +562,12 @@ struct Parked(*mut Pool);
 unsafe impl Send for Parked {}
 
 /// Pools whose owners finished, kept for the next worker.
-static PARKED: Mutex<Vec<Parked>> = Mutex::new(Vec::new());
+static PARKED: Lock<Vec<Parked>> = Lock::new(Vec::new());
 
 /// Gives this thread a pool of its own until the guard drops; small
 /// allocations on it then take no lock.
 pub fn own_pool() -> OwnedPool {
-    let parked = PARKED.lock().unwrap_or_else(|e| e.into_inner()).pop();
+    let parked = PARKED.lock().pop();
     let pool = parked.map_or_else(|| Box::into_raw(Box::new(Pool::new())), |parked| parked.0);
     let previous = OWNED.with(|owned| owned.replace(pool));
     OwnedPool { pool, previous, thread: std::marker::PhantomData }
@@ -541,7 +596,7 @@ impl Drop for OwnedPool {
     fn drop(&mut self) {
         trim();
         OWNED.with(|owned| owned.set(self.previous));
-        let mut parked = PARKED.lock().unwrap_or_else(|e| e.into_inner());
+        let mut parked = PARKED.lock();
         match parked.first() {
             // SAFETY: parked pools belong to no thread; this one is no
             // thread's any more, and is dropped once emptied.
@@ -559,7 +614,7 @@ fn owned() -> *mut Pool {
     OWNED.try_with(Cell::get).unwrap_or(null_mut())
 }
 
-fn shard() -> &'static Mutex<Pool> {
+fn shard() -> &'static Lock<Pool> {
     let index = SHARD
         .try_with(|s| {
             if s.get() == 0 {
@@ -692,7 +747,7 @@ impl Pooled {
                 // SAFETY: an owned pool is only touched by its owning thread;
                 // either pool hands out blocks of the class size.
                 if !owned.is_null() { return unsafe { (*owned).take(c) } }
-                unsafe { shard().lock().unwrap_or_else(|e| e.into_inner()).take(c) }
+                unsafe { shard().lock().take(c) }
             }
             // SAFETY: forwarded unchanged.
             None => unsafe { System.alloc(layout) },
@@ -713,7 +768,7 @@ impl Pooled {
                         if owner == owned { return (*owned).give(page, block) }
                         return Page::give_remote(page, block);
                     }
-                    let mut shard = shard().lock().unwrap_or_else(|e| e.into_inner());
+                    let mut shard = shard().lock();
                     if owner == &raw mut *shard { shard.give(page, block) } else { Page::give_remote(page, block) }
                 }
             }
