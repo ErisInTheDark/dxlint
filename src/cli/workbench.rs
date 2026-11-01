@@ -66,10 +66,16 @@ fn read(dir: &Path) -> Result<View, String> {
         return Ok(View::default());
     }
     // Held folders hold every file below them.
-    let listing = run(Command::new("git").arg("-C").arg(&repo).args(["ls-tree", "-r", "-z", "--name-only", &baseline, "--"]).args(&held), None)?;
-    let files: Vec<&str> = listing.split('\0').filter(|path| !path.is_empty()).collect();
-    let requests: String = files.iter().map(|path| format!("{baseline}:{path}\n")).collect();
-    // `--filters`: the bytes a checkout would write (line endings included).
+    let listing = run(Command::new("git").arg("-C").arg(&repo).args(["ls-tree", "-r", "-z", &baseline, "--"]).args(&held), None)?;
+    // `<mode> blob <id>\t<path>` entries.
+    let entries: Vec<(&str, &str)> = listing.split('\0').filter_map(|entry| {
+        let (head, path) = entry.split_once('\t')?;
+        Some((head.rsplit(' ').next()?, path))
+    }).collect();
+    let files: Vec<&str> = entries.iter().map(|(_, path)| *path).collect();
+    // `--filters` reads `<object> <path>` lines: the path picks the
+    // filters, so the bytes are what a checkout would write.
+    let requests: String = entries.iter().map(|(id, path)| format!("{id} {path}\n")).collect();
     let contents = run_bytes(Command::new("git").arg("-C").arg(&repo).args(["cat-file", "--batch", "--filters"]), Some(requests))?;
     let texts = files.iter().zip(batch_texts(&contents)?).map(|(path, text)| (normalize_path(&repo.join(path)), text)).collect::<Vec<_>>();
     let in_view: HashSet<&Path> = texts.iter().map(|(path, _)| path.as_path()).collect();
