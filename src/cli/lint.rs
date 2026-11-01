@@ -260,31 +260,58 @@ struct Scope<'a> {
     walked: Option<Walked>,
 }
 
-/// Each named path is linted with its nearest `.dx` (or `--config`), so a
-/// file gets the same config as in the editor. `None` roots: the whole
-/// project of the current directory's config.
-fn configs(output: &mut Output<'_>, paths: &[PathBuf], arg: &ConfigArg) -> Result<Vec<(PathBuf, Option<Vec<PathBuf>>)>, u8> {
+/// A config to lint with: its named roots (`None`: its whole project), and
+/// the nested configs between it and those roots, which fold into it.
+struct Configured {
+    config: PathBuf,
+    roots: Option<Vec<PathBuf>>,
+    between: Vec<PathBuf>,
+}
+
+/// Each named path is linted with the config that loads its nearest `.dx`
+/// (or `--config`): a nested config folding into an ancestor is linted as
+/// part of it, so a file gets the same config as in the editor. `None`
+/// roots: the whole project of the current directory's config.
+fn configs(output: &mut Output<'_>, paths: &[PathBuf], arg: &ConfigArg) -> Result<Vec<Configured>, u8> {
     let explicit = arg.config.as_ref().map(|p| normalize_path(&output.cwd.join(p)));
     if paths.is_empty() {
-        return match explicit.or_else(|| crate::config::find(output.cwd)) {
-            Some(config) => Ok(vec![(config, None)]),
+        if let Some(config) = explicit {
+            return Ok(vec![Configured { config, roots: None, between: Vec::new() }]);
+        }
+        return match crate::config::find(output.cwd) {
+            Some(nearest) => {
+                // A folding config's folder is linted as part of the config it folds into.
+                let (config, between) = crate::config::loader(&nearest, &crate::config::source::Disk);
+                let roots = (config != nearest).then(|| vec![nearest.parent().map(Path::to_path_buf).unwrap_or_default()]);
+                Ok(vec![Configured { config, roots, between }])
+            }
             None => {
                 render::error(output, &crate::config::not_found_message());
                 Err(2)
             }
         };
     }
-    let mut by_config: std::collections::BTreeMap<PathBuf, Vec<PathBuf>> = std::collections::BTreeMap::new();
+    let mut by_config: std::collections::BTreeMap<PathBuf, (Vec<PathBuf>, Vec<PathBuf>)> = std::collections::BTreeMap::new();
     for path in paths {
         let full = normalize_path(&output.cwd.join(path));
         let dir = if full.is_dir() { full.as_path() } else { full.parent().unwrap_or(&full) };
-        let Some(config) = explicit.clone().or_else(|| crate::config::find(dir)) else {
-            render::error(output, &format!("{}: {}", path.display(), crate::config::not_found_message()));
-            return Err(2);
+        let (config, between) = match &explicit {
+            Some(config) => (config.clone(), Vec::new()),
+            None => match crate::config::find(dir) {
+                Some(nearest) => crate::config::loader(&nearest, &crate::config::source::Disk),
+                None => {
+                    render::error(output, &format!("{}: {}", path.display(), crate::config::not_found_message()));
+                    return Err(2);
+                }
+            },
         };
-        by_config.entry(config).or_default().push(full);
+        let entry = by_config.entry(config).or_default();
+        entry.0.push(full);
+        for config in between {
+            if !entry.1.contains(&config) { entry.1.push(config) }
+        }
     }
-    Ok(by_config.into_iter().map(|(config, roots)| (config, Some(roots))).collect())
+    Ok(by_config.into_iter().map(|(config, (roots, between))| Configured { config, roots: Some(roots), between }).collect())
 }
 
 fn lint(output: &mut Output<'_>, args: LintArgs, config: &ConfigArg, sources: Option<&Sources>) -> u8 {
@@ -309,7 +336,7 @@ fn lint(output: &mut Output<'_>, args: LintArgs, config: &ConfigArg, sources: Op
     // In a Workbench agent's shell, read the arc view while configs load.
     let mut view = (super::workbench::active() && !args.no_workbench_view).then(|| super::workbench::start(output.cwd.to_path_buf()));
     let mut tally = Tally::new();
-    for (path, roots) in configs {
+    for Configured { config: path, roots, between } in configs {
         let whole = roots.is_none();
         let roots = roots.unwrap_or_else(|| vec![path.parent().map(Path::to_path_buf).unwrap_or_default()]);
         // The walk comes between reading and building the config: it skips
@@ -319,7 +346,10 @@ fn lint(output: &mut Output<'_>, args: LintArgs, config: &ConfigArg, sources: Op
         let base = path.parent().map(Path::to_path_buf).unwrap_or_default();
         let mut walked = None;
         let nested = |ignores: &crate::path_globs::PathGlobs| {
-            let found = walk(&roots, jobs, &base, ignores);
+            let mut found = walk(&roots, jobs, &base, ignores);
+            for config in &between {
+                if !found.nested.contains(config) { found.nested.push(config.clone()) }
+            }
             let nested = if config.config.is_some() { Vec::new() } else { found.nested.clone() };
             walked = Some(found);
             nested

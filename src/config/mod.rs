@@ -97,6 +97,22 @@ pub fn load_tree(root: &Path, nested: impl FnOnce(&crate::path_globs::PathGlobs)
     (Loaded { config, sources, errors, fingerprint }, folded)
 }
 
+/// The config that loads `config`: the outermost ancestor config it folds
+/// into ([`load_tree`]), else itself. Also returns the configs from that
+/// one down to `config` (the root excluded), for the root's tree.
+pub fn loader(config: &Path, provider: &dyn SourceProvider) -> (PathBuf, Vec<PathBuf>) {
+    let config = source::normalize_path(config);
+    let chain: Vec<PathBuf> = std::iter::successors(Some(config.clone()), |c| c.parent()?.parent().and_then(find)).collect();
+    for (at, root) in chain.iter().enumerate().skip(1).rev() {
+        let below = chain[..at].to_vec();
+        let (_, folded) = load_tree(root, |_| below.clone(), provider);
+        if folded.contains(&config) {
+            return (root.clone(), below);
+        }
+    }
+    (config, Vec::new())
+}
+
 pub fn load_text(name: &str, text: &str, provider: &dyn SourceProvider) -> Loaded {
     let mut sources = SourceMap::default();
     let mut parser = parser::Parser::new(&mut sources, provider);

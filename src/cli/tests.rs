@@ -843,6 +843,20 @@ fn named_files_use_their_nearest_config() {
 }
 
 #[test]
+fn paths_under_a_folding_config_lint_with_the_config_it_folds_into() {
+    let root = format!("{RULES}command echo \"node --version\"\n");
+    let dir = project("cli-fold-named", &[(".dx", root.as_str()), ("sub/.dx", NESTED), ("sub/a.t", "LOUD\n")]);
+    for (cwd, args) in [(dir.clone(), vec!["sub/a.t"]), (dir.join("sub"), vec![])] {
+        let out = dxlint(&cwd, &[&["--format", "jsonl"][..], &args].concat());
+        let lines = stdout(&out);
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.code, 1, "{lines}{err}");
+        assert!(!err.contains("only the root config"), "{err}");
+        assert!(lines.lines().any(|l| l.contains("a.t") && l.contains("\"severity\":\"error\"")), "{lines}");
+    }
+}
+
+#[test]
 fn walks_fold_nested_configs_importing_their_parent_and_skip_other_projects() {
     let dir = project("cli-nested-fold", &[(".dx", RULES), ("sub/.dx", NESTED), ("sub/a.t", "LOUD\n"), ("other/.dx", RULES), ("other/c.t", "LOUD\n"), ("b.t", "quiet\n")]);
     let out = dxlint(&dir, &["--format", "jsonl"]);
