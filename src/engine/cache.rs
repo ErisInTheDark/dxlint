@@ -144,11 +144,12 @@ impl Cache {
         refs.deps.iter().all(|&i| self.dep_holds(linter, i))
             && refs.scans.iter().all(|&i| *self.scan_holds[i as usize].get_or_init(|| {
                 let scan = &self.saved.scans[i as usize];
-                // Only files read otherwise than saved are tested again.
+                // Only files read otherwise than saved are tested again; a
+                // changed listing could have added any file.
                 self.saved.groups[scan.files as usize].deps.iter().all(|&dep| {
                     self.dep_holds(linter, dep) || {
-                        let path = self.saved.deps[dep as usize].path();
-                        linter.passes(path, self.current_text(path).as_deref(), &scan.test)
+                        let saved = &self.saved.deps[dep as usize];
+                        saved.reads_text() && linter.passes(saved.path(), self.current_text(saved.path()).as_deref(), &scan.test)
                     }
                 })
             }))

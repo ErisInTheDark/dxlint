@@ -36,10 +36,16 @@ enum ModuleAnswer {
 
 type ModuleAnswers = crate::fx_hash::FxHashMap<Box<str>, ModuleAnswer>;
 
+/// A program's input paths, the listing reads that chose them (work over
+/// every input records those in its [`super::reads::Scan`], so a new file
+/// breaks only lookups it could change), and the program's identity: its
+/// configuration, which outlives any one list.
+type Inputs = (Arc<Vec<PathBuf>>, Arc<[super::reads::Dep]>, u64);
+
 #[derive(Default)]
 struct ProgramMemo<'a> {
     selected: RefCell<Selection<'a>>,
-    inputs: RefCell<crate::fx_hash::FxHashMap<*const Settings, super::reads::Cached<Option<Arc<Vec<PathBuf>>>>>>,
+    inputs: RefCell<crate::fx_hash::FxHashMap<*const Settings, super::reads::Cached<Option<Inputs>>>>,
     roots: RefCell<crate::fx_hash::FxHashMap<(*const Settings, Box<str>), super::reads::Cached<Known<Vec<ScopeRef>>>>>,
     catalogs: RefCell<crate::fx_hash::FxHashMap<(*const Settings, u64), super::reads::Cached<Arc<super::program::Catalog>>>>,
     modules: RefCell<crate::fx_hash::FxHashMap<(u32, *const Settings), ModuleAnswers>>,
@@ -665,13 +671,14 @@ impl<'a> Files<'a> {
         answer
     }
 
-    fn input_paths(self, selected: &Settings) -> Known<Arc<Vec<PathBuf>>> {
+    fn input_paths(self, selected: &Settings) -> Known<Inputs> {
         let key = selected as *const Settings;
         if let Some(cached) = self.0.program.inputs.borrow().get(&key) { return cached.get().map_or(Known::Unknown, Known::Yes) }
         let reentries = super::program::reentries();
         let cached = super::reads::Cached::compute(|| {
             let Known::Yes(anchor) = program_anchor(selected, &self, &QueryContext::once()) else { return Known::Unknown };
             let context = super::program::Context { anchor, settings: selected as *const Settings as usize };
+            let program = std::hash::BuildHasher::hash_one(&crate::fx_hash::FxBuild::default(), &context);
             let load = || self.0.linter.programs.paths(context.clone(), |reads| self.0.linter.reads_hold(reads), || {
                 let question = QueryContext::once();
                 let answer = program_inputs(selected, &self, &question);
@@ -682,10 +689,11 @@ impl<'a> Files<'a> {
                 }
                 answer
             });
-            match self.0.snapshot {
+            let (paths, listing) = super::reads::track_listing(|| match self.0.snapshot {
                 Some(snapshot) => snapshot.paths(self.0.revision(), context.clone(), load),
                 None => load(),
-            }
+            });
+            paths.map(|paths| (paths, listing, program))
         });
         let answer = cached.get();
         // Kept unknown too (see `program::Inputs`), unless only because the
@@ -709,14 +717,16 @@ impl<'a> Files<'a> {
     }
 
     /// The program's input paths whose text passes `keep` (all when the
-    /// profile gives no hints), read but not parsed, and their text reads.
-    fn candidate_inputs(self, paths: &[PathBuf], hinted: bool, keep: impl Fn(&str) -> bool) -> (Vec<PathBuf>, Arc<super::reads::Reads>) {
-        let mut deps = Vec::with_capacity(paths.len());
+    /// profile gives no hints), read but not parsed, and their text reads
+    /// with the `listing` that chose them.
+    fn candidate_inputs(self, paths: &[PathBuf], listing: &[super::reads::Dep], hinted: bool, keep: impl Fn(&str) -> bool) -> (Vec<PathBuf>, Arc<super::reads::Reads>) {
+        let mut deps = Vec::with_capacity(paths.len() + listing.len());
         let candidates = paths.iter().filter(|path| {
             let (text, hash) = self.source_text(path);
             deps.push(super::reads::Dep::Text(super::reads::dep_path(path), hash));
             !hinted || text.is_none_or(|text| keep(&text))
         }).cloned().collect();
+        deps.extend(listing.iter().cloned());
         (candidates, Arc::new(super::reads::Reads { deps, ..Default::default() }))
     }
 
@@ -727,7 +737,7 @@ impl<'a> Files<'a> {
         let cached = super::reads::Cached::compute(|| {
             let question = QueryContext::once();
             let roots = (|| {
-                let Known::Yes(paths) = self.timed("modules.roots.inputs", || self.input_paths(selected)) else { return Known::Unknown };
+                let Known::Yes((paths, listing, _)) = self.timed("modules.roots.inputs", || self.input_paths(selected)) else { return Known::Unknown };
                 let (paths, files): (Arc<[PathBuf]>, Arc<super::reads::Reads>) = match self.timed("modules.roots.candidates", || match (self.0.snapshot, hinted) {
                     (Some(snapshot), true) if self.shares(snapshot) => {
                         let Known::Yes((program, _)) = self.program_identity(selected) else { return Known::Unknown };
@@ -742,6 +752,7 @@ impl<'a> Files<'a> {
                                 let hinted = text.as_deref().is_none_or(|text| selected.globals.name_hints.iter().any(|hint| text.contains(&**hint)));
                                 (path.clone(), text, hinted)
                             }).collect();
+                            deps.extend(listing.iter().cloned());
                             (sources, Arc::new(super::reads::Reads { deps, ..Default::default() }))
                         }));
                         let (sources, files) = survey.get();
@@ -760,7 +771,7 @@ impl<'a> Files<'a> {
                         Known::Yes((shared.get().iter().map(|&at| sources[at as usize].0.clone()).collect(), files))
                     }
                     _ => {
-                        let (candidates, files) = self.candidate_inputs(&paths, hinted, |text| selected.globals.may_publish(text, name));
+                        let (candidates, files) = self.candidate_inputs(&paths, &listing, hinted, |text| selected.globals.may_publish(text, name));
                         Known::Yes((candidates.into(), files))
                     }
                 }) {
@@ -1026,19 +1037,17 @@ impl<'a> Files<'a> {
         })
     }
 
-    /// The program under `selected` as run-shared caches know it: a hash of
-    /// its input paths (worlds of one program share; other programs with the
+    /// The program under `selected` as run-shared caches know it: its
+    /// configuration (worlds of one program share; other programs with the
     /// same settings profile do not), and the linted file when it is not an
-    /// input.
+    /// input. Answers over the input list record its listing themselves, so
+    /// the identity outlives files coming and going, and so do the answers
+    /// they leave standing.
     fn program_identity(self, selected: &Settings) -> Known<(u64, Option<PathBuf>)> {
         if let Some(known) = self.0.program.outside.borrow().get(&(selected as *const Settings)) {
             return Known::Yes(known.clone());
         }
-        let Known::Yes(paths) = self.timed("modules.identity.inputs", || self.input_paths(selected)) else { return Known::Unknown };
-        // Worlds of one run share the run's input list (the snapshot holds
-        // it for the run), so its address names the program without hashing
-        // every path again in every world.
-        let program = Arc::as_ptr(&paths) as usize as u64;
+        let Known::Yes((paths, _, program)) = self.timed("modules.identity.inputs", || self.input_paths(selected)) else { return Known::Unknown };
         // File names first: whole-path comparison parses every component.
         let name = self.0.path.file_name();
         let outside = self.timed("modules.identity.scan", || (!paths.iter().any(|path| path.file_name() == name && path == self.0.path))
@@ -1204,8 +1213,8 @@ impl<'a> Files<'a> {
                 &mut |dep| !linted_differs(dep) && dep.holds(),
                 &mut |scan| !scan.files.deps.iter().any(linted_differs) && self.0.linter.scan_holds(scan),
             ), || match self.0.complete_attribute(|| {
-                let Known::Yes(paths) = self.input_paths(selected) else { return Known::Unknown };
-                let Known::Yes((declarations, texts)) = self.catalog_declarations(selected, classes, &paths, semantic) else { return Known::Unknown };
+                let Known::Yes((paths, listing, _)) = self.input_paths(selected) else { return Known::Unknown };
+                let Known::Yes((declarations, texts)) = self.catalog_declarations(selected, classes, &paths, &listing, semantic) else { return Known::Unknown };
                 Known::Yes(super::program::Catalog::new(declarations, texts))
             }) {
                 Known::Yes(answer) => answer,
@@ -1218,7 +1227,7 @@ impl<'a> Files<'a> {
                 None => load(),
             }) else { return Known::Unknown };
             let Some(outside) = outside else { return Known::Yes(base) };
-            let Known::Yes(Known::Yes((declarations, texts))) = self.0.complete_attribute(|| self.catalog_declarations(selected, classes, std::slice::from_ref(&outside), semantic))
+            let Known::Yes(Known::Yes((declarations, texts))) = self.0.complete_attribute(|| self.catalog_declarations(selected, classes, std::slice::from_ref(&outside), &[], semantic))
                 else { return Known::Unknown };
             Known::Yes(Arc::new(super::program::Catalog::over(base, declarations, texts)))
         });
@@ -1231,9 +1240,9 @@ impl<'a> Files<'a> {
         answer
     }
 
-    /// The ambient declarations of these classes in `paths`, with each
-    /// path's text hash.
-    fn catalog_declarations(self, selected: &Settings, classes: u64, paths: &[PathBuf], semantic: &Semantic<'_>)
+    /// The ambient declarations of these classes in `paths` (chosen by
+    /// `listing`), with each path's text hash.
+    fn catalog_declarations(self, selected: &Settings, classes: u64, paths: &[PathBuf], listing: &[super::reads::Dep], semantic: &Semantic<'_>)
         -> Known<(Vec<super::program::Declaration>, crate::fx_hash::FxHashMap<super::reads::DepPath, u64>)> {
         let mut declarations = Vec::new();
         let mut texts = crate::fx_hash::FxHashMap::default();
@@ -1248,6 +1257,7 @@ impl<'a> Files<'a> {
             scanned.push(super::reads::Dep::Text(path_read, hash));
             if selected.globals.may_declare_ambient(&text) { candidates.push(path.clone()) }
         }
+        scanned.extend(listing.iter().cloned());
         let hints = selected.globals.ambient_hints.clone().into_boxed_slice();
         super::reads::note_scan(&Arc::new(super::reads::Scan {
             files: Arc::new(super::reads::Reads { deps: scanned, ..Default::default() }),

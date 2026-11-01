@@ -19,7 +19,7 @@ pub(super) struct Context {
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub(super) struct CatalogKey {
     pub settings: usize,
-    /// The program's identity: a hash of its input paths.
+    /// The program's identity (`program_identity` in [`super::world`]).
     pub program: u64,
     pub classes: u64,
 }
@@ -221,12 +221,6 @@ fn carried_in_place<K, V>(map: RwLock<FxHashMap<K, (u64, Cached<V>)>>, to: u64, 
     RwLock::new(map)
 }
 
-/// [`Slots`] whose finished answers `keep` accepts at `revision`.
-fn carried_slots<K: Eq + Hash, V>(slots: Slots<K, V>, revision: u64, keep: &mut Keep<'_>) -> Slots<K, V> {
-    Mutex::new(slots.into_inner().expect("run slots").into_iter()
-        .filter(|(_, slot)| slot.get().is_some_and(|answer| keep(revision, Some(&answer.reads), None))).collect())
-}
-
 struct Build<'a, K: Eq + Hash, V> {
     memo: &'a Memo<K, V>,
     key: K,
@@ -264,8 +258,7 @@ fn inputs(answer: Known<Inputs>) -> Known<Arc<Vec<PathBuf>>> {
 pub(super) struct Programs {
     paths: Memo<Context, Inputs>,
     /// Input lists by content: files in different directories of one
-    /// program get the same list, and its address is the program's identity
-    /// for run-shared answers ([`super::world`]'s `program_identity`).
+    /// program share one list.
     inputs: Mutex<FxHashMap<u64, Vec<std::sync::Weak<Vec<PathBuf>>>>>,
     catalogs: Memo<CatalogKey, Arc<Catalog>>,
 }
@@ -330,10 +323,13 @@ pub(super) struct Snapshot {
     /// Directory listings behind those probes (`None`: unreadable).
     listings: RwLock<FxHashMap<PathBuf, (u64, Option<Arc<reads::Listing>>)>>,
     texts: RwLock<FxHashMap<PathBuf, (u64, Option<Arc<str>>, u64)>>,
-    /// Per program (settings, input hash) and global name: the inputs whose
+    /// Per program (settings, identity) and global name: the inputs whose
     /// text may publish it, as positions in the program's survey.
     candidates: Slots<(usize, u64, Box<str>), Arc<[u32]>>,
-    /// Per program (settings, input hash): every input's text, read once.
+    /// Per program: every input's text, read once. Its reads (inputs' texts
+    /// and listing) are its value's, not the answer's: users record them as
+    /// a scan. A carried run keeps a survey only while its listing holds,
+    /// and the candidates and sketches built from it with it.
     surveys: Slots<(usize, u64), Surveyed>,
     /// Per surveyed program, the inputs each word occurs in.
     words: Slots<(usize, u64), Words>,
@@ -511,6 +507,10 @@ impl Snapshot {
     pub(super) fn carry(self, to: u64, keep: &mut Keep<'_>) -> Snapshot {
         let Snapshot { revision, paths, catalogs, units, modules, augmentations, prefetched: _, probes, listings, texts,
             candidates, surveys, words, configurations, metadata, packages, values, frames, editor } = self;
+        let surveys: FxHashMap<_, _> = surveys.into_inner().expect("run slots").into_iter().filter(|(_, slot)| slot.get().is_some_and(|survey| {
+            let listing = Reads { deps: survey.value.1.deps.iter().filter(|dep| !dep.reads_text()).cloned().collect(), ..Default::default() };
+            keep(revision, Some(&listing), None)
+        })).collect();
         Snapshot {
             revision: to,
             paths: paths.carry(to, keep),
@@ -525,9 +525,10 @@ impl Snapshot {
             probes: carried(probes, |path, (at, found)| keep(at, None, Some(&*path)).then_some((path, (to, found)))),
             listings: carried(listings, |dir, (at, listing)| keep(at, None, Some(&*dir)).then_some((dir, (to, listing)))),
             texts: carried(texts, |path, (at, text, hash)| keep(at, None, Some(&*path)).then_some((path, (to, text, hash)))),
-            candidates: carried_slots(candidates, revision, keep),
-            surveys: carried_slots(surveys, revision, keep),
-            words: carried_slots(words, revision, keep),
+            candidates: Mutex::new(candidates.into_inner().expect("run slots").into_iter()
+                .filter(|((settings, program, _), _)| surveys.contains_key(&(*settings, *program))).collect()),
+            words: Mutex::new(words.into_inner().expect("run slots").into_iter().filter(|(key, _)| surveys.contains_key(key)).collect()),
+            surveys: Mutex::new(surveys),
             configurations: carried(configurations, |(at, settings, dir), answer| keep(at, Some(&answer.reads), None).then(|| ((to, settings, dir), answer))),
             metadata,
             packages: carried(packages, |(at, settings, root, subpath, conditions), answer|

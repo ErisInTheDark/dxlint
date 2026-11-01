@@ -300,6 +300,8 @@ pub struct Stale {
     /// files.
     touched: RefCell<crate::fx_hash::FxHashMap<*const Reads, (std::sync::Arc<Reads>, Box<[usize]>)>>,
     verdicts: RefCell<crate::fx_hash::FxHashMap<(*const Reads, reads::ScanTest), bool>>,
+    /// Per changed file and scan test: whether the file passes.
+    passed: RefCell<crate::fx_hash::FxHashMap<(PathBuf, reads::ScanTest), bool>>,
     /// Per touched dep: whether it holds.
     deps: RefCell<crate::fx_hash::FxHashMap<Dep, bool>>,
 }
@@ -320,6 +322,7 @@ impl Stale {
             groups: Default::default(),
             touched: Default::default(),
             verdicts: Default::default(),
+            passed: Default::default(),
             deps: Default::default(),
         }
     }
@@ -351,7 +354,7 @@ impl Stale {
         let names = reads.names();
         if names.texts & self.changed_names == 0 && names.files & self.listed_names == 0 && !(names.dirs && !self.listed.is_empty()) { return true }
         reads.deps.iter().all(|dep| !self.touches(dep) || self.dep_holds(dep, held))
-            && reads.scans.iter().all(|scan| self.scan_holds(scan, |path| passes(path, &scan.test)))
+            && reads.scans.iter().all(|scan| self.scan_holds(scan, held, passes))
             && reads.groups.iter().all(|group| {
                 let key = std::sync::Arc::as_ptr(group);
                 if let Some(&(_, holds)) = self.groups.borrow().get(&key) { return holds }
@@ -370,7 +373,7 @@ impl Stale {
     }
 
     /// Whether `scan` holds, asking `passes` only about its changed files.
-    fn scan_holds(&self, scan: &reads::Scan, passes: impl Fn(&Path) -> bool) -> bool {
+    fn scan_holds(&self, scan: &reads::Scan, held: &impl Fn(&Dep) -> bool, passes: &impl Fn(&Path, &reads::ScanTest) -> bool) -> bool {
         let files = std::sync::Arc::as_ptr(&scan.files);
         let key = (files, scan.test.clone());
         if let Some(&holds) = self.verdicts.borrow().get(&key) { return holds }
@@ -380,9 +383,20 @@ impl Stale {
                 .map(|(i, _)| i).collect();
             (scan.files.clone(), touched)
         }).1.clone();
+        // A listing holds when the files it gained or lost pass too (lost
+        // ones read as absent, and pass).
+        let passes = |path: &Path| {
+            let key = (path.to_path_buf(), scan.test.clone());
+            if let Some(&passed) = self.passed.borrow().get(&key) { return passed }
+            let passed = passes(path, &scan.test);
+            self.passed.borrow_mut().insert(key, passed);
+            passed
+        };
         let holds = touched.iter().all(|&i| {
             let dep = &scan.files.deps[i];
-            dep.holds() || passes(dep.path())
+            self.dep_holds(dep, held) || if dep.reads_text() { passes(dep.path()) } else {
+                self.listed.iter().filter(|path| dep.touches(path) && dep.admits(path)).all(|path| passes(path))
+            }
         });
         self.verdicts.borrow_mut().insert(key, holds);
         holds

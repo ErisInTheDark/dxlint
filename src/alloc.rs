@@ -139,7 +139,6 @@ struct Store {
 unsafe impl Send for Store {}
 
 static STORE: Mutex<Store> = Mutex::new(Store { kept: null_mut(), released: null_mut() });
-
 /// Each store page's first system page holds its link: it is never released.
 const LINK: usize = 4096;
 
@@ -409,6 +408,28 @@ impl Pool {
         }
     }
 
+    /// Takes over `other`'s pages; `other` ends with none.
+    ///
+    /// # Safety
+    /// Both pools are held by the caller, and no thread owns `other`'s
+    /// pages any more (frees from any thread go on their remote lists).
+    unsafe fn absorb(&mut self, other: &mut Pool) {
+        let me: *mut Pool = self;
+        for (mine, theirs) in self.classes.iter_mut().zip(&mut other.classes) {
+            for (into, from) in [(&mut mine.available, &mut theirs.available), (&mut mine.full, &mut theirs.full)] {
+                // SAFETY: `from` lists pages of `other`, which the caller holds.
+                unsafe {
+                    while !from.0.is_null() {
+                        let page = from.0;
+                        from.unlink(page);
+                        (*page).owner.store(me, Ordering::Relaxed);
+                        into.push_second(page);
+                    }
+                }
+            }
+        }
+    }
+
     /// Takes back remote frees and hands empty pages to the store.
     unsafe fn trim(&mut self) {
         for pages in &mut self.classes {
@@ -441,6 +462,24 @@ impl Pool {
 }
 
 static POOLS: [Mutex<Pool>; SHARDS] = [const { Mutex::new(Pool::new()) }; SHARDS];
+
+/// The pool for what a long-lived host keeps ([`lasting`]), and its address
+/// once used, so frees find it without locking.
+static LASTING: Mutex<Pool> = Mutex::new(Pool::new());
+static LASTING_POOL: AtomicPtr<Pool> = AtomicPtr::new(null_mut());
+
+/// Small allocations made inside `f` come from the lasting pool: data a
+/// host keeps past the work that made it (per-file reads, interned paths)
+/// then fills pages of its own, and the work's pages empty out wholly when
+/// it ends, for [`release`] to hand back.
+pub fn lasting<R>(f: impl FnOnce() -> R) -> R {
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) { let _ = LASTING_SCOPE.try_with(|scope| scope.set(self.0)); }
+    }
+    let _restore = Restore(LASTING_SCOPE.with(|scope| scope.replace(true)));
+    f()
+}
 static NEXT_SHARD: AtomicUsize = AtomicUsize::new(0);
 
 thread_local! {
@@ -448,6 +487,18 @@ thread_local! {
     static SHARD: Cell<usize> = const { Cell::new(0) };
     /// The pool this thread owns ([`own_pool`]), or null.
     static OWNED: Cell<*mut Pool> = const { Cell::new(null_mut()) };
+    /// Inside [`lasting`].
+    static LASTING_SCOPE: Cell<bool> = const { Cell::new(false) };
+}
+
+fn in_lasting() -> bool {
+    LASTING_SCOPE.try_with(Cell::get).unwrap_or(false)
+}
+
+fn lasting_pool() -> std::sync::MutexGuard<'static, Pool> {
+    let mut pool = LASTING.lock().unwrap_or_else(|e| e.into_inner());
+    LASTING_POOL.store(&raw mut *pool, Ordering::Relaxed);
+    pool
 }
 
 struct Parked(*mut Pool);
@@ -484,10 +535,22 @@ pub struct OwnedPool {
 }
 
 impl Drop for OwnedPool {
+    /// Parks the pool, folded into one already parked: the free blocks its
+    /// partly used pages hold serve the next worker, instead of waiting in
+    /// a pool no worker may take again (a scan's many workers, then one).
     fn drop(&mut self) {
         trim();
         OWNED.with(|owned| owned.set(self.previous));
-        PARKED.lock().unwrap_or_else(|e| e.into_inner()).push(Parked(self.pool));
+        let mut parked = PARKED.lock().unwrap_or_else(|e| e.into_inner());
+        match parked.first() {
+            // SAFETY: parked pools belong to no thread; this one is no
+            // thread's any more, and is dropped once emptied.
+            Some(into) => unsafe {
+                (*into.0).absorb(&mut *self.pool);
+                drop(Box::from_raw(self.pool));
+            },
+            None => parked.push(Parked(self.pool)),
+        }
     }
 }
 
@@ -623,6 +686,8 @@ impl Pooled {
     unsafe fn raw_alloc(&self, layout: Layout) -> *mut u8 {
         match class(layout) {
             Some(c) => {
+                // SAFETY: the lasting pool is only touched under its lock.
+                if in_lasting() { return unsafe { lasting_pool().take(c) } }
                 let owned = owned();
                 // SAFETY: an owned pool is only touched by its owning thread;
                 // either pool hands out blocks of the class size.
@@ -642,6 +707,7 @@ impl Pooled {
                 // from a live page; a pool is only touched by its holder.
                 unsafe {
                     let owner = (*page).owner.load(Ordering::Relaxed);
+                    if owner == LASTING_POOL.load(Ordering::Relaxed) { return lasting_pool().give(page, block) }
                     let owned = owned();
                     if !owned.is_null() {
                         if owner == owned { return (*owned).give(page, block) }

@@ -32,13 +32,15 @@ pub fn dep_path(path: &Path) -> DepPath {
     if let Some(found) = interned.read().expect("dep paths").paths.get(path) { return found.clone() }
     let mut interned = interned.write().expect("dep paths");
     if let Some(found) = interned.paths.get(path) { return found.clone() }
-    if interned.paths.len() >= interned.sweep_at {
-        interned.paths.retain(|held| Arc::strong_count(held) > 1);
-        interned.sweep_at = (interned.paths.len() * 2).max(FIRST_SWEEP);
-    }
-    let path: DepPath = Arc::from(path);
-    interned.paths.insert(path.clone());
-    path
+    crate::alloc::lasting(|| {
+        if interned.paths.len() >= interned.sweep_at {
+            interned.paths.retain(|held| Arc::strong_count(held) > 1);
+            interned.sweep_at = (interned.paths.len() * 2).max(FIRST_SWEEP);
+        }
+        let path: DepPath = Arc::from(path);
+        interned.paths.insert(path.clone());
+        path
+    })
 }
 
 /// One thing a lint read, with what it read.
@@ -213,6 +215,21 @@ impl Dep {
         }
     }
 
+    /// Whether it reads a file's text (rather than which files exist).
+    pub fn reads_text(&self) -> bool {
+        matches!(self, Dep::Text(..) | Dep::Outside(..))
+    }
+
+    /// Could `path` appearing or disappearing change this dep's answer?
+    /// Listings filtered by path answer exactly; the rest assume so.
+    pub fn admits(&self, path: &Path) -> bool {
+        match self {
+            Dep::Requested(_, request, _) => request_admits(request, path),
+            Dep::Discovered(name, ..) => discovery(name).is_none_or(|d| (d.wanted)(path)),
+            _ => true,
+        }
+    }
+
     /// Whether the dep still holds.
     pub fn holds(&self) -> bool {
         match self {
@@ -273,10 +290,13 @@ impl Names {
 
 /// A lookup over many files that asked each one only `test` (a program's
 /// globals, its ambient modules): it holds while every file reads the same,
-/// or passes `test` as it reads now.
+/// or passes `test` as it reads now. The listing that chose the files holds
+/// while every file added below it passes too (only a check against known
+/// changes can tell which were added: see the engine's `Stale`).
 #[derive(Debug)]
 pub struct Scan {
-    /// The scanned files' [`Dep::Text`] reads, and nothing else.
+    /// The scanned files' [`Dep::Text`] reads, and the listing's reads that
+    /// chose them (nothing else).
     pub files: Arc<Reads>,
     pub test: ScanTest,
 }
@@ -298,7 +318,7 @@ impl Scan {
     /// Whether every scanned file reads the same or passes the test now;
     /// `passes(path)` answers for a changed file.
     pub fn holds(&self, passes: impl Fn(&Path) -> bool) -> bool {
-        self.files.deps.iter().all(|dep| dep.holds() || passes(dep.path()))
+        self.files.deps.iter().all(|dep| dep.holds() || dep.reads_text() && passes(dep.path()))
     }
 }
 
@@ -430,6 +450,105 @@ pub fn note_group(group: &Arc<Reads>) {
             }
         }
     });
+}
+
+/// Runs `f`, recording what it read except which files exist; returns
+/// those listing reads instead, for a [`Scan`] over the listed files to
+/// hold: a new file then breaks only lookups it could change.
+pub fn track_listing<R>(f: impl FnOnce() -> R) -> (R, Arc<[Dep]>) {
+    let (r, reads) = track(f);
+    let mut kept = Reads::default();
+    let mut listing = Vec::new();
+    let mut seen = HashSet::new();
+    let mut stack = vec![&reads];
+    while let Some(next) = stack.pop() {
+        for dep in &next.deps {
+            if dep.reads_text() { kept.deps.push(dep.clone()) } else { listing.push(dep.clone()) }
+        }
+        kept.scans.extend(next.scans.iter().cloned());
+        stack.extend(next.groups.iter().filter(|group| seen.insert(Arc::as_ptr(group))).map(|group| &**group));
+    }
+    kept.deps.sort_unstable();
+    kept.deps.dedup();
+    listing.sort_unstable();
+    listing.dedup();
+    note_group(&Arc::new(kept));
+    (r, listing.into())
+}
+
+/// `reads` sharing every group and scan with equal ones already kept: a
+/// long-lived host keeps each file's reads, and files linted in different
+/// runs hold the same shared answers' reads as separate copies otherwise.
+/// Kept reads are copied into the allocator's lasting pool: the lint that
+/// made them frees all of its own memory.
+pub fn kept(reads: Reads) -> Arc<Reads> {
+    static KEPT: OnceLock<std::sync::Mutex<Kept>> = OnceLock::new();
+    let reads = Arc::new(reads);
+    crate::alloc::lasting(|| {
+        let mut kept = KEPT.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+        kept.sweep();
+        let mut seen = crate::fx_hash::FxHashMap::default();
+        kept.reads(reads, &mut seen)
+    })
+}
+
+/// Kept groups and scans by content hash; children are compared by
+/// address, being kept first.
+#[derive(Default)]
+struct Kept {
+    groups: crate::fx_hash::FxHashMap<u64, Vec<std::sync::Weak<Reads>>>,
+    scans: crate::fx_hash::FxHashMap<u64, Vec<std::sync::Weak<Scan>>>,
+    entries: usize,
+    sweep_at: usize,
+}
+
+impl Kept {
+    /// Drops entries nothing holds any more, whenever they doubled.
+    fn sweep(&mut self) {
+        if self.entries < self.sweep_at { return }
+        self.groups.retain(|_, list| { list.retain(|weak| weak.strong_count() > 0); !list.is_empty() });
+        self.scans.retain(|_, list| { list.retain(|weak| weak.strong_count() > 0); !list.is_empty() });
+        self.entries = self.groups.values().map(Vec::len).sum::<usize>() + self.scans.values().map(Vec::len).sum::<usize>();
+        self.sweep_at = (self.entries * 2).max(4096);
+    }
+
+    fn reads(&mut self, reads: Arc<Reads>, seen: &mut crate::fx_hash::FxHashMap<*const Reads, Arc<Reads>>) -> Arc<Reads> {
+        if let Some(found) = seen.get(&Arc::as_ptr(&reads)) { return found.clone() }
+        let groups: Vec<Arc<Reads>> = reads.groups.iter().map(|group| self.reads(group.clone(), seen)).collect();
+        let scans: Vec<Arc<Scan>> = reads.scans.iter().map(|scan| self.scan(scan, seen)).collect();
+        let mut hasher = crate::fx_hash::FxHasher::default();
+        reads.deps.hash(&mut hasher);
+        for group in &groups { Arc::as_ptr(group).hash(&mut hasher) }
+        for scan in &scans { Arc::as_ptr(scan).hash(&mut hasher) }
+        let key = hasher.finish();
+        let same = |held: &Reads| held.deps == reads.deps
+            && held.groups.len() == groups.len() && held.groups.iter().zip(&groups).all(|(a, b)| Arc::ptr_eq(a, b))
+            && held.scans.len() == scans.len() && held.scans.iter().zip(&scans).all(|(a, b)| Arc::ptr_eq(a, b));
+        let list = self.groups.entry(key).or_default();
+        let found = list.iter().filter_map(std::sync::Weak::upgrade).find(|held| same(held)).unwrap_or_else(|| {
+            let found = Arc::new(Reads { deps: reads.deps.clone(), groups, scans, ..Default::default() });
+            list.push(Arc::downgrade(&found));
+            self.entries += 1;
+            found
+        });
+        seen.insert(Arc::as_ptr(&reads), found.clone());
+        found
+    }
+
+    fn scan(&mut self, scan: &Arc<Scan>, seen: &mut crate::fx_hash::FxHashMap<*const Reads, Arc<Reads>>) -> Arc<Scan> {
+        let files = self.reads(scan.files.clone(), seen);
+        let mut hasher = crate::fx_hash::FxHasher::default();
+        Arc::as_ptr(&files).hash(&mut hasher);
+        scan.test.hash(&mut hasher);
+        let list = self.scans.entry(hasher.finish()).or_default();
+        if let Some(found) = list.iter().filter_map(std::sync::Weak::upgrade).find(|held| Arc::ptr_eq(&held.files, &files) && held.test == scan.test) {
+            return found;
+        }
+        let found = Arc::new(Scan { files, test: scan.test.clone() });
+        list.push(Arc::downgrade(&found));
+        self.entries += 1;
+        found
+    }
 }
 
 /// Records a scan for the innermost `track`, if any.
@@ -743,14 +862,27 @@ pub(crate) fn requested(request: &DiscoveryRequest) -> Option<Vec<PathBuf>> {
     found.map(|(paths, _)| paths)
 }
 
-fn request_walk(request: &DiscoveryRequest) -> Option<(Vec<PathBuf>, u64)> {
+fn request_globs(request: &DiscoveryRequest) -> Option<(crate::path_globs::PathGlobs, crate::path_globs::PathGlobs)> {
     let include = crate::path_globs::PathGlobs::new(request.include.iter().map(|glob| &**glob)).ok()?;
     let exclude = crate::path_globs::PathGlobs::new(request.exclude.iter().flat_map(|glob| [Some(&**glob), glob.strip_suffix("/**")].into_iter().flatten())).ok()?;
-    let wanted = |path: &Path| {
-        let Some(rel) = path.strip_prefix(&request.root).ok() else { return false };
-        let extension = request.extensions.is_empty() || request.extensions.iter().any(|ext| path.to_string_lossy().ends_with(&**ext));
-        extension && (include.is_empty() || include.matches(rel)) && !exclude.matches(rel)
-    };
+    Some((include, exclude))
+}
+
+/// Whether `path` passes `request`'s filters (gitignore aside).
+fn request_wants(request: &DiscoveryRequest, (include, exclude): &(crate::path_globs::PathGlobs, crate::path_globs::PathGlobs), path: &Path) -> bool {
+    let Some(rel) = path.strip_prefix(&request.root).ok() else { return false };
+    let extension = request.extensions.is_empty() || request.extensions.iter().any(|ext| path.to_string_lossy().ends_with(&**ext));
+    extension && (include.is_empty() || include.matches(rel)) && !exclude.matches(rel)
+}
+
+fn request_admits(request: &DiscoveryRequest, path: &Path) -> bool {
+    request_globs(request).is_none_or(|globs| request_wants(request, &globs, path))
+}
+
+fn request_walk(request: &DiscoveryRequest) -> Option<(Vec<PathBuf>, u64)> {
+    let globs = request_globs(request)?;
+    let exclude = globs.1.clone();
+    let wanted = |path: &Path| request_wants(request, &globs, path);
     let root = request.root.clone();
     let dirs_excluded = exclude.clone();
     let mut walker = ignore::WalkBuilder::new(&request.root);
@@ -878,6 +1010,19 @@ pub fn discovery_changed(d: &Discovery, changed: &[PathBuf]) -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn kept_reads_share_equal_groups_made_by_separate_lints() {
+        let path = dep_path(Path::new("/root/engine-kept/shared.ts"));
+        // Two runs computing the same shared answer: equal reads, two copies.
+        let answer = || Arc::new(Reads { deps: vec![Dep::Text(path.clone(), 7)], ..Default::default() });
+        let file = |own: u64| Reads { deps: vec![Dep::Text(dep_path(Path::new("/root/engine-kept/own.ts")), own)], groups: vec![answer()], ..Default::default() };
+        let (first, second) = (kept(file(1)), kept(file(2)));
+        assert!(Arc::ptr_eq(&first.groups[0], &second.groups[0]));
+        // A different answer stays its own.
+        let other = kept(Reads { groups: vec![Arc::new(Reads { deps: vec![Dep::Text(path.clone(), 8)], ..Default::default() })], ..Default::default() });
+        assert!(!Arc::ptr_eq(&first.groups[0], &other.groups[0]));
+    }
 
     #[test]
     fn requested_discovery_replays_its_filters_and_tracks_membership() {

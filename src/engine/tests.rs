@@ -172,6 +172,26 @@ fn importers_stay_valid_while_edits_stay_inside_annotated_bodies() {
 }
 
 #[test]
+fn new_files_break_only_lookups_they_could_answer() {
+    use super::reads::{drop_buffer, set_buffer};
+    let l = native_linter("in ts_call rule typed info \"{if node always number then 'number' else 'other'}\"");
+    let (config, user, module, script) = (Path::new("/listing/tsconfig.json"), Path::new("/listing/user.ts"), Path::new("/listing/module.ts"), Path::new("/listing/script.ts"));
+    set_buffer(config, r#"{ "compilerOptions": { "lib": [] } }"#);
+    let text = "export const y = g();\n";
+    set_buffer(user, text);
+    let (diags, reads) = l.lint_tracked(user, text);
+    assert_eq!(diags.iter().map(|d| d.message.as_str()).collect::<Vec<_>>(), ["other"]);
+    // A new module joins the program but declares no global `g`.
+    set_buffer(module, "export const unrelated = 1;\n");
+    assert!(!l.is_stale(&l.invalidate(&[module.to_owned()]), &reads));
+    // A new script declares it.
+    set_buffer(script, "declare function g(): number;\n");
+    assert!(l.is_stale(&l.invalidate(&[script.to_owned()]), &reads));
+    assert_eq!(l.lint(user, text).iter().map(|d| d.message.as_str()).collect::<Vec<_>>(), ["number"]);
+    for path in [config, user, module, script] { drop_buffer(path) }
+}
+
+#[test]
 fn editor_lints_after_an_edit_inside_one_body_match_fresh_lints() {
     use super::reads::{drop_buffer, set_buffer};
     let l = native_linter("in ts_call rule typed info \"{if node always number then 'number' else 'other'}\"");

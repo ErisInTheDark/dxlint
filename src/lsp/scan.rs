@@ -119,7 +119,7 @@ impl Shared {
     /// Lints `path` with `text` in `run`, keeping what the lint read.
     fn lint(&self, run: &LintRun<'_>, path: &Path, text: &str) -> Vec<crate::engine::Diagnostic> {
         let (diags, reads) = run.lint_tracked(path, text);
-        self.reads.lock().expect("lock").insert(path.to_path_buf(), Arc::new(reads));
+        self.reads.lock().expect("lock").insert(path.to_path_buf(), crate::engine::reads::kept(reads));
         diags
     }
 }
@@ -308,12 +308,12 @@ fn publish_disk(linter: &Linter, run: &LintRun<'_>, cache: Option<&Cache>, share
     let hit = cache.and_then(|c| c.lookup(linter, &rel, &text).zip(c.saved_reads(&rel)));
     let diags = match hit {
         Some((diags, reads)) => {
-            shared.reads.lock().expect("lock").insert(path.to_path_buf(), Arc::new(reads));
+            shared.reads.lock().expect("lock").insert(path.to_path_buf(), crate::engine::reads::kept(reads));
             diags
         }
         None => {
             let (diags, reads) = run.lint_tracked(path, &text);
-            let reads = Arc::new(reads);
+            let reads = crate::engine::reads::kept(reads);
             if let Some(cache) = cache {
                 cache.store(&rel, &text, &diags, reads.clone());
             }
