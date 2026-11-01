@@ -116,8 +116,13 @@ fn rule_link(linter: &Linter, rule: &str) -> Option<String> {
     Some(format!("{}#L{}", super::uri::from_path(&path), f.lines.line_of(r.span.start as usize) + 1))
 }
 
-/// A config error in its file; `uri_of` names the files of related spans.
-pub fn config_error(sources: &SourceMap, e: &ConfigError, uri_of: &dyn Fn(crate::config::source::FileId) -> Option<String>) -> Value {
+/// LSP diagnostic severities.
+pub const ERROR: u8 = 1;
+pub const INFORMATION: u8 = 3;
+
+/// A config error (or notice, by `severity`) in its file; `uri_of` names
+/// the files of related spans.
+pub fn config_error(sources: &SourceMap, e: &ConfigError, severity: u8, uri_of: &dyn Fn(crate::config::source::FileId) -> Option<String>) -> Value {
     let span_range = |span: crate::config::source::Span| {
         let f = sources.get(span.file);
         range(&f.text, &f.lines, span.start as usize, span.end as usize)
@@ -131,7 +136,7 @@ pub fn config_error(sources: &SourceMap, e: &ConfigError, uri_of: &dyn Fn(crate:
         message.push_str("\nnote: ");
         message.push_str(note);
     }
-    let mut v = json!({ "range": range, "severity": 1, "source": "dxlint", "code": "config", "message": message });
+    let mut v = json!({ "range": range, "severity": severity, "source": "dxlint", "code": "config", "message": message });
     let related: Vec<Value> = e
         .related
         .iter()

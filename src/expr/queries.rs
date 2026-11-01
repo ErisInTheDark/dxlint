@@ -9,6 +9,7 @@ mod syntax;
 mod modules;
 mod names;
 mod handles;
+mod commands;
 
 pub(crate) use names::Memo as NamesMemo;
 pub use handles::{handle_function, handle_of, HandleFunction};
@@ -49,7 +50,7 @@ pub struct QueryFunction {
     pub call: fn(&Semantic<'_>, Leaf, &[Value<'static>]) -> Known<Value<'static>>,
 }
 
-pub static QUERY_FUNCTIONS: &[&[QueryFunction]] = &[flow::FUNCTIONS, values::FUNCTIONS, syntax::FUNCTIONS, modules::FUNCTIONS, names::FUNCTIONS, handles::FUNCTIONS];
+pub static QUERY_FUNCTIONS: &[&[QueryFunction]] = &[flow::FUNCTIONS, values::FUNCTIONS, syntax::FUNCTIONS, modules::FUNCTIONS, names::FUNCTIONS, handles::FUNCTIONS, commands::FUNCTIONS];
 
 impl QueryFunction {
     pub fn uncertainty(&self) -> Uncertainty {

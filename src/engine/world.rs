@@ -1374,6 +1374,23 @@ impl World for Files<'_> {
 
     fn profile(&self) -> Option<&crate::engine::Profile> { self.0.ctx.profile }
 
+    fn command_output(&self, name: &str, args: &[String]) -> Known<crate::expr::Value<'static>> {
+        use super::commands::Answer;
+        let (state, output, message) = match self.0.linter.commands.answer(name, args) {
+            Answer::Ready(output) => ("ready", Some(output), None),
+            Answer::Failed(message) => ("failed", None, Some(message)),
+            Answer::Pending => ("pending", None, None),
+            Answer::Disabled => ("disabled", None, None),
+            Answer::Unknown => return Known::Unknown,
+        };
+        let text = |text: Option<Arc<str>>| text.map_or(crate::expr::Value::Null, |text| crate::expr::Value::text_copy(&text));
+        Known::Yes(crate::expr::Value::record(vec![
+            ("state".into(), crate::expr::Value::from(state)),
+            ("output".into(), text(output)),
+            ("message".into(), text(message)),
+        ]))
+    }
+
     fn path(&self, file: u32) -> Option<&Path> {
         if file == 0 { return Some(self.0.path); }
         Some(&self.0.views.get(file.checked_sub(1)?)?.unit.path)

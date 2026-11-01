@@ -19,6 +19,15 @@ pub struct Name {
     pub span: Span,
 }
 
+#[derive(Clone, Debug)]
+pub struct CommandDef {
+    pub name: Name,
+    /// The program and its arguments, split like a shell would (no
+    /// expansion).
+    pub argv: Vec<String>,
+    pub span: Span,
+}
+
 #[derive(Clone, Default, Debug)]
 pub struct Config {
     pub langs: Vec<LangDef>,
@@ -29,6 +38,9 @@ pub struct Config {
     pub configs: Vec<RuleConfig>,
     /// Global `ignore "glob"` items: files never linted.
     pub ignores: Vec<(String, Span)>,
+    /// `command name "program args"`: programs rules may run
+    /// (`command_output`), declared only in the root config.
+    pub commands: Vec<CommandDef>,
     /// `files "glob" { ... }` blocks (and nested configs folded into this
     /// one): the files their `RuleConfig`s apply to.
     pub scopes: Vec<FilesScope>,

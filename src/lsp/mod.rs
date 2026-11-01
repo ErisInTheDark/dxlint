@@ -55,8 +55,16 @@ impl SourceProvider for Overlay<'_> {
     }
 }
 
+/// What the request loop receives: client messages, and the server's own
+/// (finished command runs).
+type Inbox = mpsc::Sender<io::Result<Option<Value>>>;
+
+/// A finished background command run, posted to the request loop.
+const COMMAND_DONE: &str = "dxlint/commandDone";
+
 struct Server {
     out: Outbox,
+    inject: Inbox,
     shared: Arc<Shared>,
     /// Workspace folders.
     roots: Vec<PathBuf>,
@@ -94,7 +102,9 @@ struct Server {
 
 pub fn run<R: Read + Send + 'static, W: Write + Send + 'static>(input: R, output: W, stderr: &mut dyn Write) -> u8 {
     let (out, writer) = Outbox::spawn(output);
+    let (tx, rx) = mpsc::channel();
     let mut server = Server {
+        inject: tx.clone(),
         out: out.clone(),
         shared: Arc::new(Shared::default()),
         roots: Vec::new(),
@@ -117,7 +127,6 @@ pub fn run<R: Read + Send + 'static, W: Write + Send + 'static>(input: R, output
     // Reading happens on its own thread so the loop below can see how much
     // input is already waiting, and lint once per burst of edits instead of
     // once per keystroke.
-    let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let mut input = io::BufReader::new(input);
         loop {
@@ -196,6 +205,8 @@ impl Server {
                 "textDocument/didSave" => self.did_save(params),
                 "textDocument/didClose" => self.did_close(params),
                 "workspace/didChangeWatchedFiles" => self.watched_files(params),
+                // Its marker's buffer changed: the lints that waited relint.
+                COMMAND_DONE => self.changed.extend(params["path"].as_str().map(PathBuf::from)),
                 "dxlint/focus" => self.focus(params),
                 _ => {}
             },
@@ -393,6 +404,14 @@ impl Server {
             self.scan_workspace = scan;
         }
         self.inspect_hover = params["initializationOptions"]["inspectHover"].as_bool().unwrap_or(false);
+        // Clients turn commands off in workspaces they do not trust.
+        if params["initializationOptions"]["runCommands"].as_bool().unwrap_or(true) {
+            let inbox = std::sync::Mutex::new(self.inject.clone());
+            self.projects.commands = Some(Arc::new(move |marker: PathBuf| {
+                let done = json!({ "jsonrpc": "2.0", "method": COMMAND_DONE, "params": { "path": marker } });
+                let _ = inbox.lock().expect("inbox").send(Ok(Some(done)));
+            }));
+        }
         json!({
             "capabilities": {
                 "textDocumentSync": { "openClose": true, "change": 2, "save": { "includeText": false } },
@@ -572,6 +591,7 @@ impl Server {
     /// What was typed is on disk now: every file reading it catches up.
     fn did_save(&mut self, params: &Value) {
         let Some((path, _)) = Self::doc_path(params) else { return };
+        self.retry_failed_commands();
         if self.docs.contains_key(&path) && !self.projects.is_config(&path) {
             self.source_changed(&path);
         }
@@ -593,7 +613,16 @@ impl Server {
         }
     }
 
+    /// Files changed on disk: a failed command run (which reported no
+    /// inputs to wait on) may succeed now.
+    fn retry_failed_commands(&self) {
+        for linter in self.projects.linters().all() {
+            linter.commands.forget_failures();
+        }
+    }
+
     fn watched_files(&mut self, params: &Value) {
+        self.retry_failed_commands();
         for change in params["changes"].as_array().into_iter().flatten() {
             let Some(u) = change["uri"].as_str() else { continue };
             let Some(path) = uri::to_path(u) else { continue };

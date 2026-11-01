@@ -1,0 +1,4 @@
+import .ts
+command snapshot "node snapshot.mjs"
+command broken "node broken.mjs"
+rule shared-frozen-file

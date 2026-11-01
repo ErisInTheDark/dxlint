@@ -1,0 +1,3 @@
+import .ts
+import .python
+rule shared-frozen-file

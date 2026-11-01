@@ -1,0 +1,44 @@
+# .core/frozen: files sealed against change. A comment line holding
+# `dxlint-frozen <hash>` seals the rest of the file: the hash covers every
+# other line (line breaks as LF, no BOM), so any edit outside it shows.
+# `dxlint-frozen <command> [args...] <hash>` seals what a command the root
+# config declares prints for those arguments instead.
+@macro frozen_seal_start /(?m)^[ \t]*(?:\/\/|#|--|;|\/\*|<!--)[ \t]*dxlint-frozen\b/
+
+define {
+  fn frozen_hash(text) = fnv_hash(replace(re_replace(text, /^\u{FEFF}/, ""), "\r\n", "\n"))
+
+  in .* layer text match frozen_seal /^[ \t]*(?:\/\/|#|--|;|\/\*|<!--)[ \t]*dxlint-frozen\b[^\r\n]*(?:\r?\n|\z)/
+  in frozen_seal rule shared-frozen-file {
+    # Only the first seal counts; later ones are sealed content.
+    when !re_test(byte_slice(source, 0, offset), @frozen_seal_start)
+    let line trim_end(text, "\r\n")
+    # The line up to its last word, without a block comment's closer.
+    let kept re_replace(line, /[ \t]*(?:\*\/|-->)?[ \t]*$/, "")
+    let body re_replace(kept, /^.*?dxlint-frozen\b[ \t:]*/, "")
+    let words if body == "" then [] else split(re_replace(body, /[ \t]+/, " "), " ")
+    let written if re_test(last(words) ?? "", /^[0-9a-f]{16}$/) then last(words) else null
+    let named if written == null then words else take(words, count(words) - 1)
+    let command first(named)
+    let ran if command == null then null else command_output(node, command, drop(named, 1))
+    # A command still running: the file is linted again when it finishes.
+    when ran == null || ran.state != "pending"
+    let sealed when {
+      command == null then frozen_hash(byte_slice(source, 0, offset) byte_slice(source, end_offset))
+      ran.state == "ready" then frozen_hash(ran.output)
+      else then null
+    }
+    when sealed == null || written != sealed
+    let line_span { start: offset, end: offset + byte_len(line) }
+    let hash_span { start: offset + byte_len(kept) - 16, end: offset + byte_len(kept) }
+    report at line_span
+    warn when {
+      ran.state == "failed" then "Command `{command}` failed: {ran.message}"
+      ran.state == "disabled" then "Commands are off in this workspace, so this seal is not checked."
+      written == null then "Frozen file has no hash yet."
+      else then "Frozen file changed since it was sealed."
+    }
+    fix at line_span if sealed != null && written == null as kept " " sealed byte_slice(line, byte_len(kept))
+    suggest "Seal the file as it is now" at hash_span if sealed != null && written != null as sealed
+  }
+}

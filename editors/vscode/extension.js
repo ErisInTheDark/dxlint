@@ -176,6 +176,8 @@ function createClient({ command, library, shell }) {
     initializationOptions: {
       scanWorkspace: config.get("scanWorkspace", true),
       inspectHover: config.get("inspectHover", false),
+      // `command` items in .dx run programs: only in trusted workspaces.
+      runCommands: vscode.workspace.isTrusted,
     },
     synchronize: {
       // Disk changes refresh background results and reload the config.

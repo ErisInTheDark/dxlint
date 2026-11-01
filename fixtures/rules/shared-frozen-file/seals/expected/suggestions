@@ -1,0 +1,2 @@
+changed.ts:1:1-1:34 shared-frozen-file#3 > Seal the file as it is now
+  // dxlint-frozen 82f47d74af54b0f7

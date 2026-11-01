@@ -534,6 +534,12 @@ pub trait World {
     fn program_option(&self, _at: Leaf, _name: &str, _semantic: &super::semantic::Semantic<'_>) -> Known<crate::expr::Value<'static>> {
         Known::Unknown
     }
+    /// What the root config's command `name` prints for `args`, as a
+    /// `{ state, output, message }` record (the engine runs it and records
+    /// its inputs).
+    fn command_output(&self, _name: &str, _args: &[String]) -> Known<crate::expr::Value<'static>> {
+        Known::Unknown
+    }
     /// The directory of the configuration the program around `at` loads
     /// (`/`-separated); null when it loads none.
     fn program_directory(&self, _at: Leaf, _semantic: &super::semantic::Semantic<'_>) -> Known<crate::expr::Value<'static>> {

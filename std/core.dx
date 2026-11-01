@@ -28,3 +28,4 @@ match number /\b\d[\d_]*(?:\.\d+)?/
 import .whitespace
 import .core/lines
 import .core/lists
+import .core/frozen

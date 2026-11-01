@@ -24,6 +24,9 @@ pub struct Built {
     /// Still an `Option` for existing callers.
     pub linter: Option<Linter>,
     pub errors: Vec<ConfigError>,
+    /// Things worth knowing that are not mistakes (each declared command,
+    /// which runs a program); editors show them as information.
+    pub notices: Vec<ConfigError>,
     pub sources: std::sync::Arc<SourceMap>,
     /// Every name, its definitions and uses; absent in runtime-only builds.
     pub symbols: Option<std::sync::Arc<Symbols>>,
@@ -455,7 +458,13 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
         }
         wanted
     }).collect();
+    let notices = config.commands.iter()
+        .map(|command| ConfigError::new(command.span, format!("runs `{}` when a rule asks for command `{}`", command.argv.join(" "), command.name.text)))
+        .collect();
+    let commands = std::sync::Arc::new(super::commands::Commands::new(root.clone(),
+        config.commands.iter().map(|command| (command.name.text.clone(), command.argv.clone()))));
     let mut linter = Linter {
+        commands,
         invalidation: Default::default(),
         invalidated: Default::default(),
         existed: Default::default(),
@@ -491,7 +500,7 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
     phase("lowering");
     linter.shape_records();
     phase("record shapes");
-    Built { linter: Some(linter), errors, sources, symbols, phases }
+    Built { linter: Some(linter), errors, notices, sources, symbols, phases }
 }
 
 pub(super) fn option_value(

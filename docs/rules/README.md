@@ -1,6 +1,6 @@
 # Rules
 
-Every rule dxlint ships, 433 in all. Turn one on with `rule <name>` after importing its language; see [basic.md](../basic.md).
+Every rule dxlint ships, 434 in all. Turn one on with `rule <name>` after importing its language; see [basic.md](../basic.md).
 
 - **Types**: the rule reads type information (from your `tsconfig.json`; TypeScript itself never runs).
 - **Fix**: `autofix` rules are fixed by `dxlint --fix` and by the editor's quick fixes.
@@ -439,6 +439,7 @@ Pages are adapted from the documentation of [ESLint](https://eslint.org/docs/lat
 | [shared-blank-lines](shared-blank-lines.md) | Limits consecutive blank lines. |  | autofix |  |  |
 | [shared-eol-last](shared-eol-last.md) | Require a final newline in non-empty files, or forbid final newlines. |  | autofix | formatting | 90.9% |
 | [shared-final-newline](shared-final-newline.md) | Require exactly one final newline in non-empty files. |  | autofix |  |  |
+| [shared-frozen-file](shared-frozen-file.md) | Seal files that must not change. |  | autofix, suggestion |  |  |
 | [shared-linebreak-style](shared-linebreak-style.md) | Reports line endings that differ from the selected style. |  | autofix |  | 92.9% |
 | [shared-max-line-length](shared-max-line-length.md) | Reports text lines longer than the configured character limit. |  |  |  |  |
 | [shared-no-trailing-spaces](shared-no-trailing-spaces.md) | Reports whitespace at the end of a line. |  | autofix |  | 100% |

@@ -26,7 +26,7 @@ The extension activates in workspaces that contain a `.dx` file.
 
 The project's own dxlint: the `@inthedark/dxlint` package, found the way Node finds it (the workspace's `node_modules` or one above it, pnpm links included). Install it with `npm install --save-dev @inthedark/dxlint` (or your package manager's equivalent). In dxlint's own checkout it runs `package/bin` instead. `dxlint.path` overrides both.
 
-The binary runs from a copy, with the rule library from its package, so an upgrade or rebuild never hits a locked file; the server restarts when the package's binary changes. The workspace must be trusted.
+The binary runs from a copy, with the rule library from its package, so an upgrade or rebuild never hits a locked file; the server restarts when the package's binary changes. The workspace must be trusted; with `dxlint.path` set, untrusted workspaces still lint, but run none of the root config's `command` programs.
 
 ## Settings
 

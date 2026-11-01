@@ -479,6 +479,14 @@ pub static FUNCTIONS: &[Function] = &[
         call: |a| Ok(Value::from(a[0].text().len())),
     },
     Function {
+        name: "fnv_hash",
+        signature: "fnv_hash(text)",
+        doc: "FNV-1a 64-bit hash of a text's UTF-8, as 16 lowercase hex digits: the same on every platform and version, so it can be written into files",
+        min: 1,
+        max: 1,
+        call: |a| Ok(Value::from(format!("{:016x}", fnv_1a(a[0].text().as_bytes())))),
+    },
+    Function {
         name: "utf16_len",
         signature: "utf16_len(text)",
         doc: "UTF-16 units in a text: its length as JavaScript counts it (`😀` is 2)",
@@ -1029,12 +1037,27 @@ impl BigIntDecimal {
     }
 }
 
+/// 64-bit FNV-1a: its published offset basis and prime.
+fn fnv_1a(bytes: &[u8]) -> u64 {
+    const OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+    const PRIME: u64 = 0x0000_0100_0000_01b3;
+    bytes.iter().fold(OFFSET_BASIS, |hash, &byte| (hash ^ u64::from(byte)).wrapping_mul(PRIME))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn call(name: &str, args: &[Value<'static>]) -> Value<'static> {
         (lookup(name).unwrap().call)(args).unwrap()
+    }
+
+    #[test]
+    fn fnv_hash_matches_the_published_fnv_1a_vectors() {
+        // Hashes written into files must never change between versions.
+        assert_eq!(call("fnv_hash", &["".into()]), Value::from("cbf29ce484222325"));
+        assert_eq!(call("fnv_hash", &["a".into()]), Value::from("af63dc4c8601ec8c"));
+        assert_eq!(call("fnv_hash", &["foobar".into()]), Value::from("85944171f73967e8"));
     }
 
     #[test]

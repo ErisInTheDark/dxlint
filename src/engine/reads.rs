@@ -249,6 +249,12 @@ impl Dep {
 /// The hash of something that is not there.
 pub const MISSING: u64 = 0;
 
+/// The hash of `path`'s bytes on disk, editor buffers aside (what a program
+/// the engine runs sees), unrecorded.
+pub fn disk_hash(path: &Path) -> u64 {
+    std::fs::read(path).map_or(MISSING, |bytes| hash_bytes(&bytes))
+}
+
 pub fn hash_bytes(bytes: &[u8]) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     bytes.hash(&mut h);

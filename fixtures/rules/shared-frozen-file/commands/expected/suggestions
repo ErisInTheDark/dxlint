@@ -1,0 +1,2 @@
+changed.ts:1:1-1:48 shared-frozen-file#3 > Seal the file as it is now
+  // dxlint-frozen snapshot beta e6acfd2e9330c18c

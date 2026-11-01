@@ -38,6 +38,10 @@ pub struct Projects {
     known: HashSet<PathBuf>,
     /// Folded config directory → the directory of the config it folded into.
     folded: HashMap<PathBuf, PathBuf>,
+    /// How loaded linters run commands: in the background, telling this
+    /// callback each finished run's marker path; `None`: not at all (an
+    /// untrusted workspace).
+    pub commands: Option<Arc<dyn Fn(PathBuf) + Send + Sync>>,
 }
 
 /// Linters by config directory, snapshotted for background scans.
@@ -146,8 +150,10 @@ impl Projects {
         }
     }
 
+    /// Whether `uri` shows config errors (notices aside).
     pub fn has_errors(&self, uri: &str) -> bool {
-        self.error_uris.contains(uri)
+        self.error_uris.contains(uri) && self.by_dir.values()
+            .any(|project| project.errors.get(uri).is_some_and(|list| list.iter().any(|d| d["severity"] == convert::ERROR)))
     }
 
     /// Drops configs not in `keep`. Returns whether any were dropped.
@@ -197,11 +203,16 @@ impl Projects {
         project.symbols = built.symbols.clone();
         project.errors.clear();
         let file_uri = |id| built.sources.get(id).path.as_deref().map(|p: &Path| uri_of(p));
-        for e in &built.errors {
+        let notices = built.notices.iter().map(|e| (e, convert::INFORMATION));
+        for (e, severity) in built.errors.iter().map(|e| (e, convert::ERROR)).chain(notices) {
             let file = e.span.and_then(|s| built.sources.get(s.file).path.clone()).unwrap_or_else(|| config.to_path_buf());
-            project.errors.entry(uri_of(&file)).or_default().push(convert::config_error(&built.sources, e, &file_uri));
+            project.errors.entry(uri_of(&file)).or_default().push(convert::config_error(&built.sources, e, severity, &file_uri));
         }
         let Some(linter) = built.linter else { return false };
+        match &self.commands {
+            Some(finished) => linter.commands.run_in_background(finished.clone()),
+            None => linter.commands.disable(),
+        }
         project.linter = Some(Arc::new(linter));
         true
     }

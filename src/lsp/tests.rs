@@ -206,6 +206,27 @@ fn project(name: &str) -> PathBuf {
 }
 
 #[test]
+fn commands_run_in_the_background_and_their_seals_report_once_done() {
+    let dir = project("lsp-commands");
+    std::fs::write(dir.join(".dx"), "import .ts\ncommand gen \"node gen.mjs\"\nrule shared-frozen-file\n").expect("config");
+    std::fs::write(dir.join("gen.mjs"), "import fs from 'node:fs'; process.stdout.write('dxlint-input in.txt\\n' + fs.readFileSync('in.txt', 'utf8'));\n").expect("script");
+    std::fs::write(dir.join("in.txt"), "one").expect("input");
+    let sealed = dir.join("sealed.ts");
+    std::fs::write(&sealed, "// dxlint-frozen gen 0000000000000000\nexport {};\n").expect("sealed");
+    let mut c = Client::start(&dir);
+    // The command line shows as information on its own line.
+    let notices = c.diagnostics_for(&dir.join(".dx"));
+    assert!(notices.iter().any(|d| d["severity"] == 3 && d["message"].as_str().is_some_and(|m| m.contains("node gen.mjs"))), "{notices:#?}");
+    // Pending at first (nothing to show); reported once the run finishes.
+    let diags = loop {
+        let diags = c.diagnostics_for(&sealed);
+        if !diags.is_empty() { break diags }
+    };
+    assert!(diags[0]["message"].as_str().is_some_and(|m| m.contains("changed since it was sealed")), "{diags:#?}");
+    c.shutdown();
+}
+
+#[test]
 fn streams_workspace_diagnostics_and_serves_fixes() {
     let dir = project("lsp-stream");
     let on_disk = dir.join("disk.t");

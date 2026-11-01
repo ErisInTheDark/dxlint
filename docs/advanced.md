@@ -685,6 +685,31 @@ in ts_class_body rule late-member warn "out of order" {
 }
 ```
 
+### Commands
+
+The root config (the `.dx` linting starts from; never an import, a library
+file or a nested config) may declare programs for rules to run:
+
+```dx
+command snapshot "node scripts/snapshot.mjs"
+```
+
+`command_output(node, "snapshot", ["arg"])` runs `node scripts/snapshot.mjs arg`
+in the root's directory (no shell: words split on spaces, double quotes keep
+one together) and gives `{ state, output, message }`. `state` is `ready`
+(`output` holds the payload), `failed` (`message` says why: exit code and the
+end of stderr, output not UTF-8, or 60 s passed), `pending` or `disabled`.
+
+The program first prints a `dxlint-input <path>` line per file it read
+(relative to the root); everything after is the payload. dxlint keeps each
+run with those files' contents and runs it again only when one changes;
+lints record them as reads, so caches and the language server follow them.
+The language server runs commands in the background: until a run finishes the
+answer is `pending`, and the files that asked are linted again once it does.
+Editors show each `command` line as information, and VS Code runs none in
+untrusted workspaces (`disabled`). `shared-frozen-file` seals use commands to
+freeze what a program produces.
+
 ## Debugging rules
 
 - **`dxlint describe <name>`** explains any name in the config: a rule (final

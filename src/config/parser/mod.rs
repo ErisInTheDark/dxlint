@@ -431,6 +431,7 @@ impl<'a> Parser<'a> {
             (Tk::Ident, "native") => self.native(),
             (Tk::Ident, "set") => self.old_set(),
             (Tk::Ident, "ignore") => self.ignore(),
+            (Tk::Ident, "command") if ctx.is_none() => self.command(),
             (Tk::Ident, "severity") if ctx.is_none() => self.severity_item(),
             (Tk::Ident, "files") if ctx.is_none() && self.defining == 0 => self.files_block(),
             (Tk::Ident, "drop") => self.drop_item(),
@@ -446,7 +447,7 @@ impl<'a> Parser<'a> {
             _ => {
                 self.errors.push(
                     ConfigError::new(t.span, format!("expected an item, found {}", t.describe())).note(
-                        "items are: lang, language, group, match, in ..., rule, indent, let, fn, @macro, schema, import, ignore, files, native, define, drop, override",
+                        "items are: lang, language, group, match, in ..., rule, indent, let, fn, @macro, schema, import, ignore, command, files, native, define, drop, override",
                     ),
                 );
                 self.bump();
@@ -2671,6 +2672,52 @@ impl<'a> Parser<'a> {
         self.config.ignores.extend(globs);
         self.end_of_item();
     }
+
+    /// `command name "program args"`. Only the root config (the file loading
+    /// starts from) may run programs: never an import, a library file or a
+    /// folded nested config.
+    fn command(&mut self) {
+        let kw = self.bump().expect("peeked");
+        let Some(name) = self.ident("a command name") else { return };
+        let Some((line, line_span)) = self.string("the command line") else { return };
+        let span = kw.span.to(line_span);
+        if kw.span.file != super::source::FileId(0) || self.defining > 0 {
+            self.errors.push(ConfigError::new(span, "only the root config can declare commands")
+                .note("commands run programs, so only the `.dx` linting starts from may declare them"));
+            return;
+        }
+        if let Some(first) = self.config.commands.iter().find(|c| c.name.text == name.text) {
+            self.errors.push(ConfigError::new(name.span, format!("command `{}` is already declared", name.text)).related(first.name.span, "first declared here"));
+            return;
+        }
+        let argv = split_command_line(&line);
+        if argv.is_empty() {
+            self.errors.push(ConfigError::new(line_span, "a command needs a program to run"));
+            return;
+        }
+        self.config.commands.push(CommandDef { name, argv, span });
+        self.end_of_item();
+    }
+}
+
+/// Words of a command line: whitespace separates them, double quotes keep
+/// one together (no other expansion happens).
+fn split_command_line(line: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut word: Option<String> = None;
+    let mut quoted = false;
+    for c in line.chars() {
+        match c {
+            '"' => {
+                quoted = !quoted;
+                word.get_or_insert_with(String::new);
+            }
+            c if c.is_whitespace() && !quoted => words.extend(word.take()),
+            c => word.get_or_insert_with(String::new).push(c),
+        }
+    }
+    words.extend(word);
+    words
 }
 
 #[cfg(test)]
@@ -2692,6 +2739,15 @@ mod tests {
         let (config, errors, _) = parse_str(src);
         assert!(errors.is_empty(), "{errors:#?}");
         config
+    }
+
+    #[test]
+    fn commands_split_like_a_shell_and_stay_out_of_definitions() {
+        let (config, errors, _) = parse_str("command gen \"node \\\"a b.mjs\\\" --x\"\ndefine {\n  command inner \"x\"\n}\ncommand gen \"y\"\n");
+        assert_eq!(config.commands.len(), 1);
+        assert_eq!(config.commands[0].argv, ["node", "a b.mjs", "--x"]);
+        assert!(errors.iter().any(|e| e.message.contains("only the root config")), "{errors:#?}");
+        assert!(errors.iter().any(|e| e.message.contains("already declared")), "{errors:#?}");
     }
 
     #[test]

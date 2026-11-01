@@ -2,6 +2,7 @@
 
 mod build;
 mod arena;
+pub mod commands;
 mod editing;
 mod units;
 pub mod cache;
@@ -257,6 +258,8 @@ pub struct Linter {
     /// Paths are matched relative to this (the config file's directory).
     pub root: PathBuf,
     ignores: PathGlobs,
+    /// Programs the root config declares, which rules may run.
+    pub commands: std::sync::Arc<commands::Commands>,
     /// See [`Grammar::reach`].
     reach: Vec<Vec<bool>>,
     /// Set by [`Linter::enable_profile`].
