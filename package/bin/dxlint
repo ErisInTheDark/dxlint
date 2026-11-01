@@ -2,6 +2,7 @@
 // Runs the dxlint binary for this platform. It finds its library (std/,
 // rules/) in the nearest directory above it that holds both: this package.
 const { spawnSync } = require("node:child_process");
+const os = require("node:os");
 const path = require("node:path");
 
 const binary = path.join(__dirname, `dxlint-${process.platform}-${process.arch}${process.platform === "win32" ? ".exe" : ""}`);
@@ -12,4 +13,8 @@ if (result.error) {
     : `dxlint: ${result.error.message}\n`);
   process.exit(2);
 }
-process.exit(result.status ?? 1);
+if (result.signal) {
+  process.stderr.write(`dxlint: ${binary} was killed by ${result.signal}\n`);
+  process.exit(128 + (os.constants.signals[result.signal] ?? 0));
+}
+process.exit(result.status);
