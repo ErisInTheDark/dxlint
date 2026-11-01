@@ -1,7 +1,8 @@
 //! Agents in Workbench lint their arc view: files other live threads hold
-//! read as the view has them, the rest from disk. `wb git arc held` names the
-//! held paths and a baseline tree with their bytes; git reads them. Nothing
-//! else in dxlint knows about Workbench: the view becomes read overlays.
+//! read as the view has them, the rest from disk. `wb git arc held
+//! --contents` gives each held file's checkout bytes in the view (or that it
+//! is absent there). Nothing else in dxlint knows about Workbench: the view
+//! becomes read overlays.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -52,53 +53,61 @@ pub fn apply(view: &View) {
 }
 
 fn read(dir: &Path) -> Result<View, String> {
-    let held = run(Command::new("wb").args(["git", "arc", "held"]).current_dir(dir)
+    let held = run(Command::new("wb").args(["git", "arc", "held", "--contents"]).current_dir(dir)
         // A tool calling wb, as Workbench asks scripts to say.
-        .env("THIS_IS_A_MANAGED_SCRIPT", "1"), None);
-    let json = match held {
-        Ok(json) => json,
+        .env("THIS_IS_A_MANAGED_SCRIPT", "1"));
+    match held {
+        Ok(json) => view(&json, dir),
         // A repository Workbench does not manage has no view: the disk is it.
-        Err(error) if rejection(&error).as_deref() == Some("unmanagedRepository") => return Ok(View::default()),
-        Err(error) => return Err(error),
-    };
-    let Some((repo, baseline, held)) = repository(&json, dir)? else { return Ok(View::default()) };
-    if held.is_empty() {
-        return Ok(View::default());
+        Err(error) if rejection(&error).as_deref() == Some("unmanagedRepository") => Ok(View::default()),
+        Err(error) => Err(error),
     }
-    // Held folders hold every file below them.
-    let listing = run(Command::new("git").arg("-C").arg(&repo).args(["ls-tree", "-r", "-z", &baseline, "--"]).args(&held), None)?;
-    // `<mode> blob <id>\t<path>` entries.
-    let entries: Vec<(&str, &str)> = listing.split('\0').filter_map(|entry| {
-        let (head, path) = entry.split_once('\t')?;
-        Some((head.rsplit(' ').next()?, path))
-    }).collect();
-    let files: Vec<&str> = entries.iter().map(|(_, path)| *path).collect();
-    // `--filters` reads `<object> <path>` lines: the path picks the
-    // filters, so the bytes are what a checkout would write.
-    let requests: String = entries.iter().map(|(id, path)| format!("{id} {path}\n")).collect();
-    let contents = run_bytes(Command::new("git").arg("-C").arg(&repo).args(["cat-file", "--batch", "--filters"]), Some(requests))?;
-    let texts = files.iter().zip(batch_texts(&contents)?).map(|(path, text)| (normalize_path(&repo.join(path)), text)).collect::<Vec<_>>();
-    let in_view: HashSet<&Path> = texts.iter().map(|(path, _)| path.as_path()).collect();
-    let absent = held.iter().flat_map(|path| disk_files(&repo.join(path))).filter(|path| !in_view.contains(path.as_path())).collect();
-    Ok(View { texts, absent })
 }
 
-/// The repository holding `dir` in `wb git arc held` output: its root, the
-/// baseline tree and the paths other threads hold, relative to the root.
-fn repository(json: &str, dir: &Path) -> Result<Option<(PathBuf, String, Vec<String>)>, String> {
+/// The view of the innermost repository holding `dir`, from `wb git arc
+/// held --contents` output: each held file's base64 bytes, or null when the
+/// view has no such file.
+fn view(json: &str, dir: &Path) -> Result<View, String> {
     let value: serde_json::Value = serde_json::from_str(json).map_err(|e| format!("unexpected `wb git arc held` output: {e}"))?;
     let dir = normalize_path(dir);
     let repos = value["repositories"].as_array().into_iter().flatten();
-    let Some(repo) = repos.filter_map(|repo| Some((normalize_path(Path::new(repo["repoRoot"].as_str()?)), repo)))
-        .filter(|(root, _)| dir.starts_with(root)).max_by_key(|(root, _)| root.components().count()) else { return Ok(None) };
-    let (root, repo) = repo;
-    let baseline = repo["baseline"].as_str().ok_or("`wb git arc held` gave no baseline")?.to_string();
-    // Held entries are paths, or owners listing them.
-    let held = repo["held"].as_array().into_iter().flatten().flat_map(|entry| match entry.as_str() {
-        Some(path) => vec![path.to_string()],
-        None => entry["paths"].as_array().into_iter().flatten().filter_map(|p| p.as_str().map(String::from)).collect(),
-    }).collect();
-    Ok(Some((root, baseline, held)))
+    let Some((root, repo)) = repos.filter_map(|repo| Some((normalize_path(Path::new(repo["repoRoot"].as_str()?)), repo)))
+        .filter(|(root, _)| dir.starts_with(root)).max_by_key(|(root, _)| root.components().count()) else { return Ok(View::default()) };
+    let mut view = View::default();
+    for (path, bytes) in repo["contents"].as_object().into_iter().flatten() {
+        let path = normalize_path(&root.join(path));
+        match bytes.as_str() {
+            Some(encoded) => {
+                let bytes = base64(encoded).ok_or_else(|| format!("`wb git arc held` gave {} undecodable contents", path.display()))?;
+                view.texts.push((path, String::from_utf8_lossy(&bytes).into_owned()));
+            }
+            None => view.absent.push(path),
+        }
+    }
+    Ok(view)
+}
+
+/// Standard base64 (padding optional); `None` on any other character.
+fn base64(text: &str) -> Option<Vec<u8>> {
+    let mut bytes = Vec::with_capacity(text.len() / 4 * 3);
+    let (mut buffer, mut bits) = (0u32, 0);
+    for c in text.bytes().filter(|&c| c != b'=') {
+        let value = match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            _ => return None,
+        };
+        buffer = buffer << 6 | u32::from(value);
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            bytes.push((buffer >> bits) as u8);
+        }
+    }
+    Some(bytes)
 }
 
 /// The reason of a wb rejection (`rejection {"reason": ...}` in its output).
@@ -108,50 +117,13 @@ fn rejection(output: &str) -> Option<String> {
     value["reason"].as_str().map(String::from)
 }
 
-/// `git cat-file --batch` output: each object's content, in order.
-fn batch_texts(output: &[u8]) -> Result<Vec<String>, String> {
-    let mut texts = Vec::new();
-    let mut rest = output;
-    while !rest.is_empty() {
-        let newline = rest.iter().position(|&b| b == b'\n').ok_or("truncated `git cat-file` output")?;
-        let header = std::str::from_utf8(&rest[..newline]).map_err(|e| e.to_string())?;
-        let size: usize = header.rsplit(' ').next().and_then(|s| s.parse().ok()).ok_or_else(|| format!("unexpected `git cat-file` header: {header}"))?;
-        let body = rest.get(newline + 1..newline + 1 + size).ok_or("truncated `git cat-file` output")?;
-        texts.push(String::from_utf8_lossy(body).into_owned());
-        rest = rest.get(newline + 2 + size..).unwrap_or_default();
-    }
-    Ok(texts)
-}
-
-/// The files at or below `path` on disk.
-fn disk_files(path: &Path) -> Vec<PathBuf> {
-    if path.is_file() {
-        return vec![normalize_path(path)];
-    }
-    ignore::WalkBuilder::new(path).standard_filters(false).build().flatten()
-        .filter(|entry| entry.file_type().is_some_and(|t| t.is_file()))
-        .map(|entry| normalize_path(entry.path())).collect()
-}
-
-fn run(command: &mut Command, input: Option<String>) -> Result<String, String> {
-    run_bytes(command, input).map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
-}
-
-fn run_bytes(command: &mut Command, input: Option<String>) -> Result<Vec<u8>, String> {
+fn run(command: &mut Command) -> Result<String, String> {
     let name = command.get_program().to_string_lossy().into_owned();
-    let mut child = command.stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
-        .stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(|e| format!("cannot run `{name}`: {e}"))?;
-    if let (Some(input), Some(mut stdin)) = (input, child.stdin.take()) {
-        std::thread::spawn(move || {
-            use std::io::Write;
-            let _ = stdin.write_all(input.as_bytes());
-        });
-    }
-    let out = child.wait_with_output().map_err(|e| format!("`{name}` failed: {e}"))?;
+    let out = command.stdin(Stdio::null()).output().map_err(|e| format!("cannot run `{name}`: {e}"))?;
     if !out.status.success() {
         return Err(format!("`{name}` failed: {}", String::from_utf8_lossy(&out.stderr).trim()));
     }
-    Ok(out.stdout)
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
 #[cfg(test)]
@@ -159,15 +131,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_innermost_repository_holding_the_directory_gives_tree_and_held_paths() {
+    fn the_innermost_repository_holding_the_directory_gives_its_held_contents() {
         let json = r#"{"repositories":[
-            {"repoRoot":"/w","head":"h","baseline":"outer","held":[]},
-            {"repoRoot":"/w/inner","head":"h","baseline":"inner","held":[{"paths":["src/a.ts","lib"]},"b.ts"]}
+            {"repoRoot":"/w","contents":{"outer.ts":"eA=="}},
+            {"repoRoot":"/w/inner","contents":{"src/a.ts":"Y29uc3QgYSA9IDE7Cg==","gone.ts":null}}
         ]}"#;
-        let (root, tree, held) = repository(json, Path::new("/w/inner/src")).unwrap().unwrap();
-        assert_eq!((root, tree.as_str(), held), (normalize_path(Path::new("/w/inner")), "inner", vec!["src/a.ts".to_string(), "lib".into(), "b.ts".into()]));
-        assert_eq!(repository(json, Path::new("/elsewhere")).unwrap(), None);
-        assert!(repository("not json", Path::new("/w")).is_err());
+        let inner = |path: &str| normalize_path(&Path::new("/w/inner").join(path));
+        let view = view(json, Path::new("/w/inner/src")).unwrap();
+        assert_eq!(view, View { texts: vec![(inner("src/a.ts"), "const a = 1;\n".into())], absent: vec![inner("gone.ts")] });
+        assert_eq!(super::view(json, Path::new("/elsewhere")).unwrap(), View::default());
+        assert!(super::view("not json", Path::new("/w")).is_err());
+        assert!(super::view(r#"{"repositories":[{"repoRoot":"/w","contents":{"a":"not base64!"}}]}"#, Path::new("/w")).is_err());
     }
 
     #[test]
@@ -175,13 +149,5 @@ mod tests {
         let failure = "`wb` failed: arc failure arcHeld rejection\nrejection {\"reason\":\"unmanagedRepository\"}\ndiagnostic The managed thread has no Git arc identity";
         assert_eq!(rejection(failure).as_deref(), Some("unmanagedRepository"));
         assert_eq!(rejection("`wb` failed: cannot connect"), None);
-    }
-
-    #[test]
-    fn batches_split_by_size() {
-        // Contents may hold newlines; sizes delimit them.
-        let batch = b"aaa blob 4\na\nb\n\nccc blob 0\n\n";
-        assert_eq!(batch_texts(batch).unwrap(), ["a\nb\n", ""]);
-        assert!(batch_texts(b"aaa blob 9\nshort").is_err());
     }
 }
