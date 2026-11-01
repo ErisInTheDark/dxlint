@@ -272,7 +272,8 @@ pub struct Linter {
     /// `let` attributes, by id.
     pub(crate) attrs: Attributes,
     /// Identifies these rules: the tokens parsed (imports and macros
-    /// expanded) and the project root.
+    /// expanded). Not where the project lies: cached results keep paths
+    /// relative to the root, so a cache moves with its checkout.
     pub fingerprint: u64,
     /// Files at least this big run their rules in groups on several threads.
     pub(crate) split_at: usize,

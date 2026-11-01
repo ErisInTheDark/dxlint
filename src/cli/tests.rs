@@ -539,6 +539,20 @@ fn relative_imports_errors_exit_codes_and_fixing() {
 }
 
 #[test]
+fn cache_moves_with_its_checkout() {
+    let files = [(".dx", "import .ts\nin ts_identifier rule named info \"{text}\" { when text == \"G\" }\n"), ("tsconfig.json", "{}"), ("a.ts", "export const x = 1;\nG;\n")];
+    let first = project("cli-cache-checkout-a", &files);
+    let cold = dxlint(&first, &["--stats"]);
+    assert!(String::from_utf8_lossy(&cold.stderr).contains("(0 from cache)"), "{}", String::from_utf8_lossy(&cold.stderr));
+    // CI restores the cache into a checkout somewhere else.
+    let second = project("cli-cache-checkout-b", &files);
+    std::fs::copy(first.join(".dxcache"), second.join(".dxcache")).expect("copy cache");
+    let warm = dxlint(&second, &["--stats"]);
+    assert!(String::from_utf8_lossy(&warm.stderr).contains("(1 from cache)"), "{}", String::from_utf8_lossy(&warm.stderr));
+    assert_eq!(stdout(&warm), stdout(&cold));
+}
+
+#[test]
 fn cache_replays_results_and_relints_exactly_what_changed() {
     let rules = "import .ts\nin ts_identifier rule typed info \"{text}: {if node always number then 'number' else if node always string then 'string' else if node always boolean then 'boolean' else 'unknown'}\" { when text == \"G\" || reference_kind == \"import\" }\n";
     let dir = project(

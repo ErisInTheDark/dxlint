@@ -386,15 +386,6 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
     for rule in &mut rules {
         rule.specialise_options(&grammar.functions);
     }
-    // The rules as parsed, and where paths are relative to: what cached
-    // results are only valid for.
-    let fingerprint = {
-        use std::hash::{Hash, Hasher};
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        fingerprint.hash(&mut h);
-        root.hash(&mut h);
-        h.finish()
-    };
     let mut by_matcher = vec![Vec::new(); grammar.matchers.len()];
     let mut by_field: crate::fx_hash::FxHashMap<(u32, u16), Vec<usize>> = Default::default();
     let mut by_selection: crate::fx_hash::FxHashMap<u32, Vec<(NodeSelection, Vec<usize>)>> = Default::default();

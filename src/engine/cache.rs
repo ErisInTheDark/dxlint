@@ -5,8 +5,9 @@
 //! for files with problems alike, so a warm run only lints what changed.
 //!
 //! The whole cache belongs to one rule state: the config's tokens (imports
-//! and macros expanded), the project root and the dxlint executable. Any
-//! change there starts afresh.
+//! and macros expanded) and the dxlint executable. Any change there starts
+//! afresh. Paths below the project root are saved relative to it, so a cache
+//! restored into another checkout (CI) is reused there.
 //!
 //! Reads shared by many files (a tsconfig's globals, resolved member names)
 //! are stored once as groups, and every dep and group is checked at most
