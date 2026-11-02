@@ -5,7 +5,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use super::{load_from_with, Output};
-use crate::config::source::Disk;
 use crate::engine::cache::{Cache, FILE_NAME};
 use crate::engine::{apply_fixes, Linter};
 use crate::line_index::LineIndex;
@@ -254,7 +253,7 @@ fn difference(expected: &str, actual: &str) -> String {
 }
 
 fn scenario(output: &mut Output<'_>, root: &Path, bless: bool) -> Result<Vec<String>, String> {
-    let project = load_from_with(output, &root.join(".dx"), &Disk, true).map_err(|_| "configuration failed".to_string())?;
+    let project = load_from_with(output, &root.join(".dx"), true).map_err(|_| "configuration failed".to_string())?;
     if !project.config_ok { return Err("configuration failed".into()); }
     let outputs = |entry: &ignore::DirEntry| !matches!(entry.file_name().to_str(), Some("actual" | "expected" | "edits"));
     let mut files = super::lint::walker(&[root.to_path_buf()], 1, outputs).build()

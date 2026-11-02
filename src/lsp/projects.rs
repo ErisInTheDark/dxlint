@@ -181,7 +181,7 @@ impl Projects {
             return self.by_dir.remove(dir).is_some();
         }
         let nested: Vec<PathBuf> = self.known.iter().filter(|c| c.parent().is_some_and(|d| d != dir && d.starts_with(dir))).cloned().collect();
-        let (loaded, folded) = config::load_tree(config, |_| nested, sources);
+        let (loaded, folded) = config::load_tree(config, |_| nested, None, sources);
         let built = build(loaded, dir.to_path_buf());
         // Folded folders are linted by this config's linter: their own
         // entries go, so the nearest entry above them is this one.

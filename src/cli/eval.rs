@@ -1,60 +1,26 @@
 //! `dxlint eval <target> <expr> files...`: what an expression evaluates to on
 //! every node of a layer, with everything the project config defines.
 //!
-//! The question is asked as a rule in a virtual config file next to the real
-//! one, which imports it: attributes, macros, facts and options all resolve
-//! exactly as they would in a rule, and mistakes are reported like any
-//! config error.
+//! The question is asked as a rule in a virtual file read after the project
+//! config: attributes, macros, facts and options all resolve exactly as they
+//! would in a rule, and mistakes are reported like any config error.
 
-use std::io;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use anstyle::Style;
 
-use super::{load_from, render, ConfigArg, Output};
-use crate::config::source::{normalize_path, Disk, SourceProvider};
-use crate::config;
+use super::{load_with, render, ConfigArg, Output};
+use crate::config::source::{Disk, SourceProvider};
 use crate::line_index::LineIndex;
 
 const RULE: &str = "dxlint-eval";
 const DIM: Style = Style::new().dimmed();
 const BOLD: Style = Style::new().bold();
 
-/// The real config files, plus the virtual one holding the question.
-struct WithQuestion {
-    path: PathBuf,
-    text: String,
-}
-
-impl SourceProvider for WithQuestion {
-    fn read(&self, path: &Path) -> io::Result<String> {
-        if path == self.path {
-            Ok(self.text.clone())
-        } else {
-            Disk.read(path)
-        }
-    }
-}
-
 pub fn run(output: &mut Output<'_>, arg: &ConfigArg, target: &str, expr: &str, files: &[PathBuf]) -> u8 {
     let cwd = output.cwd;
-    let real = match &arg.config {
-        Some(p) => normalize_path(&cwd.join(p)),
-        None => match config::find(cwd) {
-            Some(p) => p,
-            None => {
-                render::error(output, &config::not_found_message());
-                return 2;
-            }
-        },
-    };
-    let dir = real.parent().map(Path::to_path_buf).unwrap_or_default();
-    let stem = real.file_stem().and_then(|s| s.to_str()).unwrap_or("dxlint");
-    let question = WithQuestion {
-        path: dir.join("(dxlint eval).dx"),
-        // `null` shows as `null` rather than as an empty message.
-        text: format!("import \"./{stem}\"\nin {target} rule {RULE} info {{ value ({expr}); then (result) if result == null then \"null\" else str(result) }}\n"),
-    };
-    let project = match load_from(output, &question.path, &question) {
+    // `null` shows as `null` rather than as an empty message.
+    let question = format!("in {target} rule {RULE} info {{ value ({expr}); then (result) if result == null then \"null\" else str(result) }}\n");
+    let project = match load_with(output, arg, Some(("(dxlint eval)", &question)), false) {
         Ok(p) => p,
         Err(code) => return code,
     };

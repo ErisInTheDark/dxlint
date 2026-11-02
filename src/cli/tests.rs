@@ -857,6 +857,20 @@ fn paths_under_a_folding_config_lint_with_the_config_it_folds_into() {
 }
 
 #[test]
+fn tools_under_a_folding_config_load_the_config_it_folds_into() {
+    let root = format!("{RULES}command echo \"node --version\"\n");
+    let dir = project("cli-fold-tools", &[(".dx", root.as_str()), ("sub/.dx", NESTED), ("sub/a.t", "LOUD\n")]);
+    for (cwd, file) in [(dir.clone(), "sub/a.t"), (dir.join("sub"), "a.t")] {
+        let eval = dxlint(&cwd, &["eval", "shout", "lower(text)", file]);
+        let err = String::from_utf8_lossy(&eval.stderr);
+        assert_eq!(eval.code, 0, "{err}");
+        assert!(stdout(&eval).contains("=> loud"), "{}", stdout(&eval));
+        let check = dxlint(&cwd, &["check"]);
+        assert_eq!(check.code, 0, "{}", String::from_utf8_lossy(&check.stderr));
+    }
+}
+
+#[test]
 fn walks_fold_nested_configs_importing_their_parent_and_skip_other_projects() {
     let dir = project("cli-nested-fold", &[(".dx", RULES), ("sub/.dx", NESTED), ("sub/a.t", "LOUD\n"), ("other/.dx", RULES), ("other/c.t", "LOUD\n"), ("b.t", "quiet\n")]);
     let out = dxlint(&dir, &["--format", "jsonl"]);

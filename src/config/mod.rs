@@ -63,7 +63,14 @@ pub fn load_file(path: &Path, provider: &dyn SourceProvider) -> Loaded {
 /// folders last. `nested` lists the candidates, given the root's `ignore`
 /// globs (folders they ignore hold nothing to lint, so their configs never
 /// fold). Returns the folded configs too; the others stay separate.
-pub fn load_tree(root: &Path, nested: impl FnOnce(&crate::path_globs::PathGlobs) -> Vec<PathBuf>, provider: &dyn SourceProvider) -> (Loaded, Vec<PathBuf>) {
+/// `extra` (name, text) is read last as a file of its own, still part of
+/// the root config (`dxlint eval`'s question).
+pub fn load_tree(
+    root: &Path,
+    nested: impl FnOnce(&crate::path_globs::PathGlobs) -> Vec<PathBuf>,
+    extra: Option<(&str, &str)>,
+    provider: &dyn SourceProvider,
+) -> (Loaded, Vec<PathBuf>) {
     let root = source::normalize_path(root);
     let root_dir = root.parent().map(Path::to_path_buf).unwrap_or_default();
     let mut sources = SourceMap::default();
@@ -92,6 +99,9 @@ pub fn load_tree(root: &Path, nested: impl FnOnce(&crate::path_globs::PathGlobs)
         read.push((dir.to_path_buf(), parent.union(&own).cloned().collect()));
         folded.push(config.clone());
     }
+    if let Some((name, text)) = extra {
+        parser.parse_text(name, text);
+    }
     let fingerprint = parser.finish();
     let (config, errors) = (std::mem::take(&mut parser.config), std::mem::take(&mut parser.errors));
     (Loaded { config, sources, errors, fingerprint }, folded)
@@ -105,7 +115,7 @@ pub fn loader(config: &Path, provider: &dyn SourceProvider) -> (PathBuf, Vec<Pat
     let chain: Vec<PathBuf> = std::iter::successors(Some(config.clone()), |c| c.parent()?.parent().and_then(find)).collect();
     for (at, root) in chain.iter().enumerate().skip(1).rev() {
         let below = chain[..at].to_vec();
-        let (_, folded) = load_tree(root, |_| below.clone(), provider);
+        let (_, folded) = load_tree(root, |_| below.clone(), None, provider);
         if folded.contains(&config) {
             return (root.clone(), below);
         }

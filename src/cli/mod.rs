@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use clap::{Parser, Subcommand, ValueEnum};
 
-use crate::config::source::{normalize_path, Disk, SourceProvider};
+use crate::config::source::{normalize_path, Disk};
 use crate::config;
 use crate::engine::symbols::Symbols;
 use crate::engine::{build, build_for_lint, Linter};
@@ -384,37 +384,35 @@ pub struct Project {
     pub build_phases: Vec<(&'static str, std::time::Duration)>,
 }
 
-/// Loads and builds the linter, printing any config errors. Uses the
-/// explicit `--config`, else the nearest `.dx` upward. Only a
+/// Loads and builds the linter, printing any config errors. Only a
 /// missing config is fatal: a broken one lints with what still works.
 fn load(output: &mut Output<'_>, arg: &ConfigArg) -> Result<Project, u8> {
-    load_with(output, arg, false)
+    load_with(output, arg, None, false)
 }
 
 fn load_for_lint(output: &mut Output<'_>, arg: &ConfigArg) -> Result<Project, u8> {
-    load_with(output, arg, true)
+    load_with(output, arg, None, true)
 }
 
-fn load_with(output: &mut Output<'_>, arg: &ConfigArg, runtime: bool) -> Result<Project, u8> {
-    let path = match &arg.config {
-        Some(p) => normalize_path(&output.cwd.join(p)),
+/// The explicit `--config` alone, else the config the current directory's
+/// nearest `.dx` loads with ([`config::loader`]), the configs between them
+/// folded in, as linting does. `extra`: see [`config::load_tree`].
+fn load_with(output: &mut Output<'_>, arg: &ConfigArg, extra: Option<(&str, &str)>, runtime: bool) -> Result<Project, u8> {
+    let (path, between) = match &arg.config {
+        Some(p) => (normalize_path(&output.cwd.join(p)), Vec::new()),
         None => match config::find(output.cwd) {
-            Some(p) => p,
+            Some(nearest) => config::loader(&nearest, &Disk),
             None => {
                 render::error(output, &config::not_found_message());
                 return Err(2);
             }
         },
     };
-    load_from_with(output, &path, &Disk, runtime)
+    load_tree_with(output, &path, |_| between, extra, runtime).map(|(project, _)| project)
 }
 
-fn load_from(output: &mut Output<'_>, path: &Path, provider: &dyn SourceProvider) -> Result<Project, u8> {
-    load_from_with(output, path, provider, false)
-}
-
-fn load_from_with(output: &mut Output<'_>, path: &Path, provider: &dyn SourceProvider, runtime: bool) -> Result<Project, u8> {
-    load_tree_with(output, path, |_| Vec::new(), provider, runtime).map(|(project, _)| project)
+fn load_from_with(output: &mut Output<'_>, path: &Path, runtime: bool) -> Result<Project, u8> {
+    load_tree_with(output, path, |_| Vec::new(), None, runtime).map(|(project, _)| project)
 }
 
 /// [`load_from_with`], folding the nested configs below it that fold
@@ -423,13 +421,13 @@ fn load_tree_with(
     output: &mut Output<'_>,
     path: &Path,
     nested: impl FnOnce(&crate::path_globs::PathGlobs) -> Vec<PathBuf>,
-    provider: &dyn SourceProvider,
+    extra: Option<(&str, &str)>,
     runtime: bool,
 ) -> Result<(Project, Vec<PathBuf>), u8> {
     let root = path.parent().map(Path::to_path_buf).unwrap_or_default();
     let started = std::time::Instant::now();
     config::lexer::take_lexing_time();
-    let (loaded, folded) = config::load_tree(path, nested, provider);
+    let (loaded, folded) = config::load_tree(path, nested, extra, &Disk);
     let load_time = started.elapsed();
     let lex_time = config::lexer::take_lexing_time();
     let built = if runtime { build_for_lint(loaded, root) } else { build(loaded, root) };
