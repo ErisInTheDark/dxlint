@@ -45,6 +45,44 @@ pub struct Shared {
     editing: Mutex<Editing>,
     /// The server is exiting: the editor worker stops.
     pub closing: AtomicBool,
+    /// [`relint_check`]: each file on disk's latest problems, as compared.
+    checked: Mutex<HashMap<PathBuf, Vec<String>>>,
+}
+
+/// `DXLINT_RELINT_CHECK=1`: files on disk an edit's dependency check let
+/// keep their problems are linted afresh and compared ([`check_held`]);
+/// differences go to stderr.
+pub fn relint_check() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("DXLINT_RELINT_CHECK").is_some())
+}
+
+fn problem_keys(diags: &[crate::engine::Diagnostic]) -> Vec<String> {
+    let mut keys: Vec<String> = diags.iter().map(|d| format!("{}:{}-{} {} {}", d.rule, d.start, d.end, d.message, d.fix.is_some())).collect();
+    keys.sort();
+    keys
+}
+
+/// Lints `held` (files whose recorded reads an edit left standing) afresh
+/// and reports any whose problems differ from their kept ones.
+pub fn check_held(linters: Linters, held: Vec<PathBuf>, shared: Arc<Shared>) {
+    if held.is_empty() { return }
+    lint_thread(true, move || {
+        let mut differ = 0;
+        for path in &held {
+            let Some(linter) = linters.for_path(path).filter(|l| l.wants(path)) else { continue };
+            let Ok(text) = std::fs::read_to_string(path) else { continue };
+            let Some(kept) = shared.checked.lock().expect("lock").get(path).cloned() else { continue };
+            let fresh = problem_keys(&linter.lint(path, &text));
+            if fresh != kept {
+                differ += 1;
+                eprintln!("dxlint relint check: DIFFERS {}", path.display());
+                for line in kept.iter().filter(|line| !fresh.contains(line)) { eprintln!("  kept only: {line}") }
+                for line in fresh.iter().filter(|line| !kept.contains(line)) { eprintln!("  fresh only: {line}") }
+            }
+        }
+        eprintln!("dxlint relint check: {} held, {differ} differ", held.len());
+    });
 }
 
 /// A file the editor owns, to lint: an open buffer's text, or a gitignored
@@ -335,6 +373,9 @@ fn publish_disk(linter: &Linter, run: &LintRun<'_>, cache: Option<&Cache>, share
             diags
         }
     };
+    if relint_check() {
+        shared.checked.lock().expect("lock").insert(path.to_path_buf(), problem_keys(&diags));
+    }
     // The editor may have opened the file while it was being linted; then
     // the buffer's diagnostics win.
     if current() && !open() {

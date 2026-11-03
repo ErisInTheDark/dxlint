@@ -18,6 +18,8 @@ pub struct Index {
     /// publication kind: for each static name, and for computed names.
     mentioned: FxHashMap<Box<str>, [u64; PublicationKind::COUNT]>,
     computed: [u64; PublicationKind::COUNT],
+    /// Another file's index: lookups are recorded ([`crate::parts`]).
+    pub owner: Option<std::sync::Arc<crate::parts::Owner>>,
 }
 
 impl PublicationKind {
@@ -88,11 +90,15 @@ impl Index {
     /// Whether any scope of the file could publish `name` in `class`: when
     /// not, every owner's plans for it are empty, without resolving names.
     pub fn mentions(&self, name: &str, class: u64, publication: PublicationKind) -> bool {
+        if let Some(owner) = &self.owner { crate::parts::note(owner, crate::parts::Read::Name(crate::parts::name_hash(name))) }
         let named = self.mentioned.get(name).map_or(0, |masks| masks[publication as usize]);
         (named | self.computed[publication as usize]) & class != 0
     }
 
     pub fn plans(&self, owner: u32, name: Option<(&str, u64)>, publication: PublicationKind) -> Vec<&Plan> {
+        if let Some(file) = &self.owner {
+            crate::parts::note(file, name.map_or(crate::parts::Read::Whole, |(name, _)| crate::parts::Read::Name(crate::parts::name_hash(name))));
+        }
         let Some(scope) = self.scopes.get(&(owner, publication)) else { return Vec::new() };
         let ids = match name {
             None => return scope.all.iter().map(|&id| &self.plans[id]).collect(),
@@ -108,6 +114,20 @@ impl Index {
             }
         };
         ids.into_iter().map(|id| &self.plans[id]).collect()
+    }
+
+    /// What `owner`'s scope publishes: each name (`None`: computed) with
+    /// its publishing node. Unrecorded: for describing the file itself.
+    pub fn published(&self, owner: u32) -> Vec<(Option<&str>, u32)> {
+        let mut out = Vec::new();
+        for publication in [PublicationKind::Exports, PublicationKind::Globals] {
+            let Some(scope) = self.scopes.get(&(owner, publication)) else { continue };
+            for (name, classes) in &scope.named {
+                out.extend(classes.values().flatten().map(|&id| (Some(&**name), self.plans[id].node)));
+            }
+            out.extend(scope.computed.values().flatten().map(|&id| (None, self.plans[id].node)));
+        }
+        out
     }
 }
 

@@ -11,6 +11,7 @@ Rust linter; rules in `.dx` (docs/advanced.md). Binary `dxlint`.
 - perf check: `dxlint --stats --no-cache <big file>`; compare before/after engine changes
 - CPU profile (Windows, no admin): env `DXLINT_SAMPLE=<report>` on a build with debug line tables; `DXLINT_SAMPLE_CALLERS=a;>b` adds callers of `a`, callees of `b`; `DXLINT_SAMPLE_AFTER=<s>` skips startup (a server's scan). Budget steps are not time: profile before trusting them
 - memory: env `DXLINT_HEAP_STATS=1` prints live heap by owner and where allocator pages sit (CLI end, LSP shutdown)
+- cross-file deps (`src/parts.rs`): env `DXLINT_RELINT_CHECK=1` makes the language server lint afresh every file an edit's dep check kept, and print any that differ (slow; replays: scratch/lsp-load/hub.mjs)
 
 ## Layout
 

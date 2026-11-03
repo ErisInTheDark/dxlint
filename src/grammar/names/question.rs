@@ -510,6 +510,9 @@ pub trait World {
     /// Records that the answer being worked out depends on `file`'s whole
     /// text: for files a scan reached that turn out to matter.
     fn depends_on_file(&self, _file: u32) {}
+    /// Records that the answer read part `read` of another file `file`
+    /// ([`crate::parts`]).
+    fn note_part(&self, _file: u32, _read: crate::parts::Read) {}
     /// Work is stepping onto `at`: inside another file's body, it depends on
     /// that file's whole text, not only what lies outside its bodies.
     fn note_entered(&self, _at: Leaf) {}

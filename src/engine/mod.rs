@@ -4,6 +4,7 @@ mod build;
 mod arena;
 pub mod commands;
 mod editing;
+mod file_parts;
 mod units;
 pub mod cache;
 pub mod diagnostic;
@@ -238,6 +239,8 @@ pub struct Linter {
     units: std::sync::Mutex<crate::fx_hash::FxHashMap<PathBuf, std::sync::Arc<units::Unit>>>,
     discoveries: std::sync::Mutex<crate::fx_hash::FxHashMap<crate::grammar::names::modules::resolution::DiscoveryRequest, reads::Cached<Option<Vec<PathBuf>>>>>,
     programs: program::Programs,
+    /// Part reads judged against files as they read now ([`Linter::holds`]).
+    parts: file_parts::Judged,
     /// `files` blocks: per-file severities and option copies.
     pub scopes: scopes::Scopes,
     unit_overlays: Vec<bool>,
@@ -308,11 +311,18 @@ pub struct Stale {
     passed: RefCell<crate::fx_hash::FxHashMap<(PathBuf, reads::ScanTest), bool>>,
     /// Per touched dep: whether it holds.
     deps: RefCell<crate::fx_hash::FxHashMap<Dep, bool>>,
+    /// For answers holding node ids of the changed files (an editor's
+    /// carried answers): their places must stay too.
+    strict: bool,
 }
 
 impl Stale {
     /// `stayed[i]`: `changed[i]` existed before as it does now.
     fn new(changed: &[PathBuf], stayed: &[bool]) -> Self {
+        Stale::judging(changed, stayed, false)
+    }
+
+    fn judging(changed: &[PathBuf], stayed: &[bool], strict: bool) -> Self {
         let listed: Vec<PathBuf> = changed.iter().zip(stayed.iter().chain(std::iter::repeat(&false)))
             .filter(|(_, &stayed)| !stayed).map(|(path, _)| path.clone()).collect();
         let names = |paths: &[PathBuf]| paths.iter().fold(0, |bloom, path| bloom | reads::Names::bit(path));
@@ -328,6 +338,7 @@ impl Stale {
             verdicts: Default::default(),
             passed: Default::default(),
             deps: Default::default(),
+            strict,
         }
     }
 
@@ -339,24 +350,30 @@ impl Stale {
         if self.changed.len() <= 4 {
             let name = path.file_name();
             return match dep {
-                Dep::Text(..) | Dep::Outside(..) => self.changed.iter().any(|changed| changed.file_name() == name && changed == path),
+                Dep::Text(..) | Dep::Outside(..) | Dep::Part(..) => self.changed.iter().any(|changed| changed.file_name() == name && changed == path),
                 Dep::IsFile(..) => self.listed.iter().any(|changed| changed.file_name() == name && changed == path),
                 _ => self.listed.iter().any(|changed| changed.starts_with(path)),
             };
         }
         match dep {
-            Dep::Text(..) | Dep::Outside(..) => self.files.contains(path),
+            Dep::Text(..) | Dep::Outside(..) | Dep::Part(..) => self.files.contains(path),
             Dep::IsFile(..) => self.listed.iter().any(|changed| changed == path),
             _ => self.holding.contains(path),
         }
+    }
+
+    /// Whether `reads` may have read a changed file at all (a bloom: false
+    /// means surely not).
+    pub fn may_touch(&self, reads: &Reads) -> bool {
+        let names = reads.names();
+        names.texts & self.changed_names != 0 || names.files & self.listed_names != 0 || (names.dirs && !self.listed.is_empty())
     }
 
     /// Whether everything `reads` read still holds, judging only the
     /// changed files with `held`; `passes` answers a scan's test for one
     /// of them.
     fn holds(&self, reads: &Reads, held: &impl Fn(&Dep) -> bool, passes: &impl Fn(&Path, &reads::ScanTest) -> bool) -> bool {
-        let names = reads.names();
-        if names.texts & self.changed_names == 0 && names.files & self.listed_names == 0 && !(names.dirs && !self.listed.is_empty()) { return true }
+        if !self.may_touch(reads) { return true }
         reads.deps.iter().all(|dep| !self.touches(dep) || self.dep_holds(dep, held))
             && reads.scans.iter().all(|scan| self.scan_holds(scan, held, passes))
             && reads.groups.iter().all(|group| {
@@ -423,7 +440,7 @@ impl LintRun<'_> {
     }
 
     pub fn lint(&self, path: &Path, text: &str) -> Vec<Diagnostic> {
-        self.linter.lint_in(&self.programs, self.rule_jobs, path, text)
+        crate::parts::linting(path, || self.linter.lint_in(&self.programs, self.rule_jobs, path, text))
     }
 
     pub fn lint_tracked(&self, path: &Path, text: &str) -> (Vec<Diagnostic>, Reads) {
@@ -463,7 +480,8 @@ impl Linter {
         let mut programs = previous.carry(revision, &mut |at, reads, path| {
             let Some(stale) = stale.entry(at).or_insert_with(|| self.changed_since(at).map(|changed| {
                 let (paths, stayed): (Vec<_>, Vec<_>) = changed.into_iter().unzip();
-                Stale::new(&paths, &stayed)
+                // Carried answers hold the changed files' node ids.
+                Stale::judging(&paths, &stayed, true)
             })) else { return false };
             path.is_none_or(|path| !stale.files.contains(path) && !stale.holding.contains(path)) && reads.is_none_or(|reads| !self.is_stale(stale, reads))
         });
@@ -679,8 +697,15 @@ impl Linter {
     /// Whether `dep` still holds; a file read outside its bodies is checked
     /// against a parse of its text now.
     pub fn holds(&self, dep: &Dep) -> bool {
+        self.holds_judging(dep, false)
+    }
+
+    /// [`Linter::holds`]; `strict` for answers holding node ids (part
+    /// reads then hold only for edits inside bodies nobody stepped into).
+    fn holds_judging(&self, dep: &Dep, strict: bool) -> bool {
         match dep {
             Dep::Outside(path, bodies) => self.outside_holds(path, bodies),
+            Dep::Part(path, parts, read) => self.part_holds(path, parts, read, strict),
             dep => dep.holds(),
         }
     }
@@ -713,6 +738,11 @@ impl Linter {
 
     /// `ask` on a world over `path` alone; `None` when it does not parse.
     fn alone<T>(&self, path: &Path, ask: impl for<'w> FnOnce(&'w world::LintWorld<'w>) -> T) -> Option<T> {
+        self.alone_unit(path, |world, _| ask(world))
+    }
+
+    /// [`Linter::alone`], with the file's unit.
+    fn alone_unit<T>(&self, path: &Path, ask: impl for<'w> FnOnce(&'w world::LintWorld<'w>, &'w units::Unit) -> T) -> Option<T> {
         let unit = self.unit_quiet(path, None).1?;
         let run = Run { path: &unit.path, lang: unit.lang, text: &unit.text, lines: unit.lines(), file: &unit.rel, active: &[], settings: None };
         let native = unit.parsed.front.map(|front| self.native_facts(front, &unit.parsed.tree, &run, (&*unit.path, Path::new(&unit.rel)), unit.parsed.state.clone()));
@@ -720,7 +750,7 @@ impl Linter {
         let reindented = RefCell::default();
         let ctx = self.tree_ctx(unit.lang, &unit.parsed.tree, (&unit.text, unit.lines(), &unit.rel), &memo, &reindented, native.as_deref());
         let world = world::LintWorld::new(self, &unit.path, ctx);
-        Some(ask(&world))
+        Some(ask(&world, &unit))
     }
 
     /// The byte ranges of `unit`'s opaque bodies (`opaque` name items whose
@@ -808,7 +838,7 @@ impl Linter {
     /// Whether the `stale` files broke something `reads` read; only those
     /// files are looked at.
     pub fn is_stale(&self, stale: &Stale, reads: &Reads) -> bool {
-        !stale.changed.is_empty() && !stale.holds(reads, &|dep| self.holds(dep), &|path, test| self.passes(path, reads::read_unrecorded(path).0.as_deref(), test))
+        !stale.changed.is_empty() && !stale.holds(reads, &|dep| self.holds_judging(dep, stale.strict), &|path, test| self.passes(path, reads::read_unrecorded(path).0.as_deref(), test))
     }
 
     /// One parsed file's native facts, from front end `front`.
@@ -983,12 +1013,12 @@ impl Linter {
                                     std::thread::Builder::new().stack_size(WORKER_STACK).spawn_scoped(s, move || {
                                         let _pool = crate::alloc::own_pool_in(family);
                                         let carry = carry;
-                                        let ((part, world), reads) = reads::track(|| {
+                                        let ((part, world), reads) = crate::parts::linting(path, || reads::track(|| {
                                             let facts = self.native_facts(index, tree, &run, (path, rel), state);
                                             let mut part = Vec::new();
                                             let world = self.check_tree(tree, &run, programs, Some(&*facts), &mut part, carry.0, dirty);
                                             (part, world)
-                                        });
+                                        }));
                                         let reads = std::sync::Arc::new(reads);
                                         (part, editing::Handed(world.map(|world| (world, reads.clone()))), reads)
                                     }).expect("rule group thread")

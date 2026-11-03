@@ -163,8 +163,10 @@ impl Linter {
             let front = self.grammar.natives.iter().position(|front| front.frontend.accepts(path));
             let tokens = front.and_then(|index| self.unit_token_kinds.get(index)).map_or(&[][..], Vec::as_slice);
             let plan = ParsePlan { lang, front, layers: true, overlays: &self.unit_overlays, child_layers: self.unit_child_layers, tokens };
-            let parsed = self.parse(path, &text, plan).ok()?;
-            let unit = Arc::new(Unit { path: reads::dep_path(path), rel: rel.to_string_lossy().replace('\\', "/"), lang, text, hash, parsed, names: OnceLock::new(), lines: OnceLock::new(), bodies: OnceLock::new(), entered: OnceLock::new() });
+            let mut parsed = self.parse(path, &text, plan).ok()?;
+            let path_read = reads::dep_path(path);
+            parsed.tree.owner = Some(Arc::new(crate::parts::Owner::new(path_read.clone(), hash)));
+            let unit = Arc::new(Unit { path: path_read, rel: rel.to_string_lossy().replace('\\', "/"), lang, text, hash, parsed, names: OnceLock::new(), lines: OnceLock::new(), bodies: OnceLock::new(), entered: OnceLock::new() });
             self.units.lock().expect("unit cache").insert(path.to_owned(), unit.clone());
             Some(unit)
         };

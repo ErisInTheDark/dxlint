@@ -293,6 +293,7 @@ impl<'a> Ctx<'a> {
                 });
                 let mut resolved = resolved.expect("name resolution ran");
                 resolved.complete &= complete && !incomplete.get();
+                if let Some(owner) = &self.tree.owner { resolved.own(owner.clone()) }
                 if tracked {
                     if let Some(previous) = self.memo.previous_names.borrow().as_deref() { resolved.renumber_scopes(previous) }
                     resolved.track();

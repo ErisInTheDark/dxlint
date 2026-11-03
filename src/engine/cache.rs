@@ -25,7 +25,7 @@ use super::reads::{hash_bytes, Dep, Reads, Scan, ScanTest};
 
 pub const FILE_NAME: &str = ".dxcache";
 /// Bumped whenever the encoding changes.
-const MAGIC: &[u8; 4] = b"ZLC9";
+const MAGIC: &[u8; 4] = b"ZLCC";
 
 /// Deps, groups and scans, by index into the tables.
 #[derive(Default, Clone, PartialEq, Eq, Hash)]
@@ -175,6 +175,11 @@ impl Cache {
                 let seen = self.texts.read().expect("cache texts").get(&**path).copied();
                 seen.map_or_else(|| linter.holds(dep), |seen| seen == *hash)
             }
+            // A part of an unchanged file holds; a changed one needs a look.
+            dep @ Dep::Part(path, parts, _) => {
+                let seen = self.texts.read().expect("cache texts").get(&**path).copied();
+                seen == Some(parts.hash) || linter.holds(dep)
+            }
             dep => linter.holds(dep),
         })
     }
@@ -245,9 +250,13 @@ impl Cache {
         entries.sort_unstable_by(|a, b| a.0.cmp(b.0));
 
         let mut w = Writer { out: Vec::new(), root: &self.root, strings: Vec::new(), string_ids: HashMap::new() };
+        w.var(tables.parts.len() as u64);
+        for parts in &tables.parts {
+            w.parts(parts);
+        }
         w.var(tables.deps.len() as u64);
         for d in &tables.deps {
-            w.dep(d);
+            w.dep(d, &tables.part_ids);
         }
         // Groups name scans and scans name groups: both counts come first.
         w.var(tables.scans.len() as u64);
@@ -304,12 +313,17 @@ struct Tables<'a> {
     /// Scans already interned, as for groups.
     scan_by_address: HashMap<usize, u32>,
     scan_by_saved: HashMap<u32, u32>,
+    /// File versions part reads name, by address.
+    parts: Vec<Arc<crate::parts::FileParts>>,
+    part_ids: HashMap<usize, u32>,
 }
 
 impl<'a> Tables<'a> {
     fn new(saved: &'a Saved) -> Self {
         Tables {
             saved,
+            parts: Vec::new(),
+            part_ids: HashMap::new(),
             deps: Vec::new(),
             dep_ids: HashMap::new(),
             groups: Vec::new(),
@@ -358,6 +372,13 @@ impl<'a> Tables<'a> {
     fn dep(&mut self, dep: &Dep) -> u32 {
         if let Some(&id) = self.dep_ids.get(dep) {
             return id;
+        }
+        if let Dep::Part(_, parts, _) = dep {
+            let address = Arc::as_ptr(parts) as usize;
+            if !self.part_ids.contains_key(&address) {
+                self.part_ids.insert(address, self.parts.len() as u32);
+                self.parts.push(parts.clone());
+            }
         }
         let id = self.deps.len() as u32;
         self.deps.push(dep.clone());
@@ -534,7 +555,66 @@ impl Writer<'_> {
         }
     }
 
-    fn dep(&mut self, d: &Dep) {
+    fn bodies(&mut self, bodies: &super::reads::Bodies) {
+        let (len, ranges) = bodies.parts();
+        self.out.extend_from_slice(&bodies.hash.to_le_bytes());
+        self.var(len as u64);
+        self.var(ranges.len() as u64);
+        for &(start, end, before, after) in ranges {
+            self.var(u64::from(start));
+            self.var(u64::from(end));
+            self.out.extend_from_slice(&before.to_le_bytes());
+            self.out.extend_from_slice(&after.to_le_bytes());
+        }
+    }
+
+    fn names(&mut self, names: &[crate::parts::Name]) {
+        self.var(names.len() as u64);
+        for name in names { self.out.extend_from_slice(&name.to_le_bytes()) }
+    }
+
+    /// One file version part reads name ([`crate::parts::FileParts`]).
+    fn parts(&mut self, parts: &crate::parts::FileParts) {
+        self.out.extend_from_slice(&parts.hash.to_le_bytes());
+        self.out.extend_from_slice(&parts.outside.to_le_bytes());
+        self.out.push(u8::from(parts.precise) | u8::from(parts.failed) << 1 | u8::from(parts.coarse.is_some()) << 2);
+        if let Some(bodies) = &parts.coarse { self.bodies(bodies) }
+        for list in [&parts.statements, &parts.bodies] {
+            self.var(list.len() as u64);
+            for part in list.iter() {
+                self.var(u64::from(part.start));
+                self.var(u64::from(part.end));
+                self.out.extend_from_slice(&part.hash.to_le_bytes());
+                self.out.push(u8::from(part.computed));
+                self.names(&part.declares);
+                self.names(&part.mentions);
+                self.var(part.refers.len() as u64);
+                for &index in part.refers.iter() { self.var(u64::from(index)) }
+            }
+        }
+        let mut declared: Vec<(&u32, &crate::parts::Name)> = parts.declared.iter().collect();
+        declared.sort_unstable();
+        self.var(declared.len() as u64);
+        for (&node, &name) in declared {
+            self.var(u64::from(node));
+            self.out.extend_from_slice(&name.to_le_bytes());
+        }
+    }
+
+    fn dep(&mut self, d: &Dep, parts: &HashMap<usize, u32>) {
+        if let Dep::Part(path, version, read) = d {
+            self.out.push(8);
+            self.path(path);
+            self.var(u64::from(parts[&(Arc::as_ptr(version) as usize)]));
+            for indices in [&read.statements, &read.bodies, &read.uses_of] {
+                self.var(indices.len() as u64);
+                for &index in indices.iter() { self.var(u64::from(index)) }
+            }
+            self.names(&read.names);
+            self.names(&read.uses);
+            self.out.push(u8::from(read.whole));
+            return;
+        }
         let (tag, a) = match d {
             Dep::Text(_, h) => (0, *h),
             Dep::Outside(_, bodies) => (7, bodies.hash),
@@ -543,6 +623,7 @@ impl Writer<'_> {
             Dep::List(_, h) => (3, *h),
             Dep::Discovered(_, _, h) => (5, *h),
             Dep::Requested(_, _, hash) => (6, *hash),
+            Dep::Part(..) => unreachable!("written above"),
         };
         self.out.push(tag);
         self.path(d.path());
@@ -618,7 +699,8 @@ fn decode(bytes: &[u8], key: u64, root: &Path) -> Option<Saved> {
         let s = String::from_utf8(r.take(n)?.to_vec()).ok()?;
         r.strings.push(s);
     }
-    let deps = (0..r.var()?).map(|_| r.dep()).collect::<Option<Vec<_>>>()?;
+    let parts = (0..r.var()?).map(|_| r.parts().map(|parts| Arc::new(parts.lasting()))).collect::<Option<Vec<_>>>()?;
+    let deps = (0..r.var()?).map(|_| r.dep(&parts)).collect::<Option<Vec<_>>>()?;
     let scan_count = usize::try_from(r.var()?).ok()?;
     let mut groups = Vec::new();
     for _ in 0..r.var()? {
@@ -728,10 +810,73 @@ impl<'a> Reader<'a> {
         Some(p)
     }
 
-    fn dep(&mut self) -> Option<Dep> {
+    fn count(&mut self) -> Option<usize> {
+        let count = usize::try_from(self.var()?).ok()?;
+        (count <= self.bytes.len().saturating_sub(self.at)).then_some(count)
+    }
+
+    fn bodies(&mut self) -> Option<super::reads::Bodies> {
+        let hash = self.u64()?;
+        let len = usize::try_from(self.var()?).ok()?;
+        let count = self.count()?;
+        let ranges = (0..count).map(|_| Some((u32::try_from(self.var()?).ok()?, u32::try_from(self.var()?).ok()?, self.u64()?, self.u64()?)))
+            .collect::<Option<Vec<_>>>()?;
+        Some(super::reads::Bodies::from_parts(hash, len, ranges))
+    }
+
+    fn name(&mut self) -> Option<crate::parts::Name> {
+        Some(crate::parts::Name::from_le_bytes(self.take(4)?.try_into().ok()?))
+    }
+
+    fn names(&mut self) -> Option<Box<[crate::parts::Name]>> {
+        let count = self.count()?;
+        (0..count).map(|_| self.name()).collect()
+    }
+
+    fn parts(&mut self) -> Option<crate::parts::FileParts> {
+        let (hash, outside) = (self.u64()?, self.u64()?);
+        let flags = self.u8()?;
+        let coarse = if flags & 4 != 0 { Some(Arc::new(self.bodies()?)) } else { None };
+        let mut lists = Vec::new();
+        for _ in 0..2 {
+            let count = self.count()?;
+            let list = (0..count).map(|_| {
+                let (start, end) = (u32::try_from(self.var()?).ok()?, u32::try_from(self.var()?).ok()?);
+                let hash = self.u64()?;
+                let computed = self.u8()? != 0;
+                let (declares, mentions) = (self.names()?, self.names()?);
+                let refers_count = self.count()?;
+                let refers = (0..refers_count).map(|_| u32::try_from(self.var()?).ok()).collect::<Option<Box<[u32]>>>()?;
+                Some(crate::parts::Part { start, end, hash, declares, computed, mentions, refers })
+            }).collect::<Option<Vec<_>>>()?;
+            lists.push(list);
+        }
+        let bodies = lists.pop()?;
+        let statements = lists.pop()?;
+        let count = self.count()?;
+        let declared = (0..count).map(|_| Some((u32::try_from(self.var()?).ok()?, self.name()?))).collect::<Option<crate::fx_hash::FxHashMap<u32, crate::parts::Name>>>()?;
+        Some(crate::parts::FileParts::new(hash, outside, statements, bodies, (flags & 1 != 0, flags & 2 != 0), declared, coarse))
+    }
+
+    fn dep(&mut self, parts: &[Arc<crate::parts::FileParts>]) -> Option<Dep> {
         let tag = self.u8()?;
         let raw = self.path()?;
         let path = super::reads::dep_path(&raw);
+        if tag == 8 {
+            let version = parts.get(usize::try_from(self.var()?).ok()?)?.clone();
+            let mut indices = Vec::new();
+            for _ in 0..3 {
+                let count = self.count()?;
+                indices.push((0..count).map(|_| u32::try_from(self.var()?).ok()).collect::<Option<Box<[u32]>>>()?);
+            }
+            let (names, uses) = (self.names()?, self.names()?);
+            let whole = self.u8()? != 0;
+            let uses_of = indices.pop()?;
+            let bodies = indices.pop()?;
+            let statements = indices.pop()?;
+            let read = crate::parts::PartReads { statements, bodies, names, uses, uses_of, whole };
+            return Some(Dep::Part(path, version, Arc::new(read)));
+        }
         let a = self.u64()?;
         Some(match tag {
             0 => Dep::Text(path, a),
@@ -817,6 +962,29 @@ mod tests {
         assert_eq!(crate::engine::apply_fixes("abc", &cached), ("abX".into(), 1));
     }
     #[test]
+    fn part_reads_keep_what_they_read_and_of_which_version_when_saved() {
+        use crate::parts::{name_hash, FileParts, Part, PartReads, Read};
+        let root = Path::new("/root/cached-parts");
+        let statement = Part { start: 0, end: 9, hash: 1, declares: [name_hash("a")].into(), mentions: [name_hash("a"), name_hash("b")].into(), refers: [1].into(), computed: false };
+        let parts = Arc::new(FileParts::new(7, 8, vec![statement, Part { start: 9, end: 20, hash: 2, ..Part::default() }], Vec::new(), (true, false),
+            [(3, name_hash("a"))].into_iter().collect(), None));
+        let read = Arc::new(PartReads::new([Read::Statement(1), Read::Name(name_hash("a")), Read::UsesOf(3)]));
+        let dep = Dep::Part(super::super::reads::dep_path(&root.join("f.ts")), parts.clone(), read.clone());
+        let mut writer = Writer { out: Vec::new(), root, strings: Vec::new(), string_ids: HashMap::new() };
+        writer.parts(&parts);
+        writer.dep(&dep, &[(Arc::as_ptr(&parts) as usize, 0)].into_iter().collect());
+        let mut reader = Reader { bytes: &writer.out, at: 0, root, strings: writer.strings };
+        let version = Arc::new(reader.parts().expect("cached parts"));
+        let Some(Dep::Part(_, back, reads)) = reader.dep(std::slice::from_ref(&version)) else { panic!("a part read") };
+        assert_eq!(*reads, *read);
+        assert!(back.precise && back.hash == 7 && back.statements.len() == 2);
+        // The version judges an unrelated new statement as before.
+        let added = FileParts::new(9, 10, vec![Part { hash: 1, ..back.statements[0].clone() }, Part { hash: 2, ..Part::default() }, Part { hash: 3, declares: [name_hash("c")].into(), ..Part::default() }],
+            Vec::new(), (false, false), Default::default(), None);
+        assert!(back.holds_all(&back.diff(&added), &reads, false));
+    }
+
+    #[test]
     fn requested_discovery_keeps_its_replay_policy_when_saved() {
         let root = Path::new("/root/cached-engine-inputs");
         let first = root.join("src/first.ts");
@@ -824,9 +992,9 @@ mod tests {
         let request = crate::grammar::names::modules::resolution::DiscoveryRequest { root: root.to_owned(), include: vec!["src/**".into()], exclude: vec!["generated/**".into()], extensions: vec![".ts".into()] };
         let (_, reads) = super::super::reads::track(|| super::super::reads::requested(&request));
         let mut writer = Writer { out: Vec::new(), root, strings: Vec::new(), string_ids: HashMap::new() };
-        writer.dep(&reads.deps[0]);
+        writer.dep(&reads.deps[0], &HashMap::new());
         let mut reader = Reader { bytes: &writer.out, at: 0, root, strings: writer.strings };
-        let dep = reader.dep().expect("cached discovery");
+        let dep = reader.dep(&[]).expect("cached discovery");
         assert!(dep.holds());
         let added = root.join("src/second.ts");
         super::super::reads::set_buffer(&added, "");

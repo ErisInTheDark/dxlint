@@ -121,6 +121,8 @@ impl Effects<'_> {
         footprint::whole(tables::READS);
         let Some(reads) = self.reads(at).known() else { return Known::Unknown };
         if binding.file == 0 { footprint::table(tables::READS, binding.node) }
+        // Another file's catalogue: what reads the binding anywhere in it.
+        self.semantic.world.note_part(binding.file, crate::parts::Read::UsesOf(binding.node));
         Known::Yes(reads.get(&binding).is_some_and(|reads| !reads.is_empty()))
     }
 
@@ -131,6 +133,7 @@ impl Effects<'_> {
         let Some(graph) = self.execution(entry).known() else { return Known::Unknown };
         if graph.write_steps(node).is_empty() { return Known::Unknown }
         footprint::whole(tables::READS);
+        self.semantic.world.note_part(node.file, crate::parts::Read::Whole);
         let Some(reads) = self.reads(at).known() else { return Known::Unknown };
         graph.value_used(node, &reads, &self.semantic.question.budget)
     }
@@ -232,6 +235,8 @@ impl Effects<'_> {
             footprint::whole(tables::WRITTEN);
             footprint::table(tables::WRITTEN, node.node);
         }
+        // Another file's catalogue: what writes the binding anywhere in it.
+        self.semantic.world.note_part(node.file, crate::parts::Read::UsesOf(node.node));
         let Known::Yes(written) = self.written_bindings(binding, tree.nodes.len(), declaration) else { return Known::Unknown };
         written.unwritten(node)
     }

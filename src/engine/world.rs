@@ -193,14 +193,34 @@ impl<'a> LintWorld<'a> {
         super::editing::WorldCarry { units: self.views.units(), state, interned, names: None, results: Default::default(), conditions: Default::default(), walls: Vec::new() }
     }
 
-    /// `path`'s file, its text read recorded on every lookup: work in any
-    /// frame that reaches the file depends on its text, not only the frame
-    /// that loaded it.
+    /// `path`'s file. Reaching a file reads nothing of it yet: work records
+    /// the parts it reads ([`crate::parts`]); a file that does not parse is
+    /// read whole.
     fn file(&'a self, path: &Path) -> Option<u32> {
         if path == self.path { return Some(0); }
         let (file, read) = self.load(path);
-        super::reads::note(read);
+        if file.is_none() { super::reads::note(read) }
         file
+    }
+
+    /// Foreign `file`'s parts: with its names once they are resolved, else
+    /// what its tree alone tells.
+    fn parts_of(&'a self, file: u32) -> Option<std::sync::Arc<crate::parts::FileParts>> {
+        if crate::parts::is_quiet() { return None }
+        let unit = &self.views.get(file.checked_sub(1)?)?.unit;
+        let owner = unit.parsed.tree.owner.as_ref()?;
+        let kept = owner.parts();
+        let names = unit.names.get().map(|names| names.value.clone()).filter(|names| names.complete && names.failures.is_empty());
+        if let Some(kept) = kept.filter(|kept| kept.precise || names.is_none()) { return Some(kept) }
+        let index = unit.parsed.tree.module_index(&self.ctx.grammar.names, &unit.text, &|text| self.key(file, text), self.ctx.profile);
+        let published: Vec<(Option<String>, u32)> = index.published(unit.parsed.tree.root).into_iter().map(|(name, node)| (name.map(str::to_owned), node)).collect();
+        Some(owner.offer(self.linter.describe(unit, names.as_deref(), &published).lasting()))
+    }
+
+    /// Records `read` of foreign `file`.
+    fn note_part(&'a self, file: u32, read: crate::parts::Read) {
+        let Some(unit) = file.checked_sub(1).and_then(|view| self.views.get(view)).map(|view| &view.unit) else { return };
+        if let Some(owner) = &unit.parsed.tree.owner { crate::parts::note(owner, read) }
     }
 
     /// [`LintWorld::file`] unrecorded, for scans (which record a
@@ -264,7 +284,10 @@ impl<'a> LintWorld<'a> {
                 info.node
             }
             Target::Scope(scope) => {
-                let Some(names) = unit.names.get() else { return };
+                let Some(names) = unit.names.get() else {
+                    if !quiet { self.note_part(file, crate::parts::Read::Whole) }
+                    return;
+                };
                 let Some(info) = names.value.scopes.get(scope.scope as usize) else { return };
                 info.node
             }
@@ -274,6 +297,19 @@ impl<'a> LintWorld<'a> {
         let tree = if file == 0 { self.ctx.tree } else { &unit.parsed.tree };
         let Some(syntax) = tree.nodes.get(node as usize) else { return };
         if quiet { return }
+        if file != 0 {
+            // Another file: the statement stepped onto, and the body. Its
+            // root is its module scope: what is looked up there records
+            // itself (by name).
+            if node == tree.root { return }
+            let Some(parts) = self.parts_of(file) else { return self.note_part(file, crate::parts::Read::Whole) };
+            let statement = parts.statement_at(syntax.start);
+            // Wrappers of the whole file are its scope too.
+            if statement.is_some_and(|index| syntax.end > parts.statements[index as usize].end) { return }
+            if let Some(statement) = statement { self.note_part(file, crate::parts::Read::Statement(statement)) }
+            if let Some(body) = self.linter.body_index(unit, syntax.start) { self.note_part(file, crate::parts::Read::Body(body)) }
+            return;
+        }
         if let Some(entered) = self.linter.entered(unit, syntax.start) {
             super::reads::note(super::reads::Dep::Outside(unit.path.clone(), entered));
         }
@@ -1265,22 +1301,27 @@ impl<'a> Files<'a> {
         }));
         self.prefetch_inputs(selected, &candidates);
         // Only files that open a module scope of these classes contribute;
-        // the scan stands for the others while they still open none.
-        for path in &candidates {
-            let Some(file) = self.0.file_quiet(path) else { return Known::Unknown };
-            if !self.opens_scopes(file, classes, semantic) { continue }
-            World::depends_on_file(&self, file);
-            let Some(names) = World::names(&self, file) else { return Known::Unknown };
-            let shared_path = super::reads::dep_path(path);
-            for (scope, info) in names.scopes.iter().enumerate() {
-                if classes & info.classes == 0 { continue }
-                let Known::Yes(items) = self.named_scope(ScopeRef { file, scope: scope as u32 }, classes, semantic) else { return Known::Unknown };
-                declarations.extend(items.into_iter().map(|item| super::program::Declaration {
-                    path: shared_path.clone(), scope: item.scope.scope, node: info.node,
-                    name: item.name, source: item.source, classes: item.classes,
-                }));
+        // the scan stands for the others while they still open none, and
+        // one that does is read whole: nothing here records its parts.
+        let collected = crate::parts::quiet(|| {
+            for path in &candidates {
+                let Some(file) = self.0.file_quiet(path) else { return None };
+                if !self.opens_scopes(file, classes, semantic) { continue }
+                World::depends_on_file(&self, file);
+                let names = World::names(&self, file)?;
+                let shared_path = super::reads::dep_path(path);
+                for (scope, info) in names.scopes.iter().enumerate() {
+                    if classes & info.classes == 0 { continue }
+                    let Known::Yes(items) = self.named_scope(ScopeRef { file, scope: scope as u32 }, classes, semantic) else { return None };
+                    declarations.extend(items.into_iter().map(|item| super::program::Declaration {
+                        path: shared_path.clone(), scope: item.scope.scope, node: info.node,
+                        name: item.name, source: item.source, classes: item.classes,
+                    }));
+                }
             }
-        }
+            Some(())
+        });
+        if collected.is_none() { return Known::Unknown }
         Known::Yes((declarations, texts))
     }
 
@@ -1411,6 +1452,7 @@ impl World for Files<'_> {
         // A run unit's names resolved by any world are complete and shared:
         // read them without building this world's expression context.
         if let Some(shared) = self.0.name_cache(file).and_then(std::sync::OnceLock::get) {
+            self.0.parts_of(file);
             return Some(&**shared.as_ref());
         }
         let ctx = self.0.on(file, self.tree(file)?.root)?;
@@ -1425,6 +1467,7 @@ impl World for Files<'_> {
             let _owner = crate::alloc::heap::Owner::enter(crate::alloc::heap::NAMES);
             ctx.names()
         };
+        if file != 0 { self.0.parts_of(file); }
         if names.complete { Some(names) } else {
             self.0.mark_unknown();
             None
@@ -1450,11 +1493,22 @@ impl World for Files<'_> {
     fn index(&self, file: u32) -> Option<&ScopeIndex> {
         if file == 0 { self.0.note_linted_read() }
         let ctx = self.0.on(file, self.tree(file)?.root)?;
-        Some(ctx.names().index(ctx.tree, ctx.source, &|text| self.0.key(file, text)))
+        let names = ctx.names();
+        if file != 0 { self.0.parts_of(file); }
+        Some(names.index(ctx.tree, ctx.source, &|text| self.0.key(file, text)))
+    }
+
+    fn module_index(&self, file: u32, tables: &crate::grammar::names::Names) -> Option<&crate::grammar::names::modules::index::Index> {
+        if file != 0 { self.0.parts_of(file); }
+        Some(World::tree(self, file)?.module_index(tables, World::text(self, file)?, &|text| self.name_key(file, text), self.profile()))
     }
 
     fn name_key<'s>(&self, file: u32, text: &'s str) -> Cow<'s, str> {
         self.0.key(file, text)
+    }
+
+    fn note_part(&self, file: u32, read: crate::parts::Read) {
+        if file != 0 { self.0.note_part(file, read) }
     }
 
     fn depends_on_file(&self, file: u32) {
@@ -1766,6 +1820,17 @@ pub(super) fn opens_scopes<'a>(world: &'a LintWorld<'a>, classes: u64) -> bool {
     let question = QueryContext::once();
     let semantic = Semantic::new(&files, &world.ctx.grammar.names, &question);
     files.opens_scopes(0, classes, &semantic)
+}
+
+/// The parts of `unit` (which `world` holds alone, as its file 0) for
+/// judging an older version's reads: from its tree and words, without
+/// resolving its names (that needs its program).
+pub(super) fn describe_alone<'a>(world: &'a LintWorld<'a>, unit: &super::units::Unit) -> crate::parts::FileParts {
+    let files = Files(world);
+    let index = World::module_index(&files, 0, &world.ctx.grammar.names);
+    let published: Vec<(Option<String>, u32)> = index.map(|index| index.published(unit.parsed.tree.root).into_iter()
+        .map(|(name, node)| (name.map(str::to_owned), node)).collect()).unwrap_or_default();
+    world.linter.describe(unit, None, &published)
 }
 
 /// Whether some of `items` (a node of the world's file, and the condition
@@ -2195,43 +2260,38 @@ mod tests {
     }
 
     #[test]
-    fn every_lookup_of_a_loaded_file_records_its_text_and_quiet_ones_none() {
+    fn work_depends_on_the_statements_it_stepped_into_not_on_reaching_the_file() {
         let linter = linter("in paren fits marked");
-        let path = Path::new("/root/unit-relookup.t");
-        reads::set_buffer(path, "(text)");
-        with_world(&linter, |files| {
-            // A shared answer worked out after the load still depends on it.
-            for _ in 0..2 {
-                let (_, deps) = reads::track(|| files.0.file(path).expect("unit loads"));
-                assert!(deps.any(&mut |dep| matches!(dep, reads::Dep::Text(p, _) if **p == *path)));
-            }
-            let (_, quiet) = reads::track(|| files.0.file_quiet(path).expect("unit loads"));
-            assert!(quiet.is_empty());
+        let path = Path::new("/root/unit-parts.t");
+        reads::set_buffer(path, "(first) (second)");
+        let deps = with_world(&linter, |files| {
+            let (_, reached) = reads::track(|| files.0.file(path).expect("unit loads"));
+            assert!(reached.is_empty());
+            let file = files.0.file(path).unwrap();
+            files.names(file).expect("names resolve");
+            let tree = files.tree(file).unwrap();
+            let first = tree.order.iter().copied().find(|&node| tree.node(node).matcher == linter.grammar.matcher("paren").unwrap()).unwrap();
+            let at = Leaf { target: Target::Node(NodeRef { file, node: first }), frame: FrameId::ROOT };
+            reads::track(|| files.note_entered(at)).1
         });
+        assert!(deps.any(&mut |dep| matches!(dep, reads::Dep::Part(p, ..) if **p == *path)));
+        // A statement added elsewhere leaves the read standing...
+        reads::set_buffer(path, "(first) (second) (third)");
+        assert!(!linter.is_stale(&linter.invalidate(&[path.to_owned()]), &deps));
+        // ...a change to the statement read does not.
+        reads::set_buffer(path, "(changed) (second)");
+        assert!(linter.is_stale(&linter.invalidate(&[path.to_owned()]), &deps));
         reads::drop_buffer(path);
     }
 
     #[test]
-    fn every_unit_consumer_records_text_and_changed_units_are_replaced() {
+    fn changed_units_are_replaced() {
         let linter = linter("in paren fits marked");
         let path = Path::new("/root/unit-cache.t");
         reads::set_buffer(path, "(before)");
         let first = linter.unit(path, None).unwrap();
         let second = linter.unit(path, None).unwrap();
         assert!(std::sync::Arc::ptr_eq(&first, &second));
-        for _ in 0..2 {
-            let (_, deps) = reads::track(|| with_world(&linter, |files| {
-                let file = files.0.file(path).expect("unit loads");
-                assert_eq!(World::text(&files, file), Some("(before)"));
-            }));
-            assert!(deps.any(&mut |dep| matches!(dep, reads::Dep::Text(p, _) if **p == *path)));
-            assert!(!deps.any(&mut |dep| !linter.holds(dep)));
-            reads::set_buffer(path, "(after)");
-            assert!(deps.any(&mut |dep| !linter.holds(dep)));
-            let stale = linter.invalidate(&[path.to_owned()]);
-            assert!(linter.is_stale(&stale, &deps));
-            reads::set_buffer(path, "(before)");
-        }
         reads::set_buffer(path, "(after)");
         linter.invalidate(&[path.to_owned()]);
         with_world(&linter, |files| {
@@ -2507,8 +2567,9 @@ mod tests {
             let repeated = Semantic::new(&files, &linter.grammar.names, &bounded);
             let (answer, dependencies) = reads::track(|| files.module(at, "./module-unit", &repeated));
             assert_eq!(answer, Known::Yes(Some(scope)));
+            // Which module a specifier names does not depend on its text.
             reads::set_buffer(path, "(updated)");
-            assert!(dependencies.any(&mut |dep| !linter.holds(dep)));
+            assert!(!dependencies.any(&mut |dep| !linter.holds(dep)));
             let (answer, deps) = reads::track(|| files.module(at, "./created-unit", &semantic));
             assert_eq!(answer, Known::Yes(None));
             assert_eq!(files.module(at, "./created-unit", &repeated), Known::Yes(None));

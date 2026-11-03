@@ -69,9 +69,10 @@ const COMMAND_DONE: &str = "dxlint/commandDone";
 const EDITOR_IDLE: Duration = Duration::from_secs(30);
 
 /// Background relints wait until changes on disk stop for this long...
-const SETTLE: Duration = Duration::from_millis(1500);
-/// ...or a burst has gone on this long.
-const SETTLE_AT_MOST: Duration = Duration::from_secs(10);
+const SETTLE: Duration = Duration::from_secs(3);
+/// ...or a burst has gone on this long: an agent saving a file over and
+/// over relints its readers once per half minute, not once per save.
+const SETTLE_AT_MOST: Duration = Duration::from_secs(30);
 
 struct Server {
     out: Outbox,
@@ -303,6 +304,7 @@ impl Server {
             }
         };
         let mut background = Vec::new();
+        let mut held = Vec::new();
         for (path, reads) in reads {
             let Some(linter) = linters.for_path(&path) else { continue };
             let Some((_, saved, unsaved)) = stale.iter().find(|(l, ..)| Arc::ptr_eq(l, linter)) else { continue };
@@ -311,6 +313,7 @@ impl Server {
             }
             let editor = self.docs.contains_key(&path) || self.ignored_tabs.contains(&path);
             if !linter.is_stale(saved, &reads) && !(editor && linter.is_stale(unsaved, &reads)) {
+                if scan::relint_check() && !editor && saved.may_touch(&reads) { held.push(path) }
                 continue;
             }
             if self.docs.contains_key(&path) {
@@ -321,6 +324,7 @@ impl Server {
                 background.push(path);
             }
         }
+        scan::check_held(linters.clone(), held, self.shared.clone());
         self.settle(background);
     }
 

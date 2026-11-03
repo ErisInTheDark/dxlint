@@ -463,6 +463,7 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
         units: Default::default(),
         discoveries: Default::default(),
         programs: Default::default(),
+        parts: Default::default(),
         scopes,
         unit_overlays,
         unit_token_reasons,

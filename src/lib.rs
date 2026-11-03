@@ -19,6 +19,7 @@ pub mod grammar;
 pub mod levers;
 pub mod line_index;
 pub mod lsp;
+pub mod parts;
 pub mod native;
 pub mod path_globs;
 pub mod pattern;

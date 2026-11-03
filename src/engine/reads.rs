@@ -60,6 +60,9 @@ pub enum Dep {
     /// A file's content outside its declarations' bodies: work that never
     /// entered a body holds while edits stay inside one.
     Outside(DepPath, Arc<Bodies>),
+    /// Parts of a version of a file ([`crate::parts`]): it holds while edits
+    /// leave those parts reading the same.
+    Part(DepPath, Arc<crate::parts::FileParts>, Arc<crate::parts::PartReads>),
 }
 
 /// A file's text as [`Dep::Outside`] reads it: the whole text's hash, and
@@ -200,7 +203,7 @@ impl Bodies {
 impl Dep {
     pub fn path(&self) -> &Path {
         match self {
-            Dep::Text(p, _) | Dep::IsFile(p, _) | Dep::IsDir(p, _) | Dep::List(p, _) | Dep::Discovered(_, p, _) | Dep::Outside(p, _) => p,
+            Dep::Text(p, _) | Dep::IsFile(p, _) | Dep::IsDir(p, _) | Dep::List(p, _) | Dep::Discovered(_, p, _) | Dep::Outside(p, _) | Dep::Part(p, ..) => p,
             Dep::Requested(_, request, _) => &request.root,
         }
     }
@@ -217,7 +220,7 @@ impl Dep {
 
     /// Whether it reads a file's text (rather than which files exist).
     pub fn reads_text(&self) -> bool {
-        matches!(self, Dep::Text(..) | Dep::Outside(..))
+        matches!(self, Dep::Text(..) | Dep::Outside(..) | Dep::Part(..))
     }
 
     /// Could `path` appearing or disappearing change this dep's answer?
@@ -237,6 +240,8 @@ impl Dep {
             // An edit inside a body needs a parse to confirm: the engine's
             // `Linter::holds` does that.
             Dep::Outside(p, bodies) => bodies.edit(text(p).as_ref()) == Some(None),
+            // What changed needs a parse to tell: the engine's `Linter::holds`.
+            Dep::Part(p, parts, _) => content(p).1 == parts.hash,
             Dep::IsFile(p, b) => file_exists(p) == *b,
             Dep::IsDir(p, b) => directory_exists(p) == *b,
             Dep::List(p, h) => listing(p).1 == *h,
@@ -362,7 +367,7 @@ impl Reads {
             let mut names = Names::default();
             for dep in &self.deps {
                 match dep {
-                    Dep::Text(path, _) | Dep::Outside(path, _) => names.texts |= Names::bit(path),
+                    Dep::Text(path, _) | Dep::Outside(path, _) | Dep::Part(path, ..) => names.texts |= Names::bit(path),
                     Dep::IsFile(path, _) => names.files |= Names::bit(path),
                     Dep::IsDir(..) | Dep::List(..) | Dep::Discovered(..) | Dep::Requested(..) => names.dirs = true,
                 }
@@ -423,14 +428,25 @@ pub fn track<R>(f: impl FnOnce() -> R) -> (R, Reads) {
         fn drop(&mut self) {
             if self.0 {
                 FRAMES.with(|f| f.borrow_mut().pop());
+                crate::parts::end();
             }
         }
     }
     FRAMES.with(|f| f.borrow_mut().push(Frame::default()));
+    crate::parts::begin();
     let mut unwinding = Unwinding(true);
     let r = f();
     unwinding.0 = false;
-    let frame = FRAMES.with(|f| f.borrow_mut().pop()).unwrap_or_default();
+    let parts = crate::parts::end();
+    let mut frame = FRAMES.with(|f| f.borrow_mut().pop()).unwrap_or_default();
+    for (owner, read) in parts {
+        // Owners name their unit's interned path.
+        let path = owner.path.clone();
+        frame.deps.insert(match owner.parts() {
+            Some(parts) => Dep::Part(path, parts, Arc::new(read)),
+            None => Dep::Text(path, owner.hash),
+        });
+    }
     let deps: Vec<Dep> = frame.deps.into_iter().collect();
     (r, Reads { deps, groups: frame.groups, scans: frame.scans, ..Default::default() })
 }
@@ -505,6 +521,7 @@ pub fn kept(reads: Reads) -> Arc<Reads> {
 struct Kept {
     groups: crate::fx_hash::FxHashMap<u64, Vec<std::sync::Weak<Reads>>>,
     scans: crate::fx_hash::FxHashMap<u64, Vec<std::sync::Weak<Scan>>>,
+    part_reads: crate::fx_hash::FxHashMap<u64, Vec<std::sync::Weak<crate::parts::PartReads>>>,
     entries: usize,
     sweep_at: usize,
 }
@@ -515,8 +532,22 @@ impl Kept {
         if self.entries < self.sweep_at { return }
         self.groups.retain(|_, list| { list.retain(|weak| weak.strong_count() > 0); !list.is_empty() });
         self.scans.retain(|_, list| { list.retain(|weak| weak.strong_count() > 0); !list.is_empty() });
-        self.entries = self.groups.values().map(Vec::len).sum::<usize>() + self.scans.values().map(Vec::len).sum::<usize>();
+        self.part_reads.retain(|_, list| { list.retain(|weak| weak.strong_count() > 0); !list.is_empty() });
+        self.entries = self.groups.values().map(Vec::len).sum::<usize>() + self.scans.values().map(Vec::len).sum::<usize>()
+            + self.part_reads.values().map(Vec::len).sum::<usize>();
         self.sweep_at = (self.entries * 2).max(4096);
+    }
+
+    /// The kept copy of `read`, shared by every kept read equal to it.
+    fn part_reads(&mut self, read: &Arc<crate::parts::PartReads>) -> Arc<crate::parts::PartReads> {
+        use std::hash::BuildHasher;
+        let key = crate::fx_hash::FxBuild::default().hash_one(&**read);
+        let list = self.part_reads.entry(key).or_default();
+        if let Some(found) = list.iter().filter_map(std::sync::Weak::upgrade).find(|held| **held == **read) { return found }
+        let copy = Arc::new((**read).clone());
+        list.push(Arc::downgrade(&copy));
+        self.entries += 1;
+        copy
     }
 
     fn reads(&mut self, reads: Arc<Reads>, seen: &mut crate::fx_hash::FxHashMap<*const Reads, Arc<Reads>>) -> Arc<Reads> {
@@ -530,7 +561,7 @@ impl Kept {
             std::mem::discriminant(dep).hash(&mut hasher);
             match dep {
                 Dep::Requested(_, request, _) => std::ptr::hash(Arc::as_ptr(request), &mut hasher),
-                Dep::Text(path, _) | Dep::IsFile(path, _) | Dep::IsDir(path, _) | Dep::List(path, _) | Dep::Discovered(_, path, _) | Dep::Outside(path, _) =>
+                Dep::Text(path, _) | Dep::IsFile(path, _) | Dep::IsDir(path, _) | Dep::List(path, _) | Dep::Discovered(_, path, _) | Dep::Outside(path, _) | Dep::Part(path, ..) =>
                     Arc::as_ptr(path).cast::<u8>().hash(&mut hasher),
             }
         }
@@ -540,10 +571,15 @@ impl Kept {
         let same = |held: &Reads| held.deps == reads.deps
             && held.groups.len() == groups.len() && held.groups.iter().zip(&groups).all(|(a, b)| Arc::ptr_eq(a, b))
             && held.scans.len() == scans.len() && held.scans.iter().zip(&scans).all(|(a, b)| Arc::ptr_eq(a, b));
-        let list = self.groups.entry(key).or_default();
-        let found = list.iter().filter_map(std::sync::Weak::upgrade).find(|held| same(held)).unwrap_or_else(|| {
-            let found = Arc::new(Reads { deps: reads.deps.clone(), groups, scans, ..Default::default() });
-            list.push(Arc::downgrade(&found));
+        let held = self.groups.get(&key).and_then(|list| list.iter().filter_map(std::sync::Weak::upgrade).find(|held| same(held)));
+        let found = held.unwrap_or_else(|| {
+            // Many answers read the same parts of a file: one copy each.
+            let deps = reads.deps.iter().map(|dep| match dep {
+                Dep::Part(path, parts, read) => Dep::Part(path.clone(), parts.clone(), self.part_reads(read)),
+                dep => dep.clone(),
+            }).collect();
+            let found = Arc::new(Reads { deps, groups, scans, ..Default::default() });
+            self.groups.entry(key).or_default().push(Arc::downgrade(&found));
             self.entries += 1;
             found
         });

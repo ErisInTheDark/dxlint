@@ -365,6 +365,9 @@ pub struct Resolved {
     /// `within` fields respected; [`NO_SCOPE`] outside every scope.
     scope_of: Vec<u32>,
     tracked: bool,
+    /// Another file's names: lookups by name, listings and uses read are
+    /// recorded ([`crate::parts`], [`Resolved::own`]).
+    owner: Option<std::sync::Arc<crate::parts::Owner>>,
 }
 
 /// One of a tree's name tables, by node: reads of an editor's file record
@@ -373,6 +376,9 @@ pub struct Resolved {
 pub struct Table<V> {
     entries: FxHashMap<u32, V>,
     tracked: Tracked,
+    /// Another file's table whose entries depend on the whole file (a
+    /// declaration's uses): reads are recorded as such ([`crate::parts`]).
+    uses_of: Option<std::sync::Arc<crate::parts::Owner>>,
 }
 
 /// How reads of a [`Table`] are recorded.
@@ -389,7 +395,7 @@ enum Tracked {
 
 impl<V> Default for Table<V> {
     fn default() -> Self {
-        Self { entries: FxHashMap::default(), tracked: Tracked::No }
+        Self { entries: FxHashMap::default(), tracked: Tracked::No, uses_of: None }
     }
 }
 
@@ -401,6 +407,7 @@ impl<V> Table<V> {
             Tracked::Chunk => crate::footprint::names(node),
             Tracked::Own(table) => crate::footprint::table(table, node),
         }
+        if let Some(owner) = &self.uses_of { crate::parts::note(owner, crate::parts::Read::UsesOf(node)) }
     }
 
     pub fn get(&self, node: &u32) -> Option<&V> {
@@ -540,12 +547,19 @@ pub struct ScopeIndex {
     /// For an editor's file: each scope's opening node, whose entries a
     /// read of the scope's declarations reads.
     tracked: Option<Vec<u32>>,
+    /// Another file's index: lookups by name and listings are recorded.
+    owner: Option<std::sync::Arc<crate::parts::Owner>>,
 }
 
 impl ScopeIndex {
     #[inline]
     fn read(&self, scope: u32) {
         if let Some(node) = self.tracked.as_ref().and_then(|nodes| nodes.get(scope as usize)) { crate::footprint::names(*node) }
+    }
+
+    #[inline]
+    fn read_foreign(&self, read: impl FnOnce() -> crate::parts::Read) {
+        if let Some(owner) = &self.owner { crate::parts::note(owner, read()) }
     }
 
     /// The scopes `node` opens, outermost first.
@@ -557,12 +571,14 @@ impl ScopeIndex {
     /// What declares `key` in `scope`, in document order.
     pub fn declared(&self, scope: u32, key: &str) -> &[u32] {
         self.read(scope);
+        self.read_foreign(|| crate::parts::Read::Name(crate::parts::name_hash(key)));
         self.declared.get(scope as usize).and_then(|names| names.get(key)).map_or(&[], Vec::as_slice)
     }
 
     /// Every name declared in `scope`, with its declarations.
     pub fn names(&self, scope: u32) -> impl Iterator<Item = (&str, &[u32])> {
         self.read(scope);
+        self.read_foreign(|| crate::parts::Read::Whole);
         self.declared.get(scope as usize).into_iter().flat_map(|names| names.iter().map(|(key, decls)| (&**key, decls.as_slice())))
     }
 }
@@ -1447,6 +1463,12 @@ impl Resolved {
     }
 
     /// Records reads of these names from now on: an editor's file.
+    /// Marks these as another file's names, read by other files' lints.
+    pub fn own(&mut self, owner: std::sync::Arc<crate::parts::Owner>) {
+        self.references.uses_of = Some(owner.clone());
+        self.owner = Some(owner);
+    }
+
     pub fn track(&mut self) {
         self.tracked = true;
         self.keys.tracked = Tracked::Chunk;
@@ -1573,7 +1595,7 @@ impl Resolved {
         // Readers record the scopes they read, not the whole build.
         self.index.get_or_init(|| crate::footprint::quiet(|| {
             let tracked = self.tracked.then(|| self.scopes.iter().map(|scope| scope.node).collect());
-            let mut index = ScopeIndex { declared: vec![FxHashMap::default(); self.scopes.len()], opened: FxHashMap::default(), tracked };
+            let mut index = ScopeIndex { declared: vec![FxHashMap::default(); self.scopes.len()], opened: FxHashMap::default(), tracked, owner: self.owner.clone() };
             for (i, scope) in self.scopes.iter().enumerate().filter(|(_, scope)| scope.node != NO_SCOPE) {
                 let i = i as u32;
                 index.opened.entry(scope.node).or_insert((i, i)).1 = i + 1;

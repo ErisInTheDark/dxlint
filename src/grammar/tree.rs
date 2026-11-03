@@ -46,6 +46,9 @@ pub struct Tree {
     /// recorded ([`crate::footprint`]). Kinds, labels and spans are not:
     /// a node keeps its id across edits only while those stay the same.
     regions: Option<Box<crate::footprint::Regions>>,
+    /// Another file's tree, as other files' reads of it are recorded
+    /// ([`crate::parts`]); `None` for the file being linted.
+    pub owner: Option<std::sync::Arc<crate::parts::Owner>>,
 }
 
 impl Tree {
@@ -154,7 +157,7 @@ impl Tree {
             }
         }
         parent[root as usize] = NONE;
-        Tree { nodes, first, edges, parent, label, field_indices: OnceLock::new(), descendants: OnceLock::new(), module_index: OnceLock::new(), order, root, holes, too_deep, layer_roots: Vec::new(), overlapping, regions: None }
+        Tree { nodes, first, edges, parent, label, field_indices: OnceLock::new(), descendants: OnceLock::new(), module_index: OnceLock::new(), order, root, holes, too_deep, layer_roots: Vec::new(), overlapping, regions: None, owner: None }
     }
 
     /// Records reads of this tree from now on: it is an editor's file.
@@ -290,7 +293,7 @@ impl Tree {
             order: self.order.iter().map(|&id| to[id as usize]).collect(),
             root: to[self.root as usize], holes, too_deep: self.too_deep,
             layer_roots: self.layer_roots.iter().map(|&(root, layer)| (to[root as usize], layer)).collect(),
-            overlapping, regions: None,
+            overlapping, regions: None, owner: self.owner.clone(),
         }
     }
 
@@ -381,10 +384,12 @@ impl Tree {
         if self.regions.is_some() { crate::footprint::enter_atom(crate::footprint::Atom::whole(crate::footprint::tables::MODULE)) }
         self.module_index.get_or_init(|| crate::footprint::quiet(|| {
             let build = || super::names::modules::index::Index::build(tables, self, text, key);
-            match profile {
+            let mut index = match profile {
                 Some(profile) => profile.time_module_index(build),
                 None => build(),
-            }
+            };
+            index.owner = self.owner.clone();
+            index
         }))
     }
 
