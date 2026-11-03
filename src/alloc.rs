@@ -758,7 +758,7 @@ pub mod heap {
     /// Module work splits by phase: `roots` finds and loads a global name's
     /// candidate files, `catalog` builds program catalogs, `shared` keeps
     /// run-wide module answers; `modules` is the rest of module queries.
-    pub const OWNERS: [&str; 11] = ["other", "units", "names", "semantic", "effects", "rules", "modules", "roots", "catalog", "shared", "kept reads"];
+    pub const OWNERS: [&str; 13] = ["other", "units", "names", "semantic", "effects", "rules", "modules", "roots", "catalog", "shared", "kept reads", "file versions", "part reads"];
     pub const UNITS: usize = 1;
     pub const NAMES: usize = 2;
     pub const SEMANTIC: usize = 3;
@@ -770,6 +770,10 @@ pub mod heap {
     pub const SHARED: usize = 9;
     /// Reads a long-lived host keeps per linted file (`reads::kept`).
     pub const KEPT: usize = 10;
+    /// Versions of other files those reads name (`parts::FileParts`).
+    pub const FILE_VERSIONS: usize = 11;
+    /// What the reads read of each version (`parts::PartReads`).
+    pub const PART_READS: usize = 12;
     /// 0 undecided, 1 off, 2 on.
     static MODE: AtomicU8 = AtomicU8::new(0);
     static LIVE: [AtomicIsize; OWNERS.len()] = [const { AtomicIsize::new(0) }; OWNERS.len()];

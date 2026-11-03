@@ -52,17 +52,26 @@ pub enum Dep {
     IsDir(DepPath, bool),
     /// A directory's entry names, hashed.
     List(DepPath, u64),
-    /// The files below a directory a [`Discovery`] (by name) finds.
-    Discovered(&'static str, DepPath, u64),
-    /// A policy-filtered discovery, retaining its request for cache replay
-    /// (shared: inline, it would size every dep).
-    Requested(&'static str, Arc<DiscoveryRequest>, u64),
+    /// The files below a directory a [`Discovery`] finds (rare: boxed, so
+    /// as not to size every dep).
+    Discovered(Arc<Discovered>),
+    /// The program's input files a policy-filtered discovery finds,
+    /// retaining its request for cache replay.
+    Requested(Arc<DiscoveryRequest>, u64),
     /// A file's content outside its declarations' bodies: work that never
     /// entered a body holds while edits stay inside one.
     Outside(DepPath, Arc<Bodies>),
-    /// Parts of a version of a file ([`crate::parts`]): it holds while edits
-    /// leave those parts reading the same.
-    Part(DepPath, Arc<crate::parts::FileParts>, Arc<crate::parts::PartReads>),
+    /// Parts of a version of a file ([`crate::parts`], which names the
+    /// file): it holds while edits leave those parts reading the same.
+    Part(Arc<crate::parts::FileParts>, Arc<crate::parts::PartReads>),
+}
+
+/// A [`Dep::Discovered`]: what discovery `name` found below `dir`, hashed.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct Discovered {
+    pub name: &'static str,
+    pub dir: DepPath,
+    pub hash: u64,
 }
 
 /// A file's text as [`Dep::Outside`] reads it: the whole text's hash, and
@@ -203,8 +212,10 @@ impl Bodies {
 impl Dep {
     pub fn path(&self) -> &Path {
         match self {
-            Dep::Text(p, _) | Dep::IsFile(p, _) | Dep::IsDir(p, _) | Dep::List(p, _) | Dep::Discovered(_, p, _) | Dep::Outside(p, _) | Dep::Part(p, ..) => p,
-            Dep::Requested(_, request, _) => &request.root,
+            Dep::Text(p, _) | Dep::IsFile(p, _) | Dep::IsDir(p, _) | Dep::List(p, _) | Dep::Outside(p, _) => p,
+            Dep::Discovered(found) => &found.dir,
+            Dep::Part(parts, _) => &parts.path,
+            Dep::Requested(request, _) => &request.root,
         }
     }
 
@@ -212,8 +223,9 @@ impl Dep {
     /// change this dep's answer?
     pub fn touches(&self, changed: &Path) -> bool {
         match self {
-            Dep::List(dir, _) | Dep::IsDir(dir, _) | Dep::Discovered(_, dir, _) => changed.starts_with(dir),
-            Dep::Requested(_, request, _) => changed.starts_with(&request.root),
+            Dep::List(dir, _) | Dep::IsDir(dir, _) => changed.starts_with(dir),
+            Dep::Discovered(found) => changed.starts_with(&found.dir),
+            Dep::Requested(request, _) => changed.starts_with(&request.root),
             dep => dep.path() == changed,
         }
     }
@@ -227,8 +239,8 @@ impl Dep {
     /// Listings filtered by path answer exactly; the rest assume so.
     pub fn admits(&self, path: &Path) -> bool {
         match self {
-            Dep::Requested(_, request, _) => request_admits(request, path),
-            Dep::Discovered(name, ..) => discovery(name).is_none_or(|d| (d.wanted)(path)),
+            Dep::Requested(request, _) => request_admits(request, path),
+            Dep::Discovered(found) => discovery(found.name).is_none_or(|d| (d.wanted)(path)),
             _ => true,
         }
     }
@@ -241,12 +253,12 @@ impl Dep {
             // `Linter::holds` does that.
             Dep::Outside(p, bodies) => bodies.edit(text(p).as_ref()) == Some(None),
             // What changed needs a parse to tell: the engine's `Linter::holds`.
-            Dep::Part(p, parts, _) => content(p).1 == parts.hash,
+            Dep::Part(parts, _) => content(&parts.path).1 == parts.hash,
             Dep::IsFile(p, b) => file_exists(p) == *b,
             Dep::IsDir(p, b) => directory_exists(p) == *b,
             Dep::List(p, h) => listing(p).1 == *h,
-            Dep::Discovered(name, p, h) => discovery(name).is_some_and(|d| walk(d, p, 1).1 == *h),
-            Dep::Requested(name, request, hash) => *name == PROGRAM_FILES.name && request_walk(request).map_or(MISSING, |(_, current)| current) == *hash,
+            Dep::Discovered(found) => discovery(found.name).is_some_and(|d| walk(d, &found.dir, 1).1 == found.hash),
+            Dep::Requested(request, hash) => request_walk(request).map_or(MISSING, |(_, current)| current) == *hash,
         }
     }
 }
@@ -367,7 +379,8 @@ impl Reads {
             let mut names = Names::default();
             for dep in &self.deps {
                 match dep {
-                    Dep::Text(path, _) | Dep::Outside(path, _) | Dep::Part(path, ..) => names.texts |= Names::bit(path),
+                    Dep::Text(path, _) | Dep::Outside(path, _) => names.texts |= Names::bit(path),
+                    Dep::Part(parts, _) => names.texts |= Names::bit(&parts.path),
                     Dep::IsFile(path, _) => names.files |= Names::bit(path),
                     Dep::IsDir(..) | Dep::List(..) | Dep::Discovered(..) | Dep::Requested(..) => names.dirs = true,
                 }
@@ -441,10 +454,9 @@ pub fn track<R>(f: impl FnOnce() -> R) -> (R, Reads) {
     let mut frame = FRAMES.with(|f| f.borrow_mut().pop()).unwrap_or_default();
     for (owner, read) in parts {
         // Owners name their unit's interned path.
-        let path = owner.path.clone();
         frame.deps.insert(match owner.parts() {
-            Some(parts) => Dep::Part(path, parts, Arc::new(read)),
-            None => Dep::Text(path, owner.hash),
+            Some(parts) => Dep::Part(parts, Arc::new(read)),
+            None => Dep::Text(owner.path.clone(), owner.hash),
         });
     }
     let deps: Vec<Dep> = frame.deps.into_iter().collect();
@@ -503,7 +515,6 @@ pub fn track_listing<R>(f: impl FnOnce() -> R) -> (R, Arc<Reads>, Arc<[Dep]>) {
 /// Kept reads are copied into the allocator's lasting pool: the lint that
 /// made them frees all of its own memory.
 pub fn kept(reads: Reads) -> Arc<Reads> {
-    static KEPT: OnceLock<std::sync::Mutex<Kept>> = OnceLock::new();
     let reads = Arc::new(reads);
     let _owner = crate::alloc::heap::Owner::enter(crate::alloc::heap::KEPT);
     crate::alloc::lasting(|| {
@@ -512,6 +523,29 @@ pub fn kept(reads: Reads) -> Arc<Reads> {
         let mut seen = crate::fx_hash::FxHashMap::default();
         kept.reads(reads, &mut seen)
     })
+}
+
+static KEPT: OnceLock<std::sync::Mutex<Kept>> = OnceLock::new();
+
+/// What [`kept`] reads hold now, by dep kind: for `DXLINT_HEAP_STATS`.
+pub fn kept_census() -> String {
+    let Some(kept) = KEPT.get() else { return String::new() };
+    let kept = kept.lock().unwrap_or_else(|e| e.into_inner());
+    const KINDS: [&str; 8] = ["text", "is file", "is dir", "list", "discovered", "requested", "outside", "part"];
+    let (mut held, mut groups, mut scans, mut deps) = (0usize, 0usize, 0usize, [0usize; KINDS.len()]);
+    for reads in kept.groups.values().flatten().filter_map(std::sync::Weak::upgrade) {
+        held += 1;
+        groups += reads.groups.len();
+        scans += reads.scans.len();
+        for dep in &reads.deps {
+            deps[match dep {
+                Dep::Text(..) => 0, Dep::IsFile(..) => 1, Dep::IsDir(..) => 2, Dep::List(..) => 3,
+                Dep::Discovered(..) => 4, Dep::Requested(..) => 5, Dep::Outside(..) => 6, Dep::Part(..) => 7,
+            }] += 1;
+        }
+    }
+    let kinds: Vec<String> = KINDS.iter().zip(deps).filter(|(_, count)| *count > 0).map(|(kind, count)| format!("{kind} {count}")).collect();
+    format!("kept reads: {held} sets ({} bytes a dep), {groups} group links, {scans} scan links, deps: {}", std::mem::size_of::<Dep>(), kinds.join(", "))
 }
 
 /// Kept groups and scans by content hash; children are compared by
@@ -543,6 +577,7 @@ impl Kept {
         let key = crate::fx_hash::FxBuild::default().hash_one(&**read);
         let list = self.part_reads.entry(key).or_default();
         if let Some(found) = list.iter().filter_map(std::sync::Weak::upgrade).find(|held| **held == **read) { return found }
+        let _owner = crate::alloc::heap::Owner::enter(crate::alloc::heap::PART_READS);
         let copy = Arc::new((**read).clone());
         list.push(Arc::downgrade(&copy));
         self.entries += 1;
@@ -558,11 +593,13 @@ impl Kept {
         // components, and a path that is not interned only misses sharing.
         for dep in &reads.deps {
             std::mem::discriminant(dep).hash(&mut hasher);
-            match dep {
-                Dep::Requested(_, request, _) => std::ptr::hash(Arc::as_ptr(request), &mut hasher),
-                Dep::Text(path, _) | Dep::IsFile(path, _) | Dep::IsDir(path, _) | Dep::List(path, _) | Dep::Discovered(_, path, _) | Dep::Outside(path, _) | Dep::Part(path, ..) =>
-                    Arc::as_ptr(path).cast::<u8>().hash(&mut hasher),
-            }
+            let path = match dep {
+                Dep::Requested(request, _) => { std::ptr::hash(Arc::as_ptr(request), &mut hasher); continue }
+                Dep::Text(path, _) | Dep::IsFile(path, _) | Dep::IsDir(path, _) | Dep::List(path, _) | Dep::Outside(path, _) => path,
+                Dep::Discovered(found) => &found.dir,
+                Dep::Part(parts, _) => &parts.path,
+            };
+            Arc::as_ptr(path).cast::<u8>().hash(&mut hasher);
         }
         for group in &groups { Arc::as_ptr(group).hash(&mut hasher) }
         for scan in &scans { Arc::as_ptr(scan).hash(&mut hasher) }
@@ -574,7 +611,7 @@ impl Kept {
         let found = held.unwrap_or_else(|| {
             // Many answers read the same parts of a file: one copy each.
             let deps = reads.deps.iter().map(|dep| match dep {
-                Dep::Part(path, parts, read) => Dep::Part(path.clone(), parts.clone(), self.part_reads(read)),
+                Dep::Part(parts, read) => Dep::Part(parts.clone(), self.part_reads(read)),
                 dep => dep.clone(),
             }).collect();
             let found = Arc::new(Reads { deps, groups, scans, ..Default::default() });
@@ -909,7 +946,7 @@ static PROGRAM_FILES: Discovery = Discovery { name: "engine:program-inputs", wan
 pub(crate) fn requested(request: &DiscoveryRequest) -> Option<Vec<PathBuf>> {
     let found = request_walk(request);
     let hash = found.as_ref().map_or(MISSING, |(_, hash)| *hash);
-    note(Dep::Requested(PROGRAM_FILES.name, Arc::new(request.clone()), hash));
+    note(Dep::Requested(Arc::new(request.clone()), hash));
     found.map(|(paths, _)| paths)
 }
 
@@ -1041,7 +1078,7 @@ fn walk(d: &Discovery, dir: &Path, jobs: usize) -> (Vec<PathBuf>, u64) {
 pub fn discover(d: &'static Discovery, dir: &Path, jobs: usize) -> Vec<PathBuf> {
     let (found, hash) = walk(d, dir, jobs);
     walks().write().expect("walks lock").insert((d.name, dir.to_path_buf()), Arc::new(found.iter().cloned().collect()));
-    note(Dep::Discovered(d.name, dep_path(dir), hash));
+    note(Dep::Discovered(Arc::new(Discovered { name: d.name, dir: dep_path(dir), hash })));
     found
 }
 

@@ -2294,7 +2294,7 @@ mod tests {
             let at = Leaf { target: Target::Node(NodeRef { file, node: first }), frame: FrameId::ROOT };
             reads::track(|| files.note_entered(at)).1
         });
-        assert!(deps.any(&mut |dep| matches!(dep, reads::Dep::Part(p, ..) if **p == *path)));
+        assert!(deps.any(&mut |dep| matches!(dep, reads::Dep::Part(parts, _) if *parts.path == *path)));
         // A statement added elsewhere leaves the read standing...
         reads::set_buffer(path, "(first) (second) (third)");
         assert!(!linter.is_stale(&linter.invalidate(&[path.to_owned()]), &deps));

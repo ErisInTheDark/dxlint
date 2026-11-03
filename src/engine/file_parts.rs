@@ -224,6 +224,6 @@ impl Linter {
                 part.refers = indices(std::mem::take(&mut body_refers[index]));
             }
         }
-        FileParts::new(unit.hash, outside, statements, bodies, (precise, failed), declared_names, coarse)
+        FileParts::new((unit.path.clone(), unit.hash), outside, statements, bodies, (precise, failed), declared_names, coarse)
     }
 }

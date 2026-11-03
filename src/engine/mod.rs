@@ -705,7 +705,7 @@ impl Linter {
     fn holds_judging(&self, dep: &Dep, strict: bool) -> bool {
         match dep {
             Dep::Outside(path, bodies) => self.outside_holds(path, bodies),
-            Dep::Part(path, parts, read) => self.part_holds(path, parts, read, strict),
+            Dep::Part(parts, read) => self.part_holds(&parts.path, parts, read, strict),
             dep => dep.holds(),
         }
     }

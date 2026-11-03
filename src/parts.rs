@@ -48,6 +48,8 @@ pub struct Part {
 /// One version of a file, as its readers' deps see it.
 #[derive(Debug)]
 pub struct FileParts {
+    /// The file (interned): reads of a version name it through it.
+    pub path: Arc<Path>,
     /// The whole text's hash: equal hashes, equal parts.
     pub hash: u64,
     /// The text with the opaque bodies blanked, hashed with their places.
@@ -70,9 +72,10 @@ pub struct FileParts {
     reach: OnceLock<Box<[Box<[u64]>]>>,
 }
 
+// A version is its file and text: equal hashes, equal parts.
 impl PartialEq for FileParts {
     fn eq(&self, other: &Self) -> bool {
-        self.hash == other.hash
+        self.hash == other.hash && self.path == other.path
     }
 }
 impl Eq for FileParts {}
@@ -88,7 +91,7 @@ impl PartialOrd for FileParts {
 }
 impl Ord for FileParts {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.hash.cmp(&other.hash)
+        (&self.path, self.hash).cmp(&(&other.path, other.hash))
     }
 }
 
@@ -174,14 +177,15 @@ pub struct Diff {
 }
 
 impl FileParts {
-    pub fn new(hash: u64, outside: u64, statements: Vec<Part>, bodies: Vec<Part>, (precise, failed): (bool, bool), declared: crate::fx_hash::FxHashMap<u32, Name>,
+    pub fn new((path, hash): (Arc<Path>, u64), outside: u64, statements: Vec<Part>, bodies: Vec<Part>, (precise, failed): (bool, bool), declared: crate::fx_hash::FxHashMap<u32, Name>,
         coarse: Option<Arc<crate::engine::reads::Bodies>>) -> FileParts {
-        FileParts { hash, outside, statements: statements.into(), bodies: bodies.into(), precise, failed, declared, coarse, reach: OnceLock::new() }
+        FileParts { path, hash, outside, statements: statements.into(), bodies: bodies.into(), precise, failed, declared, coarse, reach: OnceLock::new() }
     }
 
     /// A copy made inside [`crate::alloc::lasting`]: versions live as long
     /// as reads of them, past the work that described them.
     pub fn lasting(self) -> FileParts {
+        let _owner = crate::alloc::heap::Owner::enter(crate::alloc::heap::FILE_VERSIONS);
         crate::alloc::lasting(|| FileParts {
             statements: self.statements.to_vec().into(),
             bodies: self.bodies.to_vec().into(),
@@ -390,6 +394,7 @@ impl Owner {
         match &*kept {
             Some(current) if current.precise || !parts.precise => current.clone(),
             _ => {
+                let _owner = crate::alloc::heap::Owner::enter(crate::alloc::heap::FILE_VERSIONS);
                 let parts = crate::alloc::lasting(|| Arc::new(parts));
                 *kept = Some(parts.clone());
                 parts
@@ -483,7 +488,7 @@ mod tests {
     }
 
     fn file(hash: u64, statements: Vec<Part>) -> FileParts {
-        FileParts::new(hash, hash, statements, Vec::new(), (true, false), Default::default(), None)
+        FileParts::new((Path::new("/parts/file.ts").into(), hash), hash, statements, Vec::new(), (true, false), Default::default(), None)
     }
 
     #[test]

@@ -229,7 +229,7 @@ impl Server {
                     }
                     "shutdown" => {
                         *shutdown = true;
-                        if let Some(summary) = crate::alloc::heap::summary() { eprintln!("dxlint lsp: {summary}") }
+                        if let Some(summary) = crate::alloc::heap::summary() { eprintln!("dxlint lsp: {summary}\n{}", crate::engine::reads::kept_census()) }
                         self.out.respond(id, Value::Null);
                     }
                     "textDocument/codeAction" => self.out.respond(id, self.code_actions(params)),

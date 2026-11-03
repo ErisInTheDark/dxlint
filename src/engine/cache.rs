@@ -176,8 +176,8 @@ impl Cache {
                 seen.map_or_else(|| linter.holds(dep), |seen| seen == *hash)
             }
             // A part of an unchanged file holds; a changed one needs a look.
-            dep @ Dep::Part(path, parts, _) => {
-                let seen = self.texts.read().expect("cache texts").get(&**path).copied();
+            dep @ Dep::Part(parts, _) => {
+                let seen = self.texts.read().expect("cache texts").get(&*parts.path).copied();
                 seen == Some(parts.hash) || linter.holds(dep)
             }
             dep => linter.holds(dep),
@@ -373,7 +373,7 @@ impl<'a> Tables<'a> {
         if let Some(&id) = self.dep_ids.get(dep) {
             return id;
         }
-        if let Dep::Part(_, parts, _) = dep {
+        if let Dep::Part(parts, _) = dep {
             let address = Arc::as_ptr(parts) as usize;
             if !self.part_ids.contains_key(&address) {
                 self.part_ids.insert(address, self.parts.len() as u32);
@@ -575,6 +575,7 @@ impl Writer<'_> {
 
     /// One file version part reads name ([`crate::parts::FileParts`]).
     fn parts(&mut self, parts: &crate::parts::FileParts) {
+        self.path(&parts.path);
         self.out.extend_from_slice(&parts.hash.to_le_bytes());
         self.out.extend_from_slice(&parts.outside.to_le_bytes());
         self.out.push(u8::from(parts.precise) | u8::from(parts.failed) << 1 | u8::from(parts.coarse.is_some()) << 2);
@@ -602,9 +603,9 @@ impl Writer<'_> {
     }
 
     fn dep(&mut self, d: &Dep, parts: &HashMap<usize, u32>) {
-        if let Dep::Part(path, version, read) = d {
+        if let Dep::Part(version, read) = d {
             self.out.push(8);
-            self.path(path);
+            self.path(&version.path);
             self.var(u64::from(parts[&(Arc::as_ptr(version) as usize)]));
             for indices in [&read.statements, &read.bodies, &read.uses_of] {
                 self.var(indices.len() as u64);
@@ -621,18 +622,17 @@ impl Writer<'_> {
             Dep::IsFile(_, found) => (1, u64::from(*found)),
             Dep::IsDir(_, found) => (2, u64::from(*found)),
             Dep::List(_, h) => (3, *h),
-            Dep::Discovered(_, _, h) => (5, *h),
-            Dep::Requested(_, _, hash) => (6, *hash),
+            Dep::Discovered(found) => (5, found.hash),
+            Dep::Requested(_, hash) => (6, *hash),
             Dep::Part(..) => unreachable!("written above"),
         };
         self.out.push(tag);
         self.path(d.path());
         self.out.extend_from_slice(&a.to_le_bytes());
-        if let Dep::Discovered(name, ..) = d {
-            self.str(name);
+        if let Dep::Discovered(found) = d {
+            self.str(found.name);
         }
-        if let Dep::Requested(name, request, _) = d {
-            self.str(name);
+        if let Dep::Requested(request, _) = d {
             for list in [&request.include, &request.exclude, &request.extensions] {
                 self.var(list.len() as u64);
                 for value in list { self.str(value); }
@@ -834,6 +834,7 @@ impl<'a> Reader<'a> {
     }
 
     fn parts(&mut self) -> Option<crate::parts::FileParts> {
+        let path = super::reads::dep_path(&self.path()?);
         let (hash, outside) = (self.u64()?, self.u64()?);
         let flags = self.u8()?;
         let coarse = if flags & 4 != 0 { Some(Arc::new(self.bodies()?)) } else { None };
@@ -855,7 +856,7 @@ impl<'a> Reader<'a> {
         let statements = lists.pop()?;
         let count = self.count()?;
         let declared = (0..count).map(|_| Some((u32::try_from(self.var()?).ok()?, self.name()?))).collect::<Option<crate::fx_hash::FxHashMap<u32, crate::parts::Name>>>()?;
-        Some(crate::parts::FileParts::new(hash, outside, statements, bodies, (flags & 1 != 0, flags & 2 != 0), declared, coarse))
+        Some(crate::parts::FileParts::new((path, hash), outside, statements, bodies, (flags & 1 != 0, flags & 2 != 0), declared, coarse))
     }
 
     fn dep(&mut self, parts: &[Arc<crate::parts::FileParts>]) -> Option<Dep> {
@@ -875,7 +876,7 @@ impl<'a> Reader<'a> {
             let bodies = indices.pop()?;
             let statements = indices.pop()?;
             let read = crate::parts::PartReads { statements, bodies, names, uses, uses_of, whole };
-            return Some(Dep::Part(path, version, Arc::new(read)));
+            return Some(Dep::Part(version, Arc::new(read)));
         }
         let a = self.u64()?;
         Some(match tag {
@@ -884,11 +885,10 @@ impl<'a> Reader<'a> {
             2 => Dep::IsDir(path, a != 0),
             3 => Dep::List(path, a),
             // An unknown discovery (another build's front end) drops the entry.
-            5 => Dep::Discovered(super::reads::discovery_name(&self.str()?)?, path, a),
+            5 => Dep::Discovered(Arc::new(super::reads::Discovered { name: super::reads::discovery_name(&self.str()?)?, dir: path, hash: a })),
             6 => {
-                let name = super::reads::discovery_name(&self.str()?)?;
                 let request = crate::grammar::names::modules::resolution::DiscoveryRequest { root: raw, include: self.string_list()?, exclude: self.string_list()?, extensions: self.string_list()? };
-                Dep::Requested(name, std::sync::Arc::new(request), a)
+                Dep::Requested(std::sync::Arc::new(request), a)
             }
             7 => {
                 let len = usize::try_from(self.var()?).ok()?;
@@ -966,20 +966,21 @@ mod tests {
         use crate::parts::{name_hash, FileParts, Part, PartReads, Read};
         let root = Path::new("/root/cached-parts");
         let statement = Part { start: 0, end: 9, hash: 1, declares: [name_hash("a")].into(), mentions: [name_hash("a"), name_hash("b")].into(), refers: [1].into(), computed: false };
-        let parts = Arc::new(FileParts::new(7, 8, vec![statement, Part { start: 9, end: 20, hash: 2, ..Part::default() }], Vec::new(), (true, false),
+        let file = super::super::reads::dep_path(&root.join("f.ts"));
+        let parts = Arc::new(FileParts::new((file.clone(), 7), 8, vec![statement, Part { start: 9, end: 20, hash: 2, ..Part::default() }], Vec::new(), (true, false),
             [(3, name_hash("a"))].into_iter().collect(), None));
         let read = Arc::new(PartReads::new([Read::Statement(1), Read::Name(name_hash("a")), Read::UsesOf(3)]));
-        let dep = Dep::Part(super::super::reads::dep_path(&root.join("f.ts")), parts.clone(), read.clone());
+        let dep = Dep::Part(parts.clone(), read.clone());
         let mut writer = Writer { out: Vec::new(), root, strings: Vec::new(), string_ids: HashMap::new() };
         writer.parts(&parts);
         writer.dep(&dep, &[(Arc::as_ptr(&parts) as usize, 0)].into_iter().collect());
         let mut reader = Reader { bytes: &writer.out, at: 0, root, strings: writer.strings };
         let version = Arc::new(reader.parts().expect("cached parts"));
-        let Some(Dep::Part(_, back, reads)) = reader.dep(std::slice::from_ref(&version)) else { panic!("a part read") };
+        let Some(Dep::Part(back, reads)) = reader.dep(std::slice::from_ref(&version)) else { panic!("a part read") };
         assert_eq!(*reads, *read);
-        assert!(back.precise && back.hash == 7 && back.statements.len() == 2);
+        assert!(back.precise && back.hash == 7 && back.statements.len() == 2 && back.path == file);
         // The version judges an unrelated new statement as before.
-        let added = FileParts::new(9, 10, vec![Part { hash: 1, ..back.statements[0].clone() }, Part { hash: 2, ..Part::default() }, Part { hash: 3, declares: [name_hash("c")].into(), ..Part::default() }],
+        let added = FileParts::new((file.clone(), 9), 10, vec![Part { hash: 1, ..back.statements[0].clone() }, Part { hash: 2, ..Part::default() }, Part { hash: 3, declares: [name_hash("c")].into(), ..Part::default() }],
             Vec::new(), (false, false), Default::default(), None);
         assert!(back.holds_all(&back.diff(&added), &reads, false));
     }
