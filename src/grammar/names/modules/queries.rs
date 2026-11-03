@@ -282,7 +282,13 @@ impl<'a> Queries<'a> {
                 // The scan that chose the scopes covers files without the name.
                 let index = world.module_index(scope.file, self.semantic.tables).ok_or(())?;
                 if !crate::parts::quiet(|| index.mentions(name, class, PublicationKind::Globals)) { continue }
-                world.depends_on_file(scope.file);
+                // A file that may publish it: what it publishes under the
+                // name (the work below records the rest). The linted file
+                // counts through run-shared answers.
+                match scope.file {
+                    0 => world.depends_on_file(0),
+                    file => world.note_part(file, crate::parts::Read::Name(crate::parts::name_hash(name))),
+                }
                 for PreparedItem { node, item, target: prepared } in self.indexed_items(scope, Some((name, class)), PublicationKind::Globals, true)? {
                     let Action::Globals { first: true, classes, target: Some(target), module: None, asks, .. } = item.action else { continue };
                     if classes != 0 && classes & class == 0 || !self.holds(node, item.when)? { continue }

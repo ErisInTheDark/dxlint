@@ -549,6 +549,9 @@ pub struct ScopeIndex {
     tracked: Option<Vec<u32>>,
     /// Another file's index: lookups by name and listings are recorded.
     owner: Option<std::sync::Arc<crate::parts::Owner>>,
+    /// Another file's index: the text each scope's listing reads (`None`:
+    /// the whole file).
+    spans: Vec<Option<(u32, u32)>>,
 }
 
 impl ScopeIndex {
@@ -578,7 +581,10 @@ impl ScopeIndex {
     /// Every name declared in `scope`, with its declarations.
     pub fn names(&self, scope: u32) -> impl Iterator<Item = (&str, &[u32])> {
         self.read(scope);
-        self.read_foreign(|| crate::parts::Read::Whole);
+        self.read_foreign(|| match self.spans.get(scope as usize) {
+            Some(&Some((start, end))) => crate::parts::Read::Span(start, end),
+            _ => crate::parts::Read::Whole,
+        });
         self.declared.get(scope as usize).into_iter().flat_map(|names| names.iter().map(|(key, decls)| (&**key, decls.as_slice())))
     }
 }
@@ -1595,7 +1601,7 @@ impl Resolved {
         // Readers record the scopes they read, not the whole build.
         self.index.get_or_init(|| crate::footprint::quiet(|| {
             let tracked = self.tracked.then(|| self.scopes.iter().map(|scope| scope.node).collect());
-            let mut index = ScopeIndex { declared: vec![FxHashMap::default(); self.scopes.len()], opened: FxHashMap::default(), tracked, owner: self.owner.clone() };
+            let mut index = ScopeIndex { declared: vec![FxHashMap::default(); self.scopes.len()], opened: FxHashMap::default(), tracked, owner: self.owner.clone(), spans: Vec::new() };
             for (i, scope) in self.scopes.iter().enumerate().filter(|(_, scope)| scope.node != NO_SCOPE) {
                 let i = i as u32;
                 index.opened.entry(scope.node).or_insert((i, i)).1 = i + 1;
@@ -1619,6 +1625,17 @@ impl Resolved {
             }
             for names in &mut index.declared {
                 names.values_mut().for_each(|decls| decls.sort_by_key(|&d| (tree.node(d).start, d)));
+            }
+            if index.owner.is_some() {
+                // A listing of a scope inside the file reads the text from its
+                // opening node to its last declaration; the file's own scope
+                // (or one without a node) changes with any statement.
+                index.spans = self.scopes.iter().zip(&index.declared).map(|(scope, names)| {
+                    if scope.node == NO_SCOPE || scope.node == tree.root { return None }
+                    let opening = tree.node(scope.node);
+                    Some(names.values().flatten().map(|&name| tree.node(name))
+                        .fold((opening.start, opening.end), |(start, end), node| (start.min(node.start), end.max(node.end))))
+                }).collect();
             }
             index
         }))

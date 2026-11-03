@@ -744,13 +744,18 @@ impl Linter {
     /// [`Linter::alone`], with the file's unit.
     fn alone_unit<T>(&self, path: &Path, ask: impl for<'w> FnOnce(&'w world::LintWorld<'w>, &'w units::Unit) -> T) -> Option<T> {
         let unit = self.unit_quiet(path, None).1?;
+        Some(self.alone_on(&unit, ask))
+    }
+
+    /// `ask` on a world over `unit` alone.
+    fn alone_on<T>(&self, unit: &units::Unit, ask: impl for<'w> FnOnce(&'w world::LintWorld<'w>, &'w units::Unit) -> T) -> T {
         let run = Run { path: &unit.path, lang: unit.lang, text: &unit.text, lines: unit.lines(), file: &unit.rel, active: &[], settings: None };
         let native = unit.parsed.front.map(|front| self.native_facts(front, &unit.parsed.tree, &run, (&*unit.path, Path::new(&unit.rel)), unit.parsed.state.clone()));
         let memo = AttrMemo::default();
         let reindented = RefCell::default();
         let ctx = self.tree_ctx(unit.lang, &unit.parsed.tree, (&unit.text, unit.lines(), &unit.rel), &memo, &reindented, native.as_deref());
         let world = world::LintWorld::new(self, &unit.path, ctx);
-        Some(ask(&world, &unit))
+        ask(&world, unit)
     }
 
     /// The byte ranges of `unit`'s opaque bodies (`opaque` name items whose

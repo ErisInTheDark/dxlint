@@ -165,8 +165,9 @@ fn importers_stay_valid_while_edits_stay_inside_annotated_bodies() {
     set_buffer(a, &source("return 1;", "return \"1\";"));
     assert!(l.is_stale(&l.invalidate(&[a.to_owned()]), &reads[1]));
     // A `}` typed inside `f`'s body ends it early: what follows is
-    // top-level now, though the text around the old body still matches.
-    set_buffer(a, &source("return 2; } export const h = 1; {", "return 1;"));
+    // top-level now (here another `f`), though the text around the old
+    // body still matches.
+    set_buffer(a, &source("return 2; } export function f(): string { return \"\";", "return 1;"));
     assert!(l.is_stale(&l.invalidate(&[a.to_owned()]), &reads[0]));
     for path in [config, a, signature, inferred] { drop_buffer(path) }
 }
@@ -189,6 +190,48 @@ fn new_files_break_only_lookups_they_could_answer() {
     assert!(l.is_stale(&l.invalidate(&[script.to_owned()]), &reads));
     assert_eq!(l.lint(user, text).iter().map(|d| d.message.as_str()).collect::<Vec<_>>(), ["number"]);
     for path in [config, user, module, script] { drop_buffer(path) }
+}
+
+#[test]
+fn editor_runs_see_globals_another_file_starts_declaring() {
+    use super::reads::{drop_buffer, set_buffer};
+    let l = native_linter("in ts_call rule typed info \"{if node always number then 'number' else 'other'}\"");
+    let (config, user, script) = (Path::new("/survey/tsconfig.json"), Path::new("/survey/user.ts"), Path::new("/survey/script.ts"));
+    set_buffer(config, r#"{ "compilerOptions": { "lib": [] } }"#);
+    let text = "export const y = g();\n";
+    set_buffer(user, text);
+    set_buffer(script, "declare function h(): number;\n");
+    let messages = |diags: Vec<Diagnostic>| diags.into_iter().map(|d| d.message).collect::<Vec<_>>();
+    let run = l.run_after(None);
+    assert_eq!(messages(run.lint(user, text)), ["other"]);
+    let carried = run.carried();
+    set_buffer(script, "declare function h(): number;\ndeclare function g(): number;\n");
+    l.invalidate(&[script.to_owned()]);
+    let run = l.run_after(Some(carried));
+    assert_eq!(messages(run.lint(user, text)), ["number"]);
+    for path in [config, user, script] { drop_buffer(path) }
+}
+
+#[test]
+fn global_lookups_read_only_the_name_they_found() {
+    use super::reads::{drop_buffer, set_buffer};
+    let l = native_linter("in ts_call rule typed info \"{if node always number then 'number' else 'other'}\"");
+    let (config, user, script, module) = (Path::new("/found/tsconfig.json"), Path::new("/found/user.ts"), Path::new("/found/script.ts"), Path::new("/found/module.ts"));
+    set_buffer(config, r#"{ "compilerOptions": { "lib": [] } }"#);
+    let text = "export const y = g();\n";
+    set_buffer(user, text);
+    set_buffer(script, "declare function g(): number;\n");
+    // Declares a `g` too, but as a module: not a global.
+    set_buffer(module, "export const first = 1;\nexport function g(): string { return \"\"; }\n");
+    let (diags, reads) = l.lint_tracked(user, text);
+    assert_eq!(diags.iter().map(|d| d.message.as_str()).collect::<Vec<_>>(), ["number"]);
+    // Anything else the module gains changes nothing the lookup read.
+    set_buffer(module, "export const first = 1;\nexport function g(): string { return \"\"; }\nexport const other = 1;\n");
+    assert!(!l.is_stale(&l.invalidate(&[module.to_owned()]), &reads));
+    // Without its exports it is a script: its `g` joins the global one.
+    set_buffer(module, "const first = 1;\nfunction g(): string { return \"\"; }\n");
+    assert!(l.is_stale(&l.invalidate(&[module.to_owned()]), &reads));
+    for path in [config, user, script, module] { drop_buffer(path) }
 }
 
 #[test]

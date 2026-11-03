@@ -212,8 +212,9 @@ impl<'a> LintWorld<'a> {
         let kept = owner.parts();
         let names = unit.names.get().map(|names| names.value.clone()).filter(|names| names.complete && names.failures.is_empty());
         if let Some(kept) = kept.filter(|kept| kept.precise || names.is_none()) { return Some(kept) }
-        let index = unit.parsed.tree.module_index(&self.ctx.grammar.names, &unit.text, &|text| self.key(file, text), self.ctx.profile);
-        let published: Vec<(Option<String>, u32)> = index.published(unit.parsed.tree.root).into_iter().map(|(name, node)| (name.map(str::to_owned), node)).collect();
+        // Judged in a world over the file alone, like its later versions;
+        // nothing it reads is this work's.
+        let (published, _) = super::reads::track(|| self.linter.alone_on(unit, |world, unit| publications(world, unit)));
         Some(owner.offer(self.linter.describe(unit, names.as_deref(), &published).lasting()))
     }
 
@@ -303,10 +304,13 @@ impl<'a> LintWorld<'a> {
             // itself (by name).
             if node == tree.root { return }
             let Some(parts) = self.parts_of(file) else { return self.note_part(file, crate::parts::Read::Whole) };
-            let statement = parts.statement_at(syntax.start);
-            // Wrappers of the whole file are its scope too.
-            if statement.is_some_and(|index| syntax.end > parts.statements[index as usize].end) { return }
-            if let Some(statement) = statement { self.note_part(file, crate::parts::Read::Statement(statement)) }
+            // Wrappers of the whole file are its scope too; text no
+            // statement holds is read whole.
+            match parts.statement_at(syntax.start) {
+                Some(index) if syntax.end > parts.statements[index as usize].end => return,
+                Some(index) => self.note_part(file, crate::parts::Read::Statement(index)),
+                None => self.note_part(file, crate::parts::Read::Whole),
+            }
             if let Some(body) = self.linter.body_index(unit, syntax.start) { self.note_part(file, crate::parts::Read::Body(body)) }
             return;
         }
@@ -781,17 +785,18 @@ impl<'a> Files<'a> {
                         // Hints don't depend on the name: each text is checked
                         // for them once per program, not once per name.
                         let survey = self.timed("modules.roots.survey", || snapshot.survey((settings, program), || {
+                            let hints: Arc<[Box<str>]> = selected.globals.name_hints.clone().into();
                             let mut deps = Vec::with_capacity(paths.len());
                             let sources = paths.iter().map(|path| {
                                 let (text, hash) = self.source_text(path);
                                 deps.push(super::reads::Dep::Text(super::reads::dep_path(path), hash));
-                                let hinted = text.as_deref().is_none_or(|text| selected.globals.name_hints.iter().any(|hint| text.contains(&**hint)));
+                                let hinted = super::program::holds_hint(text.as_deref(), &hints);
                                 (path.clone(), text, hinted)
                             }).collect();
                             deps.extend(listing.iter().cloned());
-                            (sources, Arc::new(super::reads::Reads { deps, ..Default::default() }))
+                            super::program::Surveyed { sources, reads: Arc::new(super::reads::Reads { deps, ..Default::default() }), hints }
                         }));
-                        let (sources, files) = survey.get();
+                        let super::program::Surveyed { sources, reads: files, .. } = survey.get();
                         // Kept as survey positions: a run asks thousands of
                         // names, each with up to every input as a candidate.
                         let shared = snapshot.candidates((settings, program, Box::from(name)), || {
@@ -1826,11 +1831,19 @@ pub(super) fn opens_scopes<'a>(world: &'a LintWorld<'a>, classes: u64) -> bool {
 /// judging an older version's reads: from its tree and words, without
 /// resolving its names (that needs its program).
 pub(super) fn describe_alone<'a>(world: &'a LintWorld<'a>, unit: &super::units::Unit) -> crate::parts::FileParts {
+    world.linter.describe(unit, None, &publications(world, unit))
+}
+
+/// What the world's file (`unit`) publishes, by name (`None`: names nobody
+/// can list), with the publishing node. A computed publication counts only
+/// where its condition may hold: every `export` statement carries the
+/// conditional `export *` one.
+pub(super) fn publications<'a>(world: &'a LintWorld<'a>, unit: &super::units::Unit) -> Vec<(Option<String>, u32)> {
     let files = Files(world);
-    let index = World::module_index(&files, 0, &world.ctx.grammar.names);
-    let published: Vec<(Option<String>, u32)> = index.map(|index| index.published(unit.parsed.tree.root).into_iter()
-        .map(|(name, node)| (name.map(str::to_owned), node)).collect()).unwrap_or_default();
-    world.linter.describe(unit, None, &published)
+    let Some(index) = World::module_index(&files, 0, &world.ctx.grammar.names) else { return Vec::new() };
+    index.published(unit.parsed.tree.root).into_iter()
+        .filter(|(name, plan)| name.is_some() || any_holds(world, &[(plan.node, plan.item.when)]))
+        .map(|(name, plan)| (name.map(str::to_owned), plan.node)).collect()
 }
 
 /// Whether some of `items` (a node of the world's file, and the condition

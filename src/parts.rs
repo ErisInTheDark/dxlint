@@ -107,6 +107,9 @@ pub enum Read {
     UsesOf(u32),
     /// Everything outside the bodies it did not step into.
     Whole,
+    /// The statements holding bytes `start..end`; recorded as those
+    /// statements ([`end`]).
+    Span(u32, u32),
 }
 
 /// Everything one piece of work read of one file, compactly.
@@ -130,7 +133,7 @@ impl PartReads {
                 Read::Name(name) => names.push(name),
                 Read::Uses(name) => uses.push(name),
                 Read::UsesOf(node) => uses_of.push(node),
-                Read::Whole => whole = true,
+                Read::Whole | Read::Span(..) => whole = true,
             }
         }
         fn sorted<T: Ord>(mut list: Vec<T>) -> Box<[T]> { list.sort_unstable(); list.dedup(); list.into_boxed_slice() }
@@ -193,6 +196,15 @@ impl FileParts {
     pub fn statement_at(&self, at: u32) -> Option<u32> {
         let after = self.statements.partition_point(|part| part.start <= at);
         (after > 0 && at < self.statements[after - 1].end).then(|| after as u32 - 1)
+    }
+
+    /// Reads of the statements holding bytes `start..end`: the whole file
+    /// when some of them lie outside every statement.
+    pub fn statements_in(&self, start: u32, end: u32) -> Vec<Read> {
+        match (self.statement_at(start), self.statement_at(end.saturating_sub(1).max(start))) {
+            (Some(first), Some(last)) => (first..=last).map(Read::Statement).collect(),
+            _ => vec![Read::Whole],
+        }
     }
 
     /// How `new` (a later version of the file) differs from this one.
@@ -284,7 +296,7 @@ impl FileParts {
             };
         }
         match read {
-            Read::Whole => !diff.statements,
+            Read::Whole | Read::Span(..) => !diff.statements,
             Read::Body(index) => !diff.removed_bodies.contains(&index) && self.bodies.get(index as usize).is_some_and(|body| self.reach_holds(diff, body.refers.iter().copied())),
             Read::Statement(index) => self.reach_holds(diff, std::iter::once(index)),
             Read::Name(name) => !diff.any_declared && !diff.declared.contains(&name)
@@ -446,7 +458,12 @@ pub fn end() -> Vec<(Arc<Owner>, PartReads)> {
     let Some((seen, owners)) = SINKS.with(|sinks| sinks.borrow_mut().pop()) else { return Vec::new() };
     let own = |owner: &Owner| LINTED.with(|linted| linted.borrow().as_deref() == Some(&*owner.path));
     owners.into_iter().filter(|owner| !own(owner)).map(|owner| {
-        let reads = PartReads::new(seen.iter().filter(|(of, _)| *of == Arc::as_ptr(&owner)).map(|&(_, read)| read));
+        let parts = owner.parts();
+        let reads = seen.iter().filter(|(of, _)| *of == Arc::as_ptr(&owner)).flat_map(|&(_, read)| match (read, &parts) {
+            (Read::Span(start, end), Some(parts)) => parts.statements_in(start, end),
+            (read, _) => vec![read],
+        });
+        let reads = PartReads::new(reads);
         (owner, reads)
     }).collect()
 }
@@ -501,5 +518,15 @@ mod tests {
         let moved = file(2, vec![part(20, &["b"], &[], &[]), part(10, &["a"], &[], &[])]);
         let diff = old.diff(&moved);
         assert!(!diff.statements && old.holds(&diff, Read::Whole, false));
+    }
+
+    #[test]
+    fn spans_read_the_statements_holding_them_or_the_whole_file() {
+        let at = |start, end| Part { start, end, ..part(start.into(), &[], &[], &[]) };
+        let parts = file(1, vec![at(0, 10), at(10, 20), at(20, 30)]);
+        assert_eq!(parts.statements_in(12, 25), [Read::Statement(1), Read::Statement(2)]);
+        assert_eq!(parts.statements_in(10, 20), [Read::Statement(1)]);
+        // Text past the last statement belongs to none of them.
+        assert_eq!(parts.statements_in(25, 40), [Read::Whole]);
     }
 }

@@ -116,16 +116,16 @@ impl Index {
         ids.into_iter().map(|id| &self.plans[id]).collect()
     }
 
-    /// What `owner`'s scope publishes: each name (`None`: computed) with
-    /// its publishing node. Unrecorded: for describing the file itself.
-    pub fn published(&self, owner: u32) -> Vec<(Option<&str>, u32)> {
+    /// What `owner`'s scope may publish: each name (`None`: computed) with
+    /// its plan. Unrecorded: for describing the file itself.
+    pub fn published(&self, owner: u32) -> Vec<(Option<&str>, &Plan)> {
         let mut out = Vec::new();
         for publication in [PublicationKind::Exports, PublicationKind::Globals] {
             let Some(scope) = self.scopes.get(&(owner, publication)) else { continue };
             for (name, classes) in &scope.named {
-                out.extend(classes.values().flatten().map(|&id| (Some(&**name), self.plans[id].node)));
+                out.extend(classes.values().flatten().map(|&id| (Some(&**name), &self.plans[id])));
             }
-            out.extend(scope.computed.values().flatten().map(|&id| (None, self.plans[id].node)));
+            out.extend(scope.computed.values().flatten().map(|&id| (None, &self.plans[id])));
         }
         out
     }

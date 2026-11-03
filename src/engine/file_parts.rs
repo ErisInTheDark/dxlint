@@ -85,26 +85,28 @@ impl Linter {
             (after > 0 && at < body_spans[after - 1].1).then(|| after - 1)
         };
         // Statements: the top level's children (below wrappers holding the
-        // whole file), each with the text before it.
+        // whole file), each with the text before it. Layers grafted beside
+        // them (comments, line endings) are no statements.
+        let syntax = |node: u32| !tree.layer_roots.iter().any(|&(root, _)| root == node);
         // A child holding every other child (a program node beside an end
         // token) wraps the statements.
         let mut top = tree.root;
         loop {
-            let children = tree.children(top);
+            let children: Vec<u32> = tree.children(top).iter().map(|edge| edge.node).filter(|&node| syntax(node)).collect();
             let holds_all = |child: u32| {
                 let (start, end) = (tree.node(child).start, tree.node(child).end);
-                children.iter().map(|other| tree.node(other.node))
+                children.iter().map(|&other| tree.node(other))
                     .all(|other| other.start == other.end || other.start >= start && other.end <= end)
             };
-            match children.iter().map(|edge| edge.node).find(|&child| holds_all(child) && !tree.children(child).is_empty()) {
+            match children.iter().copied().find(|&child| holds_all(child) && !tree.children(child).is_empty()) {
                 Some(wrapper) => top = wrapper,
                 None => break,
             }
         }
         let mut statements: Vec<Part> = Vec::new();
         let mut previous = 0u32;
-        for edge in tree.children(top) {
-            let node = tree.node(edge.node);
+        for node in tree.children(top).iter().map(|edge| edge.node).filter(|&node| syntax(node)) {
+            let node = tree.node(node);
             if node.end <= previous { continue }
             statements.push(Part { start: previous, end: node.end, ..Part::default() });
             previous = node.end;

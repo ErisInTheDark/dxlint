@@ -221,6 +221,50 @@ fn carried_in_place<K, V>(map: RwLock<FxHashMap<K, (u64, Cached<V>)>>, to: u64, 
     RwLock::new(map)
 }
 
+type SurveySlots = FxHashMap<(usize, u64), Arc<std::sync::OnceLock<Cached<Surveyed>>>>;
+
+/// The candidates and sketches a carried run keeps of those built from
+/// `surveys`: those of surveys gone are dropped, and those of surveys whose
+/// `patched` inputs were read again match those inputs' texts now.
+fn patch_surveyed(surveys: &SurveySlots, patched: &FxHashMap<(usize, u64), Vec<usize>>,
+    candidates: Slots<(usize, u64, Box<str>), Arc<[u32]>>, words: Slots<(usize, u64), Words>)
+    -> (Slots<(usize, u64, Box<str>), Arc<[u32]>>, Slots<(usize, u64), Words>) {
+    let survey = |key: &(usize, u64)| surveys.get(key).and_then(|slot| slot.get()).map(|surveyed| &surveyed.value);
+    fn ready<V>(cached: Cached<V>) -> Arc<std::sync::OnceLock<Cached<V>>> { Arc::new(std::sync::OnceLock::from(cached)) }
+    // Each input read again, sketched alone: names are tested against it,
+    // not against every input.
+    let alone: FxHashMap<(usize, u64), Vec<(usize, (Survey, Sketches))>> = patched.iter().filter_map(|(key, changed)| {
+        let surveyed = survey(key)?;
+        Some((*key, changed.iter().map(|&at| {
+            let one: Survey = Arc::from([surveyed.sources[at].clone()]);
+            let sketches = Sketches::of(&one);
+            (at, (one, sketches))
+        }).collect()))
+    }).collect();
+    let words = words.into_inner().expect("run slots").into_iter().filter(|(key, _)| surveys.contains_key(key)).map(|(key, slot)| {
+        let (Some(changed), Some(surveyed), Some(built)) = (patched.get(&key), survey(&key), slot.get()) else { return (key, slot) };
+        let mut sketches = (*built.value).clone();
+        for &at in changed { sketches.add(at, surveyed.sources[at].1.as_deref()) }
+        let now = ready(Cached { value: Arc::new(sketches), reads: built.reads.clone() });
+        (key, now)
+    }).collect();
+    let candidates = candidates.into_inner().expect("run slots").into_iter().filter_map(|((settings, program, name), slot)| {
+        let key = (settings, program);
+        if !surveys.contains_key(&key) { return None }
+        let (Some(alone), Some(surveyed), Some(found)) = (alone.get(&key), survey(&key), slot.get()) else { return Some(((settings, program, name), slot)) };
+        let flips: Vec<(u32, bool)> = alone.iter()
+            .map(|(at, text)| (u32::try_from(*at).expect("inputs fit u32"), surveyed.may_publish(*at, &name, text)))
+            .filter(|&(at, member)| found.value.binary_search(&at).is_ok() != member).collect();
+        if flips.is_empty() { return Some(((settings, program, name), slot)) }
+        let mut list: Vec<u32> = found.value.iter().copied().filter(|at| !flips.iter().any(|(flipped, _)| flipped == at)).collect();
+        list.extend(flips.iter().filter(|(_, member)| *member).map(|(at, _)| *at));
+        list.sort_unstable();
+        let now = ready(Cached { value: list.into(), reads: found.reads.clone() });
+        Some(((settings, program, name), now))
+    }).collect();
+    (Mutex::new(candidates), Mutex::new(words))
+}
+
 struct Build<'a, K: Eq + Hash, V> {
     memo: &'a Memo<K, V>,
     key: K,
@@ -422,14 +466,56 @@ pub(super) enum StableQuestion {
 /// global name).
 pub(super) type Survey = Arc<[(PathBuf, Option<Arc<str>>, bool)]>;
 
-/// A survey and its text reads, for the scans of lookups over it.
-pub(super) type Surveyed = (Survey, Arc<Reads>);
+/// A survey, with what it read for the scans of lookups over it: the
+/// inputs' [`reads::Dep::Text`] reads, in survey order, then the listing's.
+#[derive(Clone)]
+pub(super) struct Surveyed {
+    pub sources: Survey,
+    pub reads: Arc<Reads>,
+    /// The name-independent publication hints each text was checked for.
+    pub hints: Arc<[Box<str>]>,
+}
+
+/// Whether text (`None`: unreadable) may publish any global name.
+pub(super) fn holds_hint(text: Option<&str>, hints: &[Box<str>]) -> bool {
+    text.is_none_or(|text| hints.iter().any(|hint| text.contains(&**hint)))
+}
+
+impl Surveyed {
+    /// The inputs whose text changed, by the editor's `keep`.
+    fn changed(&self, revision: u64, keep: &mut Keep<'_>) -> Vec<usize> {
+        self.sources.iter().enumerate().filter(|(_, (path, ..))| !keep(revision, None, Some(path))).map(|(at, _)| at).collect()
+    }
+
+    /// This survey with inputs `changed` read again.
+    fn patched(&self, changed: &[usize]) -> Surveyed {
+        let mut sources = self.sources.to_vec();
+        let mut deps = self.reads.deps.clone();
+        for &at in changed {
+            let (path, text, hinted) = &mut sources[at];
+            let (now, hash) = reads::read_unrecorded(path);
+            *hinted = holds_hint(now.as_deref(), &self.hints);
+            *text = now;
+            if let Some(reads::Dep::Text(_, read)) = deps.get_mut(at) { *read = hash }
+        }
+        Surveyed { sources: sources.into(), reads: Arc::new(Reads { deps, ..Default::default() }), hints: self.hints.clone() }
+    }
+
+    /// Whether input `at`'s text may publish global `name` (`text`: its
+    /// sketch alone).
+    fn may_publish(&self, at: usize, name: &str, text: &(Survey, Sketches)) -> bool {
+        let mut holds = [false];
+        text.1.mark(name, &text.0, &mut holds);
+        self.sources[at].2 || holds[0]
+    }
+}
 
 /// The byte trigrams each surveyed input's text holds, hashed into a fixed
 /// set of bits (2 KiB per input): a name can only occur in a text holding
 /// every trigram of it, so only those texts are searched. Kept per bit (the
 /// inputs holding it), so a name's candidates are a few rows ANDed together
 /// instead of a test of every input.
+#[derive(Clone)]
 pub(super) struct Sketches {
     /// Words per row: one bit per input.
     width: usize,
@@ -467,20 +553,27 @@ impl Sketches {
             }
         }
     }
+
+    fn of(survey: &Survey) -> Sketches {
+        let width = survey.len().div_ceil(64);
+        let mut sketches = Sketches { width, rows: vec![0u64; SKETCH_BITS * width].into(), readable: vec![0u64; width].into() };
+        for (input, (_, text, _)) in survey.iter().enumerate() { sketches.add(input, text.as_deref()) }
+        sketches
+    }
+
+    /// Adds input `input`'s text: its trigrams join those it held (a superset
+    /// still marks exactly, see [`Sketches::mark`]).
+    fn add(&mut self, input: usize, text: Option<&str>) {
+        let Some(text) = text else { return };
+        let (word, mask) = (input / 64, 1u64 << (input % 64));
+        self.readable[word] |= mask;
+        for gram in text.as_bytes().windows(3) { self.rows[trigram_bit(gram) * self.width + word] |= mask }
+    }
 }
 
 /// The trigram sketches of `survey`'s texts.
 pub(super) fn sketch_texts(survey: &Survey) -> Words {
-    let width = survey.len().div_ceil(64);
-    let mut rows = vec![0u64; SKETCH_BITS * width].into_boxed_slice();
-    let mut readable = vec![0u64; width].into_boxed_slice();
-    for (input, (_, text, _)) in survey.iter().enumerate() {
-        let Some(text) = text else { continue };
-        let (word, mask) = (input / 64, 1u64 << (input % 64));
-        readable[word] |= mask;
-        for gram in text.as_bytes().windows(3) { rows[trigram_bit(gram) * width + word] |= mask }
-    }
-    Arc::new(Sketches { width, rows, readable })
+    Arc::new(Sketches::of(survey))
 }
 
 /// Module scope (path, scope) -> the scopes that augment it.
@@ -507,10 +600,20 @@ impl Snapshot {
     pub(super) fn carry(self, to: u64, keep: &mut Keep<'_>) -> Snapshot {
         let Snapshot { revision, paths, catalogs, units, modules, augmentations, prefetched: _, probes, listings, texts,
             candidates, surveys, words, configurations, metadata, packages, values, frames, editor } = self;
-        let surveys: FxHashMap<_, _> = surveys.into_inner().expect("run slots").into_iter().filter(|(_, slot)| slot.get().is_some_and(|survey| {
-            let listing = Reads { deps: survey.value.1.deps.iter().filter(|dep| !dep.reads_text()).cloned().collect(), ..Default::default() };
-            keep(revision, Some(&listing), None)
-        })).collect();
+        // A survey holds while its listing does; inputs whose text changed
+        // are read again, and what was built from them patched to match.
+        let mut patched: FxHashMap<(usize, u64), Vec<usize>> = FxHashMap::default();
+        let surveys: FxHashMap<_, _> = surveys.into_inner().expect("run slots").into_iter().filter_map(|(key, slot)| {
+            let survey = slot.get()?;
+            let listing = Reads { deps: survey.value.reads.deps.iter().filter(|dep| !dep.reads_text()).cloned().collect(), ..Default::default() };
+            if !keep(revision, Some(&listing), None) { return None }
+            let changed = survey.value.changed(revision, keep);
+            if changed.is_empty() { return Some((key, slot)) }
+            let now = Cached { value: survey.value.patched(&changed), reads: survey.reads.clone() };
+            patched.insert(key, changed);
+            Some((key, Arc::new(std::sync::OnceLock::from(now))))
+        }).collect();
+        let (candidates, words) = patch_surveyed(&surveys, &patched, candidates, words);
         Snapshot {
             revision: to,
             paths: paths.carry(to, keep),
@@ -525,9 +628,8 @@ impl Snapshot {
             probes: carried(probes, |path, (at, found)| keep(at, None, Some(&*path)).then_some((path, (to, found)))),
             listings: carried(listings, |dir, (at, listing)| keep(at, None, Some(&*dir)).then_some((dir, (to, listing)))),
             texts: carried(texts, |path, (at, text, hash)| keep(at, None, Some(&*path)).then_some((path, (to, text, hash)))),
-            candidates: Mutex::new(candidates.into_inner().expect("run slots").into_iter()
-                .filter(|((settings, program, _), _)| surveys.contains_key(&(*settings, *program))).collect()),
-            words: Mutex::new(words.into_inner().expect("run slots").into_iter().filter(|(key, _)| surveys.contains_key(key)).collect()),
+            candidates,
+            words,
             surveys: Mutex::new(surveys),
             configurations: carried(configurations, |(at, settings, dir), answer| keep(at, Some(&answer.reads), None).then(|| ((to, settings, dir), answer))),
             metadata,
