@@ -515,7 +515,10 @@ pub fn track_listing<R>(f: impl FnOnce() -> R) -> (R, Arc<Reads>, Arc<[Dep]>) {
 /// Kept reads are copied into the allocator's lasting pool: the lint that
 /// made them frees all of its own memory.
 pub fn kept(reads: Reads) -> Arc<Reads> {
-    let reads = Arc::new(reads);
+    keep(Arc::new(reads))
+}
+
+fn keep(reads: Arc<Reads>) -> Arc<Reads> {
     let _owner = crate::alloc::heap::Owner::enter(crate::alloc::heap::KEPT);
     crate::alloc::lasting(|| {
         let mut kept = KEPT.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
@@ -526,6 +529,22 @@ pub fn kept(reads: Reads) -> Arc<Reads> {
 }
 
 static KEPT: OnceLock<std::sync::Mutex<Kept>> = OnceLock::new();
+
+/// Whether this process keeps every file's reads ([`kept`]).
+static HOST_KEEPS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// This process keeps every file's reads: run-shared answers' reads are
+/// kept as they are made ([`shared`]), so files share them, not copies.
+pub fn host_keeps_reads() {
+    HOST_KEEPS.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The reads of a run-shared answer, as every file using it notes them:
+/// the kept copy when this process keeps reads.
+pub fn shared(reads: Arc<Reads>) -> Arc<Reads> {
+    if !HOST_KEEPS.load(std::sync::atomic::Ordering::Relaxed) || reads.is_empty() { return reads }
+    keep(reads)
+}
 
 /// What [`kept`] reads hold now, by dep kind: for `DXLINT_HEAP_STATS`.
 pub fn kept_census() -> String {
@@ -555,6 +574,8 @@ struct Kept {
     groups: crate::fx_hash::FxHashMap<u64, Vec<std::sync::Weak<Reads>>>,
     scans: crate::fx_hash::FxHashMap<u64, Vec<std::sync::Weak<Scan>>>,
     part_reads: crate::fx_hash::FxHashMap<u64, Vec<std::sync::Weak<crate::parts::PartReads>>>,
+    /// The kept groups by address (a live one at an address is that one).
+    held: crate::fx_hash::FxHashMap<usize, std::sync::Weak<Reads>>,
     entries: usize,
     sweep_at: usize,
 }
@@ -566,6 +587,7 @@ impl Kept {
         self.groups.retain(|_, list| { list.retain(|weak| weak.strong_count() > 0); !list.is_empty() });
         self.scans.retain(|_, list| { list.retain(|weak| weak.strong_count() > 0); !list.is_empty() });
         self.part_reads.retain(|_, list| { list.retain(|weak| weak.strong_count() > 0); !list.is_empty() });
+        self.held.retain(|_, weak| weak.strong_count() > 0);
         self.entries = self.groups.values().map(Vec::len).sum::<usize>() + self.scans.values().map(Vec::len).sum::<usize>()
             + self.part_reads.values().map(Vec::len).sum::<usize>();
         self.sweep_at = (self.entries * 2).max(4096);
@@ -586,6 +608,8 @@ impl Kept {
 
     fn reads(&mut self, reads: Arc<Reads>, seen: &mut crate::fx_hash::FxHashMap<*const Reads, Arc<Reads>>) -> Arc<Reads> {
         if let Some(found) = seen.get(&Arc::as_ptr(&reads)) { return found.clone() }
+        // Already kept (a run-shared answer's, see `shared`): as it is.
+        if self.held.get(&(Arc::as_ptr(&reads) as usize)).is_some_and(|held| held.strong_count() > 0) { return reads }
         let groups: Vec<Arc<Reads>> = reads.groups.iter().map(|group| self.reads(group.clone(), seen)).collect();
         let scans: Vec<Arc<Scan>> = reads.scans.iter().map(|scan| self.scan(scan, seen)).collect();
         let mut hasher = crate::fx_hash::FxHasher::default();
@@ -616,6 +640,7 @@ impl Kept {
             }).collect();
             let found = Arc::new(Reads { deps, groups, scans, ..Default::default() });
             self.groups.entry(key).or_default().push(Arc::downgrade(&found));
+            self.held.insert(Arc::as_ptr(&found) as usize, Arc::downgrade(&found));
             self.entries += 1;
             found
         });

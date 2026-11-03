@@ -133,6 +133,7 @@ impl Timers {
 }
 
 pub fn run<R: Read + Send + 'static, W: Write + Send + 'static>(input: R, output: W, stderr: &mut dyn Write) -> u8 {
+    reads::host_keeps_reads();
     let (out, writer) = Outbox::spawn(output);
     let (tx, rx) = mpsc::channel();
     let mut server = Server {

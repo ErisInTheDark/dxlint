@@ -1034,7 +1034,7 @@ impl<'a> Files<'a> {
         }
         // Every other input is read as a run unit, which records its read;
         // the linted file's own tree only counts when the answer read it.
-        let answer = super::reads::Cached::compute(|| {
+        let mut answer = super::reads::Cached::compute(|| {
             let before = self.0.program.linted_reads.get();
             let value = compute();
             if self.0.program.linted_reads.get() != before {
@@ -1042,6 +1042,7 @@ impl<'a> Files<'a> {
             }
             value
         });
+        answer.reads = super::reads::shared(answer.reads);
         self.timed("modules.resolve.shared.record", || super::reads::note_group(&answer.reads));
         if let Known::Yes(targets) = &answer.value {
             self.timed("modules.resolve.shared.publish", || {
@@ -1687,7 +1688,7 @@ impl World for Files<'_> {
         match stable {
             Ok(stable) => {
                 if let Some(profile) = profile { super::Profile::add(&profile.shared_value_publishes, 1) }
-                snapshot.keep_value(key, super::reads::Cached { value: stable, reads: answer.reads.clone() });
+                snapshot.keep_value(key, super::reads::Cached { value: stable, reads: super::reads::shared(answer.reads.clone()) });
             }
             Err(reason) => skip(reason),
         }
