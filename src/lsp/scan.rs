@@ -103,6 +103,20 @@ impl Shared {
         out.notify("textDocument/publishDiagnostics", params);
     }
 
+    /// The editor has been idle: its last runs' answers (kept so the next
+    /// keystroke lints fast) go, and with them their memory. The next editor
+    /// lint starts cold. False (nothing done) while an editor lint runs.
+    pub fn forget_editor_runs(&self) -> bool {
+        let carried = {
+            let mut editing = self.editing.lock().expect("lock");
+            if editing.running { return false }
+            std::mem::take(&mut editing.carried)
+        };
+        drop(carried);
+        crate::alloc::release();
+        true
+    }
+
     /// Moves files to the front of the running scan.
     pub fn prioritize(&self, files: impl IntoIterator<Item = PathBuf>) {
         self.priority.lock().expect("lock").queue.extend(files);
@@ -186,7 +200,7 @@ pub fn relint(linters: Linters, files: Vec<PathBuf>, shared: Arc<Shared>, out: O
             return;
         }
     }
-    lint_thread(move || {
+    lint_thread(true, move || {
         let current = || shared.generation.load(Ordering::SeqCst) == generation;
         // A config change that matters rescans, which ends this batch.
         let linters = shared.relint.lock().expect("lock").linters.clone();
@@ -227,7 +241,7 @@ pub fn edit(shared: &Arc<Shared>, out: &Outbox, lint: EditorLint) {
         }
     }
     let (shared, out) = (shared.clone(), out.clone());
-    lint_thread(move || loop {
+    lint_thread(false, move || loop {
         let (batch, mut carried) = {
             let mut editing = shared.editing.lock().expect("lock");
             if editing.queue.is_empty() || shared.closing.load(Ordering::SeqCst) {
@@ -397,17 +411,56 @@ fn worth_walking(linters: &Linters, dir: &Path) -> bool {
 pub fn start(linters: Linters, roots: Vec<PathBuf>, tabs: Vec<PathBuf>, shared: Arc<Shared>, out: Outbox, progress: bool) {
     let generation = shared.generation.fetch_add(1, Ordering::SeqCst) + 1;
     *shared.priority.lock().expect("lock") = Priority { generation, queue: tabs.into() };
-    lint_thread(move || Scan::new(linters, shared, out, progress, generation).run(&roots));
+    lint_thread(true, move || Scan::new(linters, shared, out, progress, generation).run(&roots));
 }
 
 /// A thread that lints: worker-sized stack, as deep questions need, and an
 /// owned pool, which the next lint thread takes over: one batch's free
 /// blocks serve the next instead of each thread spreading over a new shard.
-fn lint_thread(work: impl FnOnce() + Send + 'static) {
+/// Runs `work` on a lint worker. Background workers (scans, relints) run at
+/// a low priority: nobody waits on them, and they must not slow the user's
+/// machine.
+/// Editor workers keep their own pools ([`crate::alloc::Family`]).
+fn lint_thread(background: bool, work: impl FnOnce() + Send + 'static) {
     std::thread::Builder::new().stack_size(crate::engine::WORKER_STACK).spawn(move || {
-        let _pool = crate::alloc::own_pool();
+        if background { lower_priority() }
+        let _pool = crate::alloc::own_pool_in(if background { crate::alloc::Family::Work } else { crate::alloc::Family::Editor });
         work()
     }).expect("lint thread");
+}
+
+/// Lowers the calling thread's CPU priority. Only CPU: Windows' background
+/// mode also lowers memory priority, and trimming a lint's working set
+/// stalls it for seconds. Best effort: a refusal leaves it as it was.
+fn lower_priority() {
+    #[cfg(windows)]
+    {
+        const THREAD_PRIORITY_LOWEST: i32 = -2;
+        extern "system" {
+            fn GetCurrentThread() -> *mut std::ffi::c_void;
+            fn SetThreadPriority(thread: *mut std::ffi::c_void, priority: i32) -> i32;
+        }
+        // SAFETY: changes only the calling thread's own scheduling.
+        unsafe { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_LOWEST) };
+    }
+    // Linux nice values are per thread: `who` 0 is the calling thread.
+    #[cfg(target_os = "linux")]
+    {
+        extern "C" {
+            fn setpriority(which: i32, who: u32, priority: i32) -> i32;
+        }
+        // SAFETY: changes only the calling thread's own scheduling.
+        unsafe { setpriority(0, 0, 10) };
+    }
+    #[cfg(target_vendor = "apple")]
+    {
+        const QOS_CLASS_UTILITY: u32 = 0x11;
+        extern "C" {
+            fn pthread_set_qos_class_self_np(class: u32, relative_priority: i32) -> i32;
+        }
+        // SAFETY: changes only the calling thread's own scheduling.
+        unsafe { pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0) };
+    }
 }
 
 struct Scan {

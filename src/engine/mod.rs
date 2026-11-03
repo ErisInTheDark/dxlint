@@ -978,9 +978,10 @@ impl Linter {
                                     let run = Run { active: mask, ..run };
                                     let carry = editing::Handed(carry.take());
                                     let dirty = dirty.clone();
+                                    let family = crate::alloc::family();
                                     // Reads are tracked per thread: pass them on.
                                     std::thread::Builder::new().stack_size(WORKER_STACK).spawn_scoped(s, move || {
-                                        let _pool = crate::alloc::own_pool();
+                                        let _pool = crate::alloc::own_pool_in(family);
                                         let carry = carry;
                                         let ((part, world), reads) = reads::track(|| {
                                             let facts = self.native_facts(index, tree, &run, (path, rel), state);

@@ -9,7 +9,8 @@ Rust linter; rules in `.dx` (docs/advanced.md). Binary `dxlint`.
 - package binaries: `npm run build:binaries` (Windows, Linux, macOS; setup in its header); any change to `src/` or Cargo files ships with it in the same batch (publishing refuses binaries whose `package/source.sha256` stamp is stale)
 - self-lint: `cargo run --release --` (uses `.dx`); must stay clean
 - perf check: `dxlint --stats --no-cache <big file>`; compare before/after engine changes
-- CPU profile (Windows, no admin): env `DXLINT_SAMPLE=<report>` on a build with debug line tables; `DXLINT_SAMPLE_CALLERS=a;>b` adds callers of `a`, callees of `b`. Budget steps are not time: profile before trusting them
+- CPU profile (Windows, no admin): env `DXLINT_SAMPLE=<report>` on a build with debug line tables; `DXLINT_SAMPLE_CALLERS=a;>b` adds callers of `a`, callees of `b`; `DXLINT_SAMPLE_AFTER=<s>` skips startup (a server's scan). Budget steps are not time: profile before trusting them
+- memory: env `DXLINT_HEAP_STATS=1` prints live heap by owner and where allocator pages sit (CLI end, LSP shutdown)
 
 ## Layout
 

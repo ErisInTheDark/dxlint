@@ -182,16 +182,22 @@ impl Page {
 struct Store {
     kept: *mut Page,
     released: *mut Page,
+    /// Pages on each list, and segments taken from the system.
+    kept_pages: usize,
+    released_pages: usize,
+    segments: usize,
 }
 
 // The store is only touched under its mutex.
 unsafe impl Send for Store {}
 
-static STORE: Lock<Store> = Lock::new(Store { kept: null_mut(), released: null_mut() });
-/// Each store page's first system page holds its link: it is never released.
-/// 16 KiB is the largest system page in use (Apple Silicon): releases must
-/// start on a system page.
+static STORE: Lock<Store> = Lock::new(Store { kept: null_mut(), released: null_mut(), kept_pages: 0, released_pages: 0, segments: 0 });
+/// Each store page's first system page holds its link: it is never released,
+/// and releases must start on a system page (16 KiB on Apple Silicon).
+#[cfg(target_vendor = "apple")]
 const LINK: usize = 16 * 1024;
+#[cfg(not(target_vendor = "apple"))]
+const LINK: usize = 4 * 1024;
 
 impl Store {
     fn lock() -> Held<'static, Store> {
@@ -214,8 +220,15 @@ impl Store {
             let mut store = Store::lock();
             // SAFETY: the lock is held.
             match unsafe { Store::pop(&mut store.kept) } {
-                page if !page.is_null() => (page, false),
-                _ => (unsafe { Store::pop(&mut store.released) }, true),
+                page if !page.is_null() => {
+                    store.kept_pages -= 1;
+                    (page, false)
+                }
+                _ => {
+                    let page = unsafe { Store::pop(&mut store.released) };
+                    if !page.is_null() { store.released_pages -= 1 }
+                    (page, true)
+                }
             }
         };
         // SAFETY: a released page's memory past its link is the system's.
@@ -227,6 +240,8 @@ impl Store {
             let segment = unsafe { system::segment() };
             if segment.is_null() { return null_mut() }
             let mut store = Store::lock();
+            store.segments += 1;
+            store.kept_pages += SEGMENT / PAGE - 1;
             for index in 1..SEGMENT / PAGE {
                 // SAFETY: each page lies inside the segment just allocated.
                 unsafe {
@@ -260,15 +275,29 @@ impl Store {
         // SAFETY: the page is no pool's any more.
         unsafe { (*page).next = store.kept };
         store.kept = page;
+        store.kept_pages += 1;
     }
 }
 
 /// Hands the memory of every unused page back to the system; their
-/// addresses stay the store's, so later allocations take them again. Pools
-/// keep their own pages: call it when a burst of work has ended (owned pools
-/// [`trim`] into the store when their workers finish).
+/// addresses stay the store's, so later allocations take them again. Call it
+/// when a burst of work has ended. Pools no thread owns (parked, lasting,
+/// shards) first take back what other threads freed, so pages they emptied
+/// go too; owned pools [`trim`] into the store when their workers finish.
 pub fn release() {
-    let head = std::mem::replace(&mut Store::lock().kept, null_mut());
+    // SAFETY: each pool is held (parked ones through their list's lock).
+    unsafe {
+        for parked in &PARKED {
+            for pool in parked.lock().iter() { (*pool.0).trim() }
+        }
+        LASTING.lock().trim();
+        for shard in &POOLS { shard.lock().trim() }
+    }
+    system::compact();
+    let (head, count) = {
+        let mut store = Store::lock();
+        (std::mem::replace(&mut store.kept, null_mut()), std::mem::take(&mut store.kept_pages))
+    };
     if head.is_null() { return }
     // SAFETY: the detached pages are no pool's and no other thread sees them;
     // each keeps its link page, so the list stays intact.
@@ -284,7 +313,27 @@ pub fn release() {
     // SAFETY: the lock is held; `tail` ends the detached list.
     unsafe { (*tail).next = store.released };
     store.released = head;
+    store.released_pages += count;
 }
+/// Segments taken from the system, and the store's kept and released pages.
+fn store_pages() -> (usize, usize, usize) {
+    let store = Store::lock();
+    (store.segments, store.kept_pages, store.released_pages)
+}
+
+/// (pages, bytes handed out) of the pools no thread owns right now: parked
+/// work and editor pools, the lasting pool and the shards.
+fn pool_usage() -> [(&'static str, usize, usize); 4] {
+    let parked = |family: Family| PARKED[family as usize].lock().iter()
+        // SAFETY: parked pools belong to no thread; the parked list's lock is held.
+        .map(|pool| unsafe { (*pool.0).usage() }).fold((0, 0), |a, b| (a.0 + b.0, a.1 + b.1));
+    // SAFETY: each pool is held while it is read.
+    let lasting = unsafe { LASTING.lock().usage() };
+    let shards = POOLS.iter().map(|pool| unsafe { pool.lock().usage() }).fold((0, 0), |a, b| (a.0 + b.0, a.1 + b.1));
+    let (work, editor) = (parked(Family::Work), parked(Family::Editor));
+    [("work", work.0, work.1), ("editor", editor.0, editor.1), ("lasting", lasting.0, lasting.1), ("shards", shards.0, shards.1)]
+}
+
 /// The system memory behind the store.
 mod system {
     use super::{PAGE, SEGMENT};
@@ -313,6 +362,16 @@ mod system {
 
         pub unsafe fn reclaim(at: *mut u8, size: usize) -> bool {
             !unsafe { VirtualAlloc(at.cast(), size, MEM_COMMIT, PAGE_READWRITE) }.is_null()
+        }
+
+        /// The process heap (large blocks) gives its free ranges back.
+        pub fn compact() {
+            extern "system" {
+                fn GetProcessHeap() -> *mut c_void;
+                fn HeapCompact(heap: *mut c_void, flags: u32) -> usize;
+            }
+            // SAFETY: compacts the process's own heap; no block moves.
+            unsafe { HeapCompact(GetProcessHeap(), 0) };
         }
     }
 
@@ -344,6 +403,8 @@ mod system {
         pub unsafe fn reclaim(_: *mut u8, _: usize) -> bool {
             true
         }
+
+        pub fn compact() {}
     }
 
     /// SEGMENT fresh bytes, PAGE-aligned; null when the system is out.
@@ -359,6 +420,11 @@ mod system {
     /// Makes released bytes usable again; false when the system is out.
     pub unsafe fn reclaim(at: *mut u8, size: usize) -> bool {
         unsafe { os::reclaim(at, size) }
+    }
+
+    /// Asks the system allocator to give its free memory back.
+    pub fn compact() {
+        os::compact()
     }
 
     const _: () = assert!(PAGE.is_multiple_of(super::LINK) && SEGMENT.is_multiple_of(PAGE));
@@ -485,6 +551,28 @@ impl Pool {
         }
     }
 
+    /// Pages listed, and bytes of blocks handed out from them.
+    ///
+    /// # Safety
+    /// The caller holds this pool.
+    unsafe fn usage(&self) -> (usize, usize) {
+        let (mut pages, mut used) = (0, 0);
+        for class in &self.classes {
+            for list in [class.available, class.full] {
+                let mut page = list.0;
+                // SAFETY: listed pages are this pool's.
+                while !page.is_null() {
+                    unsafe {
+                        pages += 1;
+                        used += (*page).used * (*page).size;
+                        page = (*page).next;
+                    }
+                }
+            }
+        }
+        (pages, used)
+    }
+
     /// Takes back remote frees and hands empty pages to the store.
     unsafe fn trim(&mut self) {
         for pages in &mut self.classes {
@@ -561,16 +649,41 @@ struct Parked(*mut Pool);
 // Parked pools belong to no thread until one takes them.
 unsafe impl Send for Parked {}
 
-/// Pools whose owners finished, kept for the next worker.
-static PARKED: Lock<Vec<Parked>> = Lock::new(Vec::new());
+/// Which workers share parked pools. A language server's editor keeps its
+/// last run's answers between keystrokes: pages shared with background
+/// work would end up holding a few of those long-lived blocks each, and
+/// none of them could go back to the system.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Family {
+    Work,
+    Editor,
+}
+
+/// Pools whose owners finished, kept for the next worker of their family.
+static PARKED: [Lock<Vec<Parked>>; 2] = [const { Lock::new(Vec::new()) }; 2];
+
+thread_local! {
+    static FAMILY: Cell<Family> = const { Cell::new(Family::Work) };
+}
+
+/// The family of this thread's owned pool, for workers it starts.
+pub fn family() -> Family {
+    FAMILY.try_with(Cell::get).unwrap_or(Family::Work)
+}
 
 /// Gives this thread a pool of its own until the guard drops; small
 /// allocations on it then take no lock.
 pub fn own_pool() -> OwnedPool {
-    let parked = PARKED.lock().pop();
+    own_pool_in(Family::Work)
+}
+
+/// [`own_pool`] from `family`'s parked pools.
+pub fn own_pool_in(family: Family) -> OwnedPool {
+    let parked = PARKED[family as usize].lock().pop();
     let pool = parked.map_or_else(|| Box::into_raw(Box::new(Pool::new())), |parked| parked.0);
     let previous = OWNED.with(|owned| owned.replace(pool));
-    OwnedPool { pool, previous, thread: std::marker::PhantomData }
+    let previous_family = FAMILY.with(|current| current.replace(family));
+    OwnedPool { pool, previous, family, previous_family, thread: std::marker::PhantomData }
 }
 
 /// Hands this thread's owned pool's empty pages back to the shared store
@@ -585,6 +698,8 @@ pub fn trim() {
 pub struct OwnedPool {
     pool: *mut Pool,
     previous: *mut Pool,
+    family: Family,
+    previous_family: Family,
     /// Ownership stays on the thread that took it.
     thread: std::marker::PhantomData<*mut Pool>,
 }
@@ -596,7 +711,8 @@ impl Drop for OwnedPool {
     fn drop(&mut self) {
         trim();
         OWNED.with(|owned| owned.set(self.previous));
-        let mut parked = PARKED.lock();
+        FAMILY.with(|current| current.set(self.previous_family));
+        let mut parked = PARKED[self.family as usize].lock();
         match parked.first() {
             // SAFETY: parked pools belong to no thread; this one is no
             // thread's any more, and is dropped once emptied.
@@ -642,7 +758,7 @@ pub mod heap {
     /// Module work splits by phase: `roots` finds and loads a global name's
     /// candidate files, `catalog` builds program catalogs, `shared` keeps
     /// run-wide module answers; `modules` is the rest of module queries.
-    pub const OWNERS: [&str; 10] = ["other", "units", "names", "semantic", "effects", "rules", "modules", "roots", "catalog", "shared"];
+    pub const OWNERS: [&str; 11] = ["other", "units", "names", "semantic", "effects", "rules", "modules", "roots", "catalog", "shared", "kept reads"];
     pub const UNITS: usize = 1;
     pub const NAMES: usize = 2;
     pub const SEMANTIC: usize = 3;
@@ -652,6 +768,8 @@ pub mod heap {
     pub const ROOTS: usize = 7;
     pub const CATALOG: usize = 8;
     pub const SHARED: usize = 9;
+    /// Reads a long-lived host keeps per linted file (`reads::kept`).
+    pub const KEPT: usize = 10;
     /// 0 undecided, 1 off, 2 on.
     static MODE: AtomicU8 = AtomicU8::new(0);
     static LIVE: [AtomicIsize; OWNERS.len()] = [const { AtomicIsize::new(0) }; OWNERS.len()];
@@ -722,13 +840,36 @@ pub mod heap {
             PEAK.load(Ordering::Relaxed))
     }
 
-    /// [`report`] as one line, when accounting is on.
+    /// Bytes of pooled blocks (class sizes, headers included) and of system
+    /// blocks, live now.
+    static POOLED: AtomicIsize = AtomicIsize::new(0);
+    static LARGE: AtomicIsize = AtomicIsize::new(0);
+
+    /// An accounted block of `layout` was taken (`sign` 1) or given back (-1).
+    pub(super) fn taken(layout: std::alloc::Layout, sign: isize) {
+        match super::class(layout) {
+            Some(class) => POOLED.fetch_add(sign * ((class + 1) * super::QUANTUM) as isize, Ordering::Relaxed),
+            None => LARGE.fetch_add(sign * layout.size() as isize, Ordering::Relaxed),
+        };
+    }
+
+    /// [`report`] as one line, when accounting is on, with where the
+    /// allocator's memory is now.
     pub fn summary() -> Option<String> {
         if !on() { return None }
         let (owners, peak) = report();
         let mib = |bytes: isize| bytes as f64 / 1048576.0;
         let rows: Vec<String> = owners.iter().map(|(name, at_peak, now)| format!("{name} {:.1} ({:.1} at end)", mib(*at_peak), mib(*now))).collect();
-        Some(format!("heap at peak {:.1} MiB by owner: {}", mib(peak as isize), rows.join(", ")))
+        let (segments, kept, released) = super::store_pages();
+        let page = |pages: usize| mib((pages * super::PAGE) as isize);
+        let pooled_pages = segments * (super::SEGMENT / super::PAGE) - kept - released;
+        let pools: Vec<String> = super::pool_usage().iter()
+            .map(|(name, pages, used)| format!("{name} {:.1} ({:.1} used)", page(*pages), mib(*used as isize))).collect();
+        Some(format!(
+            "heap at peak {:.1} MiB by owner: {}\nallocator now: pools hold {:.1} MiB of pages ({:.1} MiB in live blocks; unowned pools: {}), store keeps {:.1} MiB, released {:.1} MiB ({:.1} MiB of it still committed), large blocks {:.1} MiB",
+            mib(peak as isize), rows.join(", "), page(pooled_pages), mib(POOLED.load(Ordering::Relaxed)), pools.join(", "), page(kept), page(released),
+            mib((released * super::LINK) as isize), mib(LARGE.load(Ordering::Relaxed)),
+        ))
     }
 }
 
@@ -802,6 +943,7 @@ unsafe impl GlobalAlloc for Pooled {
                 let owner = heap::current();
                 *block = owner;
                 heap::add(owner, layout.size() as isize);
+                heap::taken(outer, 1);
                 return block.add(HEADER);
             }
         }
@@ -828,6 +970,7 @@ unsafe impl GlobalAlloc for Pooled {
             unsafe {
                 let start = block.sub(HEADER);
                 heap::add(*start, -(layout.size() as isize));
+                heap::taken(outer, -1);
                 return self.raw_dealloc(start, outer);
             }
         }
@@ -969,6 +1112,35 @@ mod tests {
             for block in reused { unsafe { Pooled.dealloc(block, large) } }
             assert!(landed > 0, "no page freed by 32-byte blocks served 1024-byte blocks");
         }).join().expect("worker");
+    }
+
+    #[test]
+    fn pages_emptied_by_other_threads_after_their_worker_ended_go_on_release() {
+        let _apart = STORE_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        let l = layout(256, 16);
+        // A worker's blocks outlive it (an editor's kept answers)...
+        let blocks: Vec<usize> = std::thread::spawn(move || {
+            let _pool = own_pool_in(Family::Editor);
+            (0..4 * PAGE / 256).map(|_| unsafe { Pooled.alloc(l) } as usize).collect()
+        }).join().expect("worker");
+        let pages: std::collections::HashSet<usize> = blocks.iter().map(|&block| block & !(PAGE - 1)).collect();
+        // ...and are freed later by another thread, onto their pages' remote lists.
+        for &block in &blocks { unsafe { Pooled.dealloc(block as *mut u8, l) } }
+        release();
+        let still_listed = PARKED.iter().map(|parked| {
+            let parked = parked.lock();
+            parked.iter().flat_map(|pool| unsafe { &(*pool.0).classes }.iter().flat_map(|class| [class.available.0, class.full.0]))
+                .flat_map(|mut page| std::iter::from_fn(move || {
+                    if page.is_null() { return None }
+                    let here = page;
+                    page = unsafe { (*page).next };
+                    Some(here)
+                }))
+                .filter(|&page| pages.contains(&(page as usize)))
+                .count()
+        }).sum::<usize>();
+        // (Another worker may take a released page again, but then it is its own.)
+        assert_eq!(still_listed, 0, "pages whose blocks were all freed stayed in parked pools");
     }
 
     #[test]

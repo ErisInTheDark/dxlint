@@ -15,6 +15,7 @@ use std::collections::{HashMap, HashSet};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc};
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
@@ -62,6 +63,16 @@ type Inbox = mpsc::Sender<io::Result<Option<Value>>>;
 /// A finished background command run, posted to the request loop.
 const COMMAND_DONE: &str = "dxlint/commandDone";
 
+/// How long without messages before the editor's kept answers go
+/// ([`scan::Shared::forget_editor_runs`]): typing keeps them, a pause frees
+/// their memory.
+const EDITOR_IDLE: Duration = Duration::from_secs(30);
+
+/// Background relints wait until changes on disk stop for this long...
+const SETTLE: Duration = Duration::from_millis(1500);
+/// ...or a burst has gone on this long.
+const SETTLE_AT_MOST: Duration = Duration::from_secs(10);
+
 struct Server {
     out: Outbox,
     inject: Inbox,
@@ -98,6 +109,26 @@ struct Server {
     /// Buffers opened or edited since the last flush: what open files
     /// learned from them is out of date; the rest wait for a save.
     typed: HashSet<PathBuf>,
+    /// Files on disk to relint in the background once changes settle.
+    settling: Vec<PathBuf>,
+    timers: Timers,
+}
+
+/// When the request loop next has deferred work, besides messages.
+#[derive(Default)]
+struct Timers {
+    /// Start [`Server::settling`]'s relints: changes on disk come in bursts
+    /// (several saves, a formatter after a save, a checkout), and each file
+    /// is relinted once per burst. With when the burst began.
+    settled: Option<(Instant, Instant)>,
+    /// Forget the editor's kept answers ([`EDITOR_IDLE`]).
+    editor_idle: Option<Instant>,
+}
+
+impl Timers {
+    fn next(&self) -> Option<Instant> {
+        self.settled.map(|(_, at)| at).into_iter().chain(self.editor_idle).min()
+    }
 }
 
 pub fn run<R: Read + Send + 'static, W: Write + Send + 'static>(input: R, output: W, stderr: &mut dyn Write) -> u8 {
@@ -123,6 +154,8 @@ pub fn run<R: Read + Send + 'static, W: Write + Send + 'static>(input: R, output
         dirty_tabs: HashSet::new(),
         changed: HashSet::new(),
         typed: HashSet::new(),
+        settling: Vec::new(),
+        timers: Timers::default(),
     };
     // Reading happens on its own thread so the loop below can see how much
     // input is already waiting, and lint once per burst of edits instead of
@@ -139,7 +172,18 @@ pub fn run<R: Read + Send + 'static, W: Write + Send + 'static>(input: R, output
     });
     let mut shutdown = false;
     let code = 'serve: loop {
-        let mut next = rx.recv().ok();
+        let mut next = match server.timers.next() {
+            Some(at) => match rx.recv_timeout(at.saturating_duration_since(Instant::now())) {
+                Ok(msg) => Some(msg),
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    server.tick();
+                    continue;
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => None,
+            },
+            None => rx.recv().ok(),
+        };
+        server.timers.editor_idle = Some(Instant::now() + EDITOR_IDLE);
         while let Some(msg) = next.take() {
             let msg = match msg {
                 Ok(Some(m)) => m,
@@ -155,6 +199,7 @@ pub fn run<R: Read + Send + 'static, W: Write + Send + 'static>(input: R, output
             next = rx.try_recv().ok();
         }
         server.flush();
+        server.tick();
     };
     // Stop background work and let the writer drain.
     server.shared.generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -276,8 +321,32 @@ impl Server {
                 background.push(path);
             }
         }
-        if !background.is_empty() {
-            scan::relint(linters.clone(), background, self.shared.clone(), self.out.clone());
+        self.settle(background);
+    }
+
+    /// Queues background relints of files on disk until changes settle
+    /// ([`Timers::settled`]).
+    fn settle(&mut self, files: Vec<PathBuf>) {
+        if files.is_empty() { return }
+        for file in files {
+            if !self.settling.contains(&file) { self.settling.push(file) }
+        }
+        let now = Instant::now();
+        let began = self.timers.settled.map_or(now, |(began, _)| began);
+        self.timers.settled = Some((began, (now + SETTLE).min(began + SETTLE_AT_MOST)));
+    }
+
+    /// Does the deferred work that is due: settled relints, and forgetting
+    /// an idle editor's kept answers (retried while an editor lint runs).
+    fn tick(&mut self) {
+        let now = Instant::now();
+        if self.timers.settled.is_some_and(|(_, at)| at <= now) {
+            self.timers.settled = None;
+            let files = std::mem::take(&mut self.settling);
+            scan::relint(self.projects.linters(), files, self.shared.clone(), self.out.clone());
+        }
+        if self.timers.editor_idle.is_some_and(|at| at <= now) {
+            self.timers.editor_idle = (!self.shared.forget_editor_runs()).then(|| now + Duration::from_secs(1));
         }
     }
 
@@ -524,14 +593,14 @@ impl Server {
     /// A file the user does not have open changed on disk, or was just
     /// closed: relint it like a scan would, in the background. Scans never
     /// lint gitignored files.
-    fn publish_disk(&self, path: &Path, u: &str) {
+    fn publish_disk(&mut self, path: &Path, u: &str) {
         if self.ignored_tabs.contains(path) {
             self.publish_ignored_tab(path);
         } else if self.scan_workspace
             && self.projects.linter_for(path).is_some_and(|l| l.wants(path))
             && scan::walk_reaches(&self.roots, path)
         {
-            scan::relint(self.projects.linters(), vec![path.to_path_buf()], self.shared.clone(), self.out.clone());
+            self.settle(vec![path.to_path_buf()]);
         } else {
             self.shared.publish(&self.out, u, None, json!([]));
         }

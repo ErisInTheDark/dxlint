@@ -58,6 +58,7 @@ mod windows {
         fn GetCurrentThreadId() -> u32;
         fn GetCurrentProcess() -> Handle;
         fn CloseHandle(handle: Handle) -> i32;
+        fn GetExitCodeThread(thread: Handle, code: *mut u32) -> i32;
         fn ReadProcessMemory(process: Handle, address: *const c_void, buffer: *mut c_void, size: usize, read: *mut usize) -> i32;
         fn Sleep(milliseconds: u32);
         fn RtlLookupFunctionEntry(pc: u64, base: *mut u64, history: *mut c_void) -> *mut c_void;
@@ -127,10 +128,24 @@ mod windows {
     }
 
     impl Threads {
-        /// Opens every other thread of this process not yet held.
+        /// Lets go of threads that ended (a server starts a worker per batch
+        /// of work), then opens every other thread of this process not yet held.
         fn refresh(&mut self, own: u32) {
+            const STILL_ACTIVE: u32 = 259;
             // SAFETY: plain Win32 calls with owned, sized buffers.
             unsafe {
+                let mut kept = 0;
+                for index in 0..self.count {
+                    let mut code = 0u32;
+                    if GetExitCodeThread(self.handles[index], &mut code) != 0 && code != STILL_ACTIVE {
+                        CloseHandle(self.handles[index]);
+                        continue;
+                    }
+                    self.handles[kept] = self.handles[index];
+                    self.ids[kept] = self.ids[index];
+                    kept += 1;
+                }
+                self.count = kept;
                 let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
                 if snapshot.is_null() || snapshot as isize == -1 { return }
                 let process = GetCurrentProcessId();
@@ -226,10 +241,15 @@ mod windows {
         }
     }
 
-    pub fn start(report: std::path::PathBuf) -> Sampler {
+    /// Samples from `after` on (a server's scan before the work of interest).
+    pub fn start(report: std::path::PathBuf, after: std::time::Duration) -> Sampler {
         let stop = Arc::new(AtomicBool::new(false));
         let stopping = stop.clone();
         let thread = std::thread::spawn(move || {
+            let begin = std::time::Instant::now() + after;
+            while !stopping.load(Ordering::Relaxed) && std::time::Instant::now() < begin {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
             // SAFETY: plain Win32 calls.
             let own = unsafe {
                 timeBeginPeriod(1);
@@ -359,10 +379,12 @@ mod windows {
 }
 
 /// A running sampler that reports when dropped; `None` unless
-/// `DXLINT_SAMPLE` names a report path.
+/// `DXLINT_SAMPLE` names a report path. `DXLINT_SAMPLE_AFTER=<seconds>`
+/// starts it that long after the process.
 #[cfg(windows)]
 pub fn start_from_env() -> Option<impl Drop> {
-    std::env::var_os("DXLINT_SAMPLE").map(|path| windows::start(path.into()))
+    let after = std::env::var("DXLINT_SAMPLE_AFTER").ok().and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
+    std::env::var_os("DXLINT_SAMPLE").map(|path| windows::start(path.into(), std::time::Duration::from_secs_f64(after.max(0.0))))
 }
 
 #[cfg(not(windows))]

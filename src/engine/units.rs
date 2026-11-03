@@ -133,10 +133,11 @@ impl Linter {
         let workers = self.rule_jobs.min(paths.len());
         if workers <= 1 { return }
         let next = std::sync::atomic::AtomicUsize::new(0);
+        let family = crate::alloc::family();
         std::thread::scope(|scope| {
             for _ in 0..workers {
                 scope.spawn(|| {
-                    let _pool = crate::alloc::own_pool();
+                    let _pool = crate::alloc::own_pool_in(family);
                     worker(&mut std::iter::from_fn(|| loop {
                         let path = paths.get(next.fetch_add(1, std::sync::atomic::Ordering::Relaxed))?;
                         if let Some(unit) = self.unit(path, Some(run)) { return Some(unit) }

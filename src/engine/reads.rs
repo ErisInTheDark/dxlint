@@ -490,6 +490,7 @@ pub fn track_listing<R>(f: impl FnOnce() -> R) -> (R, Arc<[Dep]>) {
 pub fn kept(reads: Reads) -> Arc<Reads> {
     static KEPT: OnceLock<std::sync::Mutex<Kept>> = OnceLock::new();
     let reads = Arc::new(reads);
+    let _owner = crate::alloc::heap::Owner::enter(crate::alloc::heap::KEPT);
     crate::alloc::lasting(|| {
         let mut kept = KEPT.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
         kept.sweep();
@@ -523,7 +524,16 @@ impl Kept {
         let groups: Vec<Arc<Reads>> = reads.groups.iter().map(|group| self.reads(group.clone(), seen)).collect();
         let scans: Vec<Arc<Scan>> = reads.scans.iter().map(|scan| self.scan(scan, seen)).collect();
         let mut hasher = crate::fx_hash::FxHasher::default();
-        reads.deps.hash(&mut hasher);
+        // Paths are interned: their addresses hash much faster than their
+        // components, and a path that is not interned only misses sharing.
+        for dep in &reads.deps {
+            std::mem::discriminant(dep).hash(&mut hasher);
+            match dep {
+                Dep::Requested(_, request, _) => std::ptr::hash(Arc::as_ptr(request), &mut hasher),
+                Dep::Text(path, _) | Dep::IsFile(path, _) | Dep::IsDir(path, _) | Dep::List(path, _) | Dep::Discovered(_, path, _) | Dep::Outside(path, _) =>
+                    Arc::as_ptr(path).cast::<u8>().hash(&mut hasher),
+            }
+        }
         for group in &groups { Arc::as_ptr(group).hash(&mut hasher) }
         for scan in &scans { Arc::as_ptr(scan).hash(&mut hasher) }
         let key = hasher.finish();
