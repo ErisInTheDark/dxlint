@@ -210,8 +210,9 @@ impl<'a> LintWorld<'a> {
         let unit = &self.views.get(file.checked_sub(1)?)?.unit;
         let owner = unit.parsed.tree.owner.as_ref()?;
         let kept = owner.parts();
+        if let Some(kept) = kept.as_ref().filter(|kept| kept.precise) { return Some(kept.clone()) }
         let names = unit.names.get().map(|names| names.value.clone()).filter(|names| names.complete && names.failures.is_empty());
-        if let Some(kept) = kept.filter(|kept| kept.precise || names.is_none()) { return Some(kept) }
+        if let Some(kept) = kept.filter(|_| names.is_none()) { return Some(kept) }
         // Judged in a world over the file alone, like its later versions;
         // nothing it reads is this work's.
         let (published, _) = super::reads::track(|| self.linter.alone_on(unit, |world, unit| publications(world, unit)));
@@ -729,10 +730,16 @@ impl<'a> Files<'a> {
                 }
                 answer
             });
-            let (paths, listing) = super::reads::track_listing(|| match self.0.snapshot {
+            // Every file of the program splits the same reads: once per run.
+            let listed = || super::reads::track_listing(|| match self.0.snapshot {
                 Some(snapshot) => snapshot.paths(self.0.revision(), context.clone(), load),
                 None => load(),
             });
+            let (paths, kept, listing) = match self.0.snapshot {
+                Some(snapshot) => snapshot.listed_inputs((self.0.revision(), program), listed),
+                None => listed(),
+            };
+            super::reads::note_group(&kept);
             paths.map(|paths| (paths, listing, program))
         });
         let answer = cached.get();

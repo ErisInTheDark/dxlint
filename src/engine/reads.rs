@@ -474,10 +474,10 @@ pub fn note_group(group: &Arc<Reads>) {
     });
 }
 
-/// Runs `f`, recording what it read except which files exist; returns
-/// those listing reads instead, for a [`Scan`] over the listed files to
-/// hold: a new file then breaks only lookups it could change.
-pub fn track_listing<R>(f: impl FnOnce() -> R) -> (R, Arc<[Dep]>) {
+/// Runs `f`, splitting what it read: which files exist (listing reads, for
+/// a [`Scan`] over the listed files to hold: a new file then breaks only
+/// lookups it could change), and the rest, for the caller to note.
+pub fn track_listing<R>(f: impl FnOnce() -> R) -> (R, Arc<Reads>, Arc<[Dep]>) {
     let (r, reads) = track(f);
     let mut kept = Reads::default();
     let mut listing = Vec::new();
@@ -494,8 +494,7 @@ pub fn track_listing<R>(f: impl FnOnce() -> R) -> (R, Arc<[Dep]>) {
     kept.deps.dedup();
     listing.sort_unstable();
     listing.dedup();
-    note_group(&Arc::new(kept));
-    (r, listing.into())
+    (r, Arc::new(kept), listing.into())
 }
 
 /// `reads` sharing every group and scan with equal ones already kept: a

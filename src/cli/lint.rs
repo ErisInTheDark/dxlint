@@ -15,6 +15,9 @@ use crate::engine::{apply_fixes, Diagnostic, Edit, Fix, Linter, LintRun};
 use crate::line_index::LineIndex;
 use crate::engine::reads;
 
+/// Files a lint worker lints between trims of its allocator pool.
+const TRIM_EVERY: usize = 16;
+
 struct FileResult {
     path: PathBuf,
     text: String,
@@ -517,13 +520,14 @@ fn lint_project(output: &mut Output<'_>, args: &LintArgs, project: &mut Project,
                     let run = &run;
                     std::thread::Builder::new().stack_size(crate::engine::WORKER_STACK).spawn_scoped(w, move || {
                         let _pool = crate::alloc::own_pool();
-                        loop {
+                        // A trim walks every page the pool holds: now and then.
+                        for linted in 1usize.. {
                             let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                             let Some((_, path)) = queue.get(index) else { break };
                             if tx.send((index, lint_file(linter, run, cache, path, fix))).is_err() {
                                 break;
                             }
-                            crate::alloc::trim();
+                            if linted % TRIM_EVERY == 0 { crate::alloc::trim() }
                         }
                         working.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
                     }).expect("lint worker thread");

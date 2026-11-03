@@ -362,6 +362,8 @@ pub(super) struct Snapshot {
     augmentations: RwLock<FxHashMap<ModuleKey, (u64, Cached<Arc<Augmentations>>)>>,
     /// Program inputs (by input list hash) whose units were loaded in parallel.
     prefetched: Mutex<FxHashMap<u64, Arc<std::sync::OnceLock<()>>>>,
+    /// [`Snapshot::listed_inputs`] by (revision, program).
+    listed: Mutex<FxHashMap<(u64, u64), (Arc<Vec<PathBuf>>, Arc<Reads>, Arc<[reads::Dep]>)>>,
     /// Module resolution's file probes and reads, once per path and revision.
     probes: RwLock<FxHashMap<reads::DepPath, (u64, bool)>>,
     /// Directory listings behind those probes (`None`: unreadable).
@@ -465,6 +467,10 @@ pub(super) enum StableQuestion {
 /// text holds a name-independent publication hint (so it may publish any
 /// global name).
 pub(super) type Survey = Arc<[(PathBuf, Option<Arc<str>>, bool)]>;
+
+/// A program's input list (when known), its reads other than which files
+/// exist, and those listing reads ([`reads::track_listing`]).
+pub(super) type ListedInputs = (Known<Arc<Vec<PathBuf>>>, Arc<Reads>, Arc<[reads::Dep]>);
 
 /// A survey, with what it read for the scans of lookups over it: the
 /// inputs' [`reads::Dep::Text`] reads, in survey order, then the listing's.
@@ -598,7 +604,7 @@ impl Snapshot {
     /// hold: an editor's next lint after a keystroke redoes only what read
     /// the edited files.
     pub(super) fn carry(self, to: u64, keep: &mut Keep<'_>) -> Snapshot {
-        let Snapshot { revision, paths, catalogs, units, modules, augmentations, prefetched: _, probes, listings, texts,
+        let Snapshot { revision, paths, catalogs, units, modules, augmentations, prefetched: _, listed: _, probes, listings, texts,
             candidates, surveys, words, configurations, metadata, packages, values, frames, editor } = self;
         // A survey holds while its listing does; inputs whose text changed
         // are read again, and what was built from them patched to match.
@@ -625,6 +631,7 @@ impl Snapshot {
             modules: carried_in_place(modules, to, keep),
             augmentations: carried_in_place(augmentations, to, keep),
             prefetched: Default::default(),
+            listed: Default::default(),
             probes: carried(probes, |path, (at, found)| keep(at, None, Some(&*path)).then_some((path, (to, found)))),
             listings: carried(listings, |dir, (at, listing)| keep(at, None, Some(&*dir)).then_some((dir, (to, listing)))),
             texts: carried(texts, |path, (at, text, hash)| keep(at, None, Some(&*path)).then_some((path, (to, text, hash)))),
@@ -800,6 +807,19 @@ impl Snapshot {
 
     pub fn paths(&self, revision: u64, context: Context, build: impl FnOnce() -> Known<Arc<Vec<PathBuf>>>) -> Known<Arc<Vec<PathBuf>>> {
         inputs(self.paths.get((revision, context), None, |_| true, || Known::Yes(build().known())))
+    }
+
+    /// A program's input list with its reads split ([`reads::track_listing`]),
+    /// by revision and program: every file of the program splits the same.
+    pub(super) fn listed_inputs(&self, key: (u64, u64), list: impl FnOnce() -> ListedInputs) -> ListedInputs {
+        if let Some((paths, kept, listing)) = self.listed.lock().expect("run listed").get(&key) {
+            return (Known::Yes(paths.clone()), kept.clone(), listing.clone());
+        }
+        let (paths, kept, listing) = list();
+        if let Known::Yes(paths) = &paths {
+            self.listed.lock().expect("run listed").insert(key, (paths.clone(), kept.clone(), listing.clone()));
+        }
+        (paths, kept, listing)
     }
 
     /// `linted`: the linted file's path and text hash when the catalog lists
