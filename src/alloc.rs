@@ -795,25 +795,152 @@ pub mod heap {
         fn getenv(name: *const std::ffi::c_char) -> *const std::ffi::c_char;
     }
 
-    /// Reads the switch without allocating (std's env access would recurse
+    /// Reads a switch without allocating (std's env access would recurse
     /// into the allocator).
-    fn requested() -> bool {
+    fn requested(name: &std::ffi::CStr) -> bool {
         // SAFETY: NUL-terminated names; Windows writes nothing for size 0.
         #[cfg(windows)]
-        unsafe { GetEnvironmentVariableA(c"DXLINT_HEAP_STATS".as_ptr().cast(), std::ptr::null_mut(), 0) != 0 }
+        unsafe { GetEnvironmentVariableA(name.as_ptr().cast(), std::ptr::null_mut(), 0) != 0 }
         #[cfg(not(windows))]
-        unsafe { !getenv(c"DXLINT_HEAP_STATS".as_ptr()).is_null() }
+        unsafe { !getenv(name.as_ptr()).is_null() }
     }
 
-    pub fn on() -> bool {
-        match MODE.load(Ordering::Relaxed) {
+    /// `mode` decided once from the switch `name`.
+    fn switch(mode: &AtomicU8, name: &std::ffi::CStr) -> bool {
+        match mode.load(Ordering::Relaxed) {
             0 => {
-                let on = requested();
-                MODE.store(if on { 2 } else { 1 }, Ordering::Relaxed);
+                let on = requested(name);
+                mode.store(if on { 2 } else { 1 }, Ordering::Relaxed);
                 on
             }
             mode => mode == 2,
         }
+    }
+
+    pub fn on() -> bool { switch(&MODE, c"DXLINT_HEAP_STATS") }
+
+    /// Large blocks by the call stack that took them, on with
+    /// `DXLINT_HEAP_SITES` as well (Windows): the stack is captured without
+    /// allocating into a fixed table, and a block's header keeps its site
+    /// so a free subtracts from it.
+    pub(super) mod sites {
+        use std::sync::atomic::{AtomicIsize, AtomicU32, AtomicU64, AtomicU8, Ordering};
+
+        /// Recursion gives one allocation many stacks: room for all of them.
+        const SLOTS: usize = 65536;
+        const DEPTH: usize = 20;
+        const PROBES: usize = 256;
+        static MODE: AtomicU8 = AtomicU8::new(0);
+        /// Bytes of blocks whose site found no free slot.
+        static UNPLACED: AtomicIsize = AtomicIsize::new(0);
+
+        struct Site {
+            /// The stack's hash (never 0) once claimed.
+            hash: AtomicU32,
+            ready: AtomicU8,
+            frames: [AtomicU64; DEPTH],
+            live: AtomicIsize,
+            most: AtomicIsize,
+        }
+
+        static SITES: [Site; SLOTS] = [const { Site {
+            hash: AtomicU32::new(0), ready: AtomicU8::new(0), frames: [const { AtomicU64::new(0) }; DEPTH],
+            live: AtomicIsize::new(0), most: AtomicIsize::new(0),
+        } }; SLOTS];
+
+        #[cfg(windows)]
+        extern "system" {
+            fn RtlCaptureStackBackTrace(skip: u32, count: u32, frames: *mut u64, hash: *mut u32) -> u16;
+        }
+
+        pub fn on() -> bool { cfg!(windows) && super::switch(&MODE, c"DXLINT_HEAP_SITES") }
+
+        /// The caller's stack and its hash (never 0), without allocating.
+        #[cfg(windows)]
+        fn capture() -> Option<([u64; DEPTH], u32)> {
+            let mut frames = [0u64; DEPTH];
+            let mut hash = 0u32;
+            // SAFETY: room for DEPTH frames.
+            (unsafe { RtlCaptureStackBackTrace(2, DEPTH as u32, frames.as_mut_ptr(), &mut hash) } != 0).then_some((frames, hash.max(1)))
+        }
+
+        #[cfg(not(windows))]
+        fn capture() -> Option<([u64; DEPTH], u32)> { None }
+
+        /// Counts `bytes` taken here; the site's slot + 1 (0: none).
+        pub fn taken(bytes: isize) -> u32 {
+            if !on() { return 0 }
+            let Some((frames, hash)) = capture() else {
+                UNPLACED.fetch_add(bytes, Ordering::Relaxed);
+                return 0;
+            };
+            let mut at = hash as usize % SLOTS;
+            for _ in 0..PROBES {
+                let site = &SITES[at];
+                match site.hash.compare_exchange(0, hash, Ordering::AcqRel, Ordering::Acquire) {
+                    Ok(_) => {
+                        for (slot, frame) in site.frames.iter().zip(frames) { slot.store(frame, Ordering::Relaxed) }
+                        site.ready.store(1, Ordering::Release);
+                    }
+                    Err(claimed) if claimed == hash => {}
+                    Err(_) => {
+                        at = (at + 1) % SLOTS;
+                        continue;
+                    }
+                }
+                let live = site.live.fetch_add(bytes, Ordering::Relaxed) + bytes;
+                site.most.fetch_max(live, Ordering::Relaxed);
+                return at as u32 + 1;
+            }
+            UNPLACED.fetch_add(bytes, Ordering::Relaxed);
+            0
+        }
+
+        pub fn given(slot: u32, bytes: isize) {
+            if !on() { return }
+            match slot.checked_sub(1) {
+                Some(at) => SITES[at as usize].live.fetch_sub(bytes, Ordering::Relaxed),
+                None => UNPLACED.fetch_sub(bytes, Ordering::Relaxed),
+            };
+        }
+
+        /// Large blocks by the innermost frames that took them outside the
+        /// allocator and std's collections (stacks that differ only further
+        /// out add up): what is live now, and the sum of each stack's most
+        /// live at once (stacks peak at different times, so an upper bound).
+        #[cfg(windows)]
+        pub fn report() -> Option<String> {
+            if !on() { return None }
+            const SHOWN: usize = 25;
+            const FRAMES: usize = 5;
+            let mib = |bytes: isize| bytes as f64 / 1048576.0;
+            let mut symbols = crate::sampler::Symbols::new();
+            let plumbing = ["dxlint::_::", "dxlint::alloc::", "alloc::", "core::", "hashbrown::", "std::", "__rust", "smallvec::"];
+            let mut groups: std::collections::HashMap<String, (isize, isize)> = std::collections::HashMap::new();
+            for site in SITES.iter().filter(|site| site.ready.load(Ordering::Acquire) == 1) {
+                let names: Vec<String> = site.frames.iter().map(|frame| frame.load(Ordering::Relaxed)).take_while(|&frame| frame != 0)
+                    .map(|frame| symbols.name(frame - 1).to_string())
+                    .skip_while(|name| plumbing.iter().any(|part| name.starts_with(part)))
+                    .map(|name| name.split('<').next().unwrap_or_default().to_owned())
+                    .take(FRAMES).collect();
+                let group = groups.entry(names.join(" < ")).or_default();
+                group.0 += site.live.load(Ordering::Relaxed);
+                group.1 += site.most.load(Ordering::Relaxed);
+            }
+            let mut rows: Vec<(String, (isize, isize))> = groups.into_iter().collect();
+            let mut out = format!("large blocks by site, MiB (unplaced live {:.1})", mib(UNPLACED.load(Ordering::Relaxed)));
+            for (title, most) in [("live now", false), ("most at once (summed)", true)] {
+                rows.sort_by_key(|(_, (live, peak))| std::cmp::Reverse(if most { *peak } else { *live }));
+                out.push_str(&format!("\n{title}:"));
+                for (stack, (live, peak)) in rows.iter().take(SHOWN) {
+                    out.push_str(&format!("\n{:>8.1} {:>8.1}  {stack}", mib(if most { *peak } else { *live }), mib(if most { *live } else { *peak })));
+                }
+            }
+            Some(out)
+        }
+
+        #[cfg(not(windows))]
+        pub fn report() -> Option<String> { None }
     }
 
     /// Allocations on this thread count against `owner` until it drops.
@@ -869,16 +996,23 @@ pub mod heap {
         let pooled_pages = segments * (super::SEGMENT / super::PAGE) - kept - released;
         let pools: Vec<String> = super::pool_usage().iter()
             .map(|(name, pages, used)| format!("{name} {:.1} ({:.1} used)", page(*pages), mib(*used as isize))).collect();
-        Some(format!(
+        let mut summary = format!(
             "heap at peak {:.1} MiB by owner: {}\nallocator now: pools hold {:.1} MiB of pages ({:.1} MiB in live blocks; unowned pools: {}), store keeps {:.1} MiB, released {:.1} MiB ({:.1} MiB of it still committed), large blocks {:.1} MiB",
             mib(peak as isize), rows.join(", "), page(pooled_pages), mib(POOLED.load(Ordering::Relaxed)), pools.join(", "), page(kept), page(released),
             mib((released * super::LINK) as isize), mib(LARGE.load(Ordering::Relaxed)),
-        ))
+        );
+        if let Some(sites) = sites::report() {
+            summary.push('\n');
+            summary.push_str(&sites);
+        }
+        Some(summary)
     }
 }
 
-/// Header for accounted blocks: the owner and the requested size.
+/// Header for accounted blocks: the owner (first byte) and, for large
+/// blocks, their site's slot ([`heap::sites`]) at [`SITE`].
 const HEADER: usize = 16;
+const SITE: usize = 4;
 
 pub struct Pooled;
 
@@ -946,6 +1080,7 @@ unsafe impl GlobalAlloc for Pooled {
                 if block.is_null() { return block }
                 let owner = heap::current();
                 *block = owner;
+                if class(outer).is_none() { *block.add(SITE).cast::<u32>() = heap::sites::taken(layout.size() as isize) }
                 heap::add(owner, layout.size() as isize);
                 heap::taken(outer, 1);
                 return block.add(HEADER);
@@ -973,6 +1108,7 @@ unsafe impl GlobalAlloc for Pooled {
             // SAFETY: accounted blocks start HEADER bytes before `block`.
             unsafe {
                 let start = block.sub(HEADER);
+                if class(outer).is_none() { heap::sites::given(*start.add(SITE).cast::<u32>(), layout.size() as isize) }
                 heap::add(*start, -(layout.size() as isize));
                 heap::taken(outer, -1);
                 return self.raw_dealloc(start, outer);

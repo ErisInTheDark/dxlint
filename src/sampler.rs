@@ -286,19 +286,29 @@ mod windows {
         }
     }
 
-    fn report(samples: &[[u64; DEPTH]]) -> String {
-        // SAFETY: dbghelp on this process, from one thread.
-        let process = unsafe { GetCurrentProcess() };
-        // The PDB sits beside the executable.
-        let search: Vec<u16> = std::env::current_exe().ok().and_then(|exe| exe.parent().map(|dir| dir.as_os_str().to_owned()))
-            .map(|dir| std::os::windows::ffi::OsStrExt::encode_wide(dir.as_os_str()).chain([0]).collect()).unwrap_or_else(|| vec![0]);
-        unsafe {
-            SymSetOptions(SYMBOL_OPTIONS);
-            SymInitializeW(process, search.as_ptr(), 1);
+    /// Function names of this process's code addresses, through the PDB
+    /// beside the executable (build with debug line tables for names).
+    pub struct Symbols {
+        process: Handle,
+        names: HashMap<u64, std::rc::Rc<str>>,
+    }
+
+    impl Symbols {
+        pub fn new() -> Symbols {
+            // SAFETY: dbghelp on this process, from one thread.
+            let process = unsafe { GetCurrentProcess() };
+            let search: Vec<u16> = std::env::current_exe().ok().and_then(|exe| exe.parent().map(|dir| dir.as_os_str().to_owned()))
+                .map(|dir| std::os::windows::ffi::OsStrExt::encode_wide(dir.as_os_str()).chain([0]).collect()).unwrap_or_else(|| vec![0]);
+            unsafe {
+                SymSetOptions(SYMBOL_OPTIONS);
+                SymInitializeW(process, search.as_ptr(), 1);
+            }
+            Symbols { process, names: HashMap::new() }
         }
-        let mut names: HashMap<u64, std::rc::Rc<str>> = HashMap::new();
-        let mut name = |address: u64| -> std::rc::Rc<str> {
-            names.entry(address).or_insert_with(|| {
+
+        pub fn name(&mut self, address: u64) -> std::rc::Rc<str> {
+            let process = self.process;
+            self.names.entry(address).or_insert_with(|| {
                 let mut symbol = Box::new(SymbolInfo {
                     size: 88, type_index: 0, reserved: [0; 2], index: 0, symbol_size: 0, module_base: 0, flags: 0,
                     value: 0, address: 0, register: 0, scope: 0, tag: 0, name_length: 0, max_name_length: 511, name: [0; 512],
@@ -309,7 +319,12 @@ mod windows {
                 let length = (symbol.name_length as usize).min(511);
                 String::from_utf16_lossy(&symbol.name[..length]).into()
             }).clone()
-        };
+        }
+    }
+
+    fn report(samples: &[[u64; DEPTH]]) -> String {
+        let mut symbols = Symbols::new();
+        let mut name = |address: u64| symbols.name(address);
         let mut own: HashMap<std::rc::Rc<str>, usize> = HashMap::new();
         let mut inclusive: HashMap<std::rc::Rc<str>, usize> = HashMap::new();
         let mut seen = Vec::new();
@@ -381,6 +396,9 @@ mod windows {
 /// A running sampler that reports when dropped; `None` unless
 /// `DXLINT_SAMPLE` names a report path. `DXLINT_SAMPLE_AFTER=<seconds>`
 /// starts it that long after the process.
+#[cfg(windows)]
+pub use windows::Symbols;
+
 #[cfg(windows)]
 pub fn start_from_env() -> Option<impl Drop> {
     let after = std::env::var("DXLINT_SAMPLE_AFTER").ok().and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
