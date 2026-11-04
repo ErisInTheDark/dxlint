@@ -344,6 +344,10 @@ fn prune_config(config: &mut Config, runtime: bool) {
         for mode in &profile.modes {
             expr_names(&mode.when, &mut needed);
         }
+        for setting in profile.settings.iter().filter(|setting| setting.key.text == "references") {
+            let crate::config::ast::modules::SettingValue::Block(kinds) = &setting.value else { continue };
+            needed.extend(kinds.iter().map(|kind| kind.key.text.clone()));
+        }
     }
     for shape in &config.products {
         for value in [&shape.inherits, &shape.readonly_inherits, &shape.optional].into_iter().flatten() {

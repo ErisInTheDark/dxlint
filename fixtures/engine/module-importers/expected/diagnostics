@@ -1,0 +1,6 @@
+chain.ts:1:1-1:2 only-old-uses-this#0 only old code uses this: move it under old/
+deep.ts:1:1-1:2 only-old-uses-this#0 only old code uses this: move it under old/
+dynamic.ts:1:1-1:2 only-old-uses-this#0 only old code uses this: move it under old/
+required.ts:1:1-1:2 only-old-uses-this#0 only old code uses this: move it under old/
+tested.ts:1:1-1:2 only-tests-use-this#0
+typed.ts:1:1-1:2 only-old-uses-this#0 only old code uses this: move it under old/

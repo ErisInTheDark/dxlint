@@ -8,6 +8,16 @@ import .ts/helpers
 
 define {
 
+in ts_program rule es-module-only-used-from {
+  default option from string[] = [] "the files that alone may use a module this way: globs, relative to the config"
+  option ignore string[] = [] "files whose imports don't count: globs, relative to the config"
+  when len(from) > 0
+  let use module_importers(node, from, ignore)
+  when use.reaches_stop && !use.reaches_entry && !use.is_stop
+  report at { start: 0, end: 1 }
+  warn "Only {join(from, ', ')} use this module: move it there."
+}
+
 schema restriction_import_path {
   name: string
   message?: string

@@ -624,6 +624,7 @@ impl Writer<'_> {
             Dep::List(_, h) => (3, *h),
             Dep::Discovered(found) => (5, found.hash),
             Dep::Requested(_, hash) => (6, *hash),
+            Dep::Module(_, hash) => (9, *hash),
             Dep::Part(..) => unreachable!("written above"),
         };
         self.out.push(tag);
@@ -636,6 +637,14 @@ impl Writer<'_> {
             for list in [&request.include, &request.exclude, &request.extensions] {
                 self.var(list.len() as u64);
                 for value in list { self.str(value); }
+            }
+        }
+        if let Dep::Module(ask, _) = d {
+            self.var(u64::from(ask.settings));
+            self.str(&ask.module);
+            for list in [&ask.stop, &ask.ignore] {
+                self.var(list.len() as u64);
+                for value in list.iter() { self.str(value); }
             }
         }
         if let Dep::Outside(_, bodies) = d {
@@ -897,6 +906,12 @@ impl<'a> Reader<'a> {
                 let ranges = (0..count).map(|_| Some((u32::try_from(self.var()?).ok()?, u32::try_from(self.var()?).ok()?, self.u64()?, self.u64()?)))
                     .collect::<Option<Vec<_>>>()?;
                 Dep::Outside(path, std::sync::Arc::new(super::reads::Bodies::from_parts(a, len, ranges)))
+            }
+            9 => {
+                let settings = u32::try_from(self.var()?).ok()?;
+                let module = self.str()?.into();
+                let ask = super::reads::ModuleAsk { root: path, settings, module, stop: self.string_list()?.into(), ignore: self.string_list()?.into() };
+                Dep::Module(std::sync::Arc::new(ask), a)
             }
             _ => return None,
         })

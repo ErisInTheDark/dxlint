@@ -7,7 +7,13 @@ use super::resolution::{clean, spend, DiscoveryRequest, Host, Probe, Resolver, S
 use super::super::question::{Known, QueryContext};
 
 pub fn program_inputs(settings: &Settings, host: &dyn Host, question: &QueryContext) -> Known<Vec<PathBuf>> {
-    Inputs { resolver: Resolver { host, settings }, question, libraries: Vec::new(), sources: Vec::new() }.collect().map_or(Known::Unknown, Known::Yes)
+    Inputs { resolver: Resolver { host, settings }, question, with_libraries: true, libraries: Vec::new(), sources: Vec::new() }.collect().map_or(Known::Unknown, Known::Yes)
+}
+
+/// The program's own files alone: [`program_inputs`] without its default
+/// libraries and type packages, skipping references it cannot follow.
+pub fn program_sources(settings: &Settings, host: &dyn Host, question: &QueryContext) -> Known<Vec<PathBuf>> {
+    Inputs { resolver: Resolver { host, settings }, question, with_libraries: false, libraries: Vec::new(), sources: Vec::new() }.collect().map_or(Known::Unknown, Known::Yes)
 }
 
 /// What [`program_inputs`] depends on besides `settings`: the program's
@@ -22,6 +28,7 @@ pub fn program_anchor(settings: &Settings, host: &dyn Host, question: &QueryCont
 struct Inputs<'a> {
     resolver: Resolver<'a, dyn Host + 'a>,
     question: &'a QueryContext,
+    with_libraries: bool,
     libraries: Vec<PathBuf>,
     sources: Vec<PathBuf>,
 }
@@ -45,18 +52,28 @@ impl Inputs<'_> {
                 Visit::Exit(path) => { active.remove(&path); complete.insert(path); continue; }
             };
             if let Some(path) = &config.path {
-                if active.contains(path) { return Err(()) }
+                if active.contains(path) {
+                    if self.with_libraries { return Err(()) }
+                    continue;
+                }
                 if complete.contains(path) { continue; }
                 active.insert(path.clone());
                 visits.push(Visit::Exit(path.clone()));
             }
             let directory = config.path.as_deref().and_then(Path::parent).unwrap_or(&directory);
-            self.libraries(&config, directory)?;
-            self.type_roots(&config, directory)?;
+            if self.with_libraries {
+                self.libraries(&config, directory)?;
+                self.type_roots(&config, directory)?;
+            }
             self.project(&config, directory)?;
             for reference in config.references.iter().rev() {
-                let path = self.reference(reference)?;
-                let child = Configuration::at(&self.resolver, path, self.question)?;
+                let child = self.reference(reference).and_then(|path| Configuration::at(&self.resolver, path, self.question));
+                // A type checker needs every project it references; a list
+                // of the files that exist just goes without an absent one.
+                let child = if self.with_libraries { child? } else {
+                    let Ok(child) = child else { continue };
+                    child
+                };
                 visits.push(Visit::Enter(child, reference.clone()));
             }
         }

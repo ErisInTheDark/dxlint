@@ -39,6 +39,9 @@ pub struct Config {
     pub rules: Vec<RuleDef>,
     /// `rule name ...` without a context, in source order.
     pub configs: Vec<RuleConfig>,
+    /// `rule name extends base`: `name` starts as a copy of `base`'s
+    /// definition (its variants too), in order.
+    pub extensions: Vec<(Name, Name)>,
     /// Global `ignore "glob"` items: files never linted.
     pub ignores: Vec<(String, Span)>,
     /// `command name "program args"`: programs rules may run

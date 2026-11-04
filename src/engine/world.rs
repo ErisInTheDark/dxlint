@@ -1602,6 +1602,26 @@ impl World for Files<'_> {
         }
     }
 
+    fn module_importers(&self, at: Leaf, stop: Box<[Box<str>]>, ignore: Box<[Box<str>]>, _: &Semantic<'_>) -> Known<Value<'static>> {
+        let Some(ctx) = self.0.here(at) else { return Known::Unknown };
+        let Known::Yes(Some(selected)) = self.program_selected() else { return Known::Unknown };
+        let Some(path) = World::path(self, ctx.file_id) else { return Known::Unknown };
+        let linter = self.0.linter;
+        let Some(settings) = linter.grammar.names.settings_index(selected) else { return Known::Unknown };
+        let module = linter.relative(path).to_string_lossy().replace('\\', "/").into();
+        let ask = super::reads::ModuleAsk { root: super::reads::dep_path(&linter.root), settings, module, stop, ignore };
+        let answer = linter.module_answer(&ask);
+        super::reads::note(super::reads::Dep::Module(Arc::new(ask), super::module_graph::ModuleAnswer::hash(answer.as_ref())));
+        let Some(answer) = answer else { return Known::Yes(Value::Null) };
+        let importers = answer.importers.iter().map(|importer| Value::text_copy(importer)).collect();
+        Known::Yes(Value::record(vec![
+            ("importers".into(), Value::list(importers)),
+            ("is_stop".into(), Value::Bool(answer.is_stop)),
+            ("reaches_stop".into(), Value::Bool(answer.reaches_stop)),
+            ("reaches_entry".into(), Value::Bool(answer.reaches_entry)),
+        ]))
+    }
+
     fn origin(&self, file: u32) -> Known<crate::grammar::names::modules::resolution::Origin> {
         let Known::Yes(Some(selected)) = self.program_selected() else { return Known::Unknown };
         World::path(self, file).map_or(Known::Unknown, |path| Known::Yes(selected.origin(path)))
@@ -1820,9 +1840,7 @@ impl Host for Files<'_> {
     }
 
     fn discover(&self, request: &DiscoveryRequest, _: &QueryContext) -> Known<Vec<PathBuf>> {
-        let mut discoveries = self.0.linter.discoveries.lock().expect("unit discoveries");
-        let paths = discoveries.entry(request.clone()).or_insert_with(|| super::reads::Cached::compute(|| super::reads::requested(request))).get();
-        paths.map_or(Known::Unknown, Known::Yes)
+        self.0.linter.discovered(request)
     }
 }
 

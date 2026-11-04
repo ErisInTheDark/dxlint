@@ -22,6 +22,13 @@ import .ts/comments
       ".cjs" [".cts", ".d.cts"]
     }
     candidates ["{{dir}}/{{name}}{{ext}}", "{{dir}}/{{name}}/index{{ext}}"]
+    references {
+      ts_import ["from"]
+      ts_export ["from"]
+      ts_import_equals ["value.argument"]
+      ts_import_call ["argument"]
+      ts_import_type ["argument"]
+    }
     packages {
       directories ["node_modules"]
       metadata "package.json"

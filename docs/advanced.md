@@ -305,6 +305,13 @@ rule es-no-misused-promises:conditionals { set flagUnions "strict" }
   its default severity (unless it is on already), `rule name <severity>`
   sets the severity, a message after the severity replaces the rule's own,
   and `rule name off` turns it off.
+- `rule name extends base [severity [message]] [{ ... }]` adds a rule of your
+  own name that starts as a copy of `base`'s definition, variants included
+  (`name:variant`), so one rule can run several times with different options.
+  It takes no options set on `base`, and `base` stays as it was. The rest of
+  the line configures the copy like any `rule` line, as do later lines, and
+  reports and `dxlint-ignore` use the new name. Define it outside `files`
+  blocks; configure it inside them as usual.
 - In the block, `set option value` sets an option; `when` and `let` add to
   the rule; `fix as` and `report` replace its own. (`files` and `ignore`
   belong to definitions: a rule's own scope.)

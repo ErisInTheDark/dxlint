@@ -1,6 +1,6 @@
 # Rules
 
-Every rule dxlint ships, 434 in all. Turn one on with `rule <name>` after importing its language; see [basic.md](../basic.md).
+Every rule dxlint ships, 435 in all. Turn one on with `rule <name>` after importing its language; see [basic.md](../basic.md).
 
 - **Types**: the rule reads type information (from your `tsconfig.json`; TypeScript itself never runs).
 - **Fix**: `autofix` rules are fixed by `dxlint --fix` and by the editor's quick fixes.
@@ -112,6 +112,7 @@ Pages are adapted from the documentation of [ESLint](https://eslint.org/docs/lat
 | [es-member-delimiter-style](es-member-delimiter-style.md) | Reports inconsistent separators between interface and type literal members. |  | autofix | formatting | 100% |
 | [es-member-ordering](es-member-ordering.md) | Reports members declared out of order in classes, interfaces, and type literals. |  |  |  | 100% |
 | [es-method-signature-style](es-method-signature-style.md) | Reports function members written in the wrong signature style. |  | autofix |  | 100% |
+| [es-module-only-used-from](es-module-only-used-from.md) | Reports modules that only certain code uses, so they can move next to it. |  |  |  |  |
 | [es-multiline-comment-style](es-multiline-comment-style.md) | Reports multiline comments that do not follow the selected shape. |  | autofix |  | 95.5% |
 | [es-multiline-ternary](es-multiline-ternary.md) | Reports missing or unwanted line breaks between conditional expression operands. |  | autofix |  | 100% |
 | [es-naming-convention](es-naming-convention.md) | Reports names that do not follow the convention for their declaration kind. |  |  |  | 97.8% |

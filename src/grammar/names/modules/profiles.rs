@@ -40,6 +40,7 @@ enum Field {
     Search,
     Scopes,
     Substitutions,
+    References,
     Format,
 }
 
@@ -56,6 +57,7 @@ const ROOT: &[Control] = &[
     Control { name: "ambient_scopes", field: Field::Scopes },
     Control { name: "search", field: Field::Search },
     Control { name: "substitutions", field: Field::Substitutions },
+    Control { name: "references", field: Field::References },
 ];
 
 const CONFIG: &[Control] = &[
@@ -141,6 +143,16 @@ impl Compiler<'_> {
             }
             return Ok(());
         }
+        if matches!(field, Field::References) {
+            let SettingValue::Block(source) = &setting.value else { return Err(ConfigError::new(span, "expected a references block")) };
+            settings.references.clear();
+            for setting in source {
+                if self.grammar.matcher(&setting.key.text).is_none() { return Err(ConfigError::new(setting.key.span, format!("unknown node kind `{}`", setting.key.text))) }
+                let value = self.value(&setting.value, setting.key.span, false)?;
+                settings.references.push((setting.key.text.clone().into(), strings(&value, setting.key.span)?));
+            }
+            return Ok(());
+        }
         let value = self.value(&setting.value, span, matches!(field, Field::Search | Field::Scopes | Field::Format))?;
         match field {
             Field::Text(target, variables) => {
@@ -181,7 +193,7 @@ impl Compiler<'_> {
             Field::Format => {
                 if !matches!(value, Value::Str(ref value) if &**value == "jsonc") { return Err(ConfigError::new(span, "unsupported metadata format")) }
             }
-            Field::Block(_) | Field::Substitutions => unreachable!(),
+            Field::Block(_) | Field::Substitutions | Field::References => unreachable!(),
         }
         Ok(())
     }

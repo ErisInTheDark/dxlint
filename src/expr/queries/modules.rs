@@ -10,7 +10,21 @@ pub(super) static FUNCTIONS: &[QueryFunction] = &[
     QueryFunction { name: "module_exports", arity: 2, call: exports },
     QueryFunction { name: "program_option", arity: 2, call: program_option },
     QueryFunction { name: "program_directory", arity: 1, call: program_directory },
+    QueryFunction { name: "module_importers", arity: 3, call: module_importers },
 ];
+
+fn module_importers(semantic: &Semantic<'_>, at: Leaf, args: &[Value<'static>]) -> Known<Value<'static>> {
+    let globs = |value: &Value<'static>| match value {
+        Value::List(items) => items.iter().map(|item| match item {
+            Value::Str(glob) => Some(Box::<str>::from(&**glob)),
+            _ => None,
+        }).collect::<Option<Box<[Box<str>]>>>(),
+        _ => None,
+    };
+    let [stop, ignore] = args else { return Known::Unknown };
+    let (Some(stop), Some(ignore)) = (globs(stop), globs(ignore)) else { return Known::Unknown };
+    semantic.world.module_importers(at, stop, ignore, semantic)
+}
 
 fn program_option(semantic: &Semantic<'_>, at: Leaf, args: &[Value<'static>]) -> Known<Value<'static>> {
     let [Value::Str(name)] = args else { return Known::Unknown };

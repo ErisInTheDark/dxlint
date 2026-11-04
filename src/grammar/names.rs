@@ -619,6 +619,18 @@ struct Scope<'t> {
 const NO_SCOPE: u32 = u32::MAX;
 
 impl Names {
+    /// The place of the resolution profile `settings` (its own or a mode's)
+    /// belongs to: its name across runs of these rules, unlike an address.
+    pub fn settings_index(&self, settings: &modules::resolution::Settings) -> Option<u32> {
+        self.module_resolutions.iter().position(|profile| std::ptr::eq(&profile.settings, settings)
+            || profile.modes.iter().any(|mode| std::ptr::eq(&mode.settings, settings))).and_then(|at| u32::try_from(at).ok())
+    }
+
+    /// The settings of the profile at [`Names::settings_index`] `index`.
+    pub fn settings_at(&self, index: u32) -> Option<&modules::resolution::Settings> {
+        self.module_resolutions.get(index as usize).map(|profile| &profile.settings)
+    }
+
     /// The tables of `config`'s name items. Classes come from the items
     /// naming them; one looked up or searched for but never declared or
     /// opened is an error, like an unknown matcher.

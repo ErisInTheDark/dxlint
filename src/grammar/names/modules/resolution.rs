@@ -5,7 +5,7 @@ use super::super::question::{Known, QueryContext, ScopeRef};
 use super::metadata;
 pub use super::metadata::Json;
 pub use super::configuration::Configuration;
-pub use super::inputs::{program_anchor, program_inputs};
+pub use super::inputs::{program_anchor, program_inputs, program_sources};
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct DiscoveryRequest {
@@ -131,6 +131,9 @@ pub struct Settings {
     pub globals: Globals,
     pub conditions: Vec<Box<str>>,
     pub star_excludes: Vec<Box<str>>,
+    /// Where a file names another module: per node kind, the field paths
+    /// (`a.b`) holding its quoted specifier.
+    pub references: Vec<(Box<str>, Vec<Box<str>>)>,
 }
 
 pub struct Resolver<'a, H: ?Sized> {
@@ -168,23 +171,39 @@ impl<H: Host + ?Sized> Resolver<'_, H> {
         if let Some(name) = self.settings.library_name(specifier) {
             return self.library(dir, name, question)?.map(|path| self.host.scope(&path, question).known().ok_or(())).transpose().map(Option::flatten);
         }
+        let scope = |path: &Path| self.host.scope(path, question).known().ok_or(());
+        let ambient = || self.host.ambient(importer, specifier, self.settings.ambient_scopes, question).known().ok_or(());
+        self.search(dir, specifier, conditions, question, &scope, &ambient)
+    }
+
+    /// The file `specifier` names from `dir`, without loading it. Ambient
+    /// modules and default libraries name no file of the program's own.
+    pub fn resolve_path(&self, dir: &Path, specifier: &str, question: &QueryContext) -> Result<Option<PathBuf>, ()> {
+        if self.settings.library_name(specifier).is_some() { return Ok(None) }
+        self.search(dir, specifier, &[], question, &|path| Ok(Some(path.to_path_buf())), &|| Ok(None))
+    }
+
+    /// The configured search for `specifier`, each file it finds taken
+    /// through `found` (which may turn it down, and the search goes on).
+    fn search<T>(&self, dir: &Path, specifier: &str, conditions: &[&str], question: &QueryContext,
+        found: &dyn Fn(&Path) -> Result<Option<T>, ()>, ambient: &dyn Fn() -> Result<Option<T>, ()>) -> Result<Option<T>, ()> {
         let relative = is_relative(specifier);
         let mut config = None;
         for search in &self.settings.search {
             spend(question)?;
             let result = match search {
-                Search::Relative if relative => self.candidates(dir, specifier, question)?,
+                Search::Relative if relative => self.candidates(dir, specifier, question, found)?,
                 Search::Paths | Search::Base if !relative => {
                     if config.is_none() { config = Some(self.configuration(question)?); }
                     let config = config.as_ref().ok_or(())?;
                     let base = config.base(&self.settings.config.base)?;
                     match search {
-                        Search::Base => match base { Some(base) => self.candidates(&base, specifier, question)?, None => None },
-                        _ => self.paths(config, base.as_deref(), specifier, question)?,
+                        Search::Base => match base { Some(base) => self.candidates(&base, specifier, question, found)?, None => None },
+                        _ => self.paths(config, base.as_deref(), specifier, question, found)?,
                     }
                 }
-                Search::Ambient if !relative => self.host.ambient(importer, specifier, self.settings.ambient_scopes, question).known().ok_or(())?,
-                Search::Packages if !relative => match self.packages(dir, specifier, conditions, question)? {
+                Search::Ambient if !relative => ambient()?,
+                Search::Packages if !relative => match self.packages(dir, specifier, conditions, question, found)? {
                     Probe::Found(scope) => Some(scope),
                     Probe::Blocked => return Ok(None),
                     Probe::Missing => None,
@@ -217,8 +236,8 @@ impl<H: Host + ?Sized> Resolver<'_, H> {
         Ok(None)
     }
 
-    fn candidates(&self, dir: &Path, name: &str, question: &QueryContext) -> Result<Option<ScopeRef>, ()> {
-        self.candidate_path(dir, name, question)?.map(|path| self.host.scope(&path, question).known().ok_or(())).transpose().map(Option::flatten)
+    fn candidates<T>(&self, dir: &Path, name: &str, question: &QueryContext, found: &dyn Fn(&Path) -> Result<Option<T>, ()>) -> Result<Option<T>, ()> {
+        self.candidate_path(dir, name, question)?.map(|path| found(&path)).transpose().map(Option::flatten)
     }
 
     fn candidate_path(&self, dir: &Path, name: &str, question: &QueryContext) -> Result<Option<PathBuf>, ()> {
@@ -246,18 +265,18 @@ impl<H: Host + ?Sized> Resolver<'_, H> {
         self.host.metadata(path, question)
     }
 
-    fn paths(&self, config: &Configuration, base: Option<&Path>, specifier: &str, question: &QueryContext) -> Result<Option<ScopeRef>, ()> {
+    fn paths<T>(&self, config: &Configuration, base: Option<&Path>, specifier: &str, question: &QueryContext, found: &dyn Fn(&Path) -> Result<Option<T>, ()>) -> Result<Option<T>, ()> {
         let Some(paths) = config.options.get(&*self.settings.config.paths) else { return Ok(None) };
         let Some((targets, capture)) = mapped(&paths.value, specifier) else { return Ok(None) };
         let base = base.unwrap_or(&paths.directory);
         for target in targets.array().ok_or(())? {
             let target = target.text().ok_or(())?.replace('*', capture);
-            if let Some(scope) = self.candidates(base, &target, question)? { return Ok(Some(scope)) }
+            if let Some(scope) = self.candidates(base, &target, question, found)? { return Ok(Some(scope)) }
         }
         Ok(None)
     }
 
-    fn packages(&self, dir: &Path, specifier: &str, conditions: &[&str], question: &QueryContext) -> Result<Probe, ()> {
+    fn packages<T>(&self, dir: &Path, specifier: &str, conditions: &[&str], question: &QueryContext, found: &dyn Fn(&Path) -> Result<Option<T>, ()>) -> Result<Probe<T>, ()> {
         let parts = specifier.split('/').collect::<Vec<_>>();
         if parts.is_empty() || parts.iter().any(|part| part.is_empty() || *part == "." || *part == "..") { return Ok(Probe::Blocked) }
         let count = if !self.settings.packages.scoped_prefix.is_empty() && specifier.starts_with(&*self.settings.packages.scoped_prefix) { 2 } else { 1 };
@@ -268,7 +287,7 @@ impl<H: Host + ?Sized> Resolver<'_, H> {
             spend(question)?;
             for directory in &self.settings.packages.directories {
                 let root = ancestor.join(&**directory).join(&package);
-                match self.package(&root, &subpath, conditions, question)? {
+                match self.package(&root, &subpath, conditions, question, found)? {
                     Probe::Missing => {}
                     result => return Ok(result),
                 }
@@ -277,10 +296,10 @@ impl<H: Host + ?Sized> Resolver<'_, H> {
         Ok(Probe::Missing)
     }
 
-    fn package(&self, root: &Path, subpath: &str, conditions: &[&str], question: &QueryContext) -> Result<Probe, ()> {
-        let found = self.host.package(self.settings, root, subpath, conditions, &mut || self.package_path(root, subpath, conditions, question))?;
-        Ok(match found {
-            Probe::Found(path) => self.host.scope(&path, question).known().ok_or(())?.map_or(Probe::Missing, Probe::Found),
+    fn package<T>(&self, root: &Path, subpath: &str, conditions: &[&str], question: &QueryContext, found: &dyn Fn(&Path) -> Result<Option<T>, ()>) -> Result<Probe<T>, ()> {
+        let probed = self.host.package(self.settings, root, subpath, conditions, &mut || self.package_path(root, subpath, conditions, question))?;
+        Ok(match probed {
+            Probe::Found(path) => found(&path)?.map_or(Probe::Missing, Probe::Found),
             Probe::Blocked => Probe::Blocked,
             Probe::Missing => Probe::Missing,
         })

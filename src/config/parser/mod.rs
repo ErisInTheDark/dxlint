@@ -2000,6 +2000,21 @@ impl<'a> Parser<'a> {
     /// existing rules on and configures them.
     fn configure(&mut self, kw: Token) {
         let Some(name) = self.glued_name("a rule name or glob", true) else { return };
+        self.skip(false, true);
+        if self.ts.peek_raw(0).is_some_and(|t| t.is_ident("extends")) {
+            self.ts.next_raw();
+            self.skip(false, true);
+            let Some(base) = self.glued_name("the rule it extends", false) else { return };
+            if self.scope.is_some() {
+                self.errors.push(ConfigError::new(name.span, "a `files` block sets severity and options only")
+                    .note("write `rule name extends base` outside the block, then configure `name` inside it"));
+            }
+            if name.text.contains(['*', ':']) {
+                self.errors.push(ConfigError::new(name.span, "a rule that extends another needs a plain name")
+                    .note("its variants follow the base's: `name:variant`"));
+            }
+            self.config.extensions.push((name.clone(), base));
+        }
         let mut patch = RuleDef::new(name, Vec::new());
         let mut settings = Settings::default();
         self.rule_tail(&mut patch, Some(&mut settings));

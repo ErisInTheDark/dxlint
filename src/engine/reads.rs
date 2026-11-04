@@ -64,6 +64,25 @@ pub enum Dep {
     /// Parts of a version of a file ([`crate::parts`], which names the
     /// file): it holds while edits leave those parts reading the same.
     Part(Arc<crate::parts::FileParts>, Arc<crate::parts::PartReads>),
+    /// What a program's import graph answers for a module, hashed: any file
+    /// could change it, but only a changed answer breaks the read
+    /// ([`Linter::holds`](super::Linter::holds)).
+    Module(Arc<ModuleAsk>, u64),
+}
+
+/// A question to a program's import graph ([`super::module_graph`]).
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ModuleAsk {
+    /// The directory whose program (its configuration and references) the
+    /// graph covers: the config root, as one file's own program sees only
+    /// what it references, never what imports it.
+    pub root: DepPath,
+    /// The resolution profile's place ([`crate::grammar::names::Names::settings_at`]).
+    pub settings: u32,
+    /// The module, relative to the root and `/` separated.
+    pub module: Box<str>,
+    pub stop: Box<[Box<str>]>,
+    pub ignore: Box<[Box<str>]>,
 }
 
 /// A [`Dep::Discovered`]: what discovery `name` found below `dir`, hashed.
@@ -216,6 +235,7 @@ impl Dep {
             Dep::Discovered(found) => &found.dir,
             Dep::Part(parts, _) => &parts.path,
             Dep::Requested(request, _) => &request.root,
+            Dep::Module(ask, _) => &ask.root,
         }
     }
 
@@ -223,6 +243,7 @@ impl Dep {
     /// change this dep's answer?
     pub fn touches(&self, changed: &Path) -> bool {
         match self {
+            Dep::Module(..) => true,
             Dep::List(dir, _) | Dep::IsDir(dir, _) => changed.starts_with(dir),
             Dep::Discovered(found) => changed.starts_with(&found.dir),
             Dep::Requested(request, _) => changed.starts_with(&request.root),
@@ -259,6 +280,8 @@ impl Dep {
             Dep::List(p, h) => listing(p).1 == *h,
             Dep::Discovered(found) => discovery(found.name).is_some_and(|d| walk(d, &found.dir, 1).1 == found.hash),
             Dep::Requested(request, hash) => request_walk(request).map_or(MISSING, |(_, current)| current) == *hash,
+            // The graph is the engine's: `Linter::holds`.
+            Dep::Module(..) => false,
         }
     }
 }
@@ -301,6 +324,8 @@ pub struct Names {
     pub files: u64,
     /// Whether a directory's listing (or a walk below it) was read.
     pub dirs: bool,
+    /// Whether an import graph was read: any changed file may matter.
+    pub modules: bool,
 }
 
 impl Names {
@@ -383,12 +408,14 @@ impl Reads {
                     Dep::Part(parts, _) => names.texts |= Names::bit(&parts.path),
                     Dep::IsFile(path, _) => names.files |= Names::bit(path),
                     Dep::IsDir(..) | Dep::List(..) | Dep::Discovered(..) | Dep::Requested(..) => names.dirs = true,
+                    Dep::Module(..) => names.modules = true,
                 }
             }
             for inner in self.groups.iter().map(|group| group.names()).chain(self.scans.iter().map(|scan| scan.files.names())) {
                 names.texts |= inner.texts;
                 names.files |= inner.files;
                 names.dirs |= inner.dirs;
+                names.modules |= inner.modules;
             }
             names
         })
@@ -550,7 +577,7 @@ pub fn shared(reads: Arc<Reads>) -> Arc<Reads> {
 pub fn kept_census() -> String {
     let Some(kept) = KEPT.get() else { return String::new() };
     let kept = kept.lock().unwrap_or_else(|e| e.into_inner());
-    const KINDS: [&str; 8] = ["text", "is file", "is dir", "list", "discovered", "requested", "outside", "part"];
+    const KINDS: [&str; 9] = ["text", "is file", "is dir", "list", "discovered", "requested", "outside", "part", "module"];
     let (mut held, mut groups, mut scans, mut deps) = (0usize, 0usize, 0usize, [0usize; KINDS.len()]);
     for reads in kept.groups.values().flatten().filter_map(std::sync::Weak::upgrade) {
         held += 1;
@@ -559,7 +586,7 @@ pub fn kept_census() -> String {
         for dep in &reads.deps {
             deps[match dep {
                 Dep::Text(..) => 0, Dep::IsFile(..) => 1, Dep::IsDir(..) => 2, Dep::List(..) => 3,
-                Dep::Discovered(..) => 4, Dep::Requested(..) => 5, Dep::Outside(..) => 6, Dep::Part(..) => 7,
+                Dep::Discovered(..) => 4, Dep::Requested(..) => 5, Dep::Outside(..) => 6, Dep::Part(..) => 7, Dep::Module(..) => 8,
             }] += 1;
         }
     }
@@ -619,6 +646,7 @@ impl Kept {
             std::mem::discriminant(dep).hash(&mut hasher);
             let path = match dep {
                 Dep::Requested(request, _) => { std::ptr::hash(Arc::as_ptr(request), &mut hasher); continue }
+                Dep::Module(ask, _) => { std::ptr::hash(Arc::as_ptr(ask), &mut hasher); continue }
                 Dep::Text(path, _) | Dep::IsFile(path, _) | Dep::IsDir(path, _) | Dep::List(path, _) | Dep::Outside(path, _) => path,
                 Dep::Discovered(found) => &found.dir,
                 Dep::Part(parts, _) => &parts.path,
@@ -1000,7 +1028,11 @@ fn request_walk(request: &DiscoveryRequest) -> Option<(Vec<PathBuf>, u64)> {
     let dirs_excluded = exclude.clone();
     let mut walker = ignore::WalkBuilder::new(&request.root);
     let mut overrides = ignore::overrides::OverrideBuilder::new(&request.root);
-    for glob in &request.include {
+    // An override keeps ignored directories an include names, but ignores
+    // everything else: only for includes that all name a directory.
+    let literal_part = |glob: &str| !glob.split('/').next().unwrap_or_default().contains(['*', '?', '[', '{']);
+    let named = if request.include.iter().all(|glob| literal_part(glob)) { &*request.include } else { &[] };
+    for glob in named {
         let mut prefix = String::new();
         for part in glob.split('/').take_while(|part| !part.contains(['*', '?', '[', '{'])) {
             if !prefix.is_empty() { prefix.push('/'); }
@@ -1155,6 +1187,19 @@ mod tests {
         set_buffer(&added, "");
         assert!(reads.deps.iter().any(|dep| !dep.holds()));
         for path in [&included, &excluded, &other, &outside, &added] { drop_buffer(path); }
+    }
+
+    #[test]
+    fn a_directory_named_by_one_include_keeps_the_other_includes_files() {
+        let dir = std::env::temp_dir().join(format!("dxlint-requested-mixed-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("a")).unwrap();
+        std::fs::create_dir_all(dir.join("b")).unwrap();
+        let files = [dir.join("a/x.ts"), dir.join("b/y.ts")];
+        for file in &files { std::fs::write(file, "").unwrap(); }
+        let request = DiscoveryRequest { root: dir.clone(), include: vec!["**/*.ts".into(), "a/**/*.ts".into()], exclude: vec![], extensions: vec![] };
+        let (paths, _) = track(|| requested(&request).unwrap());
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(paths.len(), 2, "{paths:?}");
     }
 
     #[test]

@@ -89,6 +89,7 @@ rule es-brace-style:* {                 # other options go in a block
 - Option names and values are the upstream ones (`allowSingleLine`, `"stroustrup"`). Every rule's page in [rules/](rules/README.md) lists them, and `dxlint describe <rule>` prints them for your config.
 - Some rules are split into **variants**, `rule:variant` (`es-semi:always`, `es-no-unused-vars:parameters`). The family name covers all of them, for turning on, configuring and suppressing.
 - `*` globs over rule names: `rule es-jsx-* off`.
+- To run a rule several times with different options, give each copy a name: `rule no-lodash extends es-no-restricted-imports error "use our helpers" { set paths [{ name: "lodash" }] }`. Reports and `dxlint-ignore` use that name.
 - A misspelled rule name is an error with a suggestion.
 
 `dxlint rules` lists every rule your config defines, with severity, options and message.

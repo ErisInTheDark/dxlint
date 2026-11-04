@@ -548,6 +548,11 @@ pub trait World {
     fn program_directory(&self, _at: Leaf, _semantic: &super::semantic::Semantic<'_>) -> Known<crate::expr::Value<'static>> {
         Known::Unknown
     }
+    /// What imports `at`'s file, as a `{ importers, is_stop, reaches_stop,
+    /// reaches_entry }` record: null when it is not in the project's program.
+    fn module_importers(&self, _at: Leaf, _stop: Box<[Box<str>]>, _ignore: Box<[Box<str>]>, _semantic: &super::semantic::Semantic<'_>) -> Known<crate::expr::Value<'static>> {
+        Known::Unknown
+    }
     /// Every scope merged into module scope `scope`, canonical first:
     /// ambient `declare module "x"` across files and augmentations of a
     /// file module. Just `scope` where nothing merges.

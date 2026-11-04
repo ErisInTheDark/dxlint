@@ -13,6 +13,7 @@ pub mod frontend;
 mod inspect;
 pub(crate) mod language_options;
 mod message;
+mod module_graph;
 mod profile;
 mod program;
 mod prune;
@@ -239,6 +240,7 @@ pub struct Linter {
     units: std::sync::Mutex<crate::fx_hash::FxHashMap<PathBuf, std::sync::Arc<units::Unit>>>,
     discoveries: std::sync::Mutex<crate::fx_hash::FxHashMap<crate::grammar::names::modules::resolution::DiscoveryRequest, reads::Cached<Option<Vec<PathBuf>>>>>,
     programs: program::Programs,
+    module_graphs: module_graph::ModuleGraphs,
     /// Part reads judged against files as they read now ([`Linter::holds`]).
     parts: file_parts::Judged,
     /// `files` blocks: per-file severities and option copies.
@@ -350,12 +352,14 @@ impl Stale {
         if self.changed.len() <= 4 {
             let name = path.file_name();
             return match dep {
+                Dep::Module(..) => true,
                 Dep::Text(..) | Dep::Outside(..) | Dep::Part(..) => self.changed.iter().any(|changed| changed.file_name() == name && changed == path),
                 Dep::IsFile(..) => self.listed.iter().any(|changed| changed.file_name() == name && changed == path),
                 _ => self.listed.iter().any(|changed| changed.starts_with(path)),
             };
         }
         match dep {
+            Dep::Module(..) => true,
             Dep::Text(..) | Dep::Outside(..) | Dep::Part(..) => self.files.contains(path),
             Dep::IsFile(..) => self.listed.iter().any(|changed| changed == path),
             _ => self.holding.contains(path),
@@ -366,7 +370,7 @@ impl Stale {
     /// means surely not).
     pub fn may_touch(&self, reads: &Reads) -> bool {
         let names = reads.names();
-        names.texts & self.changed_names != 0 || names.files & self.listed_names != 0 || (names.dirs && !self.listed.is_empty())
+        names.modules || names.texts & self.changed_names != 0 || names.files & self.listed_names != 0 || (names.dirs && !self.listed.is_empty())
     }
 
     /// Whether everything `reads` read still holds, judging only the
@@ -706,8 +710,18 @@ impl Linter {
         match dep {
             Dep::Outside(path, bodies) => self.outside_holds(path, bodies),
             Dep::Part(parts, read) => self.part_holds(&parts.path, parts, read, strict),
+            Dep::Module(ask, hash) => module_graph::ModuleAnswer::hash(self.module_answer(ask).as_ref()) == *hash,
             dep => dep.holds(),
         }
+    }
+
+    /// The files `request` finds, recorded; walked once until one of them
+    /// comes or goes.
+    fn discovered(&self, request: &crate::grammar::names::modules::resolution::DiscoveryRequest) -> crate::grammar::names::question::Known<Vec<PathBuf>> {
+        use crate::grammar::names::question::Known;
+        let mut discoveries = self.discoveries.lock().expect("unit discoveries");
+        let paths = discoveries.entry(request.clone()).or_insert_with(|| reads::Cached::compute(|| reads::requested(request))).get();
+        paths.map_or(Known::Unknown, Known::Yes)
     }
 
     /// Whether everything `reads` read still holds, scans included.

@@ -1,0 +1,7 @@
+import .ts
+
+rule only-old-uses-this extends es-module-only-used-from error "only old code uses this: move it under old/" {
+  set from ["old/**"]
+  set ignore ["test/**"]
+}
+rule only-tests-use-this extends es-module-only-used-from set ["test/**"]

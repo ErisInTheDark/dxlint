@@ -463,6 +463,7 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
         units: Default::default(),
         discoveries: Default::default(),
         programs: Default::default(),
+        module_graphs: Default::default(),
         parts: Default::default(),
         scopes,
         unit_overlays,
@@ -695,12 +696,40 @@ fn scoped_copies(
     out
 }
 
+/// Adds the rules of `rule name extends base`: copies of the base's
+/// definition and variants as written, whatever lines configure it, off
+/// until their own lines apply.
+fn extend_rules(config: &mut crate::config::ast::Config, errors: &mut Vec<ConfigError>) {
+    for (name, base) in std::mem::take(&mut config.extensions) {
+        let in_family = |rule: &str, family: &str| rule == family || rule.strip_prefix(family).is_some_and(|rest| rest.starts_with(':'));
+        if let Some(taken) = config.rules.iter().find(|rule| in_family(&rule.name.text, &name.text)) {
+            errors.push(ConfigError::new(name.span, format!("rule `{}` is defined twice", name.text)).related(taken.name.span, "first defined here"));
+            continue;
+        }
+        let copies: Vec<_> = config.rules.iter().filter(|rule| in_family(&rule.name.text, &base.text)).cloned().collect();
+        if copies.is_empty() {
+            let mut error = ConfigError::new(base.span, format!("no rule `{}`", base.text)).suggest(&base.text, config.rules.iter().map(|rule| rule.name.text.as_str()));
+            if let Some(lang) = crate::config::std_lib::defining_language(&base.text) {
+                error = error.note(format!("`{}` comes with `import .{}`", base.text, crate::config::std_lib::short_name(lang)));
+            }
+            errors.push(error);
+            continue;
+        }
+        for mut copy in copies {
+            copy.name = crate::config::ast::Name { text: format!("{}{}", name.text, &copy.name.text[base.text.len()..]), span: name.span };
+            copy.defined_only = true;
+            config.rules.push(copy);
+        }
+    }
+}
+
 /// Applies `rule name ...` lines to the definitions, in order: turning
 /// rules on or off, replacing messages and fixes, adding clauses. Lines in
 /// `files` blocks change no definition. Returns, per definition, every line
 /// that configures it (in order, blocks included): its severity changes and
 /// the option values to set once the rules are compiled.
 fn configure(config: &mut crate::config::ast::Config, errors: &mut Vec<ConfigError>) -> Vec<Vec<Setting>> {
+    extend_rules(config, errors);
     let mut settings: Vec<Vec<Setting>> = vec![Vec::new(); config.rules.len()];
     let mut configs = std::mem::take(&mut config.configs);
     for (ci, c) in configs.iter_mut().enumerate() {

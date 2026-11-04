@@ -1,0 +1,17 @@
+import .ts
+
+rule no-foo extends es-no-restricted-imports {
+  set paths [{ name: "foo" }]
+}
+rule no-bar extends es-no-restricted-imports error "bar is gone" {
+  set paths [{ name: "bar" }]
+}
+# Variants come along, under this rule's own name.
+rule no-baz extends es-no-restricted-imports {
+  set patterns [{ group: ["baz/*"] }]
+}
+# Configures the base, not the copies.
+rule es-no-restricted-imports { set paths [{ name: "base" }] }
+
+rule unused-copy extends es-no-restricted-imports
+rule unused-copy off
