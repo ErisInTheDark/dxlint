@@ -1603,23 +1603,31 @@ impl World for Files<'_> {
     }
 
     fn module_importers(&self, at: Leaf, stop: Box<[Box<str>]>, ignore: Box<[Box<str>]>, _: &Semantic<'_>) -> Known<Value<'static>> {
-        let Some(ctx) = self.0.here(at) else { return Known::Unknown };
-        let Known::Yes(Some(selected)) = self.program_selected() else { return Known::Unknown };
-        let Some(path) = World::path(self, ctx.file_id) else { return Known::Unknown };
-        let linter = self.0.linter;
-        let Some(settings) = linter.grammar.names.settings_index(selected) else { return Known::Unknown };
-        let module = linter.relative(path).to_string_lossy().replace('\\', "/").into();
-        let ask = super::reads::ModuleAsk { root: super::reads::dep_path(&linter.root), settings, module, stop, ignore };
-        let answer = linter.module_answer(&ask);
-        super::reads::note(super::reads::Dep::Module(Arc::new(ask), super::module_graph::ModuleAnswer::hash(answer.as_ref())));
-        let Some(answer) = answer else { return Known::Yes(Value::Null) };
-        let importers = answer.importers.iter().map(|importer| Value::text_copy(importer)).collect();
-        Known::Yes(Value::record(vec![
-            ("importers".into(), Value::list(importers)),
+        let Some(answer) = self.module_answer(at, stop, ignore, false) else { return Known::Unknown };
+        Known::Yes(answer.map_or(Value::Null, |answer| Value::record(vec![
+            ("importers".into(), text_list(&answer.importers)),
             ("is_stop".into(), Value::Bool(answer.is_stop)),
             ("reaches_stop".into(), Value::Bool(answer.reaches_stop)),
             ("reaches_entry".into(), Value::Bool(answer.reaches_entry)),
-        ]))
+        ])))
+    }
+
+    fn module_export_users(&self, at: Leaf, stop: Box<[Box<str>]>, ignore: Box<[Box<str>]>, _: &Semantic<'_>) -> Known<Value<'static>> {
+        let Some(answer) = self.module_answer(at, stop, ignore, true) else { return Known::Unknown };
+        Known::Yes(answer.map_or(Value::Null, |answer| {
+            let exports = answer.exports.iter().map(|export| Value::record(vec![
+                ("name".into(), Value::text_copy(&export.name)),
+                ("importers".into(), text_list(&export.importers)),
+                ("reaches_stop".into(), Value::Bool(export.reaches_stop)),
+                ("reaches_entry".into(), Value::Bool(export.reaches_entry)),
+            ])).collect();
+            Value::record(vec![
+                ("is_stop".into(), Value::Bool(answer.is_stop)),
+                ("is_entry".into(), Value::Bool(answer.is_entry)),
+                ("is_ignored".into(), Value::Bool(answer.is_ignored)),
+                ("exports".into(), Value::list(exports)),
+            ])
+        }))
     }
 
     fn origin(&self, file: u32) -> Known<crate::grammar::names::modules::resolution::Origin> {
@@ -1870,6 +1878,109 @@ pub(super) fn publications<'a>(world: &'a LintWorld<'a>, unit: &super::units::Un
     index.published(unit.parsed.tree.root).into_iter()
         .filter(|(name, plan)| name.is_some() || any_holds(world, &[(plan.node, plan.item.when)]))
         .map(|(name, plan)| (name.map(str::to_owned), plan.node)).collect()
+}
+
+fn text_list(texts: &[Box<str>]) -> Value<'static> {
+    Value::list(texts.iter().map(|text| Value::text_copy(text)).collect())
+}
+
+impl Files<'_> {
+    /// What the project's import graph answers for `at`'s file, the read
+    /// recorded; `None` when the program is unknown, `Some(None)` when it
+    /// does not hold the file.
+    fn module_answer(&self, at: Leaf, stop: Box<[Box<str>]>, ignore: Box<[Box<str>]>, exports: bool) -> Option<Option<Arc<super::module_graph::ModuleAnswer>>> {
+        let ctx = self.0.here(at)?;
+        let Known::Yes(Some(selected)) = self.program_selected() else { return None };
+        let path = World::path(self, ctx.file_id)?;
+        let linter = self.0.linter;
+        let settings = linter.grammar.names.settings_index(selected)?;
+        let module = linter.relative(path).to_string_lossy().replace('\\', "/").into();
+        let ask = super::reads::ModuleAsk { root: super::reads::dep_path(&linter.root), settings, module, stop, ignore, exports };
+        let answer = linter.module_answer(&ask);
+        super::reads::note(super::reads::Dep::Module(Arc::new(ask), super::module_graph::ModuleAnswer::hash(answer.as_deref())));
+        Some(answer)
+    }
+}
+
+/// What the world's file (`unit`) says of modules' names, from its module
+/// items: syntax alone, no name resolves. Undecided conditions count as
+/// holding, so an unknown use silences rather than reports.
+pub(super) fn module_links<'a>(world: &'a LintWorld<'a>, unit: &'a super::units::Unit) -> super::module_graph::Links {
+    let files = Files(world);
+    let question = QueryContext::once();
+    let tables = &world.ctx.grammar.names;
+    let semantic = Semantic::new(&files, tables, &question);
+    let tree = &unit.parsed.tree;
+    let at = |node: u32| Leaf { target: Target::Node(NodeRef { file: 0, node }), frame: FrameId::ROOT };
+    let holds = |node: u32, when: Option<u32>| when.is_none_or(|when| World::condition(&files, at(node), when, &semantic) != Known::Yes(false));
+    let operand = |node: u32, operand: u32| match World::operand(&files, at(node), operand, &semantic) {
+        Known::Yes(value) => value,
+        Known::Unknown => Value::Null,
+    };
+    let name = |node: u32, id: u32| -> Option<Box<str>> {
+        match operand(node, id) {
+            Value::Str(text) => Some((&*text).into()),
+            Value::Node(_, text) => Some((&*text).into()),
+            _ => None,
+        }
+    };
+    let opens_scope = |node: u32| tables.kinds.get(tree.node(node).matcher as usize)
+        .is_some_and(|kind| kind.modules.items.iter().any(|item| matches!(item.action, Action::Scope { .. })));
+    let top_level = |node: u32| {
+        let mut owner = tree.parent(node);
+        while let Some(at) = owner {
+            if opens_scope(at) { return false }
+            owner = tree.parent(at);
+        }
+        true
+    };
+    let mut links = super::module_graph::Links::default();
+    for &node in &tree.order {
+        let Some(kind) = tables.kinds.get(tree.node(node).matcher as usize) else { continue };
+        if kind.modules.items.is_empty() { continue }
+        // `export { a } from "x"` also binds `a`: a forward only reads it if
+        // its own name is read.
+        let forwards = kind.modules.items.iter().any(|item| matches!(item.action, Action::Exports { module: Some(_), .. }) && holds(node, item.when));
+        for item in &kind.modules.items {
+            match item.action {
+                Action::Resolves { binding, module, imported, .. } if !forwards && holds(node, item.when) => {
+                    if matches!(operand(node, binding), Value::Null) { continue }
+                    let Some(source) = name(node, module) else { continue };
+                    match imported.and_then(|imported| name(node, imported)) {
+                        Some(imported) => links.uses.push((source, imported)),
+                        None => links.whole.push(source),
+                    }
+                }
+                Action::Scope { module: Some(module), .. } if holds(node, item.when) => links.whole.extend(name(node, module)),
+                _ => {}
+            }
+        }
+    }
+    if let Some(index) = World::module_index(&files, 0, tables) {
+        for (known, plan) in index.published(tree.root) {
+            let Action::Exports { target, module, alias, .. } = plan.item.action else { continue };
+            let node = plan.node;
+            if !top_level(node) || !holds(node, plan.item.when) { continue }
+            let published = || known.map(Box::<str>::from).or_else(|| alias.and_then(|alias| name(node, alias)));
+            match (module, target) {
+                (Some(module), None) => links.stars.extend(name(node, module)),
+                (Some(module), Some(target)) => {
+                    let (Some(source), Some(forwarded)) = (name(node, module), name(node, target)) else { continue };
+                    links.forwards.extend(published().or_else(|| Some(forwarded.clone())).map(|name| (name, source, forwarded)));
+                }
+                (None, _) => links.published.extend(published()),
+            }
+        }
+    }
+    links.uses.sort_unstable();
+    links.uses.dedup();
+    links.published.sort_unstable();
+    links.published.dedup();
+    links.forwards.sort_unstable();
+    links.forwards.dedup();
+    links.stars.sort_unstable();
+    links.stars.dedup();
+    links
 }
 
 /// Whether some of `items` (a node of the world's file, and the condition

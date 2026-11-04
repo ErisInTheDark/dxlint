@@ -83,6 +83,8 @@ pub struct ModuleAsk {
     pub module: Box<str>,
     pub stop: Box<[Box<str>]>,
     pub ignore: Box<[Box<str>]>,
+    /// Also who reads each name the module publishes.
+    pub exports: bool,
 }
 
 /// A [`Dep::Discovered`]: what discovery `name` found below `dir`, hashed.

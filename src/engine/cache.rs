@@ -25,7 +25,7 @@ use super::reads::{hash_bytes, Dep, Reads, Scan, ScanTest};
 
 pub const FILE_NAME: &str = ".dxcache";
 /// Bumped whenever the encoding changes.
-const MAGIC: &[u8; 4] = b"ZLCC";
+const MAGIC: &[u8; 4] = b"ZLCD";
 
 /// Deps, groups and scans, by index into the tables.
 #[derive(Default, Clone, PartialEq, Eq, Hash)]
@@ -641,6 +641,7 @@ impl Writer<'_> {
         }
         if let Dep::Module(ask, _) = d {
             self.var(u64::from(ask.settings));
+            self.out.push(u8::from(ask.exports));
             self.str(&ask.module);
             for list in [&ask.stop, &ask.ignore] {
                 self.var(list.len() as u64);
@@ -909,8 +910,10 @@ impl<'a> Reader<'a> {
             }
             9 => {
                 let settings = u32::try_from(self.var()?).ok()?;
+                let exports = *self.bytes.get(self.at)? != 0;
+                self.at += 1;
                 let module = self.str()?.into();
-                let ask = super::reads::ModuleAsk { root: path, settings, module, stop: self.string_list()?.into(), ignore: self.string_list()?.into() };
+                let ask = super::reads::ModuleAsk { root: path, settings, module, stop: self.string_list()?.into(), ignore: self.string_list()?.into(), exports };
                 Dep::Module(std::sync::Arc::new(ask), a)
             }
             _ => return None,

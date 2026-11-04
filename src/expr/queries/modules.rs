@@ -11,9 +11,11 @@ pub(super) static FUNCTIONS: &[QueryFunction] = &[
     QueryFunction { name: "program_option", arity: 2, call: program_option },
     QueryFunction { name: "program_directory", arity: 1, call: program_directory },
     QueryFunction { name: "module_importers", arity: 3, call: module_importers },
+    QueryFunction { name: "module_export_users", arity: 3, call: module_export_users },
 ];
 
-fn module_importers(semantic: &Semantic<'_>, at: Leaf, args: &[Value<'static>]) -> Known<Value<'static>> {
+/// The two glob lists of a question to the import graph.
+fn stop_and_ignore(args: &[Value<'static>]) -> Option<(Box<[Box<str>]>, Box<[Box<str>]>)> {
     let globs = |value: &Value<'static>| match value {
         Value::List(items) => items.iter().map(|item| match item {
             Value::Str(glob) => Some(Box::<str>::from(&**glob)),
@@ -21,9 +23,18 @@ fn module_importers(semantic: &Semantic<'_>, at: Leaf, args: &[Value<'static>]) 
         }).collect::<Option<Box<[Box<str>]>>>(),
         _ => None,
     };
-    let [stop, ignore] = args else { return Known::Unknown };
-    let (Some(stop), Some(ignore)) = (globs(stop), globs(ignore)) else { return Known::Unknown };
+    let [stop, ignore] = args else { return None };
+    Some((globs(stop)?, globs(ignore)?))
+}
+
+fn module_importers(semantic: &Semantic<'_>, at: Leaf, args: &[Value<'static>]) -> Known<Value<'static>> {
+    let Some((stop, ignore)) = stop_and_ignore(args) else { return Known::Unknown };
     semantic.world.module_importers(at, stop, ignore, semantic)
+}
+
+fn module_export_users(semantic: &Semantic<'_>, at: Leaf, args: &[Value<'static>]) -> Known<Value<'static>> {
+    let Some((stop, ignore)) = stop_and_ignore(args) else { return Known::Unknown };
+    semantic.world.module_export_users(at, stop, ignore, semantic)
 }
 
 fn program_option(semantic: &Semantic<'_>, at: Leaf, args: &[Value<'static>]) -> Known<Value<'static>> {

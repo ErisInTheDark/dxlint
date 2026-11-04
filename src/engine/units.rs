@@ -46,6 +46,12 @@ impl Unit {
 }
 
 impl Linter {
+    /// A unit over an already parsed file, kept by nobody.
+    pub(super) fn bare_unit(&self, path: &Path, lang: usize, text: Arc<str>, hash: u64, parsed: ParsedFile) -> Unit {
+        let rel = self.relative(path).to_string_lossy().replace('\\', "/");
+        Unit { path: reads::dep_path(path), rel, lang, text, hash, parsed, names: OnceLock::new(), lines: OnceLock::new(), bodies: OnceLock::new(), entered: OnceLock::new() }
+    }
+
     /// `unit`'s opaque bodies ([`Linter::opaque_ranges`]), found once.
     pub(super) fn bodies(&self, unit: &Unit) -> Option<Arc<reads::Bodies>> {
         unit.bodies.get_or_init(|| {

@@ -1,0 +1,11 @@
+import .ts
+
+rule es-no-unused-exports {
+  set ignore ["test/**"]
+  set keepTags ["@public"]
+}
+rule only-old-uses-this extends es-export-only-used-from error "only old code uses this" {
+  set from ["old/**"]
+  set ignore ["test/**"]
+  set keepTags ["@public"]
+}

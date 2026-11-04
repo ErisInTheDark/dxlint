@@ -1,0 +1,16 @@
+assigned.ts:2:1-2:16 es-no-unused-exports#0
+barrel.ts:1:21-1:34 es-no-unused-exports#0
+chain.ts:2:14-2:21 only-old-uses-this#0 only old code uses this
+lib.ts:27:14-27:23 es-no-unused-exports#0
+lib.ts:29:14-29:20 es-no-unused-exports#0
+lib.ts:3:14-3:18 es-no-unused-exports#0
+lib.ts:4:16-4:28 es-no-unused-exports#0
+lib.ts:7:17-7:21 es-no-unused-exports#0
+only-old.ts:2:14-2:21 only-old-uses-this#0 only old code uses this
+only-old.ts:5:14-5:26 only-old-uses-this#0 only old code uses this
+side-effect.ts:1:14-1:35 es-no-unused-exports#0
+source.ts:2:14-2:27 es-no-unused-exports#0
+specifiers.ts:3:33-3:36 es-no-unused-exports#0
+specifiers.ts:6:15-6:22 es-no-unused-exports#0
+star-source.ts:2:14-2:22 es-no-unused-exports#0
+tested.ts:1:14-1:27 es-no-unused-exports#0

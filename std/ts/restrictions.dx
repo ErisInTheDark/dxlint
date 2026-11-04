@@ -5,6 +5,7 @@
 
 import .ts/restrictions/comments
 import .ts/helpers
+import .ts/modules
 
 define {
 
@@ -16,6 +17,70 @@ in ts_program rule es-module-only-used-from {
   when use.reaches_stop && !use.reaches_entry && !use.is_stop
   report at { start: 0, end: 1 }
   warn "Only {join(from, ', ')} use this module: move it there."
+}
+
+# One name's sites (overloads, merges) decide together, and report once.
+fn export_usage_site(owner, name, at, before) = { owner: owner, name: name, at: at, before: before }
+fn export_usage_tagged(text, tags) = text != null && any(tags, tag => re_test(text, "(?:^|[\\s*/])" re_escape(tag) "(?:$|[^\\w-])"))
+fn export_usage_bound(declarator) = if declarator.name.node is ts_identifier then [declarator.name.node] else {
+  value [declarator.name.node]
+  walk (current) current.children.nodes
+  filter (item) item is ts_identifier && item.declaration_kind != null
+}
+in ts_export_specifier let export_usage_before byte_slice(source, previous.end_offset ?? parent.offset, offset)
+fn export_usage_statement_sites(statement) = {
+  value before: statement.gap_before ?? statement.text_before
+  value when {
+    statement is ts_export_assignment then [export_usage_site(statement, "=", statement, before)]
+    statement.kind == "default" then [export_usage_site(statement, "default", statement.declaration.name.node ?? statement, before)]
+    statement.operator == "*" then if statement.namespace == null then [] else [export_usage_site(statement, ts_module_name(statement.namespace.node), statement.namespace.node, before)]
+    count(statement.specifier) > 0 then map(statement.specifier.nodes, item => export_usage_site(item, ts_module_name(item.exported.node ?? item.local.node), item.exported.node ?? item.local.node, before item.export_usage_before))
+    statement.declaration.node is ts_variable_declaration then flat_map(statement.declaration.declaration.nodes, declarator => map(export_usage_bound(declarator), bound => export_usage_site(declarator, bound.text, bound, before)))
+    statement.declaration != null then [export_usage_site(statement, "{statement.declaration.name}", statement.declaration.name.node, before)]
+    else then []
+  }
+}
+in ts_program let export_usage_sites {
+  value body.nodes
+  filter (statement) statement is (ts_export, ts_export_assignment)
+  flat_map (statement) export_usage_statement_sites(statement)
+}
+group export_usage_owner ts_export, ts_export_assignment, ts_export_specifier, ts_declarator
+in ts_export, ts_export_assignment let export_usage_top_level parent is ts_program
+in ts_export_specifier let export_usage_top_level parent.export_usage_top_level
+in ts_declarator let export_usage_top_level parent.parent is ts_export && parent.parent.export_usage_top_level
+fn export_usage_reported(sites, owner, names, tags) = {
+  value sites
+  filter (site) site.owner == owner && contains(names, site.name)
+    && find(sites, other => other.name == site.name).owner == owner
+    && !any(sites, other => other.name == site.name && export_usage_tagged(other.before, tags))
+}
+@macro export_usage_options {
+  option ignore string[] = [] "files whose imports don't count: globs, relative to the config"
+  option keepTags string[] = [] "comment tags before an export that keep it, such as @public"
+}
+in export_usage_owner rule es-no-unused-exports {
+  @export_usage_options
+  when export_usage_top_level
+  let use module_export_users(node, [], ignore)
+  when use != null && !use.is_entry && !use.is_ignored
+  let unused { value use.exports; filter (row) count(row.importers) == 0; map (row) row.name }
+  let reported export_usage_reported(ts_program.export_usage_sites, node, unused, keepTags)
+  when count(reported) > 0
+  report at first(reported).at
+  warn "Nothing imports this export: {join(map(reported, site => site.name), ', ')}."
+}
+in export_usage_owner rule es-export-only-used-from {
+  default option from string[] = [] "the files that alone may use an export this way: globs, relative to the config"
+  @export_usage_options
+  when len(from) > 0 && export_usage_top_level
+  let use module_export_users(node, from, ignore)
+  when use != null && !use.is_stop && !use.is_ignored
+  let only { value use.exports; filter (row) row.reaches_stop && !row.reaches_entry; map (row) row.name }
+  let reported export_usage_reported(ts_program.export_usage_sites, node, only, keepTags)
+  when count(reported) > 0
+  report at first(reported).at
+  warn "Only {join(from, ', ')} use this export: {join(map(reported, site => site.name), ', ')}. Move it there."
 }
 
 schema restriction_import_path {

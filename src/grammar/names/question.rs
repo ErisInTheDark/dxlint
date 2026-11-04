@@ -553,6 +553,12 @@ pub trait World {
     fn module_importers(&self, _at: Leaf, _stop: Box<[Box<str>]>, _ignore: Box<[Box<str>]>, _semantic: &super::semantic::Semantic<'_>) -> Known<crate::expr::Value<'static>> {
         Known::Unknown
     }
+    /// Who reads each name `at`'s file publishes, as a `{ is_stop, is_entry, is_ignored,
+    /// exports: [{ name, importers, reaches_stop, reaches_entry }] }` record:
+    /// null when it is not in the project's program.
+    fn module_export_users(&self, _at: Leaf, _stop: Box<[Box<str>]>, _ignore: Box<[Box<str>]>, _semantic: &super::semantic::Semantic<'_>) -> Known<crate::expr::Value<'static>> {
+        Known::Unknown
+    }
     /// Every scope merged into module scope `scope`, canonical first:
     /// ambient `declare module "x"` across files and augmentations of a
     /// file module. Just `scope` where nothing merges.

@@ -1,6 +1,6 @@
 # Rules
 
-Every rule dxlint ships, 435 in all. Turn one on with `rule <name>` after importing its language; see [basic.md](../basic.md).
+Every rule dxlint ships, 437 in all. Turn one on with `rule <name>` after importing its language; see [basic.md](../basic.md).
 
 - **Types**: the rule reads type information (from your `tsconfig.json`; TypeScript itself never runs).
 - **Fix**: `autofix` rules are fixed by `dxlint --fix` and by the editor's quick fixes.
@@ -54,6 +54,7 @@ Pages are adapted from the documentation of [ESLint](https://eslint.org/docs/lat
 | [es-explicit-function-return-type](es-explicit-function-return-type.md) | Require return type annotations on functions and methods. |  |  | style | 100% |
 | [es-explicit-member-accessibility](es-explicit-member-accessibility.md) | Require explicit visibility on class members, or forbid redundant `public` modifiers. |  | autofix | style | 100% |
 | [es-explicit-module-boundary-types](es-explicit-module-boundary-types.md) | Require argument and return types on exported functions and public methods of exported classes. |  |  | style | 100% |
+| [es-export-only-used-from](es-export-only-used-from.md) | Reports exports that only certain code uses, so they can move next to it. |  |  |  |  |
 | [es-for-direction](es-for-direction.md) | Report for-loop counters that move away from their stop condition. |  |  | bugs | 100% |
 | [es-func-name-matching](es-func-name-matching.md) | Match a named function expression's name to its variable or property name. |  |  |  | 100% |
 | [es-func-names](es-func-names.md) | Require or forbid names on function expressions. |  |  |  | 100% |
@@ -296,6 +297,7 @@ Pages are adapted from the documentation of [ESLint](https://eslint.org/docs/lat
 | [es-no-unsafe-return](es-no-unsafe-return.md) | Reports unsafe `any` return values, including arrays and promises. | yes |  | type-safety | 98.4% |
 | [es-no-unsafe-type-assertion](es-no-unsafe-type-assertion.md) | Reports type assertions that narrow a value's type without a runtime check, including unsafe assertions involving `any`. | yes |  |  | 94.1% |
 | [es-no-unsafe-unary-minus](es-no-unsafe-unary-minus.md) | Reports unary `-` applied to values that are not numeric. | yes |  | type-safety | 100% |
+| [es-no-unused-exports](es-no-unused-exports.md) | Reports exports nothing imports. |  |  |  |  |
 | [es-no-unused-expressions](es-no-unused-expressions.md) | Reports expression statements whose values are discarded without a useful effect. |  |  | suspicious | 100% |
 | [es-no-unused-imports](es-no-unused-imports.md) | Reports imported names that are never used. |  |  | suspicious |  |
 | [es-no-unused-labels](es-no-unused-labels.md) | Reports labels that no `break` or `continue` refers to. |  | autofix | suspicious | 100% |

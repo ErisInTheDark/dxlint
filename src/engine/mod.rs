@@ -710,7 +710,7 @@ impl Linter {
         match dep {
             Dep::Outside(path, bodies) => self.outside_holds(path, bodies),
             Dep::Part(parts, read) => self.part_holds(&parts.path, parts, read, strict),
-            Dep::Module(ask, hash) => module_graph::ModuleAnswer::hash(self.module_answer(ask).as_ref()) == *hash,
+            Dep::Module(ask, hash) => module_graph::ModuleAnswer::hash(self.module_answer(ask).as_deref()) == *hash,
             dep => dep.holds(),
         }
     }
