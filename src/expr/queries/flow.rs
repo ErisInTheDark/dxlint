@@ -38,7 +38,7 @@ fn effect_id(semantic: &Semantic<'_>, value: &Value<'static>) -> Option<EffectId
 fn effect_steps(graph: &Execution, effect: EffectId, budget: &Budget) -> Known<Vec<StepId>> {
     let mut steps = Vec::new();
     for (step, point) in graph.steps() {
-        if !budget.step() { return Known::Unknown }
+        if !budget.hop() { return Known::Unknown }
         if point.event().is_some_and(|event| event.kind == EventKind::Effect(effect)) { steps.push(step) }
     }
     Known::Yes(steps)

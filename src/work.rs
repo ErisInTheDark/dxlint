@@ -30,6 +30,31 @@ pub fn alloc() {
     }
 }
 
+thread_local! {
+    /// Per open budgeted fact: the work of those inside it that ran out.
+    static BUDGETED: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
+}
+static RAN_OUT: AtomicU64 = AtomicU64::new(0);
+static RAN_OUT_FACTS: AtomicU64 = AtomicU64::new(0);
+
+/// A budgeted fact starts; give what this returns to [`fact_end`].
+pub fn fact_begin() -> u64 {
+    BUDGETED.with(|open| open.borrow_mut().push(0));
+    now()
+}
+
+/// That fact ended: all its work is wasted when it ran out of budget.
+pub fn fact_end(started: u64, ran_out: bool) {
+    let total = now() - started;
+    let inner = BUDGETED.with(|open| open.borrow_mut().pop().unwrap_or(0));
+    let wasted = if ran_out {
+        RAN_OUT.fetch_add(total.saturating_sub(inner), Ordering::Relaxed);
+        RAN_OUT_FACTS.fetch_add(1, Ordering::Relaxed);
+        total
+    } else { inner };
+    BUDGETED.with(|open| if let Some(parent) = open.borrow_mut().last_mut() { *parent += wasted });
+}
+
 /// `DXLINT_WORK_SITES=1`: the census also keeps, per rule and `let`, the work
 /// of each expression in it (slow).
 static SITES_ON: AtomicBool = AtomicBool::new(false);
@@ -188,6 +213,7 @@ pub fn report() {
     PAUSED.store(true, Ordering::Relaxed);
     let (vm, allocs) = (VM.load(Ordering::Relaxed), ALLOCS.load(Ordering::Relaxed));
     eprintln!("work: {} = {vm} vm + {allocs} allocs", vm + allocs);
+    eprintln!("in facts that ran out of budget: {} work, {} facts", RAN_OUT.load(Ordering::Relaxed), RAN_OUT_FACTS.load(Ordering::Relaxed));
     let facts = FACTS.lock().expect("census");
     let Some(facts) = facts.as_ref() else { return };
     #[derive(Default)]

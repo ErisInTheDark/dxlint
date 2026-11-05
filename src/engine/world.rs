@@ -688,7 +688,10 @@ impl<'a> Files<'a> {
     fn resolution_context(self, at: Leaf, semantic: &Semantic<'_>) -> Known<Value<'static>> {
         let Some(ctx) = self.0.here(at) else { return Known::Unknown };
         let Known::Yes(Some(settings)) = self.program_selected() else { return Known::Unknown };
-        self.0.asking(semantic, at, || Resolver { host: &self, settings }.context(ctx.file_id, semantic.question))
+        // A fact about the program, on an allowance of its own: "is strict
+        // on" must not read as off because the asking question is nearly spent.
+        semantic.question.budget.sized(Budget::DEFAULT, || self.0.asking(semantic, at, || Resolver { host: &self, settings }.context(ctx.file_id, semantic.question)))
+            .unwrap_or(Known::Unknown)
     }
 
     fn program_selected(self) -> Known<Option<&'a Settings>> {

@@ -571,7 +571,7 @@ impl Execution {
         let Some(completion) = &self.completion else { return Known::Unknown };
         let Some(seen) = self.reachable_steps(budget).known() else { return Known::Unknown };
         for &at in &completion.normal {
-            if !budget.step() { return Known::Unknown }
+            if !budget.hop() { return Known::Unknown }
             if seen[at as usize] { return Known::Yes(true) }
         }
         Known::Yes(false)
@@ -583,7 +583,7 @@ impl Execution {
         let mut exits = Vec::new();
         let mut unique = crate::fx_hash::FxHashSet::default();
         for &(at, exit) in &completion.exits {
-            if !budget.step() { return Known::Unknown }
+            if !budget.hop() { return Known::Unknown }
             if seen[at as usize] && unique.insert(exit) { exits.push(exit) }
         }
         Known::Yes(exits)
@@ -593,11 +593,11 @@ impl Execution {
         let Some(completion) = &self.completion else { return Known::Unknown };
         let Known::Yes(Walk::Seen(seen)) = self.walk(self.entry, avoiding, |_| false, budget) else { return Known::Unknown };
         for &step in &completion.normal {
-            if !budget.step() { return Known::Unknown }
+            if !budget.hop() { return Known::Unknown }
             if seen[step as usize] { return Known::Yes(true) }
         }
         for &(step, exit) in &completion.exits {
-            if !budget.step() { return Known::Unknown }
+            if !budget.hop() { return Known::Unknown }
             if effects.contains(&exit.effect) && seen[step as usize] { return Known::Yes(true) }
         }
         Known::Yes(false)
@@ -613,7 +613,7 @@ impl Execution {
     }
 
     fn reachable_steps(&self, budget: &Budget) -> Known<&[bool]> {
-        if !budget.step() { return Known::Unknown }
+        if !budget.hop() { return Known::Unknown }
         let seen = match self.reachable.get() {
             Some(seen) => seen,
             // Kept on the graph for every later question: the walk gets an
@@ -649,11 +649,11 @@ impl Execution {
     }
 
     pub(crate) fn value_used(&self, target: NodeRef, catalogue: &controller::Reads, budget: &Budget) -> Known<bool> {
-        if !budget.step() { return Known::Unknown }
+        if !budget.hop() { return Known::Unknown }
         let Some(writes) = self.writes.get(&target) else { return Known::Unknown };
         let mut binding = None;
         for &write in writes {
-            if !budget.step() { return Known::Unknown }
+            if !budget.hop() { return Known::Unknown }
             let Some(current) = self.step(write).and_then(Step::event).and_then(|event| event.target).and_then(|target| target.binding) else {
                 return Known::Unknown;
             };
@@ -667,14 +667,14 @@ impl Execution {
         if binding.file == 0 { crate::footprint::table(crate::footprint::tables::READS, binding.node) }
         let mut external = false;
         for site in catalogue.get(&binding).into_iter().flatten() {
-            if !budget.step() { return Known::Unknown }
+            if !budget.hop() { return Known::Unknown }
             if !reads.sites.contains(site) { external = true; break }
         }
         let Some(reachable) = self.reachable_steps(budget).known() else { return Known::Unknown };
         let Some(overwrites) = self.binding_writes.get(&binding) else { return Known::Unknown };
         let mut has_reachable_write = false;
         for &write in writes {
-            if !budget.step() { return Known::Unknown }
+            if !budget.hop() { return Known::Unknown }
             if !reachable[write as usize] { continue }
             has_reachable_write = true;
             if external { return Known::Yes(true) }
@@ -698,13 +698,13 @@ impl Execution {
         let mut pending = next.to_vec();
         let mut seen = vec![false; self.steps.len()];
         while let Some(step) = pending.pop() {
-            if !budget.step() || step as usize >= seen.len() { return Known::Unknown }
+            if !budget.hop() || step as usize >= seen.len() { return Known::Unknown }
             if seen[step as usize] || overwrites.contains(&step) { continue }
             seen[step as usize] = true;
             if reads.contains(&step) { return Known::Yes(true) }
             let Some(next) = self.successors(step) else { return Known::Unknown };
             for &next in next {
-                if !budget.step() || next as usize >= seen.len() { return Known::Unknown }
+                if !budget.hop() || next as usize >= seen.len() { return Known::Unknown }
                 pending.push(next);
             }
         }
@@ -716,7 +716,7 @@ impl Execution {
         let mut seen = vec![ThroughVisit::default(); self.steps.len()];
         let mut targets = crate::fx_hash::FxHashSet::default();
         for &step in starts.iter().chain(observations).chain(barriers) {
-            if !budget.step() || self.step(step).is_none() { return Known::Unknown }
+            if !budget.hop() || self.step(step).is_none() { return Known::Unknown }
         }
         targets.extend(observations.iter().copied());
         for &step in barriers { seen[step as usize].barrier = true; }
@@ -725,7 +725,7 @@ impl Execution {
         let mut pending: Vec<_> = starts.iter().copied().filter(|&step| reachable[step as usize])
             .map(|step| (step, false)).collect();
         while let Some((step, crossed)) = pending.pop() {
-            if !budget.step() { return Known::Unknown }
+            if !budget.hop() { return Known::Unknown }
             if crossed && seen[step as usize].barrier { continue }
             let crossed = crossed || self.steps[step as usize].event().is_some_and(|event| {
                 matches!(event.kind, EventKind::Effect(effect) if effects.contains(&effect))
@@ -736,7 +736,7 @@ impl Execution {
             if crossed && targets.contains(&step) { return Known::Yes(true) }
             let Some(next) = self.successors(step) else { return Known::Unknown };
             for &next in next {
-                if !budget.step() || next as usize >= self.steps.len() { return Known::Unknown }
+                if !budget.hop() || next as usize >= self.steps.len() { return Known::Unknown }
                 pending.push((next, crossed));
             }
         }
@@ -748,7 +748,7 @@ impl Execution {
         let mut events = Vec::new();
         let mut targets = Vec::new();
         for (step, point) in self.steps() {
-            if !budget.step() { return Known::Unknown }
+            if !budget.hop() { return Known::Unknown }
             if let Some(event) = point.event().filter(|event| event.kind == EventKind::Effect(effect)) {
                 if seen[step as usize] { events.push(step) }
                 if event.site == node { targets.push(step) }
@@ -775,7 +775,7 @@ impl Execution {
     /// the uses, stopping at candidates.
     pub fn last_steps(&self, uses: &[StepId], candidates: &[StepId], budget: &Budget) -> Known<Option<Vec<StepId>>> {
         for &step in uses.iter().chain(candidates) {
-            if !budget.step() || self.step(step).is_none() { return Known::Unknown }
+            if !budget.hop() || self.step(step).is_none() { return Known::Unknown }
         }
         if candidates.len() < 64 {
             if let Some(reaching) = self.reaching(candidates, budget) {
@@ -785,7 +785,7 @@ impl Execution {
                 let mut before = 0u64;
                 let mut reached = false;
                 for &step in uses {
-                    if !budget.step() { return Known::Unknown }
+                    if !budget.hop() { return Known::Unknown }
                     // Unreachable uses (no reaching set) don't count.
                     if reaching[step as usize] == 0 { continue }
                     reached = true;
@@ -813,11 +813,11 @@ impl Execution {
         let mut last_before = vec![false; self.steps.len()];
         let mut pending: Vec<StepId> = uses.iter().copied().filter(|&step| !candidate[step as usize]).collect();
         while let Some(step) = pending.pop() {
-            if !budget.step() { return Known::Unknown }
+            if !budget.hop() { return Known::Unknown }
             if std::mem::replace(&mut visited[step as usize], true) { continue }
             if step == self.entry { return Known::Yes(None) }
             for &previous in predecessors.of(step) {
-                if !budget.step() { return Known::Unknown }
+                if !budget.hop() { return Known::Unknown }
                 if candidate[previous as usize] {
                     last_before[previous as usize] = true;
                 } else if !visited[previous as usize] {
@@ -847,7 +847,7 @@ impl Execution {
             while let Some(step) = pending.pop() {
                 let value = out[step as usize];
                 for &next in self.edges.of(step) {
-                    if !budget.step() { return None }
+                    if !budget.hop() { return None }
                     let merged = match gen(next) { Some(bit) => bit, None => out[next as usize] | value };
                     if merged != out[next as usize] {
                         out[next as usize] = merged;
@@ -890,7 +890,7 @@ impl Execution {
         let mut seen = vec![[false; 2]; len];
         let mut pending: Vec<(StepId, bool)> = uses.iter().map(|&step| (step, false)).collect();
         while let Some((step, passed)) = pending.pop() {
-            if !budget.step() { return Known::Unknown }
+            if !budget.hop() { return Known::Unknown }
             let passed = passed || marked(step);
             let visit = &mut seen[step as usize][usize::from(passed)];
             if *visit { continue }
@@ -900,7 +900,7 @@ impl Execution {
                 continue;
             }
             for &previous in predecessors.of(step) {
-                if !budget.step() { return Known::Unknown }
+                if !budget.hop() { return Known::Unknown }
                 pending.push((previous, passed));
             }
         }
@@ -948,7 +948,7 @@ impl Execution {
             pending.extend(self.edges.get(start)?.iter().map(|&next| (next, passed)));
         }
         while let Some((step, passed)) = pending.pop() {
-            if !budget.step() { return None }
+            if !budget.hop() { return None }
             if step as usize >= len { return None }
             if barrier[step as usize] { continue }
             let passed = passed || marked(step);
@@ -972,13 +972,13 @@ impl Execution {
         for &to in targets { target[to as usize] = true }
         let mut seen = vec![ThroughVisit::default(); self.steps.len()];
         for &barrier in barriers {
-            if !budget.step() || barrier as usize >= self.steps.len() { return Known::Unknown }
+            if !budget.hop() || barrier as usize >= self.steps.len() { return Known::Unknown }
             seen[barrier as usize].barrier = true;
         }
         let mut pending = vec![(from, false)];
         let mut initial = true;
         while let Some((step, matched)) = pending.pop() {
-            if !budget.step() { return Known::Unknown }
+            if !budget.hop() { return Known::Unknown }
             let starts_here = std::mem::take(&mut initial);
             if !starts_here && seen[step as usize].barrier { continue }
             let matched = matched || self.steps[step as usize].event().is_some_and(&event);
@@ -988,7 +988,7 @@ impl Execution {
             if matched && target[step as usize] { return Known::Yes(true) }
             let Some(edges) = self.edges.get(step) else { return Known::Unknown };
             for &next in edges {
-                if !budget.step() || next as usize >= self.steps.len() { return Known::Unknown }
+                if !budget.hop() || next as usize >= self.steps.len() { return Known::Unknown }
                 pending.push((next, matched));
             }
         }
@@ -999,19 +999,19 @@ impl Execution {
         if from as usize >= self.steps.len() { return Known::Unknown }
         let mut blocked = vec![false; self.steps.len()];
         for &step in avoiding {
-            if !budget.step() || step as usize >= self.steps.len() { return Known::Unknown }
+            if !budget.hop() || step as usize >= self.steps.len() { return Known::Unknown }
             blocked[step as usize] = true;
         }
         let mut seen = vec![false; self.steps.len()];
         let mut pending = vec![from];
         while let Some(step) = pending.pop() {
-            if !budget.step() { return Known::Unknown }
+            if !budget.hop() { return Known::Unknown }
             if blocked[step as usize] || seen[step as usize] { continue }
             seen[step as usize] = true;
             if found(step) { return Known::Yes(Walk::Found) }
             let Some(edges) = self.edges.get(step) else { return Known::Unknown };
             for &next in edges {
-                if !budget.step() || next as usize >= self.steps.len() { return Known::Unknown }
+                if !budget.hop() || next as usize >= self.steps.len() { return Known::Unknown }
                 if !seen[next as usize] { pending.push(next) }
             }
         }
@@ -1122,7 +1122,6 @@ mod tests {
     fn exhausted_work_cannot_be_used_as_a_negative_proof() {
         let graph = graph(&[&[1], &[2], &[]]);
         assert_eq!(graph.reaches(0, 2, &[], &Budget::new(0)), Known::Unknown);
-        assert_eq!(graph.reaches(0, 2, &[], &Budget::new(1)), Known::Unknown);
         assert_eq!(graph.reaches(0, 2, &[], &Budget::default()), Known::Yes(true));
         // Asking costs a step; the kept walk itself is the graph's.
         assert_eq!(graph.reachable(NodeRef::here(2), &Budget::new(0)), Known::Unknown);
@@ -1205,7 +1204,7 @@ mod tests {
         let reads = read_catalogue(&[3]);
         let execution = with_read(with_writes(graph(&[&[1], &[2], &[3], &[], &[]]), &[(1, 10)]), 3);
         assert_eq!(execution.reachable(NodeRef::here(2), &Budget::default()), Known::Yes(true));
-        assert_eq!(execution.value_used(NodeRef::here(10), &reads, &Budget::new(7)), Known::Unknown);
+        assert_eq!(execution.value_used(NodeRef::here(10), &reads, &Budget::new(0)), Known::Unknown);
         assert_eq!(execution.value_used(NodeRef::here(10), &reads, &Budget::default()), Known::Yes(true));
         assert_eq!(execution.value_used(NodeRef::here(10), &reads, &Budget::default()), Known::Yes(true));
         assert_eq!(execution.value_used(NodeRef::here(50), &reads, &Budget::default()), Known::Unknown);

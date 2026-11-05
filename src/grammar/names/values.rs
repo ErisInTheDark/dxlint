@@ -368,7 +368,11 @@ impl Values<'_> {
     /// ([`super::question::Budget::fact`]), noting whether it ran out for
     /// later readers ([`Self::read_kept`]).
     pub(crate) fn fact<R>(&self, tag: (usize, u64), units: u32, compute: impl FnOnce() -> R) -> Result<R, super::question::Cut> {
+        #[cfg(feature = "work")]
+        let started = crate::work::fact_begin();
         let answer = self.question.budget.fact(units, compute);
+        #[cfg(feature = "work")]
+        crate::work::fact_end(started, answer.as_ref().err().copied() == Some(super::question::Cut::RanOut));
         self.note_ended(tag, answer.as_ref().err().copied());
         answer
     }
@@ -640,11 +644,11 @@ impl Values<'_> {
         let Some(kind) = self.tables.kinds.get(node_data.matcher as usize) else { return Known::Yes(false) };
         let mut unknown = false;
         for &(bits, views, when) in &kind.fits {
-            if !self.question.budget.step() {
-                return Known::Unknown;
-            }
             if bits & (1 << trait_id) == 0 {
                 continue;
+            }
+            if !self.question.budget.step() {
+                return Known::Unknown;
             }
             if views != 0 {
                 let Target::Scope(scope) = leaf.target else { continue };

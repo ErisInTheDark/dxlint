@@ -449,6 +449,9 @@ impl<'a, 'world> Run<'a, 'world> {
     fn derives(&mut self, expected: &[Vec<Leaf>], actual: &[Leaf]) -> bool {
         const MAX_BASES: usize = 32;
         let values = self.values;
+        // A base has members: a target without any (`string`) names none, and
+        // reading the apparent bases of each arm is the costly part.
+        if expected.iter().flatten().all(|&leaf| values.member_shape(leaf) == Known::Yes(false)) { return false }
         let mut pending = vec![actual.to_vec()];
         let mut seen: Vec<Vec<Leaf>> = Vec::new();
         while let Some(row) = pending.pop() {

@@ -5,6 +5,9 @@ fn main() -> std::process::ExitCode {
     dxlint::no_error_dialogs();
     #[cfg(feature = "work")]
     dxlint::work::start();
+    if let Some(units) = std::env::var("DXLINT_SEMANTIC_BUDGET").ok().and_then(|units| units.parse().ok()) {
+        dxlint::grammar::names::question::Budget::set_per_question(units);
+    }
     let code = {
         // The sampler reports when it drops, before the levers do.
         let _sampler = dxlint::sampler::start_from_env();

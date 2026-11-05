@@ -611,7 +611,13 @@ impl Effects<'_> {
         }
     }
 
+    /// A walk of the whole body, on an allowance of its own: what a body
+    /// declares doesn't turn unknown because the asker is nearly spent.
     pub fn declared(&self, entry: Leaf, effect: EffectId) -> Known<Vec<DeclaredEffect>> {
+        self.semantic.question.budget.sized(super::super::question::Budget::DEFAULT, || self.declared_in(entry, effect)).unwrap_or(Known::Unknown)
+    }
+
+    fn declared_in(&self, entry: Leaf, effect: EffectId) -> Known<Vec<DeclaredEffect>> {
         let Some(entry) = self.semantic.leaf(entry).known() else { return Known::Unknown };
         let Target::Node(node) = entry.target else { return Known::Unknown };
         let Some(tree) = self.semantic.world.tree(node.file) else { return Known::Unknown };

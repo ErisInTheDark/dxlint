@@ -66,6 +66,8 @@ pub struct Budget {
     /// How many outermost facts have ended: provisional answers kept during
     /// one ([`super::values::Values::keep_provisional`]) expire with it.
     fact_epoch: Cell<u64>,
+    /// Graph hops since the last unit they paid ([`Budget::hop`]).
+    hops: Cell<u32>,
 }
 
 /// Why a fact ([`Budget::fact`]) gave no answer.
@@ -89,6 +91,7 @@ pub(crate) struct Asker {
     depth_cuts: u64,
     /// [`Budget::fact_epoch`] when the fact began.
     pub epoch: u64,
+    hops: u32,
 }
 
 /// Holds one level of [`Budget::nest`]; leaving it returns the level.
@@ -112,7 +115,7 @@ impl Budget {
 
     pub fn new(units: u32) -> Budget {
         Budget { left: Cell::new(units), depth: Cell::new(0), limited: Cell::new(false), traced: Cell::new(false), depth_cuts: Cell::new(0),
-            facts: Cell::new(0), fact_epoch: Cell::new(0) }
+            facts: Cell::new(0), fact_epoch: Cell::new(0), hops: Cell::new(0) }
     }
 
     pub(crate) fn trace(&self, on: bool) {
@@ -147,6 +150,17 @@ impl Budget {
                 true
             }
         }
+    }
+
+    /// A step of a walk over a built graph: a bit test, nowhere near a
+    /// semantic step, so many pay for one unit.
+    pub fn hop(&self) -> bool {
+        const HOPS_PER_UNIT: u32 = 32;
+        let hops = self.hops.get().wrapping_add(1);
+        self.hops.set(hops);
+        if hops % HOPS_PER_UNIT == 0 { return self.step() }
+        if self.left.get() == 0 { self.limit(); return false }
+        true
     }
 
     /// Spends the rest of the budget: the question ends as one that ran out.
@@ -208,7 +222,7 @@ impl Budget {
     /// asker's to hand to [`Budget::end_fact`].
     pub(crate) fn begin_fact(&self, units: u32) -> Asker {
         self.facts.set(self.facts.get() + 1);
-        Asker { left: self.left.replace(units), limited: self.limited.replace(false), depth_cuts: self.depth_cuts.get(), epoch: self.fact_epoch.get() }
+        Asker { left: self.left.replace(units), limited: self.limited.replace(false), depth_cuts: self.depth_cuts.get(), epoch: self.fact_epoch.get(), hops: self.hops.replace(0) }
     }
 
     /// See [`Budget::fact_epoch`] (the field).
@@ -223,6 +237,7 @@ impl Budget {
         let limited = self.limited();
         self.left.set(asker.left);
         self.limited.set(asker.limited);
+        self.hops.set(asker.hops);
         self.facts.set(self.facts.get() - 1);
         if self.facts.get() == 0 { self.fact_epoch.set(self.fact_epoch.get() + 1) }
         match (limited, self.depth_cuts.get() != asker.depth_cuts) {

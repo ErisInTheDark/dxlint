@@ -24,16 +24,6 @@ fn parse(semantic: &Semantic<'_>, at: Leaf, args: &[Value<'static>]) -> Known<Va
     let Some(parser) = semantic.world.grammar().parsers.get(name) else {
         return Known::Yes(error("parser", &format!("unknown declared parser `{name}`")));
     };
-    if let Some(Value::Str(text)) = field(input, "text") {
-        for _ in text.chars() {
-            if !semantic.question.budget.step() { return Known::Unknown }
-        }
-    }
-    if let Some(Value::Record(flags)) = field(input, "flags") {
-        for _ in flags.iter() {
-            if !semantic.question.budget.step() { return Known::Unknown }
-        }
-    }
     let input = match Input::read(input) {
         Ok(input) => input,
         Err(message) => return Known::Yes(error("input", &message)),
@@ -72,7 +62,6 @@ fn parse(semantic: &Semantic<'_>, at: Leaf, args: &[Value<'static>]) -> Known<Va
     }
     let mut nodes = Vec::with_capacity(parsed.nodes.len());
     for (id, node) in parsed.nodes.iter().enumerate() {
-        if !semantic.question.budget.step() { return Known::Unknown }
         let range = match mapped.range(node.start, node.end) {
             Ok(range) => range,
             Err(message) => return Known::Yes(error("mapping", &message)),
