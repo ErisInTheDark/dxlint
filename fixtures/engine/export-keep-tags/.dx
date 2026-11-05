@@ -1,0 +1,9 @@
+import .ts
+
+# This rule's options put comments among the tree's children.
+rule es-padding-line-between-statements {
+  set typescriptBodies false
+}
+rule es-no-unused-exports {
+  set keepTags ["@public"]
+}

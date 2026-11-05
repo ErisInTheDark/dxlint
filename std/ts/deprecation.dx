@@ -77,7 +77,12 @@ fn deprecation_local_doc(n) = {
   value owner: find(walk([] n.declaration, current =>
     if current is (ts_declarator, ts_identifier) then current.parent.node else null),
     current => current is ts_variable_declaration)
-  value if owner == null then null else deprecation_leading_doc(owner.gap_before ?? owner.text_before)
+  value if owner == null then null else deprecation_leading_doc(owner.deprecation_leading)
+}
+# From the code before it: comments are children only under some configs.
+in ts_variable_declaration let deprecation_leading {
+  value lead: token(node, "before")
+  value byte_slice(source, if lead == null then 0 else lead.end, offset)
 }
 fn deprecation_subject(n) = if n is (ts_member.property, ts_qualified_name.right) then n.parent.node
   else if n.deprecation_shorthand then n.declaration else n

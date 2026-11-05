@@ -28,8 +28,10 @@ fn export_usage_bound(declarator) = if declarator.name.node is ts_identifier the
   filter (item) item is ts_identifier && item.declaration_kind != null
 }
 in ts_export_specifier let export_usage_before byte_slice(source, previous.end_offset ?? parent.offset, offset)
-fn export_usage_statement_sites(statement) = {
-  value before: statement.gap_before ?? statement.text_before
+fn export_usage_statement_sites(statement, source_text) = {
+  # From the code before it: comments are children only under some configs.
+  value lead: token(statement, "before")
+  value before: byte_slice(source_text, if lead == null then 0 else lead.end, statement.offset)
   value when {
     statement is ts_export_assignment then [export_usage_site(statement, "=", statement, before)]
     statement.kind == "default" then [export_usage_site(statement, "default", statement.declaration.name.node ?? statement, before)]
@@ -43,7 +45,7 @@ fn export_usage_statement_sites(statement) = {
 in ts_program let export_usage_sites {
   value body.nodes
   filter (statement) statement is (ts_export, ts_export_assignment)
-  flat_map (statement) export_usage_statement_sites(statement)
+  flat_map (statement) export_usage_statement_sites(statement, source)
 }
 group export_usage_owner ts_export, ts_export_assignment, ts_export_specifier, ts_declarator
 in ts_export, ts_export_assignment let export_usage_top_level parent is ts_program
