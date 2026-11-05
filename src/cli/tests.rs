@@ -426,6 +426,31 @@ fn worker_limits_preserve_single_file_and_project_diagnostics() {
 }
 
 #[test]
+fn a_command_run_never_keeps_other_files_from_linting() {
+    let config = r#"
+lang t "*.t"
+command waits "node waits.js"
+command writes "node writes.js"
+in .t match waiter /WAIT/ {
+  let out command_output(node, "waits", [])
+  rule waited warn "{out.state}"
+}
+in .t match writer /WRITE/ {
+  let out command_output(node, "writes", [])
+  rule wrote warn "{out.state}"
+}
+"#;
+    let waits = "const fs = require('fs'); const start = Date.now(); while (!fs.existsSync('token')) { if (Date.now() - start > 20000) process.exit(3); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20); }";
+    let writes = "require('fs').writeFileSync('token', '')";
+    let dir = project("cli-command-pool", &[(".dx", config), ("waits.js", waits), ("writes.js", writes),
+        ("first.t", "WAIT and the biggest file, so one worker reaches it first"), ("second.t", "WAIT too"), ("third.t", "WRITE")]);
+    let out = dxlint(&dir, &["--jobs", "1", "--no-cache", "--format", "jsonl"]);
+    assert_eq!(out.code, 0, "{}", String::from_utf8_lossy(&out.stderr));
+    let states = stdout(&out);
+    assert_eq!(states.matches("\"message\":\"ready\"").count(), 3, "{states}");
+}
+
+#[test]
 fn dx_library_reads_the_built_in_library_from_disk() {
     // A library dir whose `whitespace` module defines a different rule.
     let library = project("library-override", &[

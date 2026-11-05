@@ -17,7 +17,7 @@
 //! read a marker that changes when it finishes.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::fx_hash::FxHashMap;
@@ -60,6 +60,100 @@ enum Slot {
 /// Called with a finished background run's marker path.
 type Finished = dyn Fn(PathBuf) + Send + Sync;
 
+/// Replacements stop here: files all waiting on one run would otherwise each
+/// cost a thread, and the run ends anyway.
+const MAX_LANES_PER_JOB: usize = 8;
+
+/// A run on the asking thread: waiters wake when it ends, and a run that never
+/// got its result (a panic) gives way to the next asker.
+struct Claim<'c> {
+    commands: &'c Commands,
+    key: &'c Key,
+}
+
+impl Drop for Claim<'_> {
+    fn drop(&mut self) {
+        let mut runs = self.commands.runs.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if matches!(runs.get(self.key), Some(Slot::Running)) { runs.remove(self.key); }
+        drop(runs);
+        self.commands.finished.notify_all();
+    }
+}
+
+/// A worker pool's size against how many of its workers sit waiting for a
+/// command: those aren't working, so others may take their place.
+#[derive(Default)]
+pub struct Lanes {
+    counts: Mutex<LaneCounts>,
+    changed: Condvar,
+}
+
+#[derive(Default)]
+struct LaneCounts {
+    workers: usize,
+    blocked: usize,
+}
+
+impl LaneCounts {
+    fn working(&self) -> usize {
+        self.workers.saturating_sub(self.blocked)
+    }
+
+    fn wants_worker(&self, jobs: usize) -> bool {
+        self.working() < jobs && self.workers < jobs * MAX_LANES_PER_JOB
+    }
+}
+
+/// While alive, one worker counts as waiting.
+pub struct Blocked<'l>(&'l Lanes);
+
+impl Drop for Blocked<'_> {
+    fn drop(&mut self) {
+        self.0.counts.lock().expect("lanes").blocked -= 1;
+        self.0.changed.notify_all();
+    }
+}
+
+impl Lanes {
+    fn block(&self) -> Blocked<'_> {
+        self.counts.lock().expect("lanes").blocked += 1;
+        self.changed.notify_all();
+        Blocked(self)
+    }
+
+    /// One more worker is starting.
+    fn enter(&self) {
+        self.counts.lock().expect("lanes").workers += 1;
+    }
+
+    /// A worker ended, however it ended.
+    pub fn left(&self) {
+        self.counts.lock().unwrap_or_else(std::sync::PoisonError::into_inner).workers -= 1;
+        self.changed.notify_all();
+    }
+
+    /// Whether more than `jobs` workers work: one may end after its file.
+    pub fn surplus(&self, jobs: usize) -> bool {
+        self.counts.lock().expect("lanes").working() > jobs
+    }
+
+    /// Starts workers until `more_work` says none could help and all ended,
+    /// keeping `jobs` of them working.
+    pub fn supervise(&self, jobs: usize, more_work: impl Fn() -> bool, mut start: impl FnMut()) {
+        loop {
+            let counts = self.counts.lock().expect("lanes");
+            if more_work() && counts.wants_worker(jobs) {
+                drop(counts);
+                self.enter();
+                start();
+                continue;
+            }
+            if !more_work() && counts.workers == 0 { return }
+            drop(self.changed.wait(counts).expect("lanes"));
+        }
+    }
+}
+
 /// A command as the root config declares it.
 pub struct Declared {
     pub argv: Vec<String>,
@@ -71,6 +165,9 @@ pub struct Commands {
     root: PathBuf,
     declared: FxHashMap<String, Declared>,
     runs: Mutex<FxHashMap<Key, Slot>>,
+    /// Signals a finished run to those waiting for it.
+    finished: Condvar,
+    pub lanes: Lanes,
     mode: Mutex<Mode>,
 }
 
@@ -138,18 +235,31 @@ impl Commands {
             Mode::Disabled => return Answer::Disabled,
         };
         let mut runs = self.runs.lock().expect("command runs");
-        if let Some(Slot::Done(run)) = runs.get(&key) {
-            if run.inputs.iter().all(|(path, hash)| reads::disk_hash(path) == *hash) {
-                let run = run.clone();
-                drop(runs);
-                return self.recorded(&run, &marker);
+        loop {
+            match runs.get(&key) {
+                Some(Slot::Done(run)) if run.inputs.iter().all(|(path, hash)| reads::disk_hash(path) == *hash) => {
+                    let run = run.clone();
+                    drop(runs);
+                    return self.recorded(&run, &marker);
+                }
+                Some(Slot::Running) if mode.is_none() => {
+                    let _blocked = self.lanes.block();
+                    runs = self.finished.wait(runs).expect("command runs");
+                }
+                _ => break,
             }
         }
         match mode {
             None => {
-                let run = Arc::new(self.run(argv, args));
-                runs.insert(key, Slot::Done(run.clone()));
+                runs.insert(key.clone(), Slot::Running);
                 drop(runs);
+                let claim = Claim { commands: self, key: &key };
+                let run = {
+                    let _blocked = self.lanes.block();
+                    Arc::new(self.run(argv, args))
+                };
+                self.runs.lock().expect("command runs").insert(key.clone(), Slot::Done(run.clone()));
+                drop(claim);
                 self.recorded(&run, &marker)
             }
             Some(finished) => {
@@ -285,6 +395,50 @@ mod tests {
         assert_eq!(section(payload, "b"), Some(Answer::Failed("unknown version b".into())));
         assert_eq!(section(payload, "c"), Some(Answer::Ready("".into())));
         assert_eq!(section(payload, "d"), None);
+    }
+
+    #[test]
+    fn a_running_command_keeps_no_other_command_waiting() {
+        let dir = crate::config::source::normalize_path(&std::env::temp_dir().join("dxlint-commands-lock-test"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("dir");
+        let node = |code: &str| Declared { argv: vec!["node".to_owned(), "-e".to_owned(), code.to_owned()], batch: false };
+        let waits = "const fs = require('fs'); fs.writeFileSync('started', ''); const start = Date.now(); while (!fs.existsSync('token')) { if (Date.now() - start > 20000) process.exit(3); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20); } process.stdout.write('ok')";
+        let commands = Arc::new(Commands::new(dir.clone(), [("waits".to_owned(), node(waits)), ("writes".to_owned(), node("require('fs').writeFileSync('token', '')"))]));
+        let running = commands.clone();
+        let asked = std::thread::spawn(move || running.answer("waits", &[]));
+        while !dir.join("started").exists() { std::thread::yield_now() }
+        assert_eq!(commands.answer("writes", &[]), Answer::Ready("".into()));
+        assert_eq!(asked.join().expect("no panic"), Answer::Ready("ok".into()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn wants_worker(lanes: &Lanes, jobs: usize) -> bool {
+        lanes.counts.lock().expect("lanes").wants_worker(jobs)
+    }
+
+    #[test]
+    fn supervised_workers_are_replaced_while_blocked_and_leave_after() {
+        let lanes = Lanes::default();
+        lanes.enter();
+        assert!(!wants_worker(&lanes, 1));
+        assert!(!lanes.surplus(1));
+        let blocked = lanes.block();
+        assert!(wants_worker(&lanes, 1));
+        lanes.enter();
+        assert!(!wants_worker(&lanes, 1));
+        drop(blocked);
+        assert!(lanes.surplus(1));
+        lanes.left();
+        assert!(!lanes.surplus(1));
+    }
+
+    #[test]
+    fn replacements_stop_at_the_cap() {
+        let lanes = Lanes::default();
+        let blocked: Vec<_> = (0..MAX_LANES_PER_JOB).map(|_| { lanes.enter(); lanes.block() }).collect();
+        assert!(!wants_worker(&lanes, 1));
+        drop(blocked);
     }
 
     #[test]

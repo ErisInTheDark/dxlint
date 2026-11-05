@@ -261,6 +261,8 @@ struct Scope<'a> {
     whole: bool,
     /// The files under `roots`, walked before the config was built.
     walked: Option<Walked>,
+    /// The process ends after this, so what the run holds need not be freed.
+    exiting: bool,
 }
 
 /// A config to lint with: its named roots (`None`: its whole project), and
@@ -339,7 +341,9 @@ fn lint(output: &mut Output<'_>, args: LintArgs, config: &ConfigArg, sources: Op
     // In a Workbench agent's shell, read the arc view while configs load.
     let mut view = (super::workbench::active() && !args.no_workbench_view).then(|| super::workbench::start(output.cwd.to_path_buf()));
     let mut tally = Tally::new();
+    let mut remaining = configs.len();
     for Configured { config: path, roots, between } in configs {
+        remaining -= 1;
         let whole = roots.is_none();
         let roots = roots.unwrap_or_else(|| vec![path.parent().map(Path::to_path_buf).unwrap_or_default()]);
         // The walk comes between reading and building the config: it skips
@@ -381,9 +385,22 @@ fn lint(output: &mut Output<'_>, args: LintArgs, config: &ConfigArg, sources: Op
             }
         };
         let walked = walked.map(|walked| Walked { folded, ..walked });
-        lint_project(output, &args, &mut project, None, Scope { roots, named: &named, whole, walked }, started, &mut tally);
+        // The process ends after the last config: freeing all it holds would
+        // only be work. Tests go on running in this process.
+        let exiting = !cfg!(test) && remaining == 0;
+        lint_project(output, &args, &mut project, None, Scope { roots, named: &named, whole, walked, exiting }, started, &mut tally);
+        if exiting { std::mem::forget(project) }
     }
     tally.finish(output, args.format)
+}
+
+/// A lint worker's place in its pool, given up however the worker ends.
+struct Lane<'l>(&'l crate::engine::commands::Lanes);
+
+impl Drop for Lane<'_> {
+    fn drop(&mut self) {
+        self.0.left();
+    }
 }
 
 /// What a walk found before any config was built: every file (with its
@@ -429,7 +446,7 @@ fn walk(roots: &[PathBuf], jobs: usize, base: &Path, ignores: &crate::path_globs
 pub(super) fn prepared(output: &mut Output<'_>, args: LintArgs, project: &mut Project, sources: Option<&Sources>, started: Instant) -> u8 {
     let mut tally = Tally::new();
     let roots = vec![project.linter.root.clone()];
-    lint_project(output, &args, project, sources, Scope { roots, named: &[], whole: true, walked: None }, started, &mut tally);
+    lint_project(output, &args, project, sources, Scope { roots, named: &[], whole: true, walked: None, exiting: false }, started, &mut tally);
     tally.finish(output, args.format)
 }
 
@@ -461,8 +478,8 @@ fn lint_project(output: &mut Output<'_>, args: &LintArgs, project: &mut Project,
     // budget gives other results than cached ones.
     let cache = (!args.no_cache && !args.profile && !args.fix_preview && args.semantic_budget.is_none()).then(|| Cache::open(&linter));
     let cwd = output.cwd;
-    let Scope { roots, named, whole, walked } = scope;
-    let jobs = args.jobs.map_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get()), |n| n.get());
+    let Scope { roots, named, whole, walked, exiting } = scope;
+    let jobs =args.jobs.map_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get()), |n| n.get());
 
     let packed = sources.map(|sources| sources.files.iter().filter(|(_, path)| linter.wants(path)).cloned().collect::<Vec<_>>());
 
@@ -508,20 +525,26 @@ fn lint_project(output: &mut Output<'_>, args: &LintArgs, project: &mut Project,
             linter.set_rule_jobs(jobs / threads);
             let linter = &*linter;
             let run = linter.run();
-            let working = std::sync::atomic::AtomicUsize::new(threads);
+            let working = std::sync::atomic::AtomicUsize::new(0);
             std::thread::scope(|w| {
                 if let (Some(every), Some(profile)) = (watch_every(), linter.profile.as_ref()) {
                     let working = &working;
                     w.spawn(move || watch(linter, profile, every, working));
                 }
-                for _ in 0..threads {
+                // A worker waiting on a command isn't linting: another takes
+                // its place until it wakes.
+                let lanes = &linter.commands.lanes;
+                lanes.supervise(threads, || next.load(std::sync::atomic::Ordering::Relaxed) < queue.len(), || {
+                    working.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     let tx = tx.clone();
                     let (queue, next, working) = (&queue, &next, &working);
                     let run = &run;
                     std::thread::Builder::new().stack_size(crate::engine::WORKER_STACK).spawn_scoped(w, move || {
+                        let _lane = Lane(lanes);
                         let _pool = crate::alloc::own_pool();
                         // A trim walks every page the pool holds: now and then.
                         for linted in 1usize.. {
+                            if lanes.surplus(threads) { break }
                             let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                             let Some((_, path)) = queue.get(index) else { break };
                             if tx.send((index, lint_file(linter, run, cache, path, fix))).is_err() {
@@ -531,9 +554,10 @@ fn lint_project(output: &mut Output<'_>, args: &LintArgs, project: &mut Project,
                         }
                         working.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
                     }).expect("lint worker thread");
-                }
+                });
             });
             drop(tx);
+            if exiting { std::mem::forget(run) }
         });
 
         let mut results: Vec<FileResult> = Vec::new();
