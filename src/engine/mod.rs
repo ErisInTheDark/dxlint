@@ -832,6 +832,12 @@ impl Linter {
         !plans.is_empty() && self.alone(path, |world| world::any_holds(world, &plans)).unwrap_or(true)
     }
 
+    /// Moves whenever [`Linter::invalidate`] runs: answers about files from
+    /// an earlier revision may no longer be true.
+    pub fn revision(&self) -> u64 {
+        self.invalidation.load(std::sync::atomic::Ordering::Acquire)
+    }
+
     /// Forgets what the `changed` files said; [`Linter::is_stale`] then
     /// tells which recorded deps they broke.
     pub fn invalidate(&self, changed: &[PathBuf]) -> Stale {

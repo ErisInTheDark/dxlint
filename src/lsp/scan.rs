@@ -24,6 +24,7 @@ use serde_json::json;
 use super::projects::Linters;
 use super::transport::Outbox;
 use super::{convert, uri};
+use super::live_cache::LiveCaches;
 use crate::engine::cache::Cache;
 use crate::engine::{Carried, LintRun, Linter};
 use crate::engine::reads::Reads;
@@ -93,6 +94,8 @@ pub struct EditorLint {
     pub version: Option<i64>,
     pub text: Option<String>,
     pub linter: Arc<Linter>,
+    /// The buffer reads as it opened: any run may have linted that text.
+    pub unedited: bool,
 }
 
 /// Editor files waiting for [`edit`], latest text each, and whether its
@@ -243,6 +246,7 @@ pub fn relint(linters: Linters, files: Vec<PathBuf>, shared: Arc<Shared>, out: O
         // A config change that matters rescans, which ends this batch.
         let linters = shared.relint.lock().expect("lock").linters.clone();
         let runs = Runs::background(linters.all().map(|l| &**l));
+        let mut caches = LiveCaches::default();
         loop {
             let path = {
                 let mut relint = shared.relint.lock().expect("lock");
@@ -258,9 +262,10 @@ pub fn relint(linters: Linters, files: Vec<PathBuf>, shared: Arc<Shared>, out: O
             };
             let Some(linter) = linters.for_path(&path).filter(|l| l.wants(&path)) else { continue };
             let Some(run) = runs.of(linter) else { continue };
-            publish_disk(linter, run, None, &shared, &out, &path, current);
+            publish_disk(linter, run, caches.of(linter), &shared, &out, &path, current);
             crate::alloc::trim();
         }
+        caches.save();
         runs.finish();
     });
 }
@@ -306,7 +311,9 @@ pub fn edit(shared: &Arc<Shared>, out: &Outbox, lint: EditorLint) {
             };
             let diags = match text {
                 Some(text) => {
-                    let found = shared.lint(run, &lint.path, text);
+                    let saved = lint.unedited.then(|| Cache::open(&lint.linter))
+                        .and_then(|cache| saved_result(&cache, &lint.linter, &lint.path, text, &shared));
+                    let found = saved.unwrap_or_else(|| shared.lint(run, &lint.path, text));
                     if std::env::var_os("DXLINT_EDITOR_CHECK").is_some() {
                         check_against_fresh(&lint.linter, &lint.path, text, &found);
                     }
@@ -348,27 +355,29 @@ fn check_against_fresh(linter: &Linter, path: &Path, text: &str, found: &[crate:
     for line in fresh.iter().filter(|line| !carried.contains(line)) { eprintln!("dxlint editor check: MISSING {line}") }
 }
 
+/// `path`'s result for `text` from `cache`, if it holds, keeping what it read.
+fn saved_result(cache: &Cache, linter: &Linter, path: &Path, text: &str, shared: &Shared) -> Option<Vec<crate::engine::Diagnostic>> {
+    let rel = linter.relative(path).to_string_lossy().replace('\\', "/");
+    let (diags, reads) = cache.lookup(linter, &rel, text).zip(cache.saved_reads(&rel))?;
+    shared.reads.lock().expect("lock").insert(path.to_path_buf(), crate::engine::reads::kept(reads));
+    Some(diags)
+}
+
 /// Lints a file on disk (from `cache` when it can) and publishes the
 /// result, unless the editor owns the file. Returns the problem count.
-fn publish_disk(linter: &Linter, run: &LintRun<'_>, cache: Option<&Cache>, shared: &Shared, out: &Outbox, path: &Path, current: impl Fn() -> bool) -> Option<usize> {
+fn publish_disk(linter: &Linter, run: &LintRun<'_>, cache: &Cache, shared: &Shared, out: &Outbox, path: &Path, current: impl Fn() -> bool) -> Option<usize> {
     let open = || shared.editor.lock().expect("lock").contains(path);
     if open() {
         return None;
     }
     let text = std::fs::read_to_string(path).ok()?;
     let rel = linter.relative(path).to_string_lossy().replace('\\', "/");
-    let hit = cache.and_then(|c| c.lookup(linter, &rel, &text).zip(c.saved_reads(&rel)));
-    let diags = match hit {
-        Some((diags, reads)) => {
-            shared.reads.lock().expect("lock").insert(path.to_path_buf(), crate::engine::reads::kept(reads));
-            diags
-        }
+    let diags = match saved_result(cache, linter, path, &text, shared) {
+        Some(diags) => diags,
         None => {
             let (diags, reads) = run.lint_tracked(path, &text);
             let reads = crate::engine::reads::kept(reads);
-            if let Some(cache) = cache {
-                cache.store(&rel, &text, &diags, reads.clone());
-            }
+            cache.store(&rel, &text, &diags, reads.clone());
             shared.reads.lock().expect("lock").insert(path.to_path_buf(), reads);
             diags
         }
@@ -519,13 +528,11 @@ struct Scan {
     problems: AtomicUsize,
     /// Known once the walk is done.
     total: AtomicUsize,
-    /// Each config's `.dxcache`, by config directory.
-    caches: HashMap<PathBuf, Cache>,
+    caches: Mutex<LiveCaches>,
 }
 
 impl Scan {
     fn new(linters: Linters, shared: Arc<Shared>, out: Outbox, progress: bool, generation: u64) -> Scan {
-        let caches = linters.all().map(|l| (l.root.clone(), Cache::open(l))).collect();
         Scan {
             linters,
             shared,
@@ -538,7 +545,7 @@ impl Scan {
             files: AtomicUsize::new(0),
             problems: AtomicUsize::new(0),
             total: AtomicUsize::new(0),
-            caches,
+            caches: Mutex::default(),
         }
     }
 
@@ -562,21 +569,15 @@ impl Scan {
             self.total.store(files.len(), Ordering::Relaxed);
             self.drain(&files, &runs);
         }
+        // Files the editor owns were skipped, so nothing is pruned.
+        self.caches.lock().expect("lock").save();
         runs.finish();
-        let finished = self.current();
-        if finished {
+        if self.current() {
             self.sweep();
         }
         if self.progress {
             let message = format!("{} files, {} problems", self.files.load(Ordering::Relaxed), self.problems.load(Ordering::Relaxed));
             self.out.notify("$/progress", json!({ "token": token, "value": { "kind": "end", "message": message } }));
-        }
-        // Only a whole scan's results are worth keeping. Files the editor
-        // owns were skipped, so nothing is pruned.
-        if finished {
-            for cache in self.caches.into_values() {
-                let _ = cache.save(false);
-            }
         }
     }
 
@@ -624,8 +625,9 @@ impl Scan {
         }
         let Some(linter) = self.linters.for_path(path).filter(|l| l.wants(path)) else { return };
         let Some(run) = runs.of(linter) else { return };
-        let cache = self.caches.get(&linter.root);
-        let Some(problems) = publish_disk(linter, run, cache, &self.shared, &self.out, path, || self.current()) else { return };
+        let mut caches = self.caches.lock().expect("lock");
+        let Some(problems) = publish_disk(linter, run, caches.of(linter), &self.shared, &self.out, path, || self.current()) else { return };
+        drop(caches);
         self.problems.fetch_add(problems, Ordering::Relaxed);
         self.touched.lock().expect("lock").insert(uri::from_path(path));
         let n = self.files.fetch_add(1, Ordering::Relaxed) + 1;

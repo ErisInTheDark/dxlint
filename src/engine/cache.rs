@@ -66,6 +66,8 @@ struct Saved {
 }
 
 pub struct Cache {
+    /// The file's hash when read, to tell whether another run wrote it since.
+    opened: Option<u64>,
     path: PathBuf,
     root: PathBuf,
     key: u64,
@@ -96,8 +98,11 @@ impl Cache {
     pub fn open(linter: &Linter) -> Cache {
         let path = linter.root.join(FILE_NAME);
         let key = key(linter.fingerprint);
-        let saved = std::fs::read(&path).ok().and_then(|bytes| decode(&bytes, key, &linter.root)).unwrap_or_default();
+        let bytes = std::fs::read(&path).ok();
+        let opened = bytes.as_deref().map(hash_bytes);
+        let saved = bytes.and_then(|bytes| decode(&bytes, key, &linter.root)).unwrap_or_default();
         Cache {
+            opened,
             path,
             root: linter.root.clone(),
             key,
@@ -114,6 +119,11 @@ impl Cache {
             changed: AtomicBool::new(false),
             hits: AtomicUsize::new(0),
         }
+    }
+
+    /// Whether a save would have something new to write.
+    pub fn has_new(&self) -> bool {
+        self.changed.load(Ordering::Relaxed)
     }
 
     /// Files whose results came from the cache this run.
@@ -223,7 +233,8 @@ impl Cache {
     }
 
     /// Writes the cache: this run's results, plus (unless `prune`, for a
-    /// run that saw every file) older results for files not seen this run.
+    /// run that saw every file) older results for files not seen this run,
+    /// the newest any run saved for these rules: others write it meanwhile.
     /// Nothing is written when nothing changed.
     pub fn save(self, prune: bool) -> io::Result<()> {
         let fresh = self.fresh.into_inner().unwrap_or_default();
@@ -231,6 +242,10 @@ impl Cache {
         if !self.changed.load(Ordering::Relaxed) && !pruned {
             return Ok(());
         }
+        let newer = if prune { None } else {
+            std::fs::read(&self.path).ok().filter(|bytes| Some(hash_bytes(bytes)) != self.opened)
+                .and_then(|bytes| decode(&bytes, self.key, &self.root))
+        };
         let mut tables = Tables::new(&self.saved);
         let mut entries: Vec<(&str, u64, Refs, &[Diagnostic])> = Vec::new();
         for (rel, f) in &fresh {
@@ -243,7 +258,9 @@ impl Cache {
             });
         }
         if !prune {
-            for (rel, e) in self.saved.entries.iter().filter(|(k, _)| !fresh.contains_key(*k)) {
+            let others = newer.as_ref().unwrap_or(&self.saved);
+            tables.read_saved_from(others);
+            for (rel, e) in others.entries.iter().filter(|(k, _)| !fresh.contains_key(*k)) {
                 entries.push((rel, e.content, tables.saved_refs(&e.refs), &e.diags));
             }
         }
@@ -335,6 +352,13 @@ impl<'a> Tables<'a> {
             scan_by_address: HashMap::new(),
             scan_by_saved: HashMap::new(),
         }
+    }
+
+    /// Saved refs from now on index `saved`.
+    fn read_saved_from(&mut self, saved: &'a Saved) {
+        self.saved = saved;
+        self.by_saved.clear();
+        self.scan_by_saved.clear();
     }
 
     fn scan(&mut self, scan: SavedScan) -> u32 {
@@ -960,6 +984,46 @@ impl<'a> Reader<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn project(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join("dxlint-cache-tests").join(name);
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("tmp dir");
+        root
+    }
+
+    fn store(cache: &Cache, rel: &str) {
+        cache.store(rel, rel, &[], Arc::default());
+    }
+
+    #[test]
+    fn a_save_keeps_what_another_writer_saved_since_it_opened() {
+        let root = project("merge");
+        let linter = crate::engine::tests::linter_at(&root, "");
+        let (first, second) = (Cache::open(&linter), Cache::open(&linter));
+        store(&first, "first");
+        store(&second, "second");
+        first.save(false).expect("save");
+        second.save(false).expect("save");
+        let saved = Cache::open(&linter);
+        assert!(saved.lookup(&linter, "first", "first").is_some());
+        assert!(saved.lookup(&linter, "second", "second").is_some());
+    }
+
+    #[test]
+    fn a_whole_run_forgets_files_it_did_not_see_whoever_saved_them() {
+        let root = project("prune");
+        let linter = crate::engine::tests::linter_at(&root, "");
+        let whole = Cache::open(&linter);
+        let other = Cache::open(&linter);
+        store(&other, "gone");
+        other.save(false).expect("save");
+        store(&whole, "seen");
+        whole.save(true).expect("save");
+        let saved = Cache::open(&linter);
+        assert!(saved.lookup(&linter, "seen", "seen").is_some());
+        assert!(saved.lookup(&linter, "gone", "gone").is_none());
+    }
 
     #[test]
     fn cached_fixes_keep_declared_range_priority() {

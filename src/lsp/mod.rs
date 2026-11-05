@@ -6,6 +6,7 @@
 
 mod config_docs;
 mod convert;
+mod live_cache;
 mod projects;
 mod scan;
 mod transport;
@@ -40,6 +41,7 @@ struct Doc {
     uri: String,
     text: String,
     version: i64,
+    opened_version: i64,
     /// Whether [`Server::editor_config`] lets this file be linted at all.
     lint: bool,
 }
@@ -575,7 +577,7 @@ impl Server {
         }
         match self.projects.linter_for(path).filter(|_| doc.lint) {
             Some(linter) => {
-                let lint = scan::EditorLint { path: path.to_path_buf(), uri: doc.uri.clone(), version: Some(doc.version), text: Some(doc.text.clone()), linter: linter.clone() };
+                let lint = scan::EditorLint { path: path.to_path_buf(), uri: doc.uri.clone(), version: Some(doc.version), text: Some(doc.text.clone()), linter: linter.clone(), unedited: doc.version == doc.opened_version };
                 scan::edit(&self.shared, &self.out, lint);
             }
             None => self.shared.publish(&self.out, &doc.uri, Some(doc.version), json!([])),
@@ -590,7 +592,7 @@ impl Server {
         }
         let u = uri::from_path(path);
         match self.projects.linter_for(path) {
-            Some(linter) => scan::edit(&self.shared, &self.out, scan::EditorLint { path: path.to_path_buf(), uri: u, version: None, text: None, linter: linter.clone() }),
+            Some(linter) => scan::edit(&self.shared, &self.out, scan::EditorLint { path: path.to_path_buf(), uri: u, version: None, text: None, linter: linter.clone(), unedited: false }),
             None => self.shared.publish(&self.out, &u, None, json!([])),
         }
     }
@@ -621,7 +623,8 @@ impl Server {
         let td = &params["textDocument"];
         let config = if self.projects.is_config(&path) { None } else { self.editor_config(&path) };
         let text = td["text"].as_str().unwrap_or_default().to_string();
-        let doc = Doc { uri: u, text, version: td["version"].as_i64().unwrap_or(0), lint: config.is_some() };
+        let version = td["version"].as_i64().unwrap_or(0);
+        let doc = Doc { uri: u, text, version, opened_version: version, lint: config.is_some() };
         self.docs.insert(path.clone(), doc);
         self.shared.editor.lock().expect("lock").insert(path.clone());
         if self.projects.is_config(&path) {

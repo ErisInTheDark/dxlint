@@ -42,6 +42,22 @@ function darwinEnv() {
   };
 }
 
+// Whatever links package/bin may be running a binary, which Windows won't let
+// anything overwrite but does let move: it moves aside until nothing runs it.
+const replaced = path.join(root, "target", "replaced-binaries");
+fs.mkdirSync(replaced, { recursive: true });
+function ship(binary, destination) {
+  for (const old of fs.readdirSync(replaced)) {
+    try {
+      fs.rmSync(path.join(replaced, old), { force: true });
+    } catch {
+      // Still running.
+    }
+  }
+  if (fs.existsSync(destination)) fs.renameSync(destination, path.join(replaced, `${path.basename(destination)}-${process.pid}`));
+  fs.copyFileSync(binary, destination);
+}
+
 const wanted = process.argv.slice(2);
 for (const name of wanted) if (!platforms[name]) throw new Error(`unknown platform ${name}; known: ${Object.keys(platforms).join(", ")}`);
 const building = (wanted.length ? [...new Set(wanted)] : Object.keys(platforms)).map(name => ({ name, ...platforms[name] }));
@@ -54,7 +70,7 @@ if (result.status !== 0) process.exit(result.status ?? 1);
 for (const { name, target, built, shipped, refresh } of building) {
   const binary = path.join(root, "target", target, "release", built);
   const destination = path.join(root, "package", "bin", shipped);
-  fs.copyFileSync(binary, destination);
+  ship(binary, destination);
   fs.chmodSync(destination, 0o755);
   console.log(`${name}: package/bin/${shipped}`);
   if (refresh) {

@@ -33,6 +33,12 @@ pub(crate) fn linter(rules: &str) -> Linter {
     built.linter.expect("no errors")
 }
 
+/// [`linter`] of a real directory, for what touches its `.dxcache`.
+pub(crate) fn linter_at(root: &Path, rules: &str) -> Linter {
+    let src = format!("{LANG}\n{rules}");
+    build(config::load_text("test.dx", &src, &Disk), root.to_path_buf()).linter.expect("no errors")
+}
+
 pub(crate) fn errors(rules: &str) -> Vec<String> {
     let src = format!("{LANG}\n{rules}");
     build(config::load_text("test.dx", &src, &Disk), PathBuf::from("/root"))
