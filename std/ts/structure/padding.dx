@@ -170,6 +170,7 @@ in ts_node let structure_padding_multiline position(offset).js_line != position(
 fn structure_padding_receiver(n) = n.structure_padding_receiver.nonempty ?? n.structure_unwrapped
 fn structure_padding_is_require(n) = n.callee is ts_identifier && n.callee.text == "require"
 fn structure_padding_blank(text) = { value text; replace "\r\n" "\n"; re_test /[\n\r\u2028\u2029]\s*[\n\r\u2028\u2029]/ }
+fn padding_plainly_blank(gap) = !contains(gap, "/") && structure_padding_blank(gap)
 fn structure_padding_gap_end(previous, next, source) = {
   value end: if previous is ts_method_signature then previous.member_terminal_token.end else previous.end_offset
   value semicolon: if previous is ts_method_signature then previous.member_terminal_token.text == ";" else ends_with(previous.text, ";")
@@ -228,19 +229,19 @@ in structure_padding_owner rule es-padding-line-between-statements {
     prev: padding_prepare_selectors(config.prev),
     next: padding_prepare_selectors(config.next),
   })
+  let only_required all(options, policy => policy.blankLine != "never")
   let policies {
     value zip(structure_padding_items, slice(structure_padding_items, 1))
+    map (pair) { prior: first(pair), following: last(pair), end: structure_padding_gap_end(first(pair), last(pair), source) }
+    # A blank line already there breaks no policy unless one forbids it.
+    filter (pair) !only_required || !padding_plainly_blank(byte_slice(source, pair.end, pair.following.offset))
     map (pair) {
-      prior: first(pair),
-      following: last(pair),
+      end: pair.end,
+      start: pair.following.offset,
       policy: find_last(prepared_options, config =>
-        padding_side_matches(first(pair), config.prev) && padding_side_matches(last(pair), config.next)).blankLine ?? "any",
+        padding_side_matches(pair.following, config.next) && padding_side_matches(pair.prior, config.prev)).blankLine ?? "any",
     }
     filter (pair) pair.policy != "any"
-    map (pair) {
-      end: structure_padding_gap_end(pair.prior, pair.following, source),
-      start: pair.following.offset, policy: pair.policy,
-    }
     filter (pair) pair.end <= pair.start
       && (pair.policy != "never" || structure_padding_blank(byte_slice(source, pair.end, pair.start)))
   }

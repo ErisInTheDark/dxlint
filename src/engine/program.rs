@@ -69,7 +69,7 @@ impl Catalog {
     }
 
     fn includes_text(&self, path: &std::path::Path, hash: u64) -> bool {
-        self.texts.get(path).map_or_else(|| self.base.as_ref().is_some_and(|base| base.includes_text(path, hash)), |&stored| stored == hash)
+        self.texts.get(&super::reads::dep_path(path)).map_or_else(|| self.base.as_ref().is_some_and(|base| base.includes_text(path, hash)), |&stored| stored == hash)
     }
 
     /// The catalogs in declaration order: the base's first.
@@ -394,6 +394,8 @@ pub(super) struct Snapshot {
     values: RwLock<FxHashMap<ValueKey, Cached<Option<StableValue>>>>,
     /// Facts derived from those values, the same way.
     facts: RwLock<FxHashMap<RunFactKey, Cached<StableFact>>>,
+    /// Other files' tested roots: (root's file, root, owners in the file).
+    tested: RwLock<FxHashMap<TestedKey, Cached<Arc<[TestedRoot]>>>>,
     /// Frames those values are read in, interned run-wide.
     frames: RwLock<(FxHashMap<Arc<StableBinding>, u32>, Vec<Arc<StableBinding>>)>,
     /// An editor's run: each file's last lint, for its next one.
@@ -476,6 +478,10 @@ pub(super) enum StableFact {
     Member(Option<StableMember>),
     Members(Box<[StableMember]>),
 }
+
+/// (revision, settings, program, outside, scanned file).
+pub(super) type TestedKey = (u64, usize, u64, Option<PathBuf>, reads::DepPath);
+pub(super) type TestedRoot = (reads::DepPath, u32, Vec<u32>);
 
 type PackageProbe = crate::grammar::names::modules::resolution::Probe<std::path::PathBuf>;
 
@@ -650,7 +656,7 @@ impl Snapshot {
     /// the edited files.
     pub(super) fn carry(self, to: u64, keep: &mut Keep<'_>) -> Snapshot {
         let Snapshot { revision, paths, catalogs, units, modules, augmentations, prefetched: _, listed: _, probes, listings, texts,
-            candidates, surveys, words, configurations, metadata, packages, values, facts: _, frames, editor } = self;
+            candidates, surveys, words, configurations, metadata, packages, values, facts: _, tested: _, frames, editor } = self;
         // A survey holds while its listing does; inputs whose text changed
         // are read again, and what was built from them patched to match.
         let mut patched: FxHashMap<(usize, u64), Vec<usize>> = FxHashMap::default();
@@ -690,6 +696,7 @@ impl Snapshot {
             values: carried(values, |(at, settings, program, outside, leaf), answer|
                 keep(at, Some(&answer.reads), None).then(|| ((to, settings, program, outside, leaf), answer))),
             facts: Default::default(),
+            tested: Default::default(),
             frames,
             editor,
         }
@@ -718,7 +725,7 @@ impl Snapshot {
     /// Whether `path` is a file, probed once per revision; the caller
     /// records the read.
     pub(super) fn is_file(&self, revision: u64, path: &std::path::Path) -> bool {
-        if let Some(&(at, found)) = self.probes.read().expect("run probes").get(path) {
+        if let Some(&(at, found)) = self.probes.read().expect("run probes").get(&super::reads::dep_path(path)) {
             if at == revision { return found }
         }
         // Resolution probes many candidate names per directory: list each
@@ -820,6 +827,14 @@ impl Snapshot {
 
     pub(super) fn keep_value(&self, key: ValueKey, answer: Cached<Option<StableValue>>) {
         self.values.write().expect("run values").insert(key, answer);
+    }
+
+    pub(super) fn tested_answer(&self, key: &TestedKey) -> Option<Cached<Arc<[TestedRoot]>>> {
+        self.tested.read().expect("run tested roots").get(key).cloned()
+    }
+
+    pub(super) fn keep_tested(&self, key: TestedKey, answer: Cached<Arc<[TestedRoot]>>) {
+        self.tested.write().expect("run tested roots").insert(key, answer);
     }
 
     pub(super) fn fact_answer(&self, key: &RunFactKey) -> Option<Cached<StableFact>> {

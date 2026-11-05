@@ -1,9 +1,6 @@
 define {
 
-fn ts_value_has_trait(n, trait) = {
-  value arms: value_trait_parts(n, [trait])
-  value if arms == null then null else any(arms, arm => any(arm.parts, part => contains(part.traits, trait)))
-}
+fn ts_value_has_trait(n, trait) = value_has_trait(n, trait)
 fn ts_value_has_void(n) = ts_value_has_trait(n, "void")
 fn ts_value_callable(n) = {
   value signatures: value_signatures(n)

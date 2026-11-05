@@ -1132,6 +1132,8 @@ impl Names {
     /// it means (a language's escapes); `when(node, condition)` evaluates a
     /// `when` condition on a node.
     pub fn resolve<'t>(&self, tree: &Tree, text: &'t str, key: &dyn Fn(&'t str) -> Cow<'t, str>, when: &dyn Fn(u32, u32) -> bool, operand: &ResolveOperand<'_>) -> Resolved {
+        #[cfg(feature = "work")]
+        let _work = crate::work::enter("names.resolve", || (text.len() as u64, text.len() as u64, "names".to_owned()));
         let mut out = Resolved { vocabulary: self.vocabulary.clone(), complete: true, ..Resolved::default() };
         if self.resolves_nothing() {
             return out;

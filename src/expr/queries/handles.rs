@@ -16,6 +16,8 @@ const FIELD: &str = "value_handle";
 pub(super) static FUNCTIONS: &[QueryFunction] = &[
     QueryFunction { name: "value_parts", arity: 1, call: |semantic, at, args| parts(semantic, semantic.values().values(at), args) },
     QueryFunction { name: "value_trait_parts", arity: 2, call: |semantic, at, args| trait_parts(semantic, semantic.values().values(at), args) },
+    QueryFunction { name: "value_has_trait", arity: 2, call: |semantic, at, args| has_trait(semantic, semantic.values().values(at), args) },
+    QueryFunction { name: "value_may_have_carrier", arity: 1, call: |semantic, at, _| may_have_carrier(semantic, semantic.values().values(at)) },
     QueryFunction { name: "value_alternatives", arity: 1, call: |semantic, at, args| alternatives(semantic, semantic.values().values(at), args) },
     QueryFunction { name: "node_site", arity: 1, call: |semantic, at, _| match semantic.leaf(at) {
         Known::Yes(crate::grammar::names::question::Leaf { target: crate::grammar::names::question::Target::Node(node), .. }) => Known::Yes(Value::record(vec![
@@ -48,6 +50,7 @@ pub(super) static FUNCTIONS: &[QueryFunction] = &[
         }
     } },
     QueryFunction { name: "site_text", arity: 2, call: site_text },
+    QueryFunction { name: "site_mentions", arity: 3, call: site_mentions },
     QueryFunction { name: "site_field", arity: 3, call: site_field },
     QueryFunction { name: "site_parent", arity: 2, call: site_parent },
     QueryFunction { name: "declaration_origin", arity: 2, call: declaration_origin },
@@ -79,6 +82,7 @@ static HANDLES: &[HandleFunction] = &[
     HandleFunction { name: "value_bases", call: bases },
     HandleFunction { name: "value_constituents", call: |semantic, value, _| project(semantic, value) },
     HandleFunction { name: "value_trait_parts", call: trait_parts },
+    HandleFunction { name: "value_has_trait", call: has_trait },
     HandleFunction { name: "value_constituent_traits", call: |semantic, value, args| match trait_ids(semantic, args.first()) {
         Some(wanted) => project_traits(semantic, value, &wanted),
         None => Known::Unknown,
@@ -222,6 +226,38 @@ fn trait_parts(semantic: &Semantic<'_>, value: NodeValue, args: &[Value<'static>
         arms.push(Value::record(vec![("handle".into(), handle(semantic, arm)), ("parts".into(), Value::list(parts))]));
     }
     Known::Yes(Value::list(arms))
+}
+
+/// Whether any part of `value` certainly has the trait named by the argument:
+/// `value_trait_parts` for those who read nothing else of the parts.
+fn has_trait(semantic: &Semantic<'_>, value: NodeValue, args: &[Value<'static>]) -> Known<Value<'static>> {
+    let Some(name) = args.first() else { return Known::Unknown };
+    let Some(wanted) = trait_ids(semantic, Some(&Value::list(vec![name.clone()]))) else { return Known::Unknown };
+    let [(id, _)] = wanted[..] else { return Known::Unknown };
+    let NodeValue::Alternatives(rows) = value else { return Known::Unknown };
+    let values = semantic.values();
+    let mut found = false;
+    for row in rows {
+        if row.is_empty() || !semantic.question.budget.step() { return Known::Unknown }
+        for leaf in row {
+            if !semantic.question.budget.step() { return Known::Unknown }
+            found |= values.fits(leaf, id) == Known::Yes(true);
+            if semantic.question.budget.exhausted() { return Known::Unknown }
+        }
+    }
+    Known::Yes(Value::Bool(found))
+}
+
+/// False when no part of `value` has a carrier and all of it is known, so
+/// `value_parts` would show none: most values are spared describing.
+fn may_have_carrier(semantic: &Semantic<'_>, value: NodeValue) -> Known<Value<'static>> {
+    let NodeValue::Alternatives(rows) = value else { return Known::Yes(Value::Bool(true)) };
+    let values = semantic.values();
+    for leaf in rows.into_iter().flatten() {
+        if !semantic.question.budget.step() { return Known::Yes(Value::Bool(true)) }
+        if !matches!(values.carrier(leaf), Known::Yes(None)) { return Known::Yes(Value::Bool(true)) }
+    }
+    Known::Yes(Value::Bool(false))
 }
 
 fn with_handle(part: &Value<'static>, handle: Value<'static>) -> Option<Value<'static>> {
@@ -468,6 +504,14 @@ fn site_text(semantic: &Semantic<'_>, _: crate::grammar::names::question::Leaf, 
     let slice = |from: u32, to: u32| text.get(from as usize..to as usize).map(str::to_owned);
     let (Some(own), Some(leading)) = (slice(data.start, data.end), slice(before.min(data.start), data.start)) else { return Known::Yes(Value::Null) };
     Known::Yes(Value::record(vec![("text".into(), Value::from(own)), ("leading".into(), Value::from(leading))]))
+}
+
+/// Whether the file of a `{file, node}` site spells the text anywhere: a file
+/// that doesn't can't hold what a scan of it would look for.
+fn site_mentions(semantic: &Semantic<'_>, _: crate::grammar::names::question::Leaf, args: &[Value<'static>]) -> Known<Value<'static>> {
+    let (Some((file, _)), Some(needle)) = (args.first().and_then(site_of), args.get(1)) else { return Known::Yes(Value::Null) };
+    let Some(text) = semantic.world.text(file) else { return Known::Unknown };
+    Known::Yes(Value::Bool(memchr::memmem::find(text.as_bytes(), needle.text().as_bytes()).is_some()))
 }
 
 /// The children of a `{file, node}` site under one field, in any program

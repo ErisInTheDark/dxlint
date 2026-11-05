@@ -14,7 +14,32 @@ use crate::grammar::names::modules::resolution::DiscoveryRequest;
 
 /// A path a [`Dep`] names, interned: a run records the same few thousand
 /// paths in millions of reads, so each is stored once.
-pub type DepPath = Arc<Path>;
+/// Equal paths are one allocation, so comparing is a pointer check and hashing
+/// reads the bytes: run-wide answers are keyed by these millions of times, and
+/// a [`Path`]'s own hash parses every component.
+#[derive(Clone, Debug)]
+pub struct DepPath(Arc<Path>);
+
+impl std::ops::Deref for DepPath {
+    type Target = Path;
+    fn deref(&self) -> &Path { &self.0 }
+}
+impl AsRef<Path> for DepPath {
+    fn as_ref(&self) -> &Path { &self.0 }
+}
+impl PartialEq for DepPath {
+    fn eq(&self, other: &DepPath) -> bool { Arc::ptr_eq(&self.0, &other.0) }
+}
+impl Eq for DepPath {}
+impl Hash for DepPath {
+    fn hash<H: Hasher>(&self, state: &mut H) { self.0.as_os_str().as_encoded_bytes().hash(state) }
+}
+impl PartialOrd for DepPath {
+    fn partial_cmp(&self, other: &DepPath) -> Option<std::cmp::Ordering> { Some(self.cmp(other)) }
+}
+impl Ord for DepPath {
+    fn cmp(&self, other: &DepPath) -> std::cmp::Ordering { self.0.cmp(&other.0) }
+}
 
 /// The interned [`DepPath`] for `path`.
 pub fn dep_path(path: &Path) -> DepPath {
@@ -23,23 +48,23 @@ pub fn dep_path(path: &Path) -> DepPath {
     /// doubles, so it stays proportional to the live paths.
     #[derive(Default)]
     struct Interned {
-        paths: HashSet<DepPath>,
+        paths: HashSet<Arc<Path>>,
         sweep_at: usize,
     }
     const FIRST_SWEEP: usize = 4096;
     static PATHS: OnceLock<RwLock<Interned>> = OnceLock::new();
     let interned = PATHS.get_or_init(Default::default);
-    if let Some(found) = interned.read().expect("dep paths").paths.get(path) { return found.clone() }
+    if let Some(found) = interned.read().expect("dep paths").paths.get(path) { return DepPath(found.clone()) }
     let mut interned = interned.write().expect("dep paths");
-    if let Some(found) = interned.paths.get(path) { return found.clone() }
+    if let Some(found) = interned.paths.get(path) { return DepPath(found.clone()) }
     crate::alloc::lasting(|| {
         if interned.paths.len() >= interned.sweep_at {
             interned.paths.retain(|held| Arc::strong_count(held) > 1);
             interned.sweep_at = (interned.paths.len() * 2).max(FIRST_SWEEP);
         }
-        let path: DepPath = Arc::from(path);
+        let path: Arc<Path> = Arc::from(path);
         interned.paths.insert(path.clone());
-        path
+        DepPath(path)
     })
 }
 
@@ -653,7 +678,7 @@ impl Kept {
                 Dep::Discovered(found) => &found.dir,
                 Dep::Part(parts, _) => &parts.path,
             };
-            Arc::as_ptr(path).cast::<u8>().hash(&mut hasher);
+            Arc::as_ptr(&path.0).cast::<u8>().hash(&mut hasher);
         }
         for group in &groups { Arc::as_ptr(group).hash(&mut hasher) }
         for scan in &scans { Arc::as_ptr(scan).hash(&mut hasher) }
@@ -867,7 +892,42 @@ fn file_exists(path: &Path) -> bool {
     match overlay(path) {
         Overlay::Text(_) => true,
         Overlay::Hidden => false,
-        Overlay::Disk => path.is_file(),
+        Overlay::Disk => disk_kind(path) == DiskKind::File,
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DiskKind { Missing, File, Directory }
+
+/// What is at `path`. Module resolution probes thousands of paths: on Windows
+/// `Path::is_file` opens each one, where its attributes are a far cheaper ask.
+fn disk_kind(path: &Path) -> DiskKind {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn GetFileAttributesW(name: *const u16) -> u32;
+        }
+        const INVALID: u32 = u32::MAX;
+        const DIRECTORY: u32 = 0x10;
+        const REPARSE_POINT: u32 = 0x400;
+        /// Longer paths need the verbatim form `std` builds.
+        const SHORT_PATH: usize = 240;
+        let wide: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
+        if wide.len() < SHORT_PATH {
+            // SAFETY: `wide` is a live nul-terminated UTF-16 string.
+            let attributes = unsafe { GetFileAttributesW(wide.as_ptr()) };
+            if attributes == INVALID { return DiskKind::Missing }
+            if attributes & REPARSE_POINT == 0 {
+                return if attributes & DIRECTORY != 0 { DiskKind::Directory } else { DiskKind::File };
+            }
+        }
+    }
+    match std::fs::metadata(path) {
+        Ok(metadata) if metadata.is_file() => DiskKind::File,
+        Ok(metadata) if metadata.is_dir() => DiskKind::Directory,
+        _ => DiskKind::Missing,
     }
 }
 
@@ -950,7 +1010,7 @@ pub fn is_dir(path: &Path) -> bool {
 }
 
 fn directory_exists(path: &Path) -> bool {
-    buffers().read().expect("buffers lock").directories.contains_key(path) || path.is_dir()
+    buffers().read().expect("buffers lock").directories.contains_key(path) || disk_kind(path) == DiskKind::Directory
 }
 
 fn listing(dir: &Path) -> (Vec<String>, u64) {
@@ -1157,6 +1217,15 @@ pub fn discovery_changed(d: &Discovery, changed: &[PathBuf]) -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn disk_kind_tells_files_directories_and_missing_paths_apart() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        assert!(disk_kind(&root.join("Cargo.toml")) == DiskKind::File);
+        assert!(disk_kind(&root.join("src")) == DiskKind::Directory);
+        assert!(disk_kind(&root.join("no-such-entry")) == DiskKind::Missing);
+        assert!(disk_kind(&root.join("Cargo.toml/below-a-file")) == DiskKind::Missing);
+    }
 
     #[test]
     fn kept_reads_share_equal_groups_made_by_separate_lints() {

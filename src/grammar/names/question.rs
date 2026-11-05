@@ -609,6 +609,11 @@ pub trait World {
     fn shared_value(&self, _leaf: Leaf, _semantic: &super::semantic::Semantic<'_>, compute: &mut dyn FnMut() -> NodeValue) -> NodeValue {
         compute()
     }
+    /// Another file's tested roots ([`super::narrowing`]), shared with the
+    /// other worlds of the run: a whole-file scan each would repeat.
+    fn shared_tested_roots(&self, _file: u32, _semantic: &super::semantic::Semantic<'_>, compute: &mut dyn FnMut() -> Option<Vec<(NodeRef, Vec<u32>)>>) -> Option<Vec<(NodeRef, Vec<u32>)>> {
+        compute()
+    }
     /// Fact `key`, shared with the other worlds of the run that would derive
     /// the same; `compute` derives it here (`None`: unknown, never shared).
     fn shared_fact(&self, _key: &FactKey, _semantic: &super::semantic::Semantic<'_>, compute: &mut dyn FnMut() -> Option<Fact>) -> Option<Fact> {

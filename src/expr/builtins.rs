@@ -236,6 +236,8 @@ impl<'a> Ctx<'a> {
             fresh = true;
             let resolve = || {
                 self.memo.resolving_names.set(true);
+                #[cfg(feature = "work")]
+                let _owner = crate::work::owner("names.resolve");
                 let incomplete = std::cell::Cell::new(false);
                 let names = &self.grammar.names;
                 let session = crate::vm::Session::new(self, self.node, &[]);

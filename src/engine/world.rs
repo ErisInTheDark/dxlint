@@ -219,6 +219,13 @@ impl<'a> LintWorld<'a> {
         Some(owner.offer(self.linter.describe(unit, names.as_deref(), &published).lasting()))
     }
 
+    /// Makes sure foreign `file`'s parts know its names once they are resolved.
+    fn settle_parts(&'a self, file: u32) {
+        let settled = file.checked_sub(1).and_then(|view| self.views.get(view))
+            .and_then(|view| view.unit.parsed.tree.owner.as_ref()).is_some_and(|owner| owner.settled());
+        if !settled { self.parts_of(file); }
+    }
+
     /// Records `read` of foreign `file`.
     fn note_part(&'a self, file: u32, read: crate::parts::Read) {
         let Some(unit) = file.checked_sub(1).and_then(|view| self.views.get(view)).map(|view| &view.unit) else { return };
@@ -430,6 +437,14 @@ impl<'a> LintWorld<'a> {
             if !free { values.note_value_read() }
             return Some(value);
         }
+        #[cfg(feature = "work")]
+        let _work = crate::work::enter("attribute", || {
+            use std::hash::{Hash, Hasher};
+            let (strict, loose, label) = values.census_leaf(Leaf { target: Target::Node(NodeRef { file, node }), frame });
+            let name = attr;
+            let mixed = |key: u64| { let mut hash = crate::fx_hash::FxHasher::default(); (key, name).hash(&mut hash); hash.finish() };
+            (mixed(strict), mixed(loose), format!("{} {label}", self.linter.attrs.name_of(attr)))
+        });
         // One that asked no value question answers alike in every frame.
         if free && frame != FrameId::ROOT {
             if let Some(value) = kept(&AttributeKey { frame: FrameId::ROOT, ..key }) { return Some(value) }
@@ -1541,7 +1556,7 @@ impl World for Files<'_> {
         // A run unit's names resolved by any world are complete and shared:
         // read them without building this world's expression context.
         if let Some(shared) = self.0.name_cache(file).and_then(std::sync::OnceLock::get) {
-            self.0.parts_of(file);
+            self.0.settle_parts(file);
             return Some(&**shared.as_ref());
         }
         let ctx = self.0.on(file, self.tree(file)?.root)?;
@@ -1556,7 +1571,7 @@ impl World for Files<'_> {
             let _owner = crate::alloc::heap::Owner::enter(crate::alloc::heap::NAMES);
             ctx.names()
         };
-        if file != 0 { self.0.parts_of(file); }
+        if file != 0 { self.0.settle_parts(file); }
         if names.complete { Some(names) } else {
             self.0.mark_unknown();
             None
@@ -1583,12 +1598,12 @@ impl World for Files<'_> {
         if file == 0 { self.0.note_linted_read() }
         let ctx = self.0.on(file, self.tree(file)?.root)?;
         let names = ctx.names();
-        if file != 0 { self.0.parts_of(file); }
+        if file != 0 { self.0.settle_parts(file); }
         Some(names.index(ctx.tree, ctx.source, &|text| self.0.key(file, text)))
     }
 
     fn module_index(&self, file: u32, tables: &crate::grammar::names::Names) -> Option<&crate::grammar::names::modules::index::Index> {
-        if file != 0 { self.0.parts_of(file); }
+        if file != 0 { self.0.settle_parts(file); }
         Some(World::tree(self, file)?.module_index(tables, World::text(self, file)?, &|text| self.name_key(file, text), self.profile()))
     }
 
@@ -1795,6 +1810,37 @@ impl World for Files<'_> {
                 snapshot.keep_value(key, super::reads::Cached { value: stable, reads: super::reads::shared(answer.reads.clone()) });
             }
             Err(reason) => skip(reason),
+        }
+        answer.value
+    }
+
+    fn shared_tested_roots(&self, file: u32, semantic: &Semantic<'_>, compute: &mut dyn FnMut() -> Option<Vec<(NodeRef, Vec<u32>)>>) -> Option<Vec<(NodeRef, Vec<u32>)>> {
+        let Some(path) = self.shared_path(file) else { return compute() };
+        let Some(snapshot) = self.0.snapshot.filter(|&snapshot| snapshot.editor.is_none() && self.shares(snapshot)) else { return compute() };
+        let Known::Yes(Some(selected)) = self.program_selected() else { return compute() };
+        let Known::Yes((program, outside)) = self.program_identity(selected) else { return compute() };
+        let key = (self.0.revision(), selected as *const Settings as usize, program, outside, path);
+        if let Some(found) = snapshot.tested_answer(&key) {
+            // A root in this world's linted file has other ids here: scan.
+            let local: Option<Vec<_>> = found.value.iter().map(|(path, node, owners)| {
+                let file = self.0.file(path).filter(|&file| file != 0)?;
+                Some((NodeRef { file, node: *node }, owners.clone()))
+            }).collect();
+            if local.is_some() {
+                super::reads::note_group(&found.reads);
+                return local;
+            }
+        }
+        let values = semantic.values();
+        let (before, mark) = (values.root_reads(), values.cycle_mark());
+        let answer = super::reads::Cached::compute(|| compute());
+        super::reads::note_group(&answer.reads);
+        if values.root_reads() == before && !semantic.question.budget.limited() && !values.cycled_since(mark) {
+            let stable: Option<Vec<_>> = answer.value.as_ref().and_then(|roots| roots.iter()
+                .map(|(root, owners)| Some((self.shared_path(root.file)?, root.node, owners.clone()))).collect());
+            if let Some(stable) = stable {
+                snapshot.keep_tested(key, super::reads::Cached { value: stable.into(), reads: super::reads::shared(answer.reads.clone()) });
+            }
         }
         answer.value
     }

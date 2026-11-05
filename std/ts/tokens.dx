@@ -48,8 +48,12 @@ fn ts_token_gaps(source, start, end, text) = if !contains(text, "/") then [text]
 
 fn ts_token_gap(source, start, end) = {
   value text: byte_slice(source, start, end)
-  value breaks: if text == "" then 0 else ts_token_breaks(text)
-  value gaps: if text == "" then [] else ts_token_gaps(source, start, end, text)
+  value if text == "" || text == " " then {
+    text: text, start: start, end: end, spaced: text == " ", line_break: false,
+    blank_lines: 0, blank_gaps: 0, comments: false,
+  } else {
+  value breaks: ts_token_breaks(text)
+  value gaps: ts_token_gaps(source, start, end, text)
   value {
     text: text,
     start: start,
@@ -62,7 +66,8 @@ fn ts_token_gap(source, start, end) = {
     },
     blank_gaps: if breaks < 2 then 0 else if !contains(text, "/") then breaks - 1
       else sum(map(gaps, gap => max(ts_token_breaks(gap) - 1, 0))),
-    comments: text != "" && trim(text) != "",
+    comments: trim(text) != "",
+  }
   }
 }
 

@@ -24,6 +24,8 @@ pub mod native;
 pub mod path_globs;
 pub mod pattern;
 pub mod sampler;
+#[cfg(feature = "work")]
+pub mod work;
 pub(crate) mod js_regex;
 pub(crate) mod vm;
 

@@ -79,17 +79,15 @@ fn type_argument_signature(n) = if n is (ts_call, ts_new) then {
   value if binding != null && count(binding.choices) == 1 && first(binding.choices).site != null
     then first(binding.choices) else null
 } else null
-fn type_argument_site(n, signature) = {
-  value named: type_argument_named(n)
-  value member: type_argument_member(n)
+fn type_argument_site(n, signature) = if signature != null then signature.site else {
   value local: {
     value declaration: type_argument_local(n)
     value if declaration != null then node_site(declaration) else null
   }
-  value if signature != null then signature.site
-    else if local != null then local
-    else if named != null then named
-    else member
+  value if local != null then local else {
+    value named: type_argument_named(n)
+    value if named != null then named else type_argument_member(n)
+  }
 }
 fn type_argument_formals(n, site) = {
   value formals: if site != null then site_field(n, site, "type_parameter") else null

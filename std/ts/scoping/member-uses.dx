@@ -2,6 +2,7 @@ define {
 
 group member_usage_access ts_member, ts_index, ts_pattern_property, ts_property
 in ts_class let member_usage_accesses descendants(member_usage_access)
+in ts_class let member_usage_access_groups { value member_usage_accesses; filter (access) access.member_usage_name != null; group_by (access) access.member_usage_name }
 fn member_usage_class(n) = find(walk(n, item => item.parent.node), item => item is ts_class)
 fn member_usage_key(n) = if n is ts_parameter then n.name.node else n.key.node
 in ts_class let member_usage_members {
@@ -80,8 +81,9 @@ fn member_usage_used(declaration) = {
   value class: member_usage_class(declaration)
   value accessor: declaration is ts_method && contains(["get", "set"], declaration.kind)
     || contains([] declaration.modifier, "accessor")
-  value any(class.member_usage_accesses, access =>
-    access.member_usage_name == name && (accessor || access.member_usage_read)
+  value named: find(class.member_usage_access_groups, group => group.key == name).items ?? []
+  value any(named, access =>
+    (accessor || access.member_usage_read)
       && (if access is ts_member && access.property is ts_private_name
         then member_usage_hash_owner(access) == class
         else {

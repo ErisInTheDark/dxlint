@@ -296,16 +296,14 @@ fn agreed_outputs(call: Leaf, values: &Values<'_>) -> Option<NodeValue> {
 }
 
 /// Whether `value` can't depend on a type argument: only trait sets, and
-/// nodes with nothing inside them (`void`) or read in a frame binding nothing.
+/// nodes with nothing inside them (`void`). A result read before inference
+/// has unbound formals in a frame binding nothing, so its frame says nothing.
 fn holds_nothing_bound(value: &NodeValue, values: &Values<'_>) -> Option<bool> {
     let NodeValue::Alternatives(rows) = value else { return Some(false) };
     for &leaf in rows.iter().flatten() {
         let fixed = match leaf.target {
             Target::Traits(_) => true,
-            Target::Node(node) => {
-                let tree = values.world.tree(node.file)?;
-                tree.children(node.node).is_empty() || values.question.get(leaf.frame).is_none_or(|frame| frame.args.is_none() && frame.through.is_none())
-            }
+            Target::Node(node) => values.world.tree(node.file)?.children(node.node).is_empty(),
             _ => false,
         };
         if !fixed { return Some(false) }

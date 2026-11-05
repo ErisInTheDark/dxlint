@@ -496,6 +496,8 @@ impl Effects<'_> {
 
     /// Builds `entry`'s graph (`None`: an unknown not to keep).
     fn build_graph(&self, entry: Leaf, reads: bool) -> Option<Known<Rc<Execution>>> {
+        #[cfg(feature = "work")]
+        let _work = crate::work::enter("effects.graph", || self.semantic.values().census_leaf(entry));
         let state = &self.semantic.effects.graphs;
         // A body built in another frame builds alike when the conditions its
         // build decided answer alike here (graphs read written values

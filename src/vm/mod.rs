@@ -275,7 +275,8 @@ pub enum VExpr {
     Containing(NodeSel),
     /// `node_at(offset)`: the innermost default-layer node holding it.
     NodeAt(Box<VExpr>),
-    Token(crate::expr::TokenRead, Box<VExpr>, Option<Box<VExpr>>),
+    /// With the shape of the token record it gives.
+    Token(crate::expr::TokenRead, Box<VExpr>, Option<Box<VExpr>>, u16),
     /// `opener.x` / `closer.x`: on the first (last) child of these layers.
     OwnChild(bool, Box<[u32]>, Box<VExpr>),
     /// `matcher.x`: on the closest ancestor of that matcher.
@@ -302,6 +303,74 @@ pub enum VExpr {
     /// A call's body with its arguments in place ([`inlinable`]); like
     /// [`VExpr::CallFn`] it gives up past [`MAX_CALL_DEPTH`].
     Inlined(u32, Box<VExpr>, Box<[VExpr]>),
+    /// A rule `let` reading nothing of the node ([`hoist`]): computed once
+    /// per file.
+    Hoisted(Box<VExpr>),
+}
+
+/// `lowered` (of the rule `let` `e`) computed once per file, when `e` reads
+/// only constants and options: per-node work that no node can change.
+pub fn hoist(e: &CExpr, lowered: VExpr, functions: &[UserFn]) -> VExpr {
+    fn closed(e: &CExpr, functions: &[UserFn], depth: u8) -> bool {
+        let own = match e {
+            CExpr::Const(_) | CExpr::Param(_) | CExpr::Opt(_) | CExpr::Template(_) | CExpr::Hole(..) | CExpr::List(_)
+            | CExpr::Call(..) | CExpr::Not(_) | CExpr::Neg(_) | CExpr::Binary(..) | CExpr::If(..) | CExpr::Record(_)
+            | CExpr::Key(..) | CExpr::Each(_) | CExpr::Bind(..) | CExpr::Nullish(..) | CExpr::NonEmpty(_)
+            | CExpr::Member(..) | CExpr::Path(..) | CExpr::Test(..) | CExpr::TestDfa(..) => true,
+            CExpr::UserCall(i, _) => depth > 0 && functions.get(*i as usize).and_then(|function| function.body.get())
+                .is_some_and(|body| closed(body, functions, depth - 1)),
+            _ => false,
+        };
+        if !own { return false }
+        let mut holds = true;
+        e.for_each_child(&mut |child| holds = holds && closed(child, functions, depth));
+        holds
+    }
+    if matches!(lowered, VExpr::Const(_)) || !closed(e, functions, 8) { return lowered }
+    VExpr::Hoisted(Box::new(lowered))
+}
+
+#[cfg(feature = "work")]
+impl VExpr {
+    /// A short reading of this expression, for the work census.
+    fn census_label(&self, h: &impl Host, depth: u32) -> String {
+        let of = |e: &VExpr| e.census_label(h, depth.saturating_sub(1));
+        let args = |list: &[VExpr]| list.iter().map(of).collect::<Vec<_>>().join(", ");
+        let function = |i: u32| h.grammar().functions.get(i as usize).map_or("?", |function| function.name.as_str()).to_owned();
+        if depth == 0 { return "..".into() }
+        match self {
+            VExpr::Const(v) => format!("{v:?}"),
+            VExpr::Attr(a) => format!(".{}", h.census_attr(*a)),
+            VExpr::ParentAttr(a) => format!("parent.{}", h.census_attr(*a)),
+            VExpr::Call(called, list) => format!("{}({})", called.name, args(list)),
+            VExpr::QueryCall(called, list) => format!("?{}({})", called.name, args(list)),
+            VExpr::Trait(subject, _, called, _) => format!("?trait {} {}", called.name, of(subject)),
+            VExpr::Token(read, ..) => format!("Token.{read:?}"),
+            VExpr::Fact { fact, .. } => format!("fact {}", crate::expr::facts::FACTS[*fact].name),
+            VExpr::Builtin(builtin) => format!("Builtin.{builtin:?}"),
+            VExpr::CallFn(i, list) | VExpr::Inlined(i, _, list) => format!("{}({})", function(*i), args(list)),
+            VExpr::Binary(op, a, b) => format!("{} {op:?} {}", of(a), of(b)),
+            VExpr::Not(a) => format!("!{}", of(a)),
+            VExpr::If(c, ..) => format!("if {}", of(c)),
+            VExpr::OnField(label, inner) => format!("field{label}.{}", of(inner)),
+            VExpr::OnParent(inner) => format!("parent.{}", of(inner)),
+            VExpr::OnAncestor(_, inner) => format!("ancestor.{}", of(inner)),
+            VExpr::Contains(a, b) => format!("Contains({}, {})", of(a), of(b)),
+            VExpr::Let(a, _, b) => format!("Let({}; {})", of(a), of(b)),
+            VExpr::Member(a, key, _) => format!("{}.{key}", of(a)),
+            VExpr::Key(a, key) => format!("{}[{key}]", of(a)),
+            VExpr::Local(i) => format!("local{i}"),
+            VExpr::Bound(i) => format!("bound{i}"),
+            VExpr::Template(list) => format!("template({})", args(list)),
+            VExpr::Position(a, read) => format!("position({}).{read:?}", of(a)),
+            VExpr::Each(kind, _, body, _) => format!("{kind:?}(.. => {})", of(body)),
+            other => {
+                let text = format!("{other:?}");
+                let cut = text.find(|c: char| !c.is_alphanumeric()).unwrap_or(text.len());
+                text[..cut].to_owned()
+            }
+        }
+    }
 }
 
 /// What `position(offset)` reads.
@@ -557,10 +626,20 @@ fn lower_in<'a>(e: &'a CExpr, g: &Scope<'a, '_>, args: &[Lowered], bound: u16) -
     let all = |items: &'a [CExpr]| -> Box<[VExpr]> { items.iter().map(|v| scalar(v, g, args, bound)).collect() };
     Ok(Lowered::V(match e {
         CExpr::Const(v) => VExpr::Const(g.values.borrow_mut().constant(v).ok_or(e)?),
-        CExpr::List(items) => VExpr::List(all(items)),
+        CExpr::List(items) => {
+            let items = all(items);
+            match g.values.borrow_mut().constant_items(&items) {
+                Some(handle) => VExpr::Const(V::List(handle)),
+                None => VExpr::List(items),
+            }
+        }
         CExpr::Record(entries) => {
             let shape = g.values.borrow_mut().shape(entries.iter().map(|(key, _)| key.clone())).ok_or(e)?;
-            VExpr::Record(shape, entries.iter().map(|(_, v)| scalar(v, g, args, bound)).collect())
+            let items: Box<[VExpr]> = entries.iter().map(|(_, v)| scalar(v, g, args, bound)).collect();
+            match g.values.borrow_mut().constant_items(&items) {
+                Some(handle) => VExpr::Const(V::Record(shape, handle)),
+                None => VExpr::Record(shape, items),
+            }
         }
         // `position(x).line`: only the key read, no record built.
         CExpr::Key(base, key) if position_key(base, key).is_some() => {
@@ -766,14 +845,23 @@ fn lower_in<'a>(e: &'a CExpr, g: &Scope<'a, '_>, args: &[Lowered], bound: u16) -
         }
         CExpr::Containing(sel) => VExpr::Containing(sel.clone()),
         CExpr::NodeAt(offset) => VExpr::NodeAt(boxed(offset)?),
-        CExpr::Token(read, inner, pairs) => VExpr::Token(*read, boxed(inner)?, match pairs {
-            Some(pairs) => Some(boxed(pairs)?),
-            None => None,
-        }),
+        CExpr::Token(read, inner, pairs) => {
+            let shape = g.values.borrow_mut().shape(["text", "start", "end", "node"].into_iter().map(crate::expr::value::Key::from)).ok_or(e)?;
+            VExpr::Token(*read, boxed(inner)?, match pairs {
+                Some(pairs) => Some(boxed(pairs)?),
+                None => None,
+            }, shape)
+        }
         CExpr::OwnChild(last, kinds, inner) => VExpr::OwnChild(*last, kinds.clone().into(), boxed(inner)?),
         CExpr::OnAncestor(matcher, inner) => VExpr::OnAncestor(*matcher, boxed(inner)?),
         CExpr::KindName(inner) => VExpr::KindName(boxed(inner)?),
-        CExpr::Template(parts) => VExpr::Template(all(parts)),
+        CExpr::Template(parts) => {
+            let parts = all(parts);
+            match &*parts {
+                [VExpr::Const(V::Str(text))] => VExpr::Const(V::Str(text)),
+                _ => VExpr::Template(parts),
+            }
+        }
         CExpr::Overlapping(sel, range) => {
             let range = range.as_deref().map(|(from, to)| Box::new((scalar(from, g, args, bound), scalar(to, g, args, bound))));
             return Ok(Lowered::Seq(Seq::Overlapping(sel.clone(), range)));
@@ -845,6 +933,8 @@ pub trait Host {
     fn lines(&self) -> &crate::line_index::LineIndex;
     /// An attribute on a node through the VM; `None` gives up on the VM.
     fn attr(&self, node: u32, attr: u16) -> Option<V>;
+    #[cfg(feature = "work")]
+    fn census_attr(&self, attr: u16) -> String { attr.to_string() }
     /// A native fact read on a node, when its value is one the VM holds.
     fn fact(&self, node: u32, fact: usize, of: FactOf) -> Option<V>;
     fn fact_call(&self, _node: u32, _fact: usize, _args: Vec<Value<'static>>) -> Option<V> { None }
@@ -1526,6 +1616,15 @@ fn list_call<H: Host>(h: &Runtime<'_, H>, name: &str, args: &[V]) -> Option<Opti
     let len = with_view(h.host, &h.scratch.borrow(), |view| view.len(handle));
     Some(match (name, args) {
         ("len", [_]) => Some(V::Num(len as f64)),
+        ("compact", [_]) => {
+            let items: Vec<V> = with_view(h.host, &h.scratch.borrow(), |view| (0..len).map(|at| view.item(handle, at)).collect());
+            let kept: Vec<V> = items.into_iter().filter(|&item| match item {
+                V::Null => false,
+                V::Bool(_) | V::Num(_) | V::Record(..) => true,
+                other => !h.unpack(other).text_is_empty(),
+            }).collect();
+            h.list(&kept)
+        }
         ("slice", [_, from, rest @ ..]) if rest.len() <= 1 => (|| {
             let resolve = |i: f64| if i < 0.0 { len.saturating_sub((-i) as usize) } else { (i as usize).min(len) };
             let from = resolve(h.num(*from)?);
@@ -1544,7 +1643,22 @@ fn list_call<H: Host>(h: &Runtime<'_, H>, name: &str, args: &[V]) -> Option<Opti
 /// One expression on one node. Every nested expression is a call here, so
 /// this holds only the common scalar forms: an arm needing lists, closures
 /// or text would grow every call's frame. The rest is [`ev_rare`].
+#[inline(always)]
 fn ev<H: Host>(h: &Runtime<'_, H>, node: u32, e: &VExpr, f: &mut Vec<V>) -> Option<V> {
+    // Over a third of all evaluations are these leaves: no call for them.
+    match e {
+        VExpr::Const(v) => { #[cfg(feature = "work")] crate::work::vm(); Some(*v) }
+        VExpr::Bound(slot) => { #[cfg(feature = "work")] crate::work::vm(); f.get(*slot as usize).copied() }
+        VExpr::Node => { #[cfg(feature = "work")] crate::work::vm(); Some(V::Node(node)) }
+        _ => ev_inner(h, node, e, f),
+    }
+}
+
+fn ev_inner<H: Host>(h: &Runtime<'_, H>, node: u32, e: &VExpr, f: &mut Vec<V>) -> Option<V> {
+    #[cfg(feature = "work")]
+    crate::work::vm();
+    #[cfg(feature = "work")]
+    let _site = crate::work::site(e as *const VExpr as usize, || e.census_label(h.host, 3));
     let tree = h.tree();
     Some(match e {
         VExpr::Const(v) => *v,
@@ -1603,6 +1717,14 @@ fn ev<H: Host>(h: &Runtime<'_, H>, node: u32, e: &VExpr, f: &mut Vec<V>) -> Opti
             Some(ancestor) => ev(h, ancestor, inner, f)?,
             None => V::Null,
         },
+        VExpr::IsValue(subject, kinds) => match ev(h, node, subject, f)? {
+            V::Node(id) => V::Bool(is_a(h.grammar(), tree.node(id).matcher, kinds)),
+            value => V::Bool(value_kind(h, value)?.is_some_and(|matcher| is_a(h.grammar(), matcher, kinds))),
+        },
+        VExpr::Let(value, slot, body) => {
+            let v = ev(h, node, value, f)?;
+            with_bound(f, *slot, &[v], |f| ev(h, node, body, f))?
+        }
         VExpr::Not(inner) => V::Bool(!h.truthy(ev(h, node, inner, f)?)),
         VExpr::Neg(inner) => V::Num(-h.num(ev(h, node, inner, f)?)?),
         VExpr::If(c, a, b) => if h.truthy(ev(h, node, c, f)?) { ev(h, node, a, f)? } else { ev(h, node, b, f)? },
@@ -1642,6 +1764,16 @@ fn ev<H: Host>(h: &Runtime<'_, H>, node: u32, e: &VExpr, f: &mut Vec<V>) -> Opti
         VExpr::Offset => V::Num(f64::from(tree.node(node).start)),
         VExpr::EndOffset => V::Num(f64::from(tree.node(node).end)),
         _ => return ev_rare(h, node, e, f),
+    })
+}
+
+/// The kind a non-node value names: by its text, or a record's `kind`.
+#[inline(never)]
+fn value_kind<H: Host>(h: &Runtime<'_, H>, value: V) -> Option<Option<u32>> {
+    Some(match value {
+        V::Source(_) | V::Str(_) | V::Text(_) => h.with_text(value, |text| Some(h.grammar().matcher(text)))?,
+        V::Record(..) => h.with_text(h.key(value, "kind"), |text| Some(h.grammar().matcher(text))).flatten(),
+        _ => None,
     })
 }
 
@@ -1955,24 +2087,11 @@ fn ev_rare<H: Host>(h: &Runtime<'_, H>, node: u32, e: &VExpr, f: &mut Vec<V>) ->
             })?;
             best.map_or(V::Null, |(_, v)| v)
         }
-        VExpr::Let(value, slot, body) => {
-            let v = eval!(node, value)?;
-            with_bound(f, *slot, &[v], |f| ev(h, node, body, f))?
-        }
         // A field holding several nodes (`ev` reads none or one).
         VExpr::Field(label) => h.list(&tree.fields(node, *label).into_iter().map(V::Node).collect::<Vec<_>>())?,
         VExpr::OnField(label, inner) => {
             let items = tree.fields(node, *label).into_iter().map(|id| ev(h, id, inner, f)).collect::<Option<Vec<_>>>()?;
             h.list(&items)?
-        }
-        VExpr::IsValue(subject, kinds) => {
-            let matcher = match eval!(node, subject)? {
-                V::Node(id) => Some(tree.node(id).matcher),
-                v @ (V::Source(_) | V::Str(_) | V::Text(_)) => h.with_text(v, |text| Some(h.grammar().matcher(text)))?,
-                value @ V::Record(..) => h.with_text(h.key(value, "kind"), |text| Some(h.grammar().matcher(text))).flatten(),
-                _ => None,
-            };
-            V::Bool(matcher.is_some_and(|m| is_a(h.grammar(), m, kinds)))
         }
         VExpr::Contains(haystack, needle) => {
             let (haystack, needle) = (eval!(node, haystack)?, eval!(node, needle)?);
@@ -1990,6 +2109,14 @@ fn ev_rare<H: Host>(h: &Runtime<'_, H>, node: u32, e: &VExpr, f: &mut Vec<V>) ->
         VExpr::EndsWith(text, suffix) => {
             let (text, suffix) = (eval!(node, text)?, eval!(node, suffix)?);
             V::Bool(h.text_pair(text, suffix, |text, suffix| text.ends_with(suffix))?)
+        }
+        VExpr::Hoisted(inner) => {
+            let Some(file) = h.file_vm() else { return eval!(node, inner) };
+            let key = std::ptr::from_ref(e) as usize;
+            if let Some(&known) = file.hoisted.borrow().get(&key) { return Some(known) }
+            let value = eval(h.host, node, inner)?.persist(file)?;
+            file.hoisted.borrow_mut().insert(key, value);
+            value
         }
         VExpr::Call(function, items) => {
             let mut args = [V::Null; 3];
@@ -2052,7 +2179,7 @@ fn ev_rare<H: Host>(h: &Runtime<'_, H>, node: u32, e: &VExpr, f: &mut Vec<V>) ->
                 tree.innermost_at(h.grammar(), at, u32::MAX).filter(|&id| !tree.is_root(id)).map_or(V::Null, V::Node)
             }
         },
-        VExpr::Token(read, inner, pairs) => {
+        VExpr::Token(read, inner, pairs, shape) => {
             use crate::expr::TokenRead;
             let V::Node(id) = eval!(node, inner)? else { return Some(V::Null) };
             let pairs = match pairs {
@@ -2066,12 +2193,13 @@ fn ev_rare<H: Host>(h: &Runtime<'_, H>, node: u32, e: &VExpr, f: &mut Vec<V>) ->
                 let span = tokens.0[index];
                 let exact = tree.innermost_at(h.grammar(), span.0, u32::MAX)
                     .filter(|&found| !tree.is_root(found) && tree.node(found).start == span.0 && tree.node(found).end == span.1);
-                h.pack(&Value::record(vec![
-                    ("text".into(), Value::from(text(span))),
-                    ("start".into(), Value::Num(f64::from(span.0))),
-                    ("end".into(), Value::Num(f64::from(span.1))),
-                    ("node".into(), exact.map_or(Value::Null, |found| Value::Node(found, crate::expr::value::Text::Borrowed(text(span))))),
-                ]))
+                let items = [
+                    h.pack(&Value::from(text(span)))?,
+                    V::Num(f64::from(span.0)),
+                    V::Num(f64::from(span.1)),
+                    exact.map_or(V::Null, V::Node),
+                ];
+                Some(V::Record(*shape, h.allocate(&items)?))
             };
             let found = match read {
                 TokenRead::First => tokens.after(start).filter(|&i| tokens.0[i].1 <= end),
@@ -2128,7 +2256,7 @@ fn ev_rare<H: Host>(h: &Runtime<'_, H>, node: u32, e: &VExpr, f: &mut Vec<V>) ->
         }
         VExpr::Const(_) | VExpr::Bound(_) | VExpr::Attr(_) | VExpr::ParentAttr(_) | VExpr::Fact { .. } | VExpr::Inlined(..) | VExpr::Is { .. }
         | VExpr::InField(..) | VExpr::InFields(_) | VExpr::FieldPresent(_) | VExpr::FieldCount(_) | VExpr::OnParent(_) | VExpr::OnSibling(..)
-        | VExpr::OnAncestor(..) | VExpr::Not(_) | VExpr::Neg(_) | VExpr::If(..) | VExpr::Binary(..) | VExpr::IsNull(_)
+        | VExpr::OnAncestor(..) | VExpr::IsValue(..) | VExpr::Let(..) | VExpr::Not(_) | VExpr::Neg(_) | VExpr::If(..) | VExpr::Binary(..) | VExpr::IsNull(_)
         | VExpr::NonEmpty(_) | VExpr::Coalesce(..) | VExpr::Nullish(..) | VExpr::Node | VExpr::Text | VExpr::Parent
         | VExpr::Offset | VExpr::EndOffset => unreachable!("ev evaluates these itself"),
     })
@@ -2262,6 +2390,10 @@ mod tests {
             (call("count", CExpr::List(vec![CExpr::Builtin(Builtin::Node), record()])), V::Num(2.0)),
             (call("sum", CExpr::Member(Box::new(CExpr::List(vec![CExpr::Builtin(Builtin::Node), record()])),
                 "size".into(), Some(Box::new(CExpr::Builtin(Builtin::Line))))), V::Num(4.0)),
+            (call("count", call("compact", CExpr::List(vec![
+                CExpr::Const(Value::Null), CExpr::Const(Value::from("")), CExpr::List(vec![CExpr::Const(Value::from(""))]),
+                num(0.0), CExpr::Const(Value::Bool(false)), record(),
+            ]))), V::Num(3.0)),
             (CExpr::Key(Box::new(record()), "size".into()), V::Num(3.0)),
             (CExpr::Key(Box::new(record()), "absent".into()), V::Null),
             (CExpr::Member(Box::new(record()), "size".into(), None), V::Num(3.0)),

@@ -35,21 +35,9 @@ fn regexp_literal_input(n, override_flags) = {
   value flags: if override_flags == null then written_flags else override_flags.value
   value end: byte_len(n.text) - byte_len(written_flags) - 1
   value pattern: byte_slice(n.text, 1, end)
-  value characters: split(pattern, "")
-  value decoded: js_string_parts(json_string(pattern))
-  value positions: regexp_positions(characters, n.offset + 1)
-  value spans: map(positions, position => {
-    offset: position.offset, end_offset: position.offset + byte_len(get(characters, position.index))
-  })
-  value units: flat(map(positions, position => {
-    value span: get(spans, position.index)
-    value count: if span.end_offset - span.offset == 4 then 2 else 1
-    value map(slice(decoded.units, position.unit, position.unit + count), unit => {
-      value: unit.value, offset: span.offset, end_offset: span.end_offset
-    })
-  }))
+  value mapped: text_units(pattern, n.offset + 1)
   value {
-    text: pattern, source: pattern, flags: flags, spans: spans, units: units,
+    text: pattern, source: pattern, flags: flags, spans: mapped.spans, units: mapped.units,
     offset: n.offset + 1, end_offset: n.offset + end, written: "regex", pattern_node: n
   }
 }

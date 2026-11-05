@@ -67,9 +67,11 @@ fn import_specifier_docs(n, site, name) = {
 fn import_deprecation_tag(n) = {
   value values: import_remote_sites(n, name_definitions(n, "value"))
   value types: if count(values) > 0 then [] else import_remote_sites(n, name_definitions(n, "type"))
-  value sites: if count(values) > 0 then values else types
-  value imported: name_binding(n).node.imported_name ?? n.text
-  value deprecation_first(flat_map(reverse(sites), site => [import_deprecation_doc(n, site)] import_specifier_docs(n, site, imported)))
+  value sites: filter(if count(values) > 0 then values else types, site => site_mentions(n, site, "@deprecated"))
+  value if count(sites) == 0 then null else {
+    value imported: name_binding(n).node.imported_name ?? n.text
+    value deprecation_first(flat_map(reverse(sites), site => [import_deprecation_doc(n, site)] import_specifier_docs(n, site, imported)))
+  }
 }
 fn deprecation_local_doc(n) = {
   value owner: find(walk([] n.declaration, current =>

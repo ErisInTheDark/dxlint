@@ -8,6 +8,8 @@ use super::Value;
 pub mod compile;
 mod algebra;
 mod carriers;
+#[cfg(feature = "work")]
+mod census;
 mod conditional;
 mod enumerated;
 mod eval;
@@ -276,6 +278,8 @@ fn share_values() -> bool {
 
 impl Values<'_> {
     pub fn values(&self, leaf: Leaf) -> NodeValue {
+        #[cfg(feature = "work")]
+        let _work = crate::work::enter("value", || self.census_leaf(leaf));
         self.note_value_read();
         self.world.note_entered(leaf);
         // File 0 is the linted file; others' values are work every file
@@ -426,7 +430,7 @@ impl Values<'_> {
     /// answers inside its cycle are settled: its answer can then be kept
     /// instead of every later ask recomputing the whole cycle.
     pub(super) fn memoized<K, T>(&self, memo: &Memo<K, Known<T>>, key: K, compute: impl Fn() -> Known<T>) -> Known<T>
-    where K: Clone + Eq + std::hash::Hash, T: Clone {
+    where K: Clone + Eq + std::hash::Hash + 'static, T: Clone {
         self.memoized_with(memo, key, || Some(()), compute)
     }
 
@@ -435,7 +439,7 @@ impl Values<'_> {
     /// reader as computing it did ([`Self::read_kept`]).
     pub(super) fn memoized_with<K, T, G>(&self, memo: &Memo<K, Known<T>>, key: K, enter: impl FnOnce() -> Option<G>,
         compute: impl Fn() -> Known<T>) -> Known<T>
-    where K: Clone + Eq + std::hash::Hash, T: Clone {
+    where K: Clone + Eq + std::hash::Hash + 'static, T: Clone {
         let state = &self.semantic.values;
         let kept = memo.get(&key);
         let tag = fact_tag(memo, &key);
@@ -457,6 +461,8 @@ impl Values<'_> {
             }
         }
         let _site = self.world.profile().map(|_| crate::engine::StepSite::enter(std::any::type_name::<(K, T)>()));
+        #[cfg(feature = "work")]
+        let _work = crate::work::enter(std::any::type_name::<(K, T)>(), || self.census_any(&key));
         // A walled answer's readers read only the answer.
         let wall = memo.entry_atom(&key);
         let outer = crate::footprint::begin();
@@ -1173,28 +1179,8 @@ impl Values<'_> {
             let declaration = Leaf { target: Target::Node(owner), frame: super::question::FrameId::ROOT };
             return self.question.bind_definition(super::question::FrameId::ROOT, owner, Some(declaration), None, classes);
         }
-        if let Some(frame) = self.instantiation_frame(owner, through, classes) { return frame }
         let through = match through.target { Target::Node(_) => Some(through), _ => None };
         self.question.bind_definition(parent, owner, through, None, classes)
-    }
-
-    /// The frame of `owner` given every formal by the reference `through`:
-    /// named by the arguments' values, it reads nothing of where it was
-    /// named, so every site instantiating `Box<string>` shares it. `None`
-    /// where only the reference can answer (defaults, recursive arguments).
-    fn instantiation_frame(&self, owner: NodeRef, through: Leaf, classes: u64) -> Option<super::question::FrameId> {
-        if self.semantic.generic_scope(owner) != Some(owner.node) || !self.semantic.declares_formals(owner) { return None }
-        let Known::Yes(Some(sites)) = self.declared_argument_sites(through) else { return None };
-        let tree = self.world.tree(owner.file)?;
-        let kind = self.tables.kinds.get(tree.nodes.get(owner.node as usize)?.matcher as usize)?;
-        let [(path, None)] = &kind.generics[..] else { return None };
-        let at = Leaf { target: Target::Node(owner), frame: super::question::FrameId::ROOT };
-        let Known::Yes(formals) = self.follow(at, path) else { return None };
-        if sites.is_empty() || sites.len() != formals.len() { return None }
-        let mark = self.cycle_mark();
-        let Known::Yes(arguments) = self.argument_values(sites, None) else { return None };
-        if self.cycled_since(mark) || arguments.iter().any(|argument| *argument == NodeValue::Unknown) { return None }
-        Some(self.question.bind_definition(super::question::FrameId::ROOT, owner, None, Some(arguments), classes))
     }
 
     /// The one frame every reach of `owner` (with view `classes`) shares

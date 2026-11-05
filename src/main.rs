@@ -3,6 +3,8 @@ static ALLOCATOR: dxlint::alloc::Pooled = dxlint::alloc::Pooled;
 
 fn main() -> std::process::ExitCode {
     dxlint::no_error_dialogs();
+    #[cfg(feature = "work")]
+    dxlint::work::start();
     let code = {
         // The sampler reports when it drops, before the levers do.
         let _sampler = dxlint::sampler::start_from_env();
@@ -22,5 +24,7 @@ fn main() -> std::process::ExitCode {
         run.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic))
     };
     dxlint::levers::report();
+    #[cfg(feature = "work")]
+    dxlint::work::report();
     std::process::ExitCode::from(code)
 }

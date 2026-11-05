@@ -97,6 +97,8 @@ pub struct FileVm {
     kept: RefCell<crate::fx_hash::FxHashMap<(u32, u16), Option<V>>>,
     /// Buffers of finished rule runs ([`super::Session`]), reused.
     pub(crate) spare: RefCell<Vec<super::Spare>>,
+    /// [`super::VExpr::Hoisted`] values, by expression.
+    pub(super) hoisted: RefCell<crate::fx_hash::FxHashMap<usize, V>>,
     fact_packs: RefCell<crate::fx_hash::FxHashMap<FactPackKey, FactPackStats>>,
     /// Attributes being evaluated without a memo (inside semantic questions).
     uncached: RefCell<Vec<(u32, u16)>>,

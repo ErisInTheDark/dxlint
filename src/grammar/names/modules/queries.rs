@@ -154,6 +154,8 @@ impl<'a> Queries<'a> {
     }
 
     fn profiled<T>(&self, query: &'static str, run: impl FnOnce() -> T) -> T {
+        #[cfg(feature = "work")]
+        let _work = crate::work::enter(query, || (0, 0, query.to_owned()));
         let _owner = crate::alloc::heap::Owner::enter(crate::alloc::heap::MODULES);
         match self.semantic.world.profile() {
             Some(profile) => profile.time_semantic_query(query, run),
@@ -272,6 +274,14 @@ impl<'a> Queries<'a> {
     }
 
     fn global_uncounted(&self, importer: u32, name: &str, class: u64) -> Known<Vec<Target>> {
+        #[cfg(feature = "work")]
+        let _work = crate::work::enter("global.compute", || {
+            use std::hash::{Hash, Hasher};
+            let mut hash = crate::fx_hash::FxHasher::default();
+            (name, class).hash(&mut hash);
+            let key = hash.finish();
+            (key, key, format!("{name} class {class}"))
+        });
         match self.cached(Request::Global(importer, name.into(), class), || {
             let scopes = self.global_scopes(importer, name)?;
             let world = self.semantic.world;

@@ -1072,6 +1072,8 @@ impl Pooled {
 unsafe impl GlobalAlloc for Pooled {
     #[inline(never)]
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        #[cfg(feature = "work")]
+        crate::work::alloc();
         if let Some(outer) = Self::accounted(layout).filter(|_| heap::on()) {
             // SAFETY: the header sits in front of the caller's bytes, inside
             // the block, which is HEADER-aligned.

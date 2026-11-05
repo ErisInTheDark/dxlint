@@ -192,6 +192,14 @@ impl Attributes {
 /// Which attributes ask semantic questions, directly or through the
 /// attributes and `fn`s they read: one walk records each body's direct
 /// questions and reads, then askers spread to their readers.
+impl Attributes {
+    /// Attribute `attr`'s name, for the work census.
+    #[cfg(feature = "work")]
+    pub(crate) fn name_of(&self, attr: u16) -> &str {
+        self.attrs.get(usize::from(attr)).map_or("?", |compiled| &compiled.name)
+    }
+}
+
 fn semantic_attributes(attrs: &[Attr], functions: &[crate::grammar::UserFn]) -> Vec<bool> {
     struct Graph {
         attrs: usize,
@@ -511,6 +519,9 @@ impl vm::Host for Ctx<'_> {
         self.lines
     }
 
+    #[cfg(feature = "work")]
+    fn census_attr(&self, attr: u16) -> String { self.attrs.name_of(attr).to_owned() }
+
     fn attr(&self, node: u32, attr: u16) -> Option<V> {
         match self.attrs.route(self.tree.node(node).matcher, attr) {
             Route::Missing => Some(V::Null),
@@ -590,6 +601,16 @@ impl<'a> Ctx<'a> {
     /// field there (computed on first read); `None` on an error or a cycle.
     fn vm_attr(&self, node: u32, attr: u16, index: u32, slot: u16) -> Option<V> {
         let _timed = self.profile.and_then(|profile| profile.begin_attribute(usize::from(attr)));
+        #[cfg(feature = "work")]
+        let _owner = crate::work::owner(self.attrs.name_of(attr));
+        #[cfg(feature = "work")]
+        let _work = crate::work::enter("let", || {
+            use std::hash::{Hash, Hasher};
+            let mut hash = crate::fx_hash::FxHasher::default();
+            attr.hash(&mut hash);
+            let key = hash.finish();
+            (key, key, self.attrs.name_of(attr).to_owned())
+        });
         let (lowered, world) = match &self.attrs.attrs[attr as usize].lowered[index as usize] {
             Lowered::Direct(body) => return vm::eval(self, node, body)?.persist(&self.memo.vm),
             Lowered::Semantic(body) => match self.world.filter(|world| world.cache_attribute(&self.memo.vm)) {
@@ -613,6 +634,15 @@ impl<'a> Ctx<'a> {
         let mut evaluated = None;
         let mut complete = true;
         let mut compute = || {
+            #[cfg(feature = "work")]
+            let _census = crate::work::enter(if self.tree.owner.is_some() { "let.compute.foreign" } else { "let.compute.linted" }, || {
+                use std::hash::{Hash, Hasher};
+                let owner = self.tree.owner.as_ref().map_or(self.source.len(), |owner| std::sync::Arc::as_ptr(owner) as usize);
+                let mut hash = crate::fx_hash::FxHasher::default();
+                (owner, self.source.as_ptr() as usize, node, attr).hash(&mut hash);
+                let key = hash.finish();
+                (key, u64::from(attr), self.attrs.name_of(attr).to_owned())
+            });
             let mut run = || {
                 evaluated = vm::eval(self, node, lowered).and_then(|v| v.persist(&self.memo.vm));
                 evaluated

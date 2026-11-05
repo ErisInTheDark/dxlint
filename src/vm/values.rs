@@ -407,6 +407,15 @@ impl Config {
         Some(id)
     }
 
+    /// `items` as one constant list's storage, when every one is a constant.
+    pub(super) fn constant_items(&mut self, items: &[super::VExpr]) -> Option<Handle> {
+        let items = items.iter().map(|item| match item {
+            super::VExpr::Const(value) => Some(*value),
+            _ => None,
+        }).collect::<Option<Vec<_>>>()?;
+        self.constants.try_allocate(Region::Config, &items).map_err(|error| self.lowering_errors.push(error.to_string())).ok()
+    }
+
     pub(super) fn constant(&mut self, value: &Value) -> Option<V> {
         Some(match value {
             Value::List(items) => {

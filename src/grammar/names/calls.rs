@@ -307,6 +307,8 @@ impl Calls<'_> {
                 return known;
             }
             let Some(_nest) = self.question.budget.nest() else { return Known::Unknown };
+            #[cfg(feature = "work")]
+            let _work = crate::work::enter("accepts", || self.semantic.values().census_values(expected, actual));
             // The same value always accepts itself, whatever its parts.
             if expected == actual && *expected != NodeValue::Unknown && self.question.budget.step() { return Known::Yes(true) }
             let depth = state.accepting.borrow().len();

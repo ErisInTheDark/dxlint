@@ -305,6 +305,30 @@ pub static FUNCTIONS: &[Function] = &[
         call: |a| Ok(Value::from(serde_json::to_string(&*a[0].text()).unwrap_or_default())),
     },
     Function {
+        name: "text_units",
+        signature: "text_units(text, offset)",
+        doc: "Text as `{ spans, units }`: each Unicode scalar's and each UTF-16 unit's byte span from `offset`; units also carry their `value`",
+        min: 2,
+        max: 2,
+        call: |a| {
+            let text = a[0].text();
+            let base = a[1].num()?;
+            let (mut spans, mut units) = (Vec::with_capacity(text.len()), Vec::with_capacity(text.len()));
+            for (at, character) in text.char_indices() {
+                let (start, end) = (base + at as f64, base + (at + character.len_utf8()) as f64);
+                spans.push(Value::record(vec![("offset".into(), Value::Num(start)), ("end_offset".into(), Value::Num(end))]));
+                for unit in character.encode_utf16(&mut [0; 2]) {
+                    units.push(Value::record(vec![
+                        ("value".into(), Value::Num(f64::from(*unit))),
+                        ("offset".into(), Value::Num(start)),
+                        ("end_offset".into(), Value::Num(end)),
+                    ]));
+                }
+            }
+            Ok(Value::record(vec![("spans".into(), Value::list(spans)), ("units".into(), Value::list(units))]))
+        },
+    },
+    Function {
         name: "js_string_parts",
         signature: "js_string_parts(text)",
         doc: "Decode a quoted string or substitution-free template to text, UTF-16 units and Unicode-scalar spans. Offsets are bytes within the literal; null for invalid syntax",

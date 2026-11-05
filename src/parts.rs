@@ -49,7 +49,7 @@ pub struct Part {
 #[derive(Debug)]
 pub struct FileParts {
     /// The file (interned): reads of a version name it through it.
-    pub path: Arc<Path>,
+    pub path: crate::engine::reads::DepPath,
     /// The whole text's hash: equal hashes, equal parts.
     pub hash: u64,
     /// The text with the opaque bodies blanked, hashed with their places.
@@ -177,7 +177,7 @@ pub struct Diff {
 }
 
 impl FileParts {
-    pub fn new((path, hash): (Arc<Path>, u64), outside: u64, statements: Vec<Part>, bodies: Vec<Part>, (precise, failed): (bool, bool), declared: crate::fx_hash::FxHashMap<u32, Name>,
+    pub fn new((path, hash): (crate::engine::reads::DepPath, u64), outside: u64, statements: Vec<Part>, bodies: Vec<Part>, (precise, failed): (bool, bool), declared: crate::fx_hash::FxHashMap<u32, Name>,
         coarse: Option<Arc<crate::engine::reads::Bodies>>) -> FileParts {
         FileParts { path, hash, outside, statements: statements.into(), bodies: bodies.into(), precise, failed, declared, coarse, reach: OnceLock::new() }
     }
@@ -370,22 +370,28 @@ impl FileParts {
 /// A file as reads of it are recorded: its path and, once known, its parts.
 #[derive(Debug)]
 pub struct Owner {
-    pub path: Arc<Path>,
+    pub path: crate::engine::reads::DepPath,
     /// The text's hash: reads of a file whose parts are not known yet
     /// depend on its whole text.
     pub hash: u64,
     /// Its parts: first without resolved names (statements and what the
     /// file publishes), then with them once they are known.
     parts: std::sync::Mutex<Option<Arc<FileParts>>>,
+    /// The parts kept know the names: nothing later replaces them.
+    settled: std::sync::atomic::AtomicBool,
 }
 
 impl Owner {
-    pub fn new(path: Arc<Path>, hash: u64) -> Owner {
-        Owner { path, hash, parts: std::sync::Mutex::new(None) }
+    pub fn new(path: crate::engine::reads::DepPath, hash: u64) -> Owner {
+        Owner { path, hash, parts: std::sync::Mutex::new(None), settled: std::sync::atomic::AtomicBool::new(false) }
     }
 
     pub fn parts(&self) -> Option<Arc<FileParts>> {
         self.parts.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    pub fn settled(&self) -> bool {
+        self.settled.load(std::sync::atomic::Ordering::Acquire)
     }
 
     /// Keeps `parts` unless the kept ones know at least as much.
@@ -396,6 +402,7 @@ impl Owner {
             _ => {
                 let _owner = crate::alloc::heap::Owner::enter(crate::alloc::heap::FILE_VERSIONS);
                 let parts = crate::alloc::lasting(|| Arc::new(parts));
+                self.settled.store(parts.precise, std::sync::atomic::Ordering::Release);
                 *kept = Some(parts.clone());
                 parts
             }
@@ -488,7 +495,7 @@ mod tests {
     }
 
     fn file(hash: u64, statements: Vec<Part>) -> FileParts {
-        FileParts::new((Path::new("/parts/file.ts").into(), hash), hash, statements, Vec::new(), (true, false), Default::default(), None)
+        FileParts::new((crate::engine::reads::dep_path(Path::new("/parts/file.ts")), hash), hash, statements, Vec::new(), (true, false), Default::default(), None)
     }
 
     #[test]

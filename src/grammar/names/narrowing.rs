@@ -94,6 +94,8 @@ impl Narrowing<'_> {
     pub fn refine(&self, at: Leaf, base: NodeValue) -> NodeValue {
         if self.semantic.tables.skip_narrowing || crate::levers::on(crate::levers::Lever::NoNarrowing) { return base }
         let _site = self.semantic.world.profile().map(|_| crate::engine::StepSite::enter("narrowing.refine"));
+        #[cfg(feature = "work")]
+        let _work = crate::work::enter("narrowing.refine", || self.semantic.values().census_leaf(at));
         let Known::Yes(at) = self.semantic.leaf(at) else { return NodeValue::Unknown };
         let refined = self.refine_graph(at, base);
         if self.semantic.question.budget.exhausted() { NodeValue::Unknown } else { refined }
@@ -215,6 +217,8 @@ impl Narrowing<'_> {
     /// `entry`) and that guard some steps, decided once per execution: every
     /// read there checks the same guards.
     fn guards(&self, execution: &Execution, entry: Leaf) -> Option<std::rc::Rc<[Guard]>> {
+        #[cfg(feature = "work")]
+        let _work = crate::work::enter("narrowing.guards", || self.semantic.values().census_leaf(entry));
         let memo = &self.semantic.narrowing_places.guards;
         let values = self.semantic.values();
         let tag = super::values::fact_tag(memo, &entry);
@@ -257,6 +261,8 @@ impl Narrowing<'_> {
     fn tested_roots(&self, file: u32) -> Option<std::rc::Rc<TestedRoots>> {
         let memo = &self.semantic.narrowing_places.tested;
         if let Some(roots) = memo.get(&file) { return roots }
+        #[cfg(feature = "work")]
+        let _work = crate::work::enter("narrowing.tested_roots", || self.semantic.values().census_file(file));
         // A once-per-file scan on its own allowance: on the asking read's
         // budget a cut would redo it for every later read in the file.
         const STEPS_PER_NODE: u32 = 4;
@@ -265,7 +271,9 @@ impl Narrowing<'_> {
             .max(super::question::Budget::DEFAULT);
         let mark = self.semantic.values().cycle_mark();
         let outer = crate::footprint::begin();
-        let roots = self.semantic.question.budget.sized(allowance, || self.collect_tested_roots(file).map(std::rc::Rc::new)).ok().flatten();
+        let scan = || self.semantic.world.shared_tested_roots(file, self.semantic, &mut || self.collect_tested_roots(file).map(|roots| roots.into_iter().collect()))
+            .map(|roots| std::rc::Rc::new(roots.into_iter().collect::<TestedRoots>()));
+        let roots = self.semantic.question.budget.sized(allowance, scan).ok().flatten();
         // It read the whole file: what reads it depends on its answer,
         // which an edit is checked against ([`Narrowing::rescan`]), not on
         // each part of the file.
@@ -505,6 +513,8 @@ impl Narrowing<'_> {
     }
 
     fn assigned(&self, subject: &Place, execution: &Execution, entry: Leaf, uses: &[StepId], base: NodeValue) -> NodeValue {
+        #[cfg(feature = "work")]
+        let _work = crate::work::enter("narrowing.assigned", || self.semantic.values().census_leaf(entry));
         let _site = self.semantic.world.profile().map(|_| crate::engine::StepSite::enter("narrowing.assigned"));
         // Writes only pick among the declared alternatives (as TypeScript
         // narrows assignments to union declared types only): one alternative
@@ -577,6 +587,8 @@ impl Narrowing<'_> {
 
     /// Whether no write in `root`'s file replaces it ([`super::effects::Effects::unwritten`]).
     fn unwritten(&self, root: Leaf) -> Known<bool> {
+        #[cfg(feature = "work")]
+        let _work = crate::work::enter("narrowing.unwritten", || self.semantic.values().census_leaf(root));
         self.semantic.effects().unwritten(root, &|target| self.write_declaration(target))
     }
 
@@ -611,6 +623,8 @@ impl Narrowing<'_> {
     /// `keys`, computed keys are not evaluated: the path only has the
     /// right length (each key stands as any key).
     fn find_place(&self, mut at: Leaf, through_arguments: bool, keys: bool) -> Known<(Place, Place)> {
+        #[cfg(feature = "work")]
+        let _work = crate::work::enter("narrowing.find_place", || self.semantic.values().census_leaf(at));
         let values = self.semantic.values();
         let mut path = Vec::new();
         let mut lexical = None;

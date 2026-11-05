@@ -556,7 +556,7 @@ impl Linter {
             rule.indents.lower(rule.indent_reset.as_ref(), functions, values);
             let locals = &rule.locals;
             let mut lower =|e: &CExpr, item: bool| crate::vm::lower_condition(e, functions, locals, values, item);
-            rule.locals_vm = rule.locals.iter().map(|e| lower(e, false)).collect();
+            rule.locals_vm = rule.locals.iter().map(|e| crate::vm::hoist(e, lower(e, false), functions)).collect();
             // Guards run before the items, with the item slot null.
             rule.node_when_vm = rule.node_when.iter().map(|e| lower(e, item)).collect();
             rule.when_vm = rule.when.iter().map(|e| lower(e, item)).collect();
@@ -1389,6 +1389,16 @@ impl Linter {
 
     /// The rule's diagnostics on one node: one, or one per `each` item.
     fn apply_each(&self, f: &Rule, ctx: &Ctx) -> Vec<Diagnostic> {
+        #[cfg(feature = "work")]
+        let _work = crate::work::enter("rule", || {
+            use std::hash::{Hash, Hasher};
+            let mut hash = crate::fx_hash::FxHasher::default();
+            f.name.hash(&mut hash);
+            let key = hash.finish();
+            (key, key, f.name.clone())
+        });
+        #[cfg(feature = "work")]
+        let _owner = crate::work::owner(&f.name);
         // Rule `let`s never read the item: one session serves every item.
         let session = crate::vm::Session::new(ctx, ctx.node, &f.locals_vm);
         if f.each.is_none() { return self.apply(f, ctx, &session).into_iter().collect() }

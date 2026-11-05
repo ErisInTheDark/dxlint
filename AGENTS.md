@@ -10,6 +10,7 @@ Rust linter; rules in `.dx` (docs/advanced.md). Binary `dxlint`.
 - self-lint: `cargo run --release --` (uses `.dx`); must stay clean
 - perf check: `dxlint --stats --no-cache <big file>`; compare before/after engine changes
 - CPU profile (Windows, no admin): env `DXLINT_SAMPLE=<report>` on a build with debug line tables; `DXLINT_SAMPLE_CALLERS=a;>b` adds callers of `a`, callees of `b`; `DXLINT_SAMPLE_AFTER=<s>` skips startup (a server's scan). Budget steps are not time: profile before trusting them
+- work census: `cargo build --release --features work`, then `--no-cache --jobs 1`: a work count that repeats exactly on a busy machine, each fact's own work with exact repeats, rules and `let`s by own work (`DXLINT_WORK_SITES=1` adds each expression, slow; scratch/tools/work-run.ps1). Native loops count only through what they call: confirm wins in CPU (scratch/tools/cpu-ab.ps1)
 - memory: env `DXLINT_HEAP_STATS=1` prints live heap by owner and where allocator pages sit (CLI end, LSP shutdown; LSP adds kept reads by dep kind); add `DXLINT_HEAP_SITES=1` (Windows, debug line tables) to list large blocks by call stack
 - cross-file deps (`src/parts.rs`): env `DXLINT_RELINT_CHECK=1` makes the language server lint afresh every file an edit's dep check kept, and print any that differ (slow; replays: scratch/lsp-load/hub.mjs)
 

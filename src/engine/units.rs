@@ -70,6 +70,14 @@ impl Linter {
     }
 
     pub(super) fn parse(&self, path: &Path, text: &str, plan: ParsePlan<'_>) -> Result<ParsedFile, (u32, String)> {
+        #[cfg(feature = "work")]
+        let _work = crate::work::enter("parse", || {
+            use std::hash::{Hash, Hasher};
+            let mut hash = crate::fx_hash::FxHasher::default();
+            path.hash(&mut hash);
+            let key = hash.finish();
+            (key, key, path.display().to_string())
+        });
         let started = std::time::Instant::now();
         let (tree, state, native_done, tokens_done) = match plan.front {
             Some(index) => {

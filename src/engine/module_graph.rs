@@ -263,7 +263,7 @@ impl Graph {
         if let Some(&target) = self.targets.get(&key) { return target }
         *resolver.host.program.borrow_mut() = self.paths[file].to_path_buf();
         let found = resolver.resolve_path(&key.0, specifier, &QueryContext::once()).ok().flatten();
-        let target = found.and_then(|path| self.by_path.get(&*path).copied());
+        let target = found.and_then(|path| self.by_path.get(&reads::dep_path(&path)).copied());
         self.targets.insert(key, target);
         target
     }
@@ -453,7 +453,7 @@ impl Linter {
         let knows_links = graph.links.is_some();
         let mut edited: Vec<(usize, Specifiers)> = Vec::new();
         for path in changed.iter().collect::<FxHashSet<_>>() {
-            let Some(&file) = graph.by_path.get(&**path) else { continue };
+            let Some(&file) = graph.by_path.get(&reads::dep_path(path)) else { continue };
             let file = file as usize;
             let (specifiers, links) = self.summary_of(settings, &graph.paths[file], knows_links);
             if specifiers != graph.specifiers[file] { edited.push((file, specifiers)) }

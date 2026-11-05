@@ -91,10 +91,9 @@ fn layout_assignment_pattern(n) = {
 fn layout_dangle_mode(kind, style, policies) = { value policies; get kind; nonempty } ?? style
 fn layout_dangle_enabled(kind, edition) = (kind != "functions" || edition >= 2017) && (kind != "dynamicImports" || edition >= 2025)
 fn layout_dangle_wrong(site, mode) = mode != "ignore" && (if mode == "always" || mode == "always-multiline" && site.multiline then site.trailing != site.allowed else site.trailing && !(mode == "only-multiline" && site.multiline) && !site.tsx_single)
-fn layout_trailing_list(items, kind, style, policies, edition) = {
+fn layout_trailing_list(items, kind, style, policies, edition) = if count(items) == 0 || !layout_dangle_enabled(kind, edition) then null else {
   value mode: layout_dangle_mode(kind, style, policies)
-  value if layout_dangle_enabled(kind, edition) && mode != "ignore" && count(items) > 0
-    then {items: items, kind: kind, mode: mode} else null
+  value if mode != "ignore" then {items: items, kind: kind, mode: mode} else null
 }
 fn layout_trailing_site(n, list, tsx) = {
   value item: last(list.items)
@@ -123,12 +122,12 @@ fn layout_trailing_site(n, list, tsx) = {
   }
 }
 fn layout_trailing_ordinary(n, style, policies, edition) = when {
+  n is (ts_call, ts_new) then layout_trailing_list(n.argument.nodes, "functions", style, policies, edition)
+  n is (ts_function, ts_method, ts_arrow, ts_function_type) then layout_trailing_list(n.parameter.nodes, "functions", style, policies, edition)
+  n is ts_object then layout_trailing_list(n.property.nodes, "objects", style, policies, edition)
   n is (ts_array, ts_array_pattern) then layout_trailing_list(n.element.nodes, "arrays", style, policies, edition)
   n is ts_tuple_type then layout_trailing_list(n.element.nodes, "tuples", style, policies, edition)
-  n is ts_object then layout_trailing_list(n.property.nodes, "objects", style, policies, edition)
   n is ts_object_pattern then layout_trailing_list({ value n.property.nodes n.rest.nodes; sort_by (item) item.offset }, "objects", style, policies, edition)
-  n is (ts_function, ts_method, ts_arrow, ts_function_type) then layout_trailing_list(n.parameter.nodes, "functions", style, policies, edition)
-  n is (ts_call, ts_new) then layout_trailing_list(n.argument.nodes, "functions", style, policies, edition)
   n is ts_import_call then layout_trailing_list(n.argument.nodes, "dynamicImports", style, policies, edition)
   n is ts_import then layout_trailing_list({ value n.specifier.nodes n.default_import.nodes n.namespace.nodes; sort_by (item) item.offset }, "imports", style, policies, edition)
   n is ts_export then layout_trailing_list(n.specifier.nodes, "exports", style, policies, edition)
@@ -138,9 +137,9 @@ fn layout_trailing_ordinary(n, style, policies, edition) = when {
 fn layout_dangle_lists(n, style, policies, edition, tsx) = {
   value lists: [
     layout_trailing_ordinary(n, style, policies, edition),
-    if n is (ts_function, ts_arrow, ts_class, ts_method, ts_interface, ts_type_alias, ts_function_type,
+    if n.type_parameter != null && n is (ts_function, ts_arrow, ts_class, ts_method, ts_interface, ts_type_alias, ts_function_type,
       ts_method_signature, ts_call_signature, ts_infer) then layout_trailing_list(n.type_parameter.nodes, "generics", style, policies, edition) else null,
-    if n is (ts_class, ts_tagged_template, ts_call, ts_new, ts_instantiation, ts_jsx_opening, ts_type_reference,
+    if n.type_argument != null && n is (ts_class, ts_tagged_template, ts_call, ts_new, ts_instantiation, ts_jsx_opening, ts_type_reference,
       ts_type_query, ts_import_type) then layout_trailing_list(n.type_argument.nodes, "type-arguments", style, policies, edition) else null
   ]
   value lists

@@ -4,6 +4,9 @@ define {
 
 in ts_node let floating_promise_arms value_parts(node)
 in ts_await let floating_promise_arms value_parts(ts_awaited_value(node, argument.node))
+# A promise or an array has a carrier: a value without one needs no describing.
+in ts_node let floating_promise_candidate value_may_have_carrier(node)
+in ts_await let floating_promise_candidate true
 in ts_node let floating_promise_safe_call false
 in ts_node let floating_promise_safe_types []
 in ts_node let floating_promises_checked true
@@ -83,22 +86,43 @@ fn floating_promise_arm(arm, n, check_thenables, safe_promises) =
       value any(headers ?? [], alternatives => any(alternatives, header => count(header.parameters) >= 2
         && all(slice(header.parameters, 0, 2), parameter => floating_callable_arm(parameter))))
     })
+fn floating_promise_exempt(part, safe_promises, safe_calls) = part is ts_assignment || floating_promise_safe(part, safe_calls)
+  || floating_promise_alias_allowed(part, safe_promises)
+  || type_value_allowed(part.floating_promise_safe_types, part) != false
+fn floating_promise_is_promise(part, check_thenables, safe_promises) = part not ts_await
+  && (check_thenables || part.floating_promise_candidate != false)
+  && any(part.floating_promise_arms ?? [], arm => floating_promise_arm(arm, part, check_thenables, safe_promises))
+fn floating_promise_is_array(part, check_thenables, safe_promises) = part.floating_promise_candidate != false
+  && floating_promise_array(part.floating_promise_arms, part, check_thenables, safe_promises)
+fn floating_promise_unhandled(part) = if part is ts_call then {
+  value handler: floating_rejection_handler(part)
+  value if handler == "handled" then null else if handler == "useless" then "useless" else "promise"
+} else "promise"
 fn floating_promise_failure(n, check_thenables, ignore_void, safe_promises, safe_calls) = {
   value floating_promise_leaves(n, ignore_void)
-  map (part) if part is ts_assignment || floating_promise_safe(part, safe_calls)
-    || floating_promise_alias_allowed(part, safe_promises)
-    || type_value_allowed(part.floating_promise_safe_types, part) != false then null else {
-      value arms: part.floating_promise_arms
-      value if floating_promise_array(arms, part, check_thenables, safe_promises) then "array"
-        else if part not ts_await
-          && any(arms ?? [], arm => floating_promise_arm(arm, part, check_thenables, safe_promises))
-          then if part is ts_call then {
-            value handler: floating_rejection_handler(part)
-            value if handler == "handled" then null else if handler == "useless" then "useless" else "promise"
-          } else "promise" else null
-    }
+  map (part) if floating_promise_exempt(part, safe_promises, safe_calls) then null
+    else if floating_promise_is_array(part, check_thenables, safe_promises) then "array"
+    else if floating_promise_is_promise(part, check_thenables, safe_promises) then floating_promise_unhandled(part) else null
   filter (failure) failure != null
   first
+}
+# One leaf can fail one way: each rule asks only its own question first.
+fn floating_promise_problem(n, check_thenables, ignore_void, safe_promises, safe_calls) = {
+  value leaves: floating_promise_leaves(n, ignore_void)
+  value if count(leaves) != 1 then floating_promise_failure(n, check_thenables, ignore_void, safe_promises, safe_calls) else {
+    value part: first(leaves)
+    value if floating_promise_exempt(part, safe_promises, safe_calls) || !floating_promise_is_promise(part, check_thenables, safe_promises)
+      || floating_promise_is_array(part, check_thenables, safe_promises) then null
+      else floating_promise_unhandled(part)
+  }
+}
+fn floating_promise_array_problem(n, check_thenables, ignore_void, safe_promises, safe_calls) = {
+  value leaves: floating_promise_leaves(n, ignore_void)
+  value if count(leaves) != 1 then floating_promise_failure(n, check_thenables, ignore_void, safe_promises, safe_calls) == "array" else {
+    value part: first(leaves)
+    value !floating_promise_exempt(part, safe_promises, safe_calls)
+      && floating_promise_is_array(part, check_thenables, safe_promises)
+  }
 }
 in ts_expression_statement.expression, ts_arrow.body rule es-no-floating-promises {
   option checkThenables boolean = false "Check promise-like types with fulfilment and rejection callbacks"
@@ -108,7 +132,7 @@ in ts_expression_statement.expression, ts_arrow.body rule es-no-floating-promise
   option allowForKnownSafeCalls string[] = [] "Function names whose returned promise is handled elsewhere"
   when floating_promise_subject_checked(node, ignoreIIFE)
   when node not ts_assignment
-  let failure floating_promise_failure(node, checkThenables, ignoreVoid, allowForKnownSafePromises, allowForKnownSafeCalls)
+  let failure floating_promise_problem(node, checkThenables, ignoreVoid, allowForKnownSafePromises, allowForKnownSafeCalls)
   when contains(["promise", "useless"], failure)
   report at if parent.node is ts_expression_statement then parent.node else node
   warn (if ignoreVoid then "Promises must be awaited, end with a call to .catch, end with a call to .then with a rejection handler or be explicitly marked as ignored with the `void` operator."
@@ -138,7 +162,7 @@ in ts_expression_statement.expression, ts_arrow.body rule es-no-floating-promise
   option allowForKnownSafeCalls string[] = [] "Function names whose returned promise is handled elsewhere"
   when floating_promise_subject_checked(node, ignoreIIFE)
   when node not ts_assignment
-  when floating_promise_failure(node, checkThenables, ignoreVoid, allowForKnownSafePromises, allowForKnownSafeCalls) == "array"
+  when floating_promise_array_problem(node, checkThenables, ignoreVoid, allowForKnownSafePromises, allowForKnownSafeCalls)
   report at if parent.node is ts_expression_statement then parent.node else node
   warn if ignoreVoid then "An array of Promises may be unintentional. Consider handling the promises' fulfillment or rejection with Promise.all or similar, or explicitly marking the expression as ignored with the `void` operator."
     else "An array of Promises may be unintentional. Consider handling the promises' fulfillment or rejection with Promise.all or similar."

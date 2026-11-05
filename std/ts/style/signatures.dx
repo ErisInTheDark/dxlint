@@ -14,6 +14,10 @@ in ts_call_signature let overload_identity { name: if kind == "new" then "new" e
 in ts_export forward overload_identity from declaration
 in ts_function, ts_method, ts_method_signature, ts_call_signature, ts_export let overload_entry { identity: overload_identity, start: offset }
 in ts_program, ts_block, ts_class, ts_interface, ts_type_literal let overload_entries [] children.overload_entry
+in ts_program, ts_block, ts_class, ts_interface, ts_type_literal let overload_repeated_names {
+  value names: map(overload_entries, entry => entry.identity.name)
+  value filter(names, (name, index) => name != null && index_of(names, name) != index)
+}
 fn earlier_overload(entries, identity, start) = any(entries, e => e.start < start && e.identity == identity)
 fn overload_report_site(n) = {
   value terminator: n.token_neighbours.after
@@ -23,6 +27,7 @@ fn overload_report_site(n) = {
 }
 in ts_function, ts_method, ts_method_signature, ts_call_signature, ts_export rule es-adjacent-overload-signatures {
   when parent is (ts_program, ts_block, ts_class, ts_interface, ts_type_literal)
+  when count(parent.overload_repeated_names) > 0 && contains(parent.overload_repeated_names, overload_identity.name)
   when overload_identity != null && overload_identity != previous.overload_identity
   when earlier_overload(parent.overload_entries, overload_identity, offset)
   let identity overload_identity

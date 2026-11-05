@@ -44,14 +44,14 @@ define {
     }
   }
 
+  in ts_class let calls_bodiless_methods filter(member.nodes, declaration => declaration is ts_method && declaration.body == null)
   in ts_function, ts_arrow, ts_method, ts_function_type, ts_method_signature, ts_call_signature {
     overloads infer last
     let calls_overload_implementation node.body != null && (
       node is ts_function && any(name_binding(node.name.node).declarations, declaration =>
         declaration.parent.node is ts_function && declaration.parent.node.body == null)
-      || node is ts_method && parent is ts_class && ts_value_key(key.node) != null
-        && any(parent.member.nodes, declaration => declaration is ts_method && declaration.body == null
-          && ts_value_key(declaration.key.node) == ts_value_key(key.node)
+      || node is ts_method && parent is ts_class && count(parent.calls_bodiless_methods) > 0 && ts_value_key(key.node) != null
+        && any(parent.calls_bodiless_methods, declaration => ts_value_key(declaration.key.node) == ts_value_key(key.node)
           && ts_value_static(declaration.modifier.nodes) == ts_value_static(modifier.nodes)))
     let calls_receivers filter(parameter.nodes, p => p.name is ts_this || p.name is ts_identifier && p.name == "this")
     let calls_parameters filter(parameter.nodes, p => !(p.name is ts_this || p.name is ts_identifier && p.name == "this"))

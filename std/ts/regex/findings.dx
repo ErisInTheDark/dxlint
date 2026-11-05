@@ -186,17 +186,21 @@ fn regexp_checked_by_call(n) = {
   value first: first(arguments)
   value n is ts_regex && owner is (ts_call, ts_new) && first == n && len(arguments) > 1 && regexp_input(owner) != null
 }
-in regexp_site let regexp_control_findings if regexp_tree.ok
+# What a literal's own spelling rules out, before anything parses it.
+in regexp_site let regexp_may_hold_control node not ts_regex || re_test(text, /\\[xuc0-9]|[\u{0}-\u{1f}]/)
+in regexp_site let regexp_may_hold_spaces node not ts_regex || contains(text, "  ")
+in regexp_site let regexp_may_mislead node not ts_regex || contains(text, "[") && re_test(text, /[^\u{0}-\u{7f}]|\\[uxc0-9]/)
+in regexp_site let regexp_control_findings if regexp_may_hold_control && regexp_tree.ok
   then regexp_controls(regexp_nodes, regexp_input) else []
-in regexp_site let regexp_empty_class_findings if node is ts_regex && regexp_tree.ok && regexp_error == null
+in regexp_site let regexp_empty_class_findings if node is ts_regex && contains(text, "[]") && regexp_tree.ok && regexp_error == null
   then regexp_empty_classes(regexp_view_nodes, regexp_input) else []
-in regexp_site let regexp_space_findings if regexp_tree.ok && regexp_error == null
+in regexp_site let regexp_space_findings if regexp_may_hold_spaces && regexp_tree.ok && regexp_error == null
   then regexp_spaces(regexp_view_nodes, regexp_input) else []
-in regexp_site let regexp_backreference_findings if re_test(regexp_input.text, /\\(?:[1-9]|k)/)
+in regexp_site let regexp_backreference_findings if re_test(if node is ts_regex then text else regexp_input.text, /\\(?:[1-9]|k)/)
   && regexp_tree.ok && regexp_error == null then regexp_backreferences(regexp_nodes, regexp_input) else []
-in regexp_site let regexp_misleading_findings if regexp_tree.ok && regexp_error == null && !regexp_checked_by_call(node)
+in regexp_site let regexp_misleading_findings if regexp_may_mislead && regexp_tree.ok && regexp_error == null && !regexp_checked_by_call(node)
   then regexp_misleading(regexp_view_nodes, regexp_input, false) else []
-in regexp_site let regexp_misleading_escaped_findings if regexp_tree.ok && regexp_error == null && !regexp_checked_by_call(node)
+in regexp_site let regexp_misleading_escaped_findings if regexp_may_mislead && regexp_tree.ok && regexp_error == null && !regexp_checked_by_call(node)
   then regexp_misleading(regexp_view_nodes, regexp_input, true) else []
 in regexp_site let regexp_findings if regexp_tree.ok != true then null else {
   value flat([

@@ -138,22 +138,24 @@ in ts_decorator let ts_name_decorator_method when {
 }
 in ts_identifier {
   let ts_name_outside_method containing(ts_decorator).ts_name_decorator_method
-  when !(is (ts_member.property, ts_method.key, ts_class_property.key, ts_property_signature.key, ts_method_signature.key,
+  let ts_name_resolution if is (ts_member.property, ts_method.key, ts_class_property.key, ts_property_signature.key, ts_method_signature.key,
       ts_enum_member.name, ts_pattern_property.key, ts_import_specifier.imported, ts_export_specifier.local,
       ts_export_specifier.exported, ts_labeled.label, ts_break.label, ts_continue.label, ts_jsx_attribute.name,
       ts_tuple_member.name, ts_qualified_name.right, ts_type_parameter.name, ts_type_alias.name,
       ts_interface.name, ts_import.default_import, ts_import.namespace, ts_export.namespace, ts_import_specifier.local, ts_import_equals.name)
     || is ts_property.key && parent.value != null && !parent.flow_shorthand_default
     # `[key: string]: T` names nothing.
-    || is ts_parameter.name && parent is ts_index_signature.parameter) {
-    when ts_name_outside_method != null { resolves value outside ts_name_outside_method }
-    when ts_name_outside_method == null && !ts_name_type_key { resolves value }
+    || is ts_parameter.name && parent is ts_index_signature.parameter then null
+    else if ts_name_outside_method != null then "outside"
     # A computed key inside type syntax reads like `typeof`: type-only
     # imports count.
-    when ts_name_outside_method == null && ts_name_type_key { resolves query }
-  }
+    else if ts_name_type_key then "query"
+    else "value"
+  when ts_name_resolution == "outside" { resolves value outside ts_name_outside_method }
+  when ts_name_resolution == "value" { resolves value }
+  when ts_name_resolution == "query" { resolves query }
 }
-in ts_identifier let ts_name_type_key name_type_access && containing(ts_computed_key) != null
+in ts_identifier let ts_name_type_key containing(ts_computed_key) != null && name_type_access
 in ts_type_reference { resolves type name }
 # `export { x }` uses `x`; `export { x } from "m"` does not.
 in ts_export_specifier { when parent.from == null { resolves value, type local } }

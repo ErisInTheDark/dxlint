@@ -82,6 +82,7 @@ fn problem_duplicate_condition(branch) = {
     && any(problem_condition_parts(condition, "&&"), part => problem_condition_covered(part, previous))
 }
 in ts_if.test rule es-no-dupe-else-if {
+  when parent.parent is ts_if && parent.parent.alternate.node == parent.node
   when problem_duplicate_condition(parent.node)
   report at unparenthesised_node(node)
   warn "This branch can never execute. Its condition is a duplicate or covered by previous conditions in the if-else-if chain."
