@@ -229,7 +229,7 @@ impl<'a> Parser<'a> {
         for (name, span) in std::mem::take(&mut self.ts.calls) {
             self.config.uses.push(Use::Macro(Name { text: name.to_string(), span }));
         }
-        self.ts.fingerprint()
+        self.fingerprint_with_helpers()
     }
 
     // ---- token helpers -------------------------------------------------
@@ -385,7 +385,22 @@ impl<'a> Parser<'a> {
     /// One item. One that only defines or configures rules keeps its token
     /// hash apart ([`Config::rule_items`]).
     fn item(&mut self, ctx: Option<&Context>) {
-        if ctx.is_some() || self.scope.is_some() || !self.at_rule_item() { return self.any_item(ctx) }
+        if ctx.is_some() || self.scope.is_some() { return self.any_item(ctx) }
+        if let Some(name) = self.at_helper() {
+            let outer = self.ts.apart();
+            self.any_item(ctx);
+            let (hash, words) = self.ts.rejoin(outer, false);
+            self.config.helpers.push(RuleHelper { name: super::stream::word_hash(&name), hash, words });
+            return;
+        }
+        // A macro counts where it expands, in the tokens it gives each use.
+        if self.peek().is_some_and(|t| t.is_ident("@macro")) {
+            let outer = self.ts.apart();
+            self.any_item(ctx);
+            self.ts.rejoin(outer, false);
+            return;
+        }
+        if !self.at_rule_item() { return self.any_item(ctx) }
         let outer = self.ts.apart();
         let (rules, configs, extensions) = (self.config.rules.len(), self.config.configs.len(), self.config.extensions.len());
         self.any_item(ctx);
@@ -395,8 +410,43 @@ impl<'a> Parser<'a> {
             .chain(self.config.configs.get(configs..).unwrap_or_default().iter().map(|config| config.patch.name.text.clone()))
             .chain(self.config.extensions.get(extensions..).unwrap_or_default().iter().map(|(name, _)| name.text.clone()))
             .collect();
-        let hash = self.ts.rejoin(outer, names.is_empty());
-        if !names.is_empty() { self.config.rule_items.push((names, hash)) }
+        let (hash, words) = self.ts.rejoin(outer, names.is_empty());
+        if !names.is_empty() { self.config.rule_items.push(RuleItem { names, hash, words }) }
+    }
+
+    /// The name of the top-level `fn` or `in <selectors> let` coming next.
+    fn at_helper(&mut self) -> Option<String> {
+        let first = self.peek()?;
+        let name_at = |parser: &mut Self, at: usize| parser.ts.peek_raw(at).filter(|token| token.kind == Tk::Ident).map(|token| token.text.to_string());
+        if first.is_ident("fn") { return name_at(self, 1) }
+        if !first.is_ident("in") { return None }
+        for ahead in 1.. {
+            let token = self.ts.peek_raw(ahead)?;
+            if token.is_ident("let") { return name_at(self, ahead + 1) }
+            if token.kind == Tk::Newline || token.is_ident("rule") || token.is_ident("match") || &*token.text == "{" { return None }
+        }
+        None
+    }
+
+    /// The fingerprint, with the helpers something outside rules reaches:
+    /// those are everyone's.
+    fn fingerprint_with_helpers(&mut self) -> u64 {
+        use std::hash::Hasher;
+        let mut reached = self.ts.words().clone();
+        let mut hash = crate::fx_hash::FxHasher::default();
+        hash.write_u64(self.ts.fingerprint());
+        let mut helpers = std::mem::take(&mut self.config.helpers);
+        loop {
+            let (shared, rest): (Vec<_>, Vec<_>) = helpers.into_iter().partition(|helper| reached.contains(&helper.name));
+            helpers = rest;
+            if shared.is_empty() { break }
+            let mut hashes: Vec<u64> = shared.iter().map(|helper| helper.hash).collect();
+            hashes.sort_unstable();
+            for item in hashes { hash.write_u64(item) }
+            for helper in shared { reached.extend(helper.words) }
+        }
+        self.config.helpers = helpers;
+        hash.finish()
     }
 
     /// Whether a `rule` line or `in <selectors> rule name` comes next. An

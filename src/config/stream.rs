@@ -36,6 +36,9 @@ pub struct Stream {
     /// Every token consumed, in order: the configuration as the parser saw
     /// it, imports and macros expanded (see [`Stream::fingerprint`]).
     seen: crate::fx_hash::FxHasher,
+    /// Every word in those tokens, strings' too (`"{name}"`): what they may
+    /// refer to, by [`word_hash`].
+    words: crate::fx_hash::FxHashSet<u64>,
     /// The last token seen ended a line (or there was none): line ends in a
     /// row count once, and leading ones not at all.
     at_line_end: bool,
@@ -47,8 +50,23 @@ pub struct StreamState {
     macros: HashMap<Rc<str>, Rc<MacroDef>>,
     calls: Vec<(Rc<str>, Span)>,
     seen: crate::fx_hash::FxHasher,
+    words: crate::fx_hash::FxHashSet<u64>,
     at_line_end: bool,
     last_span: Option<Span>,
+}
+
+/// A word's identity in [`Stream`]'s word sets.
+pub fn word_hash(word: &str) -> u64 {
+    use std::hash::Hasher;
+    let mut hash = crate::fx_hash::FxHasher::default();
+    hash.write(word.as_bytes());
+    hash.finish()
+}
+
+/// Tokens set apart by [`Stream::apart`]: what came before them.
+pub struct Apart {
+    seen: crate::fx_hash::FxHasher,
+    words: crate::fx_hash::FxHashSet<u64>,
 }
 
 impl Stream {
@@ -79,14 +97,15 @@ impl Stream {
 
     pub fn state(&self) -> StreamState {
         StreamState {
-            macros: self.macros.clone(), calls: self.calls.clone(), seen: self.seen,
+            macros: self.macros.clone(), calls: self.calls.clone(), seen: self.seen, words: self.words.clone(),
             at_line_end: self.at_line_end, last_span: self.last_span,
         }
     }
 
     /// Takes over `state`, as if the tokens that left it had been consumed.
     pub fn restore(&mut self, state: StreamState) {
-        let StreamState { macros, calls, seen, at_line_end, last_span } = state;
+        let StreamState { macros, calls, seen, words, at_line_end, last_span } = state;
+        self.words = words;
         self.macros = macros;
         self.calls = calls;
         self.seen = seen;
@@ -101,6 +120,7 @@ impl Stream {
             last_span: None,
             calls: Vec::new(),
             seen: Default::default(),
+            words: Default::default(),
             at_line_end: true,
         }
     }
@@ -113,22 +133,38 @@ impl Stream {
         self.seen.finish()
     }
 
-    /// Tokens consumed from now on hash apart from those before: returns
+    /// Tokens consumed from now on count apart from those before: returns
     /// what was seen so far, for [`Stream::rejoin`].
-    pub fn apart(&mut self) -> crate::fx_hash::FxHasher {
-        std::mem::take(&mut self.seen)
+    pub fn apart(&mut self) -> Apart {
+        Apart { seen: std::mem::take(&mut self.seen), words: std::mem::take(&mut self.words) }
     }
 
-    /// Ends [`Stream::apart`]: the hash of the tokens since, which `absorb`
-    /// also counts as part of the whole.
-    pub fn rejoin(&mut self, outer: crate::fx_hash::FxHasher, absorb: bool) -> u64 {
+    /// Ends [`Stream::apart`]: the hash and words of the tokens since, which
+    /// `absorb` also counts as part of the whole.
+    pub fn rejoin(&mut self, outer: Apart, absorb: bool) -> (u64, crate::fx_hash::FxHashSet<u64>) {
         use std::hash::Hasher;
         let hash = self.fingerprint();
-        self.seen = outer;
-        if absorb { self.seen.write_u64(hash) }
-        // As if the item were not there: adding one changes no line ends.
-        else { self.at_line_end = true }
-        hash
+        let words = std::mem::replace(&mut self.words, outer.words);
+        self.seen = outer.seen;
+        if absorb {
+            self.seen.write_u64(hash);
+            self.words.extend(&words);
+        } else {
+            // As if the item were not there: adding one changes no line ends.
+            self.at_line_end = true;
+        }
+        (hash, words)
+    }
+
+    /// The words of everything counted so far.
+    pub fn words(&self) -> &crate::fx_hash::FxHashSet<u64> {
+        &self.words
+    }
+
+    fn note_words(&mut self, text: &str) {
+        for word in text.split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '-')).filter(|word| !word.is_empty()) {
+            self.words.insert(word_hash(word));
+        }
     }
 
     pub fn push_tokens(&mut self, tokens: Vec<Token>) {
@@ -174,6 +210,7 @@ impl Stream {
                 // token texts ending in NULs and keeps token boundaries intact.
                 self.seen.write_usize(tok.text.len());
                 self.seen.write(tok.text.as_bytes());
+                self.note_words(&tok.text);
             }
             self.seen.write_u8(0xff);
         }

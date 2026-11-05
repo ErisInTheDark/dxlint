@@ -42,10 +42,12 @@ pub struct Config {
     /// `rule name extends base`: `name` starts as a copy of `base`'s
     /// definition (its variants too), in order.
     pub extensions: Vec<(Name, Name)>,
-    /// Items that only define or configure rules: the names (or globs) they
-    /// touch and a hash of their tokens, which the config's fingerprint
-    /// leaves out, in order. Editing one affects those rules alone.
-    pub rule_items: Vec<(Vec<String>, u64)>,
+    /// Items that only define or configure rules, in order, which the
+    /// config's fingerprint leaves out: editing one affects those rules alone.
+    pub rule_items: Vec<RuleItem>,
+    /// Top-level `fn`s and direct `in x let`s no other item needs: editing
+    /// one affects only the rules reaching it.
+    pub helpers: Vec<RuleHelper>,
     /// Global `ignore "glob"` items: files never linted.
     pub ignores: Vec<(String, Span)>,
     /// `command name "program args"`: programs rules may run
@@ -621,6 +623,23 @@ pub enum Report {
     Change,
     /// The (empty) end of the node: "missing X after", "too much before X".
     End,
+}
+
+#[derive(Clone, Debug)]
+pub struct RuleItem {
+    /// The rule names or globs it touches.
+    pub names: Vec<String>,
+    /// Its tokens' hash and words ([`crate::config::stream::word_hash`]).
+    pub hash: u64,
+    pub words: crate::fx_hash::FxHashSet<u64>,
+}
+
+#[derive(Clone, Debug)]
+pub struct RuleHelper {
+    /// [`crate::config::stream::word_hash`] of its name.
+    pub name: u64,
+    pub hash: u64,
+    pub words: crate::fx_hash::FxHashSet<u64>,
 }
 
 /// `rule name [severity [message]] [{ set option value; clauses }]`

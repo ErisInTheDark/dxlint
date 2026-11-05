@@ -487,9 +487,27 @@ in shout rule other {other} "other"
     assert_eq!(lint(), [pair("stays", "warn")]);
     assert_eq!(runs(), 1);
     // Anything shared starts over.
-    std::fs::write(dir.join(".dx"), config("error", "in .t let shared 1")).expect("config");
+    std::fs::write(dir.join(".dx"), config("error", "in .t match extra /EXTRA/")).expect("config");
     assert_eq!(lint(), [pair("other", "error"), pair("stays", "warn")]);
     assert_eq!(runs(), 2);
+    // A helper only `other` reaches, directly and through another: `stays` keeps.
+    let with = |text: &str| config("error", &format!("fn inner(x) = {text}\nfn outer(x) = inner(x)")).replace(r#"rule other error "other""#, r#"rule other error "{outer(1)}""#);
+    std::fs::write(dir.join(".dx"), with("x")).expect("config");
+    assert_eq!(lint(), [pair("other", "error"), pair("stays", "warn")]);
+    let base = runs();
+    std::fs::write(dir.join(".dx"), with("x + 1")).expect("config");
+    let out = dxlint(&dir, &["--format", "jsonl"]);
+    assert!(stdout(&out).contains("\"message\":\"2\""), "{}", stdout(&out));
+    assert_eq!(runs(), base);
+    // A helper the shared part reads is shared.
+    let shared = |text: &str| config("error", &format!("fn inner(x) = {text}\nin .t let shared inner(1)"))
+        .replace("in .t match word /WORD/ {", "in .t match word /WORD/ {\n  let reads shared");
+    std::fs::write(dir.join(".dx"), shared("x")).expect("config");
+    lint();
+    let before = runs();
+    std::fs::write(dir.join(".dx"), shared("x + 1")).expect("config");
+    lint();
+    assert_eq!(runs(), before + 1);
 }
 
 #[test]

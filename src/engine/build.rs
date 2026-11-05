@@ -739,10 +739,28 @@ fn rule_state(name: &str, config: &crate::config::ast::Config) -> u64 {
     let touches = |rule: &str, pattern: &str| wildcard(pattern, rule)
         || !pattern.contains(['*', ':']) && rule.strip_prefix(pattern).is_some_and(|rest| rest.starts_with(':'));
     let mut hash = crate::fx_hash::FxHasher::default();
-    for (names, item) in &config.rule_items {
+    let mut reached: crate::fx_hash::FxHashSet<u64> = Default::default();
+    for item in &config.rule_items {
         let of_base = |pattern: &String| base.is_some_and(|base| touches(base, pattern) || touches(&name.replacen(plain, base, 1), pattern));
-        if names.iter().any(|pattern| touches(name, pattern) || of_base(pattern)) { hash.write_u64(*item) }
+        if item.names.iter().any(|pattern| touches(name, pattern) || of_base(pattern)) {
+            hash.write_u64(item.hash);
+            reached.extend(&item.words);
+        }
     }
+    // The helpers its items reach, and theirs. Any word naming one counts.
+    let mut helpers: Vec<&crate::config::ast::RuleHelper> = config.helpers.iter().collect();
+    let mut found = Vec::new();
+    loop {
+        let (now, rest): (Vec<_>, Vec<_>) = helpers.into_iter().partition(|helper| reached.contains(&helper.name));
+        helpers = rest;
+        if now.is_empty() { break }
+        for helper in now {
+            found.push(helper.hash);
+            reached.extend(&helper.words);
+        }
+    }
+    found.sort_unstable();
+    for helper in found { hash.write_u64(helper) }
     hash.finish()
 }
 
