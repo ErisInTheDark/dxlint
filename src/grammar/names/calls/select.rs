@@ -271,11 +271,14 @@ fn agreed_outputs(call: Leaf, values: &Values<'_>) -> Option<NodeValue> {
         for set in sets {
             let mut agreed: Option<NodeValue> = None;
             for header in set {
-                if !super::infer::formals(header.site, values).known()?.is_empty() { return None }
+                let generic = !super::infer::formals(header.site, values).known()?.is_empty();
                 // The frame a selected overload is read in (as `candidate`).
                 // A header with no type parameters reads its result in its
                 // own frame: one result per declaration, not per call site.
                 let result = super::result::header_result(header, values).known()?;
+                // Type parameters only matter when the result can hold them
+                // (`on<K>(type: K, ...): void` always returns `void`).
+                if generic && !holds_nothing_bound(&result, values)? { return None }
                 // The very same result only: mutually assignable results
                 // (`void`, `undefined`) still tell overloads apart.
                 match &agreed {
@@ -290,6 +293,24 @@ fn agreed_outputs(call: Leaf, values: &Values<'_>) -> Option<NodeValue> {
         return Some(NodeValue::rows(results));
     }
     None
+}
+
+/// Whether `value` can't depend on a type argument: only trait sets, and
+/// nodes with nothing inside them (`void`) or read in a frame binding nothing.
+fn holds_nothing_bound(value: &NodeValue, values: &Values<'_>) -> Option<bool> {
+    let NodeValue::Alternatives(rows) = value else { return Some(false) };
+    for &leaf in rows.iter().flatten() {
+        let fixed = match leaf.target {
+            Target::Traits(_) => true,
+            Target::Node(node) => {
+                let tree = values.world.tree(node.file)?;
+                tree.children(node.node).is_empty() || values.question.get(leaf.frame).is_none_or(|frame| frame.args.is_none() && frame.through.is_none())
+            }
+            _ => false,
+        };
+        if !fixed { return Some(false) }
+    }
+    Some(true)
 }
 
 fn proven(group: &[Known<Candidate>]) -> Option<&Candidate> {
