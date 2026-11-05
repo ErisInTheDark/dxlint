@@ -392,6 +392,8 @@ pub(super) struct Snapshot {
     /// same value ([`super::world`]'s `shared_value`). `None`: unknown, and
     /// unknown for every linted file alike.
     values: RwLock<FxHashMap<ValueKey, Cached<Option<StableValue>>>>,
+    /// Facts derived from those values, the same way.
+    facts: RwLock<FxHashMap<RunFactKey, Cached<StableFact>>>,
     /// Frames those values are read in, interned run-wide.
     frames: RwLock<(FxHashMap<Arc<StableBinding>, u32>, Vec<Arc<StableBinding>>)>,
     /// An editor's run: each file's last lint, for its next one.
@@ -431,6 +433,49 @@ pub(super) type StableValue = (Arc<[Box<[StableLeaf]>]>, crate::grammar::names::
 
 /// (revision, settings, program, outside, leaf).
 pub(super) type ValueKey = (u64, usize, u64, Option<PathBuf>, StableLeaf);
+
+/// A [`crate::grammar::names::question::FactKey`] by path.
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub(super) enum StableFactKey {
+    Trait(StableLeaf, u16),
+    Optional(StableLeaf),
+    Closed(StableLeaf),
+    MemberKey(StableLeaf, StableKey),
+    Members(StableLeaf),
+    Accepts(StableValue, StableValue),
+}
+
+/// (revision, settings, program, outside, fact).
+pub(super) type RunFactKey = (u64, usize, u64, Option<PathBuf>, StableFactKey);
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub(super) enum StableKey {
+    Text(Box<str>),
+    Ordinal(u32),
+    Symbol(reads::DepPath, u32),
+    Domain(crate::config::ast::values::KeyDomain),
+}
+
+#[derive(Clone)]
+pub(super) struct StableSource {
+    pub site: StableLeaf,
+    pub value: Option<crate::grammar::names::Value>,
+    pub origin: crate::grammar::names::values::MemberOrigin,
+}
+
+#[derive(Clone)]
+pub(super) struct StableMember {
+    pub key: StableKey,
+    pub sources: Box<[StableSource]>,
+    pub required: Known<bool>,
+}
+
+#[derive(Clone)]
+pub(super) enum StableFact {
+    Flag(bool),
+    Member(Option<StableMember>),
+    Members(Box<[StableMember]>),
+}
 
 type PackageProbe = crate::grammar::names::modules::resolution::Probe<std::path::PathBuf>;
 
@@ -605,7 +650,7 @@ impl Snapshot {
     /// the edited files.
     pub(super) fn carry(self, to: u64, keep: &mut Keep<'_>) -> Snapshot {
         let Snapshot { revision, paths, catalogs, units, modules, augmentations, prefetched: _, listed: _, probes, listings, texts,
-            candidates, surveys, words, configurations, metadata, packages, values, frames, editor } = self;
+            candidates, surveys, words, configurations, metadata, packages, values, facts: _, frames, editor } = self;
         // A survey holds while its listing does; inputs whose text changed
         // are read again, and what was built from them patched to match.
         let mut patched: FxHashMap<(usize, u64), Vec<usize>> = FxHashMap::default();
@@ -644,6 +689,7 @@ impl Snapshot {
                 keep(at, Some(&answer.reads), None).then(|| ((to, settings, root, subpath, conditions), answer))),
             values: carried(values, |(at, settings, program, outside, leaf), answer|
                 keep(at, Some(&answer.reads), None).then(|| ((to, settings, program, outside, leaf), answer))),
+            facts: Default::default(),
             frames,
             editor,
         }
@@ -774,6 +820,14 @@ impl Snapshot {
 
     pub(super) fn keep_value(&self, key: ValueKey, answer: Cached<Option<StableValue>>) {
         self.values.write().expect("run values").insert(key, answer);
+    }
+
+    pub(super) fn fact_answer(&self, key: &RunFactKey) -> Option<Cached<StableFact>> {
+        self.facts.read().expect("run facts").get(key).cloned()
+    }
+
+    pub(super) fn keep_fact(&self, key: RunFactKey, answer: Cached<StableFact>) {
+        self.facts.write().expect("run facts").insert(key, answer);
     }
 
     /// `binding`'s run-wide frame id.

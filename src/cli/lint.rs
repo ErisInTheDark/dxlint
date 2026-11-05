@@ -181,7 +181,8 @@ fn lint_file(linter: &Linter, run: &LintRun<'_>, cache: Option<&Cache>, path: &P
     let rel = linter.relative(path).to_string_lossy().replace('\\', "/");
     // With `--fix`, a cached result only saves work when there is nothing
     // to fix.
-    if let Some(diags) = cache.and_then(|c| c.lookup(linter, &rel, &text)) {
+    let saved = cache.and_then(|c| if fix { c.lookup(linter, &rel, &text) } else { c.result(run, linter, &rel, path, &text) });
+    if let Some(diags) = saved {
         if !fix || diags.iter().all(|d| d.fix.is_none()) {
             return Msg::File(FileResult { path: path.to_path_buf(), text, diags, fixed: 0 });
         }
@@ -479,7 +480,7 @@ fn lint_project(output: &mut Output<'_>, args: &LintArgs, project: &mut Project,
     let cache = (!args.no_cache && !args.profile && !args.fix_preview && args.semantic_budget.is_none()).then(|| Cache::open(&linter));
     let cwd = output.cwd;
     let Scope { roots, named, whole, walked, exiting } = scope;
-    let jobs =args.jobs.map_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get()), |n| n.get());
+    let jobs = args.jobs.map_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get()), |n| n.get());
 
     let packed = sources.map(|sources| sources.files.iter().filter(|(_, path)| linter.wants(path)).cloned().collect::<Vec<_>>());
 

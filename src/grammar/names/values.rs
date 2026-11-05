@@ -495,6 +495,32 @@ impl Values<'_> {
         answer
     }
 
+    /// `compute`, reusing what another linted file derived for fact `key`.
+    fn across_files<T>(&self, key: super::question::FactKey, into: fn(T) -> super::question::Fact, from: fn(super::question::Fact) -> Option<T>,
+        compute: impl Fn() -> Known<T>) -> Known<T> {
+        let fact = self.world.shared_fact(&key, self.semantic, &mut || match compute() {
+            Known::Yes(answer) => Some(into(answer)),
+            Known::Unknown => None,
+        });
+        fact.and_then(from).map_or(Known::Unknown, Known::Yes)
+    }
+
+    /// [`Self::across_files`] for a yes-or-no fact.
+    pub(super) fn flag_across_files(&self, key: super::question::FactKey, compute: impl Fn() -> Known<bool>) -> Known<bool> {
+        use super::question::Fact;
+        self.across_files(key, Fact::Flag, |fact| match fact { Fact::Flag(flag) => Some(flag), _ => None }, compute)
+    }
+
+    pub(super) fn member_across_files(&self, at: Leaf, key: &Key, compute: impl Fn() -> Known<Option<Member>>) -> Known<Option<Member>> {
+        use super::question::{Fact, FactKey};
+        self.across_files(FactKey::MemberKey(at, key.clone()), Fact::Member, |fact| match fact { Fact::Member(member) => Some(member), _ => None }, compute)
+    }
+
+    pub(super) fn members_across_files(&self, at: Leaf, compute: impl Fn() -> Known<Vec<Member>>) -> Known<Vec<Member>> {
+        use super::question::{Fact, FactKey};
+        self.across_files(FactKey::Members(at), Fact::Members, |fact| match fact { Fact::Members(members) => Some(members), _ => None }, compute)
+    }
+
     /// Whether `memo`'s answer for `key` is being computed right now (an
     /// ask would be a cycle).
     pub(super) fn computing<K, T>(&self, memo: &Memo<K, Known<T>>, key: &K) -> bool
@@ -532,7 +558,8 @@ impl Values<'_> {
             return self.declared_trait(Leaf { frame: FrameId::ROOT, ..leaf }, trait_id);
         }
         self.memoized_with(&self.semantic.values.traits, (leaf, trait_id),
-            || (trait_id < 64 && self.question.budget.step()).then_some(()), || self.direct_trait(leaf, trait_id))
+            || (trait_id < 64 && self.question.budget.step()).then_some(()),
+            || self.flag_across_files(super::question::FactKey::Trait(leaf, trait_id), || self.direct_trait(leaf, trait_id)))
     }
 
     /// A trait answer the leaf's shape alone settles, without the memo: a
@@ -1146,8 +1173,28 @@ impl Values<'_> {
             let declaration = Leaf { target: Target::Node(owner), frame: super::question::FrameId::ROOT };
             return self.question.bind_definition(super::question::FrameId::ROOT, owner, Some(declaration), None, classes);
         }
+        if let Some(frame) = self.instantiation_frame(owner, through, classes) { return frame }
         let through = match through.target { Target::Node(_) => Some(through), _ => None };
         self.question.bind_definition(parent, owner, through, None, classes)
+    }
+
+    /// The frame of `owner` given every formal by the reference `through`:
+    /// named by the arguments' values, it reads nothing of where it was
+    /// named, so every site instantiating `Box<string>` shares it. `None`
+    /// where only the reference can answer (defaults, recursive arguments).
+    fn instantiation_frame(&self, owner: NodeRef, through: Leaf, classes: u64) -> Option<super::question::FrameId> {
+        if self.semantic.generic_scope(owner) != Some(owner.node) || !self.semantic.declares_formals(owner) { return None }
+        let Known::Yes(Some(sites)) = self.declared_argument_sites(through) else { return None };
+        let tree = self.world.tree(owner.file)?;
+        let kind = self.tables.kinds.get(tree.nodes.get(owner.node as usize)?.matcher as usize)?;
+        let [(path, None)] = &kind.generics[..] else { return None };
+        let at = Leaf { target: Target::Node(owner), frame: super::question::FrameId::ROOT };
+        let Known::Yes(formals) = self.follow(at, path) else { return None };
+        if sites.is_empty() || sites.len() != formals.len() { return None }
+        let mark = self.cycle_mark();
+        let Known::Yes(arguments) = self.argument_values(sites, None) else { return None };
+        if self.cycled_since(mark) || arguments.iter().any(|argument| *argument == NodeValue::Unknown) { return None }
+        Some(self.question.bind_definition(super::question::FrameId::ROOT, owner, None, Some(arguments), classes))
     }
 
     /// The one frame every reach of `owner` (with view `classes`) shares

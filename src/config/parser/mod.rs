@@ -382,7 +382,38 @@ impl<'a> Parser<'a> {
 
     /// One item. Inside a `{ ... }` block, `ctx` is the block's context:
     /// `match`, `rule` and `indent` lines take their layers from it.
+    /// One item. One that only defines or configures rules keeps its token
+    /// hash apart ([`Config::rule_items`]).
     fn item(&mut self, ctx: Option<&Context>) {
+        if ctx.is_some() || self.scope.is_some() || !self.at_rule_item() { return self.any_item(ctx) }
+        let outer = self.ts.apart();
+        let (rules, configs, extensions) = (self.config.rules.len(), self.config.configs.len(), self.config.extensions.len());
+        self.any_item(ctx);
+        // An override replaces a rule rather than adding one: no name here, so
+        // it counts as a shared change.
+        let names: Vec<String> = self.config.rules.get(rules..).unwrap_or_default().iter().map(|rule| rule.name.text.clone())
+            .chain(self.config.configs.get(configs..).unwrap_or_default().iter().map(|config| config.patch.name.text.clone()))
+            .chain(self.config.extensions.get(extensions..).unwrap_or_default().iter().map(|(name, _)| name.text.clone()))
+            .collect();
+        let hash = self.ts.rejoin(outer, names.is_empty());
+        if !names.is_empty() { self.config.rule_items.push((names, hash)) }
+    }
+
+    /// Whether a `rule` line or `in <selectors> rule name` comes next. An
+    /// `in` block holds more than rules: its `let`s are every rule's.
+    fn at_rule_item(&mut self) -> bool {
+        let Some(first) = self.peek() else { return false };
+        if first.is_ident("rule") { return true }
+        if !first.is_ident("in") { return false }
+        for ahead in 1.. {
+            let Some(token) = self.ts.peek_raw(ahead) else { return false };
+            if token.is_ident("rule") { return true }
+            if token.kind == Tk::Newline || token.is_ident("let") || token.is_ident("match") || &*token.text == "{" { return false }
+        }
+        false
+    }
+
+    fn any_item(&mut self, ctx: Option<&Context>) {
         let Some(t) = self.peek() else { return };
         self.items_started += 1;
         let before = self.errors.len();

@@ -3,7 +3,7 @@ use super::{Identity, Known, Leaf, NodeRef, Target, Values};
 impl Values<'_> {
     pub fn optional(&self, at: Leaf) -> Known<bool> {
         let Known::Yes(at) = self.semantic.leaf(at) else { return Known::Unknown };
-        self.memoized(&self.semantic.values.optional, at, || self.direct_optional(at))
+        self.memoized(&self.semantic.values.optional, at, || self.flag_across_files(super::super::question::FactKey::Optional(at), || self.direct_optional(at)))
     }
 
     fn direct_optional(&self, at: Leaf) -> Known<bool> {

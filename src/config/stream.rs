@@ -113,6 +113,24 @@ impl Stream {
         self.seen.finish()
     }
 
+    /// Tokens consumed from now on hash apart from those before: returns
+    /// what was seen so far, for [`Stream::rejoin`].
+    pub fn apart(&mut self) -> crate::fx_hash::FxHasher {
+        std::mem::take(&mut self.seen)
+    }
+
+    /// Ends [`Stream::apart`]: the hash of the tokens since, which `absorb`
+    /// also counts as part of the whole.
+    pub fn rejoin(&mut self, outer: crate::fx_hash::FxHasher, absorb: bool) -> u64 {
+        use std::hash::Hasher;
+        let hash = self.fingerprint();
+        self.seen = outer;
+        if absorb { self.seen.write_u64(hash) }
+        // As if the item were not there: adding one changes no line ends.
+        else { self.at_line_end = true }
+        hash
+    }
+
     pub fn push_tokens(&mut self, tokens: Vec<Token>) {
         self.frames.push(Frame { tokens: tokens.into(), pos: 0, is_macro: false });
     }

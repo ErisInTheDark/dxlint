@@ -25,7 +25,7 @@ use super::reads::{hash_bytes, Dep, Reads, Scan, ScanTest};
 
 pub const FILE_NAME: &str = ".dxcache";
 /// Bumped whenever the encoding changes.
-const MAGIC: &[u8; 4] = b"ZLCD";
+const MAGIC: &[u8; 4] = b"ZLCE";
 
 /// Deps, groups and scans, by index into the tables.
 #[derive(Default, Clone, PartialEq, Eq, Hash)]
@@ -46,6 +46,18 @@ struct Entry {
     content: u64,
     refs: Refs,
     diags: Vec<Diagnostic>,
+    /// Its rules' states, in [`Saved::rule_states`].
+    state: u32,
+}
+
+/// Each rule's name and [`Linter::rule_states`] hash, sorted.
+type RuleStates = Vec<(String, u64)>;
+
+/// What a saved entry offers for a file's current text.
+enum Found {
+    Whole(Vec<Diagnostic>),
+    /// Rules changed since: what the others reported, and which to run.
+    Partly { kept: Vec<Diagnostic>, rerun: Vec<bool> },
 }
 
 /// A result this run produced or confirmed.
@@ -62,10 +74,13 @@ struct Saved {
     /// A group's refs only point at earlier groups.
     groups: Vec<Refs>,
     scans: Vec<SavedScan>,
+    rule_states: Vec<RuleStates>,
     entries: HashMap<String, Entry>,
 }
 
 pub struct Cache {
+    /// This run's rules, as entries record them.
+    rules_now: RuleStates,
     /// The file's hash when read, to tell whether another run wrote it since.
     opened: Option<u64>,
     path: PathBuf,
@@ -101,7 +116,11 @@ impl Cache {
         let bytes = std::fs::read(&path).ok();
         let opened = bytes.as_deref().map(hash_bytes);
         let saved = bytes.and_then(|bytes| decode(&bytes, key, &linter.root)).unwrap_or_default();
+        let mut rules_now: RuleStates = linter.rules.iter().map(|rule| rule.name.clone()).zip(linter.rule_states.iter().copied()).collect();
+        rules_now.sort_unstable();
+        rules_now.dedup();
         Cache {
+            rules_now,
             opened,
             path,
             root: linter.root.clone(),
@@ -134,15 +153,59 @@ impl Cache {
     /// The saved result for `rel` (a path relative to the config, `/`
     /// separated), if `text` and everything its lint read are unchanged.
     pub fn lookup(&self, linter: &Linter, rel: &str, text: &str) -> Option<Vec<Diagnostic>> {
+        match self.find(linter, rel, text)? {
+            Found::Whole(diags) => Some(diags),
+            Found::Partly { .. } => None,
+        }
+    }
+
+    /// `path`'s result: saved, or for rules changed since it was saved,
+    /// running only those.
+    pub fn result(&self, run: &super::LintRun<'_>, linter: &Linter, rel: &str, path: &Path, text: &str) -> Option<Vec<Diagnostic>> {
+        match self.find(linter, rel, text)? {
+            Found::Whole(diags) => Some(diags),
+            Found::Partly { kept, rerun } => {
+                let (mut diags, reads) = run.lint_rules_tracked(path, text, &rerun);
+                diags.extend(kept);
+                Diagnostic::dedup(&mut diags);
+                let earlier = self.saved_reads(rel)?;
+                let both = Reads { groups: vec![Arc::new(earlier), Arc::new(reads)], ..Default::default() };
+                self.store(rel, text, &diags, Arc::new(both));
+                Some(diags)
+            }
+        }
+    }
+
+    fn find(&self, linter: &Linter, rel: &str, text: &str) -> Option<Found> {
         let entry = self.saved.entries.get(rel)?;
         let content = hash_bytes(text.as_bytes());
         self.texts.write().expect("cache texts").insert(self.root.join(rel), content);
         if entry.content != content || !self.holds(linter, &entry.refs) {
             return None;
         }
-        self.hits.fetch_add(1, Ordering::Relaxed);
-        self.fresh.lock().expect("cache lock").insert(rel.to_string(), Fresh::Kept);
-        Some(entry.diags.clone())
+        let then = self.saved.rule_states.get(entry.state as usize)?;
+        if *then == self.rules_now {
+            self.hits.fetch_add(1, Ordering::Relaxed);
+            self.fresh.lock().expect("cache lock").insert(rel.to_string(), Fresh::Kept);
+            return Some(Found::Whole(entry.diags.clone()));
+        }
+        let was = |name: &str| then.binary_search_by(|(rule, _)| rule.as_str().cmp(name)).ok().map(|at| then[at].1);
+        let now = |name: &str| self.rules_now.binary_search_by(|(rule, _)| rule.as_str().cmp(name)).ok().map(|at| self.rules_now[at].1);
+        let kept = entry.diags.iter().filter(|diag| {
+            let (old, new) = (was(&diag.rule), now(&diag.rule));
+            // Reports of no rule are the file's own: they don't change.
+            old == new
+        }).cloned().collect();
+        let rerun = linter.rules.iter().zip(&linter.rule_states).map(|(rule, state)| was(&rule.name) != Some(*state)).collect();
+        Some(Found::Partly { kept, rerun })
+    }
+
+    /// What `rel`'s current result read: this run's, else as saved.
+    pub fn reads_of(&self, rel: &str) -> Option<Reads> {
+        if let Some(Fresh::New { reads, .. }) = self.fresh.lock().expect("cache lock").get(rel) {
+            return Some(Reads { groups: vec![reads.clone()], ..Default::default() });
+        }
+        self.saved_reads(rel)
     }
 
     /// What the saved lint of `rel` read (for callers that track reads on a
@@ -247,13 +310,20 @@ impl Cache {
                 .and_then(|bytes| decode(&bytes, self.key, &self.root))
         };
         let mut tables = Tables::new(&self.saved);
-        let mut entries: Vec<(&str, u64, Refs, &[Diagnostic])> = Vec::new();
+        let state_id = |states: &RuleStates, known: &mut Vec<RuleStates>| -> u32 {
+            match known.iter().position(|seen| seen == states) {
+                Some(at) => at as u32,
+                None => { known.push(states.clone()); (known.len() - 1) as u32 }
+            }
+        };
+        let mut known: Vec<RuleStates> = vec![self.rules_now.clone()];
+        let mut entries: Vec<(&str, u64, Refs, &[Diagnostic], u32)> = Vec::new();
         for (rel, f) in &fresh {
             entries.push(match f {
-                Fresh::New { content, reads, diags } => (rel, *content, tables.reads(reads), diags),
+                Fresh::New { content, reads, diags } => (rel, *content, tables.reads(reads), diags, 0),
                 Fresh::Kept => {
                     let e = &self.saved.entries[rel];
-                    (rel, e.content, tables.saved_refs(&e.refs), &e.diags)
+                    (rel, e.content, tables.saved_refs(&e.refs), &e.diags, 0)
                 }
             });
         }
@@ -261,12 +331,21 @@ impl Cache {
             let others = newer.as_ref().unwrap_or(&self.saved);
             tables.read_saved_from(others);
             for (rel, e) in others.entries.iter().filter(|(k, _)| !fresh.contains_key(*k)) {
-                entries.push((rel, e.content, tables.saved_refs(&e.refs), &e.diags));
+                let state = others.rule_states.get(e.state as usize).map_or(0, |states| state_id(states, &mut known));
+                entries.push((rel, e.content, tables.saved_refs(&e.refs), &e.diags, state));
             }
         }
         entries.sort_unstable_by(|a, b| a.0.cmp(b.0));
 
         let mut w = Writer { out: Vec::new(), root: &self.root, strings: Vec::new(), string_ids: HashMap::new() };
+        w.var(known.len() as u64);
+        for states in &known {
+            w.var(states.len() as u64);
+            for (rule, state) in states {
+                w.str(rule);
+                w.out.extend_from_slice(&state.to_le_bytes());
+            }
+        }
         w.var(tables.parts.len() as u64);
         for parts in &tables.parts {
             w.parts(parts);
@@ -285,9 +364,10 @@ impl Cache {
             w.scan(s);
         }
         w.var(entries.len() as u64);
-        for (rel, content, refs, diags) in entries {
+        for (rel, content, refs, diags, state) in entries {
             w.str(rel);
             w.out.extend_from_slice(&content.to_le_bytes());
+            w.var(u64::from(state));
             w.refs(&refs);
             w.var(diags.len() as u64);
             for d in diags {
@@ -733,6 +813,7 @@ fn decode(bytes: &[u8], key: u64, root: &Path) -> Option<Saved> {
         let s = String::from_utf8(r.take(n)?.to_vec()).ok()?;
         r.strings.push(s);
     }
+    let rule_states = (0..r.var()?).map(|_| (0..r.var()?).map(|_| Some((r.str()?, r.u64()?))).collect::<Option<RuleStates>>()).collect::<Option<Vec<_>>>()?;
     let parts = (0..r.var()?).map(|_| r.parts().map(|parts| Arc::new(parts.lasting()))).collect::<Option<Vec<_>>>()?;
     let deps = (0..r.var()?).map(|_| r.dep(&parts)).collect::<Option<Vec<_>>>()?;
     let scan_count = usize::try_from(r.var()?).ok()?;
@@ -746,11 +827,12 @@ fn decode(bytes: &[u8], key: u64, root: &Path) -> Option<Saved> {
     for _ in 0..r.var()? {
         let rel = r.str()?;
         let content = r.u64()?;
+        let state = u32::try_from(r.var()?).ok()?;
         let refs = r.refs(deps.len(), groups.len(), scans.len())?;
         let diags = (0..r.var()?).map(|_| r.diag()).collect::<Option<Vec<_>>>()?;
-        entries.insert(rel, Entry { content, refs, diags });
+        entries.insert(rel, Entry { content, refs, diags, state });
     }
-    Some(Saved { deps, groups, scans, entries })
+    Some(Saved { deps, groups, scans, rule_states, entries })
 }
 
 struct Reader<'a> {

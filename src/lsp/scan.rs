@@ -372,8 +372,13 @@ fn publish_disk(linter: &Linter, run: &LintRun<'_>, cache: &Cache, shared: &Shar
     }
     let text = std::fs::read_to_string(path).ok()?;
     let rel = linter.relative(path).to_string_lossy().replace('\\', "/");
-    let diags = match saved_result(cache, linter, path, &text, shared) {
-        Some(diags) => diags,
+    let diags = match cache.result(run, linter, &rel, path, &text) {
+        Some(diags) => {
+            if let Some(reads) = cache.reads_of(&rel) {
+                shared.reads.lock().expect("lock").insert(path.to_path_buf(), crate::engine::reads::kept(reads));
+            }
+            diags
+        }
         None => {
             let (diags, reads) = run.lint_tracked(path, &text);
             let reads = crate::engine::reads::kept(reads);

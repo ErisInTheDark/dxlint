@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use crate::expr::{Ctx, Value};
 use crate::expr::queries::Uncertainty;
-use crate::grammar::names::question::{Budget, FrameId, Known, Leaf, NodeRef, NodeValue, ScopeRef, Target, World};
+use crate::grammar::names::question::{Budget, Fact, FactKey, FrameId, Known, Leaf, NodeRef, NodeValue, ScopeRef, Target, World};
 use crate::grammar::names::semantic::{AttributeKey, Semantic};
 use crate::grammar::names::modules::compile::Action;
 use crate::grammar::names::modules::SharedQuestion;
@@ -1245,6 +1245,82 @@ impl<'a> Files<'a> {
         Some(NodeValue::Alternatives(crate::grammar::names::question::Rows::normalized(rows, *normal)))
     }
 
+    /// Where the run keeps fact `key`, when every linted file of this
+    /// program would derive the same one. Not in an editor's run, whose
+    /// lints record finer reads than a shared answer carries.
+    fn run_fact_key(self, key: &FactKey, semantic: &Semantic<'_>) -> Option<(&'a super::program::Snapshot, super::program::RunFactKey)> {
+        use super::program::StableFactKey as Stable;
+        let snapshot = self.0.snapshot.filter(|&snapshot| snapshot.editor.is_none() && self.shares(snapshot))?;
+        let stable = match key {
+            FactKey::Trait(leaf, id) => Stable::Trait(self.stable_leaf(*leaf, semantic)?, *id),
+            FactKey::Optional(leaf) => Stable::Optional(self.stable_leaf(*leaf, semantic)?),
+            FactKey::Closed(leaf) => Stable::Closed(self.stable_leaf(*leaf, semantic)?),
+            FactKey::MemberKey(leaf, member) => Stable::MemberKey(self.stable_leaf(*leaf, semantic)?, self.stable_key(member)?),
+            FactKey::Members(leaf) => Stable::Members(self.stable_leaf(*leaf, semantic)?),
+            FactKey::Accepts(expected, actual) => Stable::Accepts(self.stable_value(expected, semantic)?, self.stable_value(actual, semantic)?),
+        };
+        let Known::Yes(Some(selected)) = self.program_selected() else { return None };
+        let Known::Yes((program, outside)) = self.program_identity(selected) else { return None };
+        Some((snapshot, (self.0.revision(), selected as *const Settings as usize, program, outside, stable)))
+    }
+
+    fn stable_key(self, key: &crate::grammar::names::values::Key) -> Option<super::program::StableKey> {
+        use crate::grammar::names::values::Key;
+        use super::program::StableKey as Stable;
+        Some(match key {
+            Key::Text(text) => Stable::Text(text.clone()),
+            Key::Ordinal(at) => Stable::Ordinal(*at),
+            Key::Symbol(node) => Stable::Symbol(self.shared_path(node.file)?, node.node),
+            Key::Domain(domain) => Stable::Domain(domain.clone()),
+        })
+    }
+
+    fn local_key(self, key: &super::program::StableKey) -> Option<crate::grammar::names::values::Key> {
+        use crate::grammar::names::values::Key;
+        use super::program::StableKey as Stable;
+        Some(match key {
+            Stable::Text(text) => Key::Text(text.clone()),
+            Stable::Ordinal(at) => Key::Ordinal(*at),
+            Stable::Symbol(path, node) => Key::Symbol(NodeRef { file: self.0.file(path).filter(|&file| file != 0)?, node: *node }),
+            Stable::Domain(domain) => Key::Domain(domain.clone()),
+        })
+    }
+
+    fn stable_member(self, member: &crate::grammar::names::values::Member, semantic: &Semantic<'_>) -> Option<super::program::StableMember> {
+        let sources = member.sources.iter().map(|source| {
+            if source.edits.is_some() { return None }
+            Some(super::program::StableSource { site: self.stable_leaf(source.site, semantic)?, value: source.value.clone(), origin: source.origin })
+        }).collect::<Option<Box<[_]>>>()?;
+        Some(super::program::StableMember { key: self.stable_key(&member.key)?, sources, required: member.required })
+    }
+
+    fn local_member(self, member: &super::program::StableMember, semantic: &Semantic<'_>) -> Option<crate::grammar::names::values::Member> {
+        use crate::grammar::names::values::{Member, MemberSource};
+        let sources = member.sources.iter().map(|source| Some(MemberSource { site: self.local_leaf(&source.site, semantic)?, value: source.value.clone(), origin: source.origin, edits: None }))
+            .collect::<Option<Vec<_>>>()?;
+        Some(Member { key: self.local_key(&member.key)?, sources, required: member.required })
+    }
+
+    fn stable_fact(self, fact: &Fact, semantic: &Semantic<'_>) -> Option<super::program::StableFact> {
+        use super::program::StableFact as Stable;
+        Some(match fact {
+            Fact::Flag(flag) => Stable::Flag(*flag),
+            Fact::Member(None) => Stable::Member(None),
+            Fact::Member(Some(member)) => Stable::Member(Some(self.stable_member(member, semantic)?)),
+            Fact::Members(members) => Stable::Members(members.iter().map(|member| self.stable_member(member, semantic)).collect::<Option<_>>()?),
+        })
+    }
+
+    fn local_fact(self, fact: &super::program::StableFact, semantic: &Semantic<'_>) -> Option<Fact> {
+        use super::program::StableFact as Stable;
+        Some(match fact {
+            Stable::Flag(flag) => Fact::Flag(*flag),
+            Stable::Member(None) => Fact::Member(None),
+            Stable::Member(Some(member)) => Fact::Member(Some(self.local_member(member, semantic)?)),
+            Stable::Members(members) => Fact::Members(members.iter().map(|member| self.local_member(member, semantic)).collect::<Option<_>>()?),
+        })
+    }
+
     fn catalog(self, selected: &Settings, classes: u64, semantic: &Semantic<'_>) -> Known<Arc<super::program::Catalog>> {
         let key = (selected as *const Settings, classes);
         if let Some(cached) = self.0.program.catalogs.borrow().get(&key) { return Known::Yes(cached.get()) }
@@ -1719,6 +1795,26 @@ impl World for Files<'_> {
                 snapshot.keep_value(key, super::reads::Cached { value: stable, reads: super::reads::shared(answer.reads.clone()) });
             }
             Err(reason) => skip(reason),
+        }
+        answer.value
+    }
+
+    fn shared_fact(&self, key: &FactKey, semantic: &Semantic<'_>, compute: &mut dyn FnMut() -> Option<Fact>) -> Option<Fact> {
+        let Some((snapshot, stable)) = self.run_fact_key(key, semantic) else { return compute() };
+        if let Some(found) = snapshot.fact_answer(&stable) {
+            if let Some(fact) = self.local_fact(&found.value, semantic) {
+                super::reads::note_group(&found.reads);
+                return Some(fact);
+            }
+        }
+        let values = semantic.values();
+        let (before, mark) = (values.root_reads(), values.cycle_mark());
+        let answer = super::reads::Cached::compute(|| compute());
+        super::reads::note_group(&answer.reads);
+        if values.root_reads() == before && !semantic.question.budget.limited() && !values.cycled_since(mark) {
+            if let Some(fact) = answer.value.as_ref().and_then(|fact| self.stable_fact(fact, semantic)) {
+                snapshot.keep_fact(stable, super::reads::Cached { value: fact, reads: super::reads::shared(answer.reads.clone()) });
+            }
         }
         answer.value
     }

@@ -451,6 +451,48 @@ in .t match writer /WRITE/ {
 }
 
 #[test]
+fn a_config_edit_reruns_only_the_rules_it_touches() {
+    let config = |other: &str, helper: &str| format!(r#"
+lang t "*.t"
+command counted "node count.js"
+{helper}
+in .t match word /WORD/ {{
+  let out command_output(node, "counted", [])
+  rule stays warn "{{out.state}}"
+}}
+in .t match shout /SHOUT/
+in shout rule other {other} "other"
+"#);
+    let count = "require('fs').appendFileSync('runs.txt', 'x'); process.stdout.write('dxlint-input a.t\\n')";
+    let dir = project("cli-cache-per-rule", &[(".dx", &config("warn", "")), ("count.js", count), ("a.t", "WORD SHOUT")]);
+    let runs = || std::fs::read_to_string(dir.join("runs.txt")).map_or(0, |runs| runs.len());
+    let lint = || {
+        let out = dxlint(&dir, &["--format", "jsonl"]);
+        let mut rules: Vec<(String, String)> = stdout(&out).lines().map(|line| {
+            let row: serde_json::Value = serde_json::from_str(line).expect("json");
+            (row["rule"].as_str().expect("rule").to_owned(), row["severity"].as_str().expect("severity").to_owned())
+        }).collect();
+        rules.sort();
+        rules
+    };
+    let pair = |rule: &str, severity: &str| (rule.to_owned(), severity.to_owned());
+    assert_eq!(lint(), [pair("other", "warn"), pair("stays", "warn")]);
+    assert_eq!(runs(), 1);
+    // Only `other` changes: `stays` keeps its report without running.
+    std::fs::write(dir.join(".dx"), config("error", "")).expect("config");
+    assert_eq!(lint(), [pair("other", "error"), pair("stays", "warn")]);
+    assert_eq!(runs(), 1);
+    // A rule gone takes its reports along.
+    std::fs::write(dir.join(".dx"), config("error", "").replace(r#"in shout rule other error "other""#, "")).expect("config");
+    assert_eq!(lint(), [pair("stays", "warn")]);
+    assert_eq!(runs(), 1);
+    // Anything shared starts over.
+    std::fs::write(dir.join(".dx"), config("error", "in .t let shared 1")).expect("config");
+    assert_eq!(lint(), [pair("other", "error"), pair("stays", "warn")]);
+    assert_eq!(runs(), 2);
+}
+
+#[test]
 fn dx_library_reads_the_built_in_library_from_disk() {
     // A library dir whose `whitespace` module defines a different rule.
     let library = project("library-override", &[

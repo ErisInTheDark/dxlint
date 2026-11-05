@@ -455,7 +455,9 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
         .collect();
     let commands = std::sync::Arc::new(super::commands::Commands::new(root.clone(),
         config.commands.iter().map(|command| (command.name.text.clone(), super::commands::Declared { argv: command.argv.clone(), batch: command.batch }))));
+    let rule_states = rules.iter().map(|rule| rule_state(&rule.name, &config)).collect();
     let mut linter = Linter {
+        rule_states,
         commands,
         invalidation: Default::default(),
         invalidated: Default::default(),
@@ -728,6 +730,22 @@ fn extend_rules(config: &mut crate::config::ast::Config, errors: &mut Vec<Config
 /// `files` blocks change no definition. Returns, per definition, every line
 /// that configures it (in order, blocks included): its severity changes and
 /// the option values to set once the rules are compiled.
+/// A hash of the rule items (in order) that touch rule `name`, directly, by
+/// glob or family, or through the rule it extends.
+fn rule_state(name: &str, config: &crate::config::ast::Config) -> u64 {
+    use std::hash::Hasher;
+    let plain = name.split(':').next().unwrap_or(name);
+    let base = config.extensions.iter().find(|(extended, _)| extended.text == plain).map(|(_, base)| base.text.as_str());
+    let touches = |rule: &str, pattern: &str| wildcard(pattern, rule)
+        || !pattern.contains(['*', ':']) && rule.strip_prefix(pattern).is_some_and(|rest| rest.starts_with(':'));
+    let mut hash = crate::fx_hash::FxHasher::default();
+    for (names, item) in &config.rule_items {
+        let of_base = |pattern: &String| base.is_some_and(|base| touches(base, pattern) || touches(&name.replacen(plain, base, 1), pattern));
+        if names.iter().any(|pattern| touches(name, pattern) || of_base(pattern)) { hash.write_u64(*item) }
+    }
+    hash.finish()
+}
+
 fn configure(config: &mut crate::config::ast::Config, errors: &mut Vec<ConfigError>) -> Vec<Vec<Setting>> {
     extend_rules(config, errors);
     let mut settings: Vec<Vec<Setting>> = vec![Vec::new(); config.rules.len()];

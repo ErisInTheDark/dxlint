@@ -189,7 +189,7 @@ impl Values<'_> {
 
     fn closed_leaf(&self, at: Leaf) -> Known<bool> {
         let Known::Yes(at) = self.semantic.leaf(at) else { return Known::Unknown };
-        self.memoized(&self.semantic.values.member_closed, at, || self.direct_closed(at))
+        self.memoized(&self.semantic.values.member_closed, at, || self.flag_across_files(super::super::question::FactKey::Closed(at), || self.direct_closed(at)))
     }
 
     fn direct_closed(&self, at: Leaf) -> Known<bool> {
@@ -360,10 +360,10 @@ impl Values<'_> {
 
     fn leaf_member(&self, at: Leaf, key: &Key) -> Known<Option<Member>> {
         let Known::Yes(at) = self.semantic.leaf(at) else { return Known::Unknown };
-        self.memoized(&self.semantic.values.member_keys, (at, key.clone()), || match self.direct_members(at, MemberRequest::Key(key)) {
+        self.memoized(&self.semantic.values.member_keys, (at, key.clone()), || self.member_across_files(at, key, || match self.direct_members(at, MemberRequest::Key(key)) {
             Known::Yes(mut members) => Known::Yes(members.pop()),
             Known::Unknown => Known::Unknown,
-        })
+        }))
     }
 
     pub(super) fn merge_member(members: &mut Vec<Member>, member: Member) {
@@ -475,7 +475,7 @@ impl Values<'_> {
 
     fn leaf_members(&self, at: Leaf) -> Known<Vec<Member>> {
         let Known::Yes(at) = self.semantic.leaf(at) else { return Known::Unknown };
-        self.memoized(&self.semantic.values.members, at, || self.direct_members(at, MemberRequest::Listing))
+        self.memoized(&self.semantic.values.members, at, || self.members_across_files(at, || self.direct_members(at, MemberRequest::Listing)))
     }
 
     pub(super) fn member_context(&self, at: Leaf) -> Known<(NodeRef, Option<(u32, u64)>)> {

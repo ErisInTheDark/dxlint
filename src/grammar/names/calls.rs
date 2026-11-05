@@ -320,7 +320,8 @@ impl Calls<'_> {
             let mut unpaid = false;
             let reading = crate::footprint::begin();
             let answer = if depth == 0 {
-                values.fact(tag, super::question::Budget::per_question(), || accepts::accepts(expected, actual, &values))
+                values.fact(tag, super::question::Budget::per_question(), || values.flag_across_files(
+                    super::question::FactKey::Accepts(expected.clone(), actual.clone()), || accepts::accepts(expected, actual, &values)))
                     .unwrap_or_else(|cut| {
                         unpaid = cut == super::question::Cut::Unpaid;
                         Known::Unknown

@@ -42,6 +42,10 @@ pub struct Config {
     /// `rule name extends base`: `name` starts as a copy of `base`'s
     /// definition (its variants too), in order.
     pub extensions: Vec<(Name, Name)>,
+    /// Items that only define or configure rules: the names (or globs) they
+    /// touch and a hash of their tokens, which the config's fingerprint
+    /// leaves out, in order. Editing one affects those rules alone.
+    pub rule_items: Vec<(Vec<String>, u64)>,
     /// Global `ignore "glob"` items: files never linted.
     pub ignores: Vec<(String, Span)>,
     /// `command name "program args"`: programs rules may run

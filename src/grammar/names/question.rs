@@ -401,6 +401,25 @@ pub struct Rows {
     normal: Normal,
 }
 
+/// A derived fact about values: what a world of a run can reuse from another
+/// when no part of it depends on which file is being linted.
+#[derive(Clone)]
+pub enum FactKey {
+    Trait(Leaf, u16),
+    Optional(Leaf),
+    Closed(Leaf),
+    MemberKey(Leaf, super::values::Key),
+    Members(Leaf),
+    Accepts(NodeValue, NodeValue),
+}
+
+#[derive(Clone)]
+pub enum Fact {
+    Flag(bool),
+    Member(Option<super::values::Member>),
+    Members(Vec<super::values::Member>),
+}
+
 /// How much of normalization a value's rows already went through.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Normal {
@@ -588,6 +607,11 @@ pub trait World {
     /// linted one), shared with the other worlds of the run that read it;
     /// `compute` evaluates it here.
     fn shared_value(&self, _leaf: Leaf, _semantic: &super::semantic::Semantic<'_>, compute: &mut dyn FnMut() -> NodeValue) -> NodeValue {
+        compute()
+    }
+    /// Fact `key`, shared with the other worlds of the run that would derive
+    /// the same; `compute` derives it here (`None`: unknown, never shared).
+    fn shared_fact(&self, _key: &FactKey, _semantic: &super::semantic::Semantic<'_>, compute: &mut dyn FnMut() -> Option<Fact>) -> Option<Fact> {
         compute()
     }
     /// The value another world of the run already shared for canonical

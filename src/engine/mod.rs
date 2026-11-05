@@ -280,6 +280,9 @@ pub struct Linter {
     /// expanded). Not where the project lies: cached results keep paths
     /// relative to the root, so a cache moves with its checkout.
     pub fingerprint: u64,
+    /// Per rule of `rules`: a hash of the config items that touch it, which
+    /// the fingerprint leaves out.
+    pub(crate) rule_states: Vec<u64>,
     /// Files at least this big run their rules in groups on several threads.
     pub(crate) split_at: usize,
     rule_jobs: usize,
@@ -449,6 +452,11 @@ impl LintRun<'_> {
 
     pub fn lint_tracked(&self, path: &Path, text: &str) -> (Vec<Diagnostic>, Reads) {
         reads::track(|| self.lint(path, text))
+    }
+
+    /// [`Self::lint_tracked`] with only the rules `only` marks.
+    pub(crate) fn lint_rules_tracked(&self, path: &Path, text: &str, only: &[bool]) -> (Vec<Diagnostic>, Reads) {
+        reads::track(|| crate::parts::linting(path, || self.linter.lint_rules(&self.programs, self.rule_jobs, path, text, Some(only))))
     }
 
     /// The run's answers, for [`Linter::run_after`].
@@ -892,6 +900,11 @@ impl Linter {
     }
 
     fn lint_in(&self, programs: &program::Snapshot, rule_jobs: usize, path: &Path, text: &str) -> Vec<Diagnostic> {
+        self.lint_rules(programs, rule_jobs, path, text, None)
+    }
+
+    /// A lint with the rules `only` marks (`None`: all).
+    fn lint_rules(&self, programs: &program::Snapshot, rule_jobs: usize, path: &Path, text: &str, only: Option<&[bool]>) -> Vec<Diagnostic> {
         let rel = self.relative(path);
         if self.ignores.matches(&rel) {
             return Vec::new();
@@ -899,7 +912,7 @@ impl Linter {
         let Some(lang) = self.grammar.lang_for(&rel) else { return Vec::new() };
         let settings = self.scopes.for_file(&rel, &self.rules);
         let severity = |i: usize| settings.as_ref().map_or(self.rules[i].severity, |s| s.severity[i]);
-        let active: Vec<bool> = self.rules.iter().enumerate().map(|(i, f)| f.applies_to(&rel, lang, severity(i))).collect();
+        let active: Vec<bool> = self.rules.iter().enumerate().map(|(i, f)| only.is_none_or(|only| only[i]) && f.applies_to(&rel, lang, severity(i))).collect();
         if !active.iter().any(|a| *a) {
             return Vec::new();
         }
