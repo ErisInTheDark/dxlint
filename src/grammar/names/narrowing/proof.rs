@@ -80,7 +80,7 @@ impl Narrowing<'_> {
                     let mut sources: Vec<(Option<&Value>, bool)> = Vec::new();
                     for item in &kind.unwraps {
                         if item.effect != Some(truthy) { continue }
-                        if !self.semantic.question.budget.step() { return NodeValue::Unknown }
+                        if !self.semantic.question.budget.hop() { return NodeValue::Unknown }
                         if let Some(from) = item.value.as_ref().and_then(atom_source) {
                             let relevant = match sources.iter().find(|(source, _)| *source == from) {
                                 Some(&(_, relevant)) => relevant,

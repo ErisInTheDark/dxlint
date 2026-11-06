@@ -173,6 +173,21 @@ fn report_fact_steps() {
     eprintln!("facts spending most altogether:");
     named.sort_by_key(|(_, (.., total))| std::cmp::Reverse(*total));
     print(&named[..named.len().min(80)]);
+    let budget = crate::grammar::names::question::Budget::per_question();
+    let mut out: FxHashMap<(&str, String), (u32, u64)> = FxHashMap::default();
+    for (steps, kind, label) in heavy.iter().filter(|(steps, ..)| *steps >= budget) {
+        let shape: String = label.chars().take(60).map(|c| if c.is_control() { ' ' } else { c }).collect();
+        let row = out.entry((*kind, shape)).or_default();
+        row.0 += 1;
+        row.1 += u64::from(*steps);
+    }
+    let mut out: Vec<_> = out.into_iter().collect();
+    out.sort_by_key(|(_, (times, _))| std::cmp::Reverse(*times));
+    eprintln!("facts that spent their whole allowance: {}, by shape (times):", out.iter().map(|(_, (times, _))| u64::from(*times)).sum::<u64>());
+    for ((kind, shape), (times, _)) in out.into_iter().take(60) {
+        let kind: String = kind.rsplit("::").next().unwrap_or(kind).chars().take(20).collect();
+        eprintln!("{times:>7}  {kind:<20} {shape}");
+    }
     drop(heavy);
     report_fact_sites();
 }
