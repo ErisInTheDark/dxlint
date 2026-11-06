@@ -419,7 +419,7 @@ impl Effects<'_> {
         let mut ancestry = Vec::new();
         let mut owner = Some(node.node);
         while let Some(id) = owner {
-            if !self.semantic.question.budget.step() { return Known::Unknown }
+            if !self.semantic.question.budget.hop() { return Known::Unknown }
             let owner_leaf = Leaf { target: Target::Node(NodeRef { node: id, ..node }), ..at };
             let Some(owner_leaf) = self.semantic.leaf(owner_leaf).known() else { return Known::Unknown };
             if owner_leaf.target != Target::Node(NodeRef { node: id, ..node }) { owner = tree.parent(id); continue }
@@ -627,17 +627,41 @@ impl Effects<'_> {
         let mut declared = Vec::new();
         let mut unique = crate::fx_hash::FxHashSet::default();
         let mut visited = FxHashSet::default();
+        // Entries met on the way down: what lies under one isn't this body's.
+        // Asking each node's entry instead keeps an answer per node and frame.
+        let mut inner = FxHashSet::default();
+        let note_entries = |owner: Leaf, inner: &mut FxHashSet<u32>| -> Known<bool> {
+            let Some(entries) = self.entries(owner).known() else { return Known::Unknown };
+            let mut holds = false;
+            for found in entries {
+                if found == entry { holds = true; continue }
+                if let Target::Node(found) = found.target { if found.file == node.file { inner.insert(found.node); } }
+            }
+            Known::Yes(holds)
+        };
+        let mut above = tree.parent(node.node);
+        while let Some(id) = above {
+            if !self.semantic.question.budget.hop() { return Known::Unknown }
+            let owner = Leaf { target: Target::Node(NodeRef { node: id, ..node }), ..entry };
+            let Some(owner) = self.semantic.leaf(owner).known() else { return Known::Unknown };
+            if owner.target == Target::Node(NodeRef { node: id, ..node }) {
+                match note_entries(owner, &mut inner) {
+                    Known::Yes(true) => break,
+                    Known::Yes(false) => {}
+                    Known::Unknown => return Known::Unknown,
+                }
+            }
+            above = tree.parent(id);
+        }
         while let Some(id) = pending.pop() {
-            if !self.semantic.question.budget.step() { return Known::Unknown }
+            if !self.semantic.question.budget.hop() { return Known::Unknown }
+            if inner.contains(&id) { continue }
             let at = Leaf { target: Target::Node(NodeRef { node: id, ..node }), ..entry };
             let Some(at) = self.semantic.leaf(at).known() else { return Known::Unknown };
             if !visited.insert(at) { continue }
-            if at != entry {
-                match self.entry_for(at) {
-                    Known::Yes(owner) if owner != entry => continue,
-                    Known::Yes(_) => {}
-                    Known::Unknown => return Known::Unknown,
-                }
+            if at.target == Target::Node(NodeRef { node: id, ..node }) {
+                if note_entries(at, &mut inner) == Known::Unknown { return Known::Unknown }
+                if inner.contains(&id) { continue }
             }
             let Some(effects) = runtime.declarations(at, Some(effect)).known() else { return Known::Unknown };
             for emission in effects {

@@ -483,6 +483,8 @@ impl Values<'_> {
             }
         };
         let mut answer = fact();
+        #[cfg(feature = "work")]
+        crate::work::fact_steps(std::any::type_name::<(K, T)>(), self.question.budget.last_spent(), || self.census_any(&key).2);
         if matches!(answer, Known::Unknown) && state.cycle_heads.borrow_mut().remove(&tag) && !state.retrying.get() {
             state.retrying.set(true);
             answer = fact();
@@ -568,7 +570,7 @@ impl Values<'_> {
             return self.declared_trait(Leaf { frame: FrameId::ROOT, ..leaf }, trait_id);
         }
         self.memoized_with(&self.semantic.values.traits, (leaf, trait_id),
-            || (trait_id < 64 && self.question.budget.step()).then_some(()),
+            || (trait_id < 64 && self.question.budget.hop()).then_some(()),
             || self.flag_across_files(super::question::FactKey::Trait(leaf, trait_id), || self.direct_trait(leaf, trait_id)))
     }
 
@@ -714,7 +716,7 @@ impl Values<'_> {
         let NodeValue::Alternatives(alternatives) = value else { return Known::Unknown };
         let mut unknown = false;
         for alternative in alternatives {
-            if !self.question.budget.step() {
+            if !self.question.budget.hop() {
                 return Known::Unknown;
             }
             let mut complete = true;
@@ -726,7 +728,7 @@ impl Values<'_> {
                 let mut fitted = false;
                 let mut maybe = false;
                 for &leaf in alternative {
-                    if !self.question.budget.step() {
+                    if !self.question.budget.hop() {
                         return Known::Unknown;
                     }
                     let fits = if declared { self.declared_trait(leaf, trait_id) } else { self.fits(leaf, trait_id) };
@@ -943,7 +945,7 @@ impl Values<'_> {
     pub fn declaration_owner(&self, node: NodeRef) -> Known<NodeRef> {
         let Known::Yes(leaf) = self.semantic.leaf(Leaf { target: Target::Node(node), frame: super::question::FrameId::ROOT }) else { return Known::Unknown };
         let Target::Node(node) = leaf.target else { return Known::Unknown };
-        if !self.question.budget.step() { return Known::Unknown }
+        if !self.question.budget.hop() { return Known::Unknown }
         let Some(names) = self.world.names(node.file) else { return Known::Unknown };
         let classes = names.declared.get(&node.node).map(|&(_, _, classes, _)| classes)
             .or_else(|| names.asked.get(&node.node).map(|lookup| lookup.classes)).unwrap_or(0);
@@ -1298,7 +1300,7 @@ impl Values<'_> {
         for &label in path {
             let mut next = Vec::new();
             for leaf in leaves {
-                if !self.question.budget.step() {
+                if !self.question.budget.hop() {
                     return Known::Unknown;
                 }
                 if label == super::IT {
@@ -1353,7 +1355,7 @@ impl Values<'_> {
                             _ => return Known::Unknown,
                         };
                         for item in items {
-                            if !self.question.budget.step() { return Known::Unknown }
+                            if !self.question.budget.hop() { return Known::Unknown }
                             let Expression::Node(child, _) = item else { return Known::Unknown };
                             if tree.nodes.get(*child as usize).is_none() { return Known::Unknown }
                             next.push(Leaf { target: Target::Node(NodeRef { file: node.file, node: *child }), frame: leaf.frame });

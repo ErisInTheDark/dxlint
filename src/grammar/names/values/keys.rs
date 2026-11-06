@@ -143,7 +143,7 @@ impl Values<'_> {
         let mut domain = None;
         let mut unknown = false;
         for &leaf in row {
-            if !self.question.budget.step() { return Known::Unknown }
+            if !self.question.budget.hop() { return Known::Unknown }
             let key = match self.identity(leaf) {
                 Known::Yes(Some(Identity::Value(value))) => Self::expression_key(value),
                 Known::Yes(Some(Identity::Declaration(node))) => match self.key_domain(leaf) {

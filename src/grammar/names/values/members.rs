@@ -326,7 +326,7 @@ impl Values<'_> {
             let mut row = Vec::new();
             let mut unknown = false;
             for &leaf in alternative {
-                if !self.question.budget.step() { return Known::Unknown }
+                if !self.question.budget.hop() { return Known::Unknown }
                 match self.leaf_member(leaf, key) {
                     Known::Yes(Some(member)) => Self::merge_member(&mut row, member),
                     Known::Yes(None) => {}
@@ -584,10 +584,10 @@ impl Values<'_> {
             entries.sort_unstable_by_key(|&(key, _)| key);
             for (key, declared) in entries {
                 if declared.is_empty() { continue }
-                if !self.question.budget.step() { return Known::Unknown }
+                if !self.question.budget.hop() { return Known::Unknown }
                 let mut sites = Vec::new();
                 for &name in declared {
-                    if !self.question.budget.step() { return Known::Unknown }
+                    if !self.question.budget.hop() { return Known::Unknown }
                     let descriptor = names.bindings.get(&name).copied()
                         .or_else(|| names.declared.get(&name).map(|&(_, owner, ..)| owner)).unwrap_or(name);
                     let site = Leaf { target: Target::Node(NodeRef { file: node.file, node: descriptor }), frame: at.frame };

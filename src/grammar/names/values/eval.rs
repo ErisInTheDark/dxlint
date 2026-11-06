@@ -39,7 +39,7 @@ impl<'a, 'world> Run<'a, 'world> {
 
 pub(super) fn values(values: &Values<'_>, leaf: Leaf) -> NodeValue {
     if values.world.profile().is_none() {
-        if !values.question.budget.step() { return NodeValue::Unknown }
+        if !values.question.budget.hop() { return NodeValue::Unknown }
         let Known::Yes(leaf) = values.semantic.leaf(leaf) else { return NodeValue::Unknown };
         if let Some(value) = kept(values, leaf) { return value }
         let mut run = Run::new(values, Vec::new());
@@ -324,6 +324,8 @@ impl<'a, 'world> Run<'a, 'world> {
         // of its kept value.
         if let Some((_, asker, _)) = opened {
             let cut = budget.end_fact(asker);
+            #[cfg(feature = "work")]
+            crate::work::fact_steps("value", budget.last_spent(), || self.values.census_leaf(leaf).2);
             self.values.note_ended(tag, cut);
             if cut == Some(super::super::question::Cut::RanOut) { budget.exhaust() }
         }
@@ -817,7 +819,7 @@ pub(super) fn combine(values: &Values<'_>, inputs: impl IntoIterator<Item = Node
                     }
                     let mut conjunction = left.clone();
                     for &leaf in right {
-                        if !values.question.budget.step() {
+                        if !values.question.budget.hop() {
                             return NodeValue::Unknown;
                         }
                         if !conjunction.contains(&leaf) { conjunction.push(leaf) }
@@ -828,7 +830,7 @@ pub(super) fn combine(values: &Values<'_>, inputs: impl IntoIterator<Item = Node
             result = product;
         } else {
             for alternative in alternatives {
-                if !values.question.budget.step() {
+                if !values.question.budget.hop() {
                     return NodeValue::Unknown;
                 }
                 result.push(alternative);

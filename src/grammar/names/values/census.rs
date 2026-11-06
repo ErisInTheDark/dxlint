@@ -55,7 +55,7 @@ impl Values<'_> {
     }
 
     fn census_text(&self, leaf: Leaf) -> String {
-        let Target::Node(node) = leaf.target else { return String::new() };
+        let Target::Node(node) = leaf.target else { return format!("{:?}", leaf.target) };
         let span = self.world.tree(node.file).and_then(|tree| tree.nodes.get(node.node as usize))
             .and_then(|data| self.world.text(node.file)?.get(data.start as usize..data.end as usize));
         span.unwrap_or("").to_owned()
@@ -153,7 +153,10 @@ impl Values<'_> {
         let with = |(strict, loose, label): (u64, u64, String), extra: u64| (strict ^ extra.wrapping_mul(0x9E37_79B9), loose ^ extra.wrapping_mul(0x9E37_79B9), label);
         if let Some(leaf) = key.downcast_ref::<Leaf>() { return self.census_leaf(*leaf) }
         if let Some((leaf, id)) = key.downcast_ref::<(Leaf, u16)>() { return with(self.census_leaf(*leaf), u64::from(*id) + 1) }
-        if let Some((leaf, member)) = key.downcast_ref::<(Leaf, Key)>() { return with(self.census_leaf(*leaf), self.census_key(Some(member))) }
+        if let Some((leaf, member)) = key.downcast_ref::<(Leaf, Key)>() {
+            let (strict, loose, label) = with(self.census_leaf(*leaf), self.census_key(Some(member)));
+            return (strict, loose, format!(".{member:?} of {label}"));
+        }
         let unique = UNIQUE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         (unique, unique, String::new())
     }

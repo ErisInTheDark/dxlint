@@ -114,9 +114,9 @@ impl Values<'_> {
             let checked = self.tables.exclusive.iter().filter(|&&group| (union & group).count_ones() > 1)
                 .fold(0, |all, group| all | group) & mask;
             for (&leaf, fittable) in alternative.iter().zip(fittable) {
-                // One step a leaf: its trait answers are memoised lookups,
-                // and a row of merged declarations (lib `Array`) has many.
-                if checked & fittable != 0 && !self.question.budget.step() { return NodeValue::Unknown }
+                // Its trait answers are memoised lookups, and a row of merged
+                // declarations (lib `Array`) has many.
+                if checked & fittable != 0 && !self.question.budget.hop() { return NodeValue::Unknown }
                 for trait_id in 0..64 {
                     if checked & fittable & (1 << trait_id) == 0 { continue }
                     if self.declared_trait(leaf, trait_id) == Known::Yes(true) {
@@ -131,7 +131,7 @@ impl Values<'_> {
             let mut constrained = Vec::new();
             let mut tops = Vec::new();
             for leaf in alternative {
-                if !self.question.budget.step() { return NodeValue::Unknown }
+                if !self.question.budget.hop() { return NodeValue::Unknown }
                 if self.top(leaf) == Known::Yes(true) {
                     tops.push(leaf);
                 } else {

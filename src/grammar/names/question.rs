@@ -68,6 +68,12 @@ pub struct Budget {
     fact_epoch: Cell<u64>,
     /// Graph hops since the last unit they paid ([`Budget::hop`]).
     hops: Cell<u32>,
+    /// What the last fact to end spent of its own allowance.
+    #[cfg(feature = "work")]
+    spent: Cell<u32>,
+    /// What this fact had left when a fact it asked cut it.
+    #[cfg(feature = "work")]
+    left_when_cut: Cell<Option<u32>>,
 }
 
 /// Why a fact ([`Budget::fact`]) gave no answer.
@@ -92,6 +98,10 @@ pub(crate) struct Asker {
     /// [`Budget::fact_epoch`] when the fact began.
     pub epoch: u64,
     hops: u32,
+    #[cfg(feature = "work")]
+    units: u32,
+    #[cfg(feature = "work")]
+    left_when_cut: Option<u32>,
 }
 
 /// Holds one level of [`Budget::nest`]; leaving it returns the level.
@@ -109,13 +119,23 @@ impl Budget {
     pub const DEFAULT: u32 = 100_000;
     /// The work one root question may do by default: a question past it is
     /// waste, and speed ranks before parity.
-    pub const QUESTION: u32 = 10_000;
+    pub const QUESTION: u32 = 500;
     /// How deeply engines may call into each other in one question.
     pub const DEPTH: u32 = 256;
 
     pub fn new(units: u32) -> Budget {
         Budget { left: Cell::new(units), depth: Cell::new(0), limited: Cell::new(false), traced: Cell::new(false), depth_cuts: Cell::new(0),
-            facts: Cell::new(0), fact_epoch: Cell::new(0), hops: Cell::new(0) }
+            facts: Cell::new(0), fact_epoch: Cell::new(0), hops: Cell::new(0),
+            #[cfg(feature = "work")]
+            spent: Cell::new(0),
+            #[cfg(feature = "work")]
+            left_when_cut: Cell::new(None) }
+    }
+
+    /// What the last fact to end spent of its own allowance.
+    #[cfg(feature = "work")]
+    pub(crate) fn last_spent(&self) -> u32 {
+        self.spent.get()
     }
 
     pub(crate) fn trace(&self, on: bool) {
@@ -141,7 +161,10 @@ impl Budget {
     }
 
     /// Spends one unit; `false` when the budget is gone.
+    #[cfg_attr(feature = "work", track_caller)]
     pub fn step(&self) -> bool {
+        #[cfg(feature = "work")]
+        crate::work::step_at(std::panic::Location::caller());
         if self.traced.get() { crate::engine::Profile::count_step() }
         match self.left.get() {
             0 => { self.limit(); false }
@@ -165,6 +188,8 @@ impl Budget {
 
     /// Spends the rest of the budget: the question ends as one that ran out.
     pub fn exhaust(&self) {
+        #[cfg(feature = "work")]
+        if self.left_when_cut.get().is_none() && self.left.get() > 0 { self.left_when_cut.set(Some(self.left.get())) }
         self.left.set(0);
         self.limit();
     }
@@ -221,8 +246,14 @@ impl Budget {
     /// evaluator's task loop): starts the fact's allowance, returning the
     /// asker's to hand to [`Budget::end_fact`].
     pub(crate) fn begin_fact(&self, units: u32) -> Asker {
+        #[cfg(feature = "work")]
+        crate::work::fact_steps_open();
         self.facts.set(self.facts.get() + 1);
-        Asker { left: self.left.replace(units), limited: self.limited.replace(false), depth_cuts: self.depth_cuts.get(), epoch: self.fact_epoch.get(), hops: self.hops.replace(0) }
+        Asker { left: self.left.replace(units), limited: self.limited.replace(false), depth_cuts: self.depth_cuts.get(), epoch: self.fact_epoch.get(), hops: self.hops.replace(0),
+            #[cfg(feature = "work")]
+            units,
+            #[cfg(feature = "work")]
+            left_when_cut: self.left_when_cut.replace(None) }
     }
 
     /// See [`Budget::fact_epoch`] (the field).
@@ -235,6 +266,12 @@ impl Budget {
     /// short, if it did.
     pub(crate) fn end_fact(&self, asker: Asker) -> Option<Cut> {
         let limited = self.limited();
+        #[cfg(feature = "work")]
+        {
+            crate::work::fact_steps_close();
+            self.spent.set(asker.units - self.left_when_cut.get().unwrap_or(self.left.get()));
+            self.left_when_cut.set(asker.left_when_cut);
+        }
         self.left.set(asker.left);
         self.limited.set(asker.limited);
         self.hops.set(asker.hops);

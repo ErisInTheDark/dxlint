@@ -456,6 +456,10 @@ impl<'a> LintWorld<'a> {
         let outer = crate::footprint::begin();
         let answer = values.fact(crate::grammar::names::values::fact_tag(&ATTRIBUTES, &key), Budget::per_question(),
             || self.complete_attribute(|| { value = compute(); value }));
+        #[cfg(feature = "work")]
+        crate::work::fact_steps("attribute", semantic.question.budget.last_spent(), || {
+            format!("{} {}", self.linter.attrs.name_of(attr), values.census_leaf(Leaf { target: Target::Node(NodeRef { file, node }), frame }).2)
+        });
         let read = crate::footprint::end(outer);
         let unpaid = answer == Err(crate::grammar::names::question::Cut::Unpaid);
         let unknown = !matches!(answer, Ok(Known::Yes(Some(_))));
