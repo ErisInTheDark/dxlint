@@ -96,7 +96,13 @@ in ts_identifier, ts_member, ts_index let flow_assignment_scalar true
 in ts_parenthesized, ts_as, ts_satisfies, ts_non_null, ts_type_assertion, ts_instantiation let flow_assignment_scalar expression.flow_assignment_scalar
 in ts_property, ts_pattern_property let flow_shorthand_default value is ts_assignment_pattern && value.left == null
 in ts_node let flow_destructuring_target
-  if is (ts_for_in.left, ts_for_of.left) then true
+  if !(is (ts_for_in.left, ts_for_of.left, ts_declarator.name, ts_assignment.left,
+    ts_array.element, ts_array_pattern.element, ts_object.property, ts_object_pattern.property,
+    ts_object_pattern.rest, ts_rest.argument, ts_spread.argument, ts_assignment_pattern.left,
+    ts_parenthesized.expression, ts_as.expression, ts_satisfies.expression, ts_non_null.expression,
+    ts_type_assertion.expression, ts_instantiation.expression, ts_property.value, ts_pattern_property.value,
+    ts_property.key, ts_pattern_property.key)) then false
+  else if is (ts_for_in.left, ts_for_of.left) then true
   else if is ts_declarator.name then
     (node.parent.init != null && flow_assignment_scalar == false)
     || node.parent.parent is (ts_for_in.left, ts_for_of.left)

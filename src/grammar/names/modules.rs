@@ -22,6 +22,8 @@ pub enum SharedQuestion<'a> {
     Publication { kind: index::PublicationKind, scope: ScopeRef, name: &'a str, class: u64 },
     /// What the program's global scopes declare as `name` in `class`.
     Global { name: &'a str, class: u64 },
+    /// Which files `scope` pulls in through its global links.
+    GlobalReach { scope: ScopeRef, class: u64 },
 }
 
 #[derive(Clone, Debug)]

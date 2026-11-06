@@ -180,6 +180,13 @@ group name_type_syntax ts_type_reference, ts_type_keyword, ts_type_parameter, ts
   ts_type_query, ts_import_type, ts_literal_type, ts_template_type, ts_type_predicate, ts_mapped_type
 in ts_node let name_type_access is name_type_syntax || parent.name_type_access == true
 in ts_node let name_write_owner when {
+  # Most nodes sit in no field that can write.
+  !(is (ts_for_in.left, ts_for_of.left, ts_declarator.name, ts_assignment.left, ts_update.argument, ts_unary.argument,
+    ts_array.element, ts_array_pattern.element, ts_object.property, ts_object_pattern.property,
+    ts_object_pattern.rest, ts_rest.argument, ts_spread.argument, ts_assignment_pattern.left,
+    ts_parenthesized.expression, ts_as.expression, ts_satisfies.expression, ts_non_null.expression,
+    ts_type_assertion.expression, ts_instantiation.expression, ts_property.value, ts_pattern_property.value,
+    ts_property.key, ts_pattern_property.key)) then null
   is (ts_for_in.left, ts_for_of.left) then parent.node
   is ts_declarator.name then when {
     parent.init != null then parent.node
@@ -274,7 +281,7 @@ in ts_node let reference_kind null
 in ts_identifier let declaration ts_name_binding.node
 in ts_identifier let declarations ts_name_binding.declarations ?? []
 in ts_identifier let references
-  if ts_name_declared && ts_name_binding.node == node then ts_name_binding.references else []
+  if ts_name_declared && ts_name_binding.node == node then name_references(node) else []
 in ts_identifier let scope when {
   ts_name_declared then first(name_scopes(node, "declaration")).owner
   ts_name_referenced then {
@@ -312,8 +319,10 @@ fn ts_name_self_owner(n) = when {
 }
 in ts_identifier let ts_name_usage_references {
   value binding: if ts_name_declared then ts_name_binding else null
-  value refs: filter(binding.references, reference => reference is ts_identifier)
-  value if binding == null || binding.node != node || any(refs, reference => reference.access == null) then null else refs
+  value if binding == null || binding.node != node then null else {
+    value refs: filter(name_references(node), reference => reference is ts_identifier)
+    value if any(refs, reference => reference.access == null) then null else refs
+  }
 }
 in ts_node {
   let uses null

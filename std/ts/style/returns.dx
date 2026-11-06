@@ -68,6 +68,7 @@ in ts_function, ts_arrow, ts_method let explicit_return_shape {
     option allowIIFEs boolean = false "Allow functions directly within calls."
     option allowTypedFunctionExpressions boolean = true "Allow contextually typed function expressions."
     when ts_program.typescript_source
+    when !return_annotation && return_method_valid != true
     let shape explicit_return_shape
     when !shape.valid && !contains(allowedNames, shape.name)
     when !(allowFunctionsWithoutTypeParameters && count(type_parameter) == 0 || allowIIFEs && shape.iife || allowHigherOrderFunctions && shape.higher_order || allowConciseArrowFunctionExpressionsStartingWithVoid && shape.void_arrow)
@@ -135,11 +136,12 @@ in ts_parameter let boundary_argument {
     option allowTypedFunctionExpressions boolean = true "Allow contextually typed functions."
     option allowOverloadFunctions boolean = false "Allow implementations with overload signatures."
     when ts_program.typescript_source
+    when if parameter_check then boundary_argument.eligible else !return_annotation && return_method_valid != true
     let boundary_shape if parameter_check then parent.explicit_return_shape else explicit_return_shape
     let boundary_name if parameter_check then parent.boundary_function_name else boundary_function_name
     let empty_method if parameter_check then parent.boundary_empty_method else boundary_empty_method
     let overload if parameter_check then parent.boundary_has_overload else boundary_has_overload
-    when if parameter_check then parent.boundary_function_reachable && boundary_argument.eligible else boundary_function_reachable
+    when if parameter_check then parent.boundary_function_reachable else boundary_function_reachable
     when empty_method == true || !(contains(allowedNames, boundary_name) || boundary_shape.ancestor_typed || allowTypedFunctionExpressions && boundary_shape.context_typed || allowOverloadFunctions && overload)
     when if parameter_check then !(allowArgumentsExplicitlyTypedAsAny && boundary_argument.any) else !boundary_shape.valid && !(allowHigherOrderFunctions && boundary_shape.higher_order || allowDirectConstAssertionInArrowFunctions && boundary_shape.const_assertion)
     report at if parameter_check then { start: boundary_argument.offset, end: boundary_argument.end } else boundary_report_site

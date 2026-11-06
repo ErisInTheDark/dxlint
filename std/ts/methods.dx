@@ -18,6 +18,8 @@ fn collection_value(n) =
 fn collection_static_value(n) = { value n; collection_value_node; collection_value }
 fn collection_method(n, name) = n is ts_member && n.property == name || n is ts_index && collection_static_value(n.index.node).type == "string" && collection_static_value(n.index.node).value == name
 
+in ts_call let collection_test_call count(argument) == 1 && collection_method(unparenthesised_node(callee.node), "test")
+
 fn collection_arrayish(n) = {
   value arms: value_parts(n)
   value parts: map(arms ?? [], arm => filter(arm.parts, part => !contains(part.traits, "parameter")

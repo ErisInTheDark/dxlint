@@ -204,7 +204,7 @@ fn ts_usage_before_parameter(n, typed, declaration_file) = {
       slice (index + 1)
       any (later) {
         value binding: name_binding(later)
-        value binding != null && (count(binding.references) > 0
+        value binding != null && (count(name_references(later)) > 0
           || any(binding.declarations, site => ts_usage_initialized(site) || ts_usage_marked(site, typed, declaration_file)))
       }
     }
@@ -269,7 +269,7 @@ fn ts_usage_summary(n) = if !n.scoping_lexical_declaration || n.parent is ts_qua
     value site: ts_usage_site(n)
     value typed: n.ts_usage_typed
     value declaration_file: n.ts_usage_declaration_file
-    value real: map(binding.references, reference => ts_usage_reference(reference))
+    value real: map(name_references(n), reference => ts_usage_reference(reference))
     value initial: {
       value sites
       filter (site) ts_usage_initialized(site)

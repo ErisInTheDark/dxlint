@@ -508,6 +508,8 @@ pub(super) enum StableQuestion {
     Global { name: Box<str>, class: u64 },
     /// Every scope merged into module scope `scope` of `path`.
     Scopes { path: reads::DepPath, scope: u32 },
+    /// The files `scope` of `path` pulls in through its global links.
+    GlobalReach { path: reads::DepPath, scope: u32, class: u64 },
     /// The module scope `specifier` names, imported from a file in `directory`.
     Resolve { directory: reads::DepPath, specifier: Box<str> },
     /// Every augmentation of the program's module scopes in `classes`.

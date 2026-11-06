@@ -79,19 +79,21 @@ fn type_argument_signature(n) = if n is (ts_call, ts_new) then {
   value if binding != null && count(binding.choices) == 1 && first(binding.choices).site != null
     then first(binding.choices) else null
 } else null
+group type_argument_owner ts_call, ts_new, ts_type_reference, ts_class, ts_jsx_opening, ts_tagged_template
+in type_argument_owner let type_argument_named_site type_argument_named(node)
 fn type_argument_site(n, signature) = if signature != null then signature.site else {
   value local: {
     value declaration: type_argument_local(n)
     value if declaration != null then node_site(declaration) else null
   }
   value if local != null then local else {
-    value named: type_argument_named(n)
+    value named: n.type_argument_named_site
     value if named != null then named else type_argument_member(n)
   }
 }
 fn type_argument_formals(n, site) = {
   value formals: if site != null then site_field(n, site, "type_parameter") else null
-  value named: if formals != null && count(formals) > 0 then null else type_argument_named(n)
+  value named: if formals != null && count(formals) > 0 then null else n.type_argument_named_site
   value if formals != null && count(formals) > 0 then formals
     else if named != null then site_field(n, named, "type_parameter")
     else formals
@@ -206,15 +208,6 @@ fn type_argument_same(n, other, widened) = if widened then {
   value source: value_union(n, [])
   value source != null && other != null && type_argument_same_handles(source, other)
 }
-fn type_argument_default_site(n, site) = {
-  value formal: get(type_argument_formals(n, site), count(n.type_argument.nodes) - 1)
-  value defaults: if formal != null then site_field(n, formal, "default") else null
-  value if defaults != null && count(defaults) == 1 then first(defaults) else null
-}
-fn type_argument_default(n, site) = {
-  value default: type_argument_default_site(n, site)
-  value if default != null then declaration_value(n, default) else null
-}
 # An unresolved type reference (`F<number>` from a missing module) says
 # nothing about which arguments it carries; only its written ones can tell
 # it apart from a default written with another shape.
@@ -282,8 +275,9 @@ fn type_argument_redundancy(n) = {
   value signature: type_argument_signature(owner)
   value site: type_argument_site(owner, signature)
   value formal: get(type_argument_formals(owner, site), count(arguments) - 1)
-  value default: type_argument_default(owner, site)
-  value default_site: type_argument_default_site(owner, site)
+  value defaults: if formal != null then site_field(owner, formal, "default") else null
+  value default_site: if defaults != null && count(defaults) == 1 then first(defaults) else null
+  value default: if default_site != null then declaration_value(owner, default_site) else null
   value if last(arguments) != n then null
     else if default != null && type_argument_same(n, default, false)
       && (!type_argument_unresolved(n) || type_argument_written_same(n, default_site)) then "default"

@@ -14,7 +14,7 @@ fn spread_written_properties(n) = {
   value binding: name_binding(n)
   value if binding == null then if n is (ts_function, ts_arrow) then false else null
     else if spread_declared_contract(n) then false
-    else any(binding.references, reference => reference.parent is (ts_member, ts_index)
+    else any(name_references(n), reference => reference.parent is (ts_member, ts_index)
       && reference.parent.object.node == reference && reference.parent.write_site != null)
 }
 fn spread_class_value(n, arms) = {

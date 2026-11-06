@@ -10,6 +10,10 @@ in ts_await let floating_promise_candidate true
 in ts_node let floating_promise_safe_call false
 in ts_node let floating_promise_safe_types []
 in ts_node let floating_promises_checked true
+# A lone value without a carrier can be neither: no leaves to walk or exempt.
+in ts_node let floating_promise_composite is (ts_parenthesized, ts_sequence, ts_logical, ts_conditional, ts_unary)
+  || is ts_call && callee.node.static_name == "finally"
+fn floating_promise_subject_possible(n) = n.floating_promise_candidate != false || n.floating_promise_composite
 fn floating_promise_safe(n, safe_calls) = {
   value expression: unparenthesised_node(n)
   value expression.floating_promise_safe_call
@@ -132,6 +136,7 @@ in ts_expression_statement.expression, ts_arrow.body rule es-no-floating-promise
   option allowForKnownSafeCalls string[] = [] "Function names whose returned promise is handled elsewhere"
   when floating_promise_subject_checked(node, ignoreIIFE)
   when node not ts_assignment
+  when checkThenables || floating_promise_subject_possible(node)
   let failure floating_promise_problem(node, checkThenables, ignoreVoid, allowForKnownSafePromises, allowForKnownSafeCalls)
   when contains(["promise", "useless"], failure)
   report at if parent.node is ts_expression_statement then parent.node else node
@@ -162,6 +167,7 @@ in ts_expression_statement.expression, ts_arrow.body rule es-no-floating-promise
   option allowForKnownSafeCalls string[] = [] "Function names whose returned promise is handled elsewhere"
   when floating_promise_subject_checked(node, ignoreIIFE)
   when node not ts_assignment
+  when floating_promise_subject_possible(node)
   when floating_promise_array_problem(node, checkThenables, ignoreVoid, allowForKnownSafePromises, allowForKnownSafeCalls)
   report at if parent.node is ts_expression_statement then parent.node else node
   warn if ignoreVoid then "An array of Promises may be unintentional. Consider handling the promises' fulfillment or rejection with Promise.all or similar, or explicitly marking the expression as ignored with the `void` operator."

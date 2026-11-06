@@ -1080,7 +1080,7 @@ impl<'a> Files<'a> {
                         let kind = match &key.question {
                             super::program::StableQuestion::Publication { .. } => 0,
                             super::program::StableQuestion::Global { .. } => 1,
-                            super::program::StableQuestion::Scopes { .. } => 2,
+                            super::program::StableQuestion::Scopes { .. } | super::program::StableQuestion::GlobalReach { .. } => 2,
                             super::program::StableQuestion::Resolve { specifier, .. } if specifier.starts_with('.') => 3,
                             super::program::StableQuestion::Resolve { .. } => 4,
                             super::program::StableQuestion::Augmentations { .. } => 5,
@@ -1753,6 +1753,10 @@ impl World for Files<'_> {
             SharedQuestion::Publication { kind, scope, name, class } => {
                 let Some(path) = self.shared_path(scope.file) else { return compute() };
                 super::program::StableQuestion::Publication { kind, path, scope: scope.scope, name: name.into(), class }
+            }
+            SharedQuestion::GlobalReach { scope, class } => {
+                let Some(path) = self.shared_path(scope.file) else { return compute() };
+                super::program::StableQuestion::GlobalReach { path, scope: scope.scope, class }
             }
             SharedQuestion::Global { name, class } => {
                 // The hottest module question (a million a run): repeats are

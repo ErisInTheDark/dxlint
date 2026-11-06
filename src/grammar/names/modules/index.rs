@@ -31,6 +31,10 @@ struct Scope {
     all: Vec<usize>,
     named: FxHashMap<Box<str>, FxHashMap<u64, Vec<usize>>>,
     computed: FxHashMap<u64, Vec<usize>>,
+    /// Global publications that only pull in another file's: they name
+    /// nothing themselves, and which files they reach is one program fact,
+    /// not a question per name.
+    links: Vec<usize>,
 }
 
 pub struct Plan {
@@ -64,7 +68,8 @@ impl Index {
                 let names = publication_names(tables, tree, text, key, node, &item.action);
                 index.plans.push(Plan { node, item: item.clone() });
                 let mask = if classes == 0 { u64::MAX } else { classes };
-                if !scopes.is_empty() {
+                let link = matches!(item.action, Action::Globals { target: None, module: Some(_), asks: 0, .. });
+                if !scopes.is_empty() && !link {
                     match &names {
                         Some(names) => for name in names {
                             index.mentioned.entry(name.clone()).or_default()[publication as usize] |= mask;
@@ -75,6 +80,10 @@ impl Index {
                 for &owner in &scopes {
                     let scope = index.scopes.entry((owner, publication)).or_default();
                     scope.all.push(id);
+                    if link {
+                        scope.links.push(id);
+                        continue;
+                    }
                     match &names {
                         Some(names) => for name in names {
                             scope.named.entry(name.clone()).or_default().entry(classes).or_default().push(id);
@@ -116,6 +125,18 @@ impl Index {
         ids.into_iter().map(|id| &self.plans[id]).collect()
     }
 
+    /// Whether any scope of the file links to other files' global publications.
+    pub fn has_links(&self) -> bool {
+        self.scopes.iter().any(|((_, publication), scope)| *publication == PublicationKind::Globals && !scope.links.is_empty())
+    }
+
+    /// `owner`'s links to other files' global publications. Who reads through
+    /// them records the names it looks up in each file they reach.
+    pub fn links(&self, owner: u32) -> Vec<&Plan> {
+        self.scopes.get(&(owner, PublicationKind::Globals))
+            .map_or_else(Vec::new, |scope| scope.links.iter().map(|&id| &self.plans[id]).collect())
+    }
+
     /// What `owner`'s scope may publish: each name (`None`: computed) with
     /// its plan. Unrecorded: for describing the file itself.
     pub fn published(&self, owner: u32) -> Vec<(Option<&str>, &Plan)> {
@@ -126,6 +147,7 @@ impl Index {
                 out.extend(classes.values().flatten().map(|&id| (Some(&**name), &self.plans[id])));
             }
             out.extend(scope.computed.values().flatten().map(|&id| (None, &self.plans[id])));
+            out.extend(scope.links.iter().map(|&id| (None, &self.plans[id])));
         }
         out
     }

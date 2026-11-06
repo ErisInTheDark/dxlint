@@ -42,7 +42,7 @@ in ts_namespace {
   when !ts_value_namespace_runtime { unwraps unknown }
 }
 
-fn ts_value_key(key) = {
+fn ts_value_key(key) = if key is ts_identifier && !contains(key.text, "\\") then key.text else {
   value literal: if key is ts_computed_key then key.expression.node else key
   value allowed: key not ts_computed_key || literal is (ts_string, ts_number, ts_bigint, ts_boolean, ts_null)
     || literal is ts_template && count(literal.expression.nodes) == 0
@@ -944,11 +944,14 @@ in ts_type_reference {
   let ts_value_missing_arguments name is ts_identifier && count(type_argument.nodes) == 0 && {
     value local: map(filter(name_binding(name.node).declarations ?? [], item => item.parent is (ts_class, ts_interface, ts_type_alias)),
       item => map(item.parent.type_parameter.nodes, parameter => parameter.default != null))
-    value remote: map(filter(value_sources(name.node).sites ?? [], site => contains(["ts_class", "ts_interface", "ts_type_alias"], site.kind)),
-      site => map(site_field(node, site, "type_parameter") ?? [], parameter => count(site_field(node, parameter, "default") ?? []) > 0))
-    value declarations: flat_map([local, remote], group => group)
-    value any(declarations, parameters => any(parameters, (parameter, index) =>
-      all(declarations, other => !any(other, (defaulted, at) => at == index && defaulted))))
+    # A plain local declaration settles it: merged declarations share parameters.
+    value if count(local) > 0 && all(local, parameters => count(parameters) == 0) then false else {
+      value remote: map(filter(value_sources(name.node).sites ?? [], site => contains(["ts_class", "ts_interface", "ts_type_alias"], site.kind)),
+        site => map(site_field(node, site, "type_parameter") ?? [], parameter => count(site_field(node, parameter, "default") ?? []) > 0))
+      value declarations: flat_map([local, remote], group => group)
+      value any(declarations, parameters => any(parameters, (parameter, index) =>
+        all(declarations, other => !any(other, (defaulted, at) => at == index && defaulted))))
+    }
   }
   arguments type_argument
   when ts_value_unresolved_type || ts_value_missing_arguments { fits any, error open }

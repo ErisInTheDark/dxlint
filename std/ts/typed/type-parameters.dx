@@ -257,7 +257,7 @@ in ts_type_parameter rule es-no-unnecessary-type-parameters warn "Type parameter
     then type_parameter_owner.end_offset
     else type_parameter_owner.body.offset ?? type_parameter_owner.return_type.end_offset ?? type_parameter_owner.end_offset
   let type_parameter_references {
-    value type_parameter_binding.references
+    value name_references(name.node)
     filter (reference) contains(name_role_classes(reference, "reference"), "type")
       && reference.offset <= type_parameter_boundary
       && (reference.offset >= node.end_offset || reference.end_offset <= node.offset)

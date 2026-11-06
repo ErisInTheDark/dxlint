@@ -26,6 +26,7 @@ in ts_parenthesized.expression, ts_logical.left, ts_logical.right, ts_conditiona
   # Comparisons and these unary operators make primitives: never thenable.
   when !(is ts_binary && contains(["===", "!==", "==", "!=", "<", "<=", ">", ">=", "in", "instanceof"], node.operator))
   when !(is ts_unary && contains(["typeof", "void", "delete", "+", "~"], node.operator))
+  when value_may_have_carrier(node) != false
   when node could thenable && (flagUnions == "all" || node always thenable || flagUnions == "strict" && ts_await_union_equivalent(node) == true)
   warn "Expected non-Promise value in a boolean conditional."
 }
@@ -51,7 +52,7 @@ fn promise_returns_thenable(arms) = promise_returns_known(arms)
 fn promise_returns_void(arms) = promise_returns_known(arms) && count(arms) > 0
   && any(arms, arm => any(arm, part => contains(part.traits, "void")))
   && !any(arms, arm => any(arm, part => contains(part.traits, "thenable")))
-fn promise_void_context(n) = {
+fn promise_void_context(n) = !(unparenthesised_node(n) is (ts_string, ts_number, ts_boolean, ts_null, ts_bigint, ts_template, ts_regex, ts_array, ts_object, ts_binary, ts_update)) && {
   value source: promise_return_arms(value_signatures(n))
   value if !promise_returns_thenable(source) then false else {
     value targets: expected_call_signatures(n)
@@ -135,7 +136,7 @@ in ts_call.argument, ts_new.argument, ts_template.expression rule es-no-misused-
 }
 
 in ts_call.argument rule es-no-misused-promises:predicates {
-  when node.index == 0 && condition_array_callback(parent)
+  when parent.condition_array_call && node.index == 0 && strict_boolean_array(parent.callee.object.node)
   when promise_returns_thenable(promise_return_arms(value_signatures(node)))
   report at unparenthesised_node(node)
   warn "Expected a non-Promise value to be returned."

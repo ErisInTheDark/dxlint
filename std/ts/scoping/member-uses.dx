@@ -65,7 +65,7 @@ fn member_usage_receiver(access) = {
     else if named != null then { class: named, static: true }
     else if declaration is ts_declarator then
       if declaration.init is ts_this
-        && all(binding.references, reference => reference.name_write_owner == null || reference.name_write_owner == declaration)
+        && all(name_references(object), reference => reference.name_write_owner == null || reference.name_write_owner == declaration)
         then member_usage_this(access) else null
     else if declaration is ts_parameter then member_usage_annotation(declaration.type.node, access)
     else null

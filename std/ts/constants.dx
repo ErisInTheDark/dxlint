@@ -9,7 +9,7 @@ fn ts_runtime_binding_init(n) = {
   value owner: declaration.parent.node
   value if binding == null || count(binding.declarations) != 1 || owner not ts_declarator
     || owner.name.node != declaration || !contains(["const", "let", "var"], declaration.declaration_kind)
-    || !all(binding.references, reference => reference.access != null
+    || !all(name_references(n), reference => reference.access != null
       && !contains(["write", "read_write"], reference.access))
     then null else owner.init.node
 }

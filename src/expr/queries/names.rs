@@ -19,6 +19,7 @@ pub(crate) struct Memo {
     scopes: Kept<ScopeRef>,
     ancestors: Kept<(ScopeRef, Option<u32>)>,
     bindings: Kept<NodeRef>,
+    references: Kept<NodeRef>,
 }
 
 type Kept<K> = std::cell::RefCell<crate::fx_hash::FxHashMap<K, (Value<'static>, crate::footprint::Footprint)>>;
@@ -41,6 +42,7 @@ pub(super) static FUNCTIONS: &[QueryFunction] = &[
     QueryFunction { name: "name_scope_declarations", arity: 3, call: declarations },
     QueryFunction { name: "name_role_classes", arity: 2, call: role_classes },
     QueryFunction { name: "name_binding", arity: 1, call: binding },
+    QueryFunction { name: "name_references", arity: 1, call: references },
     QueryFunction { name: "name_definitions", arity: 2, call: definitions },
 ];
 
@@ -127,6 +129,16 @@ impl<'a, 's> Context<'a, 's> {
         let names = semantic.world.names(node.file)?;
         if !names.failures.is_empty() { return None }
         Some(Self { semantic, node, names })
+    }
+
+    /// The first declaration of the explicit binding this node declares or
+    /// uses; `None` when it has none or an implicit one.
+    fn canonical_declaration(&self) -> Option<u32> {
+        let names = self.names;
+        let declaration = if names.declared.contains_key(&self.node.node) { self.node.node }
+            else { *names.declaration.get(&self.node.node)? };
+        let declaration = names.merged.get(&declaration).copied().unwrap_or(declaration);
+        (!names.implicit.contains_key(&declaration)).then_some(declaration)
     }
 
     fn node(&self, node: u32) -> Option<Value<'static>> {
@@ -234,58 +246,73 @@ fn role_classes(semantic: &Semantic<'_>, at: Leaf, args: &[Value<'static>]) -> K
 
 fn binding(semantic: &Semantic<'_>, at: Leaf, _: &[Value<'static>]) -> Known<Value<'static>> {
     let Some(context) = Context::read(semantic, at) else { return Known::Unknown };
-    let names = context.names;
-    let declaration = if names.declared.contains_key(&context.node.node) {
-        context.node.node
-    } else if let Some(&declaration) = names.declaration.get(&context.node.node) {
-        declaration
-    } else {
-        return Known::Yes(Value::Null);
-    };
-    let declaration = names.merged.get(&declaration).copied().unwrap_or(declaration);
-    if names.implicit.contains_key(&declaration) { return Known::Yes(Value::Null) }
+    let Some(declaration) = context.canonical_declaration() else { return Known::Yes(Value::Null) };
     let cache_key = NodeRef { file: context.node.file, node: declaration };
     kept(&semantic.name_queries.bindings, cache_key, || binding_of(semantic, &context, declaration)).map_or(Known::Unknown, Known::Yes)
+}
+
+/// `name_references(node)`: every use of the binding `node` declares or uses,
+/// in source order. Apart from [`binding`]: a much-used name has tens of
+/// thousands, and few who ask about a binding want them.
+fn references(semantic: &Semantic<'_>, at: Leaf, _: &[Value<'static>]) -> Known<Value<'static>> {
+    let Some(context) = Context::read(semantic, at) else { return Known::Unknown };
+    let Some(declaration) = context.canonical_declaration() else { return Known::Yes(Value::Null) };
+    let cache_key = NodeRef { file: context.node.file, node: declaration };
+    kept(&semantic.name_queries.references, cache_key, || references_of(semantic, &context, declaration)).map_or(Known::Unknown, Known::Yes)
+}
+
+/// The key `declaration` is declared under.
+fn binding_key(semantic: &Semantic<'_>, context: &Context<'_, '_>, declaration: u32) -> Option<String> {
+    match context.names.keys.get(&declaration) {
+        Some(Some(key)) => Some(key.to_string()),
+        Some(None) => None,
+        None => {
+            let tree = semantic.world.tree(context.node.file)?;
+            let text = semantic.world.text(context.node.file)?;
+            Some(semantic.world.name_key(context.node.file, tree.text(text, declaration)).into_owned())
+        }
+    }
 }
 
 /// The record [`binding`] answers for `declaration`.
 fn binding_of(semantic: &Semantic<'_>, context: &Context<'_, '_>, declaration: u32) -> Option<Value<'static>> {
     let names = context.names;
     let &(scope, ..) = names.declared.get(&declaration)?;
-    let tree = semantic.world.tree(context.node.file)?;
-    let key = match names.keys.get(&declaration) {
-        Some(Some(key)) => key.to_string(),
-        Some(None) => return None,
-        None => {
-            let text = semantic.world.text(context.node.file)?;
-            semantic.world.name_key(context.node.file, tree.text(text, declaration)).into_owned()
-        }
-    };
+    let key = binding_key(semantic, context, declaration)?;
     let index = semantic.world.index(context.node.file)?;
     let mut declarations = Vec::new();
-    let mut reference_nodes = Vec::new();
     for &node in index.declared(scope, &key) {
         if !semantic.question.budget.step() { return None }
         if names.merged.get(&node).copied().unwrap_or(node) != declaration { continue }
-        for &reference in names.references.get(&node).into_iter().flatten() {
-            if !semantic.question.budget.step() { return None }
-            tree.nodes.get(reference as usize)?;
-            reference_nodes.push(reference);
-        }
         declarations.push(context.node(node)?);
     }
     if declarations.is_empty() { return None }
-    reference_nodes.sort_unstable_by_key(|&node| (tree.node(node).start, node));
-    reference_nodes.dedup();
-    let references = reference_nodes.into_iter().map(|node| context.node(node)).collect::<Option<Vec<_>>>()?;
     let scope = context.scope(scope, names.scopes.get(scope as usize)?)?;
     Some(Value::record(vec![
         ("node".into(), context.node(declaration)?),
         ("key".into(), Value::from(key)),
         ("scope".into(), scope),
         ("declarations".into(), Value::list(declarations)),
-        ("references".into(), Value::list(references)),
     ]))
+}
+
+/// The list [`references`] answers for `declaration`: a file's own table
+/// copied once, whatever its size, so it costs one step.
+fn references_of(semantic: &Semantic<'_>, context: &Context<'_, '_>, declaration: u32) -> Option<Value<'static>> {
+    if !semantic.question.budget.step() { return None }
+    let names = context.names;
+    let &(scope, ..) = names.declared.get(&declaration)?;
+    let key = binding_key(semantic, context, declaration)?;
+    let index = semantic.world.index(context.node.file)?;
+    let tree = semantic.world.tree(context.node.file)?;
+    let mut nodes = Vec::new();
+    for &node in index.declared(scope, &key) {
+        if names.merged.get(&node).copied().unwrap_or(node) != declaration { continue }
+        nodes.extend(names.references.get(&node).into_iter().flatten().copied());
+    }
+    nodes.sort_unstable_by_key(|&node| (tree.nodes.get(node as usize).map_or(u32::MAX, |syntax| syntax.start), node));
+    nodes.dedup();
+    nodes.into_iter().map(|node| context.node(node)).collect::<Option<Vec<_>>>().map(Value::list)
 }
 
 #[cfg(test)]
@@ -493,7 +520,7 @@ mod tests {
             let at = Leaf { target: Target::Node(NodeRef::here(node)), frame: FrameId::ROOT };
             let Known::Yes(answer) = binding(&semantic, at, &[]) else { panic!("merged binding exists for {node}") };
             assert_eq!(answer.key("node"), Value::Node(0, "".into()));
-            assert_eq!(answer.key("references"), Value::list((2..5).map(|node| Value::Node(node, "".into())).collect()));
+            assert_eq!(references(&semantic, at, &[]), Known::Yes(Value::list((2..5).map(|node| Value::Node(node, "".into())).collect())));
             while question.budget.step() {}
         }
         world.available.set(false);
@@ -508,12 +535,13 @@ mod tests {
             in document match declaration name:/x/ /;/ {
                 declares value name in nearest outer hoisted
                 let binding name_binding(name.node)
+                let uses name_references(name.node)
                 rule observed warn "observed"
                 rule invalid-declaration warn "invalid" {
                     when binding.node != first(binding.declarations) || binding.key != "x"
-                        || count(binding.declarations) != 2 || count(binding.references) != 2
+                        || count(binding.declarations) != 2 || count(uses) != 2
                         || first(binding.declarations).offset >= last(binding.declarations).offset
-                        || first(binding.references).offset >= last(binding.references).offset
+                        || first(uses).offset >= last(uses).offset
                         || binding.node.text != "x" || binding.scope.owner.text != source
                 }
             }
@@ -522,7 +550,7 @@ mod tests {
                 let binding name_binding(name.node)
                 rule invalid-reference warn "invalid" {
                     when binding.node != first(binding.declarations) || count(binding.declarations) != 2
-                        || count(binding.references) != 2
+                        || count(name_references(name.node)) != 2
                 }
             }
         "#);

@@ -143,6 +143,7 @@ in ts_binary rule es-prefer-string-starts-ends-with {
   fix at node if replacement != null as replacement
 }
 in ts_call rule es-prefer-string-starts-ends-with:regex {
+  when collection_test_call
   let info string_boundary_regex_call(node, "test")
   when info != null
   warn if info.kind == "end" then "Use the 'String#endsWith' method instead." else "Use 'String#startsWith' method instead."

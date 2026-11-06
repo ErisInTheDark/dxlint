@@ -178,6 +178,20 @@ impl Queries<'_> {
         Ok(items)
     }
 
+    /// `scope`'s links to other files' global publications.
+    pub(super) fn link_items(&self, scope: ScopeRef) -> Result<Vec<PreparedItem>, ()> {
+        let world = self.semantic.world;
+        let index = world.module_index(scope.file, self.semantic.tables).ok_or(())?;
+        if !index.has_links() { return Ok(Vec::new()) }
+        let owner = world.names(scope.file).ok_or(())?.scopes.get(scope.scope as usize).ok_or(())?.node;
+        let mut items = Vec::new();
+        for plan in index.links(owner) {
+            let plan = BatchPlan { node: plan.node, item: plan.item.clone(), prepared: OnceCell::new() };
+            items.extend(self.prepare_item(scope, &plan)?);
+        }
+        Ok(items)
+    }
+
     fn indexed_plans(&self, scope: ScopeRef, name: Option<(&str, u64)>, publication: PublicationKind, first_globals: bool) -> Result<Vec<BatchPlan>, ()> {
         let world = self.semantic.world;
         let index = world.module_index(scope.file, self.semantic.tables).ok_or(())?;

@@ -17,6 +17,7 @@ type Answer = Known<Option<Vec<Target>>>;
 enum Request {
     Definition(NodeRef, u64),
     Global(u32, Box<str>, u64),
+    GlobalReach(ScopeRef, u64),
 }
 
 /// Each kept answer also keeps what working it out read of the editor's
@@ -283,15 +284,23 @@ impl<'a> Queries<'a> {
             (key, key, format!("{name} class {class}"))
         });
         match self.cached(Request::Global(importer, name.into(), class), || {
-            let scopes = self.global_scopes(importer, name)?;
+            let roots = self.global_scopes(importer, name)?;
             let world = self.semantic.world;
+            let mut seen: crate::fx_hash::FxHashSet<ScopeRef> = roots.iter().copied().collect();
+            let mut reached = Vec::new();
+            for &root in &roots {
+                reached.extend(self.global_reach(root, class)?.into_iter().filter(|scope| seen.insert(*scope)));
+            }
+            let root_count = roots.len();
             let mut targets = Vec::new();
-            for scope in scopes {
-                // Roots whose file cannot publish the name contribute nothing;
-                // skip them before any per-scope publication work.
-                // The scan that chose the scopes covers files without the name.
+            for (at, scope) in roots.into_iter().chain(reached).enumerate() {
+                // Files that cannot publish the name contribute nothing; skip
+                // them before any per-scope publication work. The scan that
+                // chose the roots covers those without the name; a linked file
+                // answers for itself.
                 let index = world.module_index(scope.file, self.semantic.tables).ok_or(())?;
-                if !crate::parts::quiet(|| index.mentions(name, class, PublicationKind::Globals)) { continue }
+                let mentions = || index.mentions(name, class, PublicationKind::Globals);
+                if !(if at < root_count { crate::parts::quiet(mentions) } else { mentions() }) { continue }
                 // A file that may publish it: what it publishes under the
                 // name (the work below records the rest). The linted file
                 // counts through run-shared answers.
@@ -316,6 +325,42 @@ impl<'a> Queries<'a> {
             Known::Yes(Some(targets)) => Known::Yes(targets),
             _ => Known::Unknown,
         }
+    }
+
+    /// Every file `scope` pulls in through its global links, itself first.
+    fn global_reach(&self, scope: ScopeRef, class: u64) -> Result<Vec<ScopeRef>, ()> {
+        let world = self.semantic.world;
+        if !world.module_index(scope.file, self.semantic.tables).ok_or(())?.has_links() { return Ok(vec![scope]) }
+        let answer = world.shared_modules(SharedQuestion::GlobalReach { scope, class }, &mut || {
+            match self.cached(Request::GlobalReach(scope, class), || self.follow_links(scope, class).map(Some)) {
+                Known::Yes(Some(targets)) => Known::Yes(targets),
+                _ => Known::Unknown,
+            }
+        });
+        let Known::Yes(targets) = answer else { return Err(()) };
+        targets.into_iter().map(|target| match target {
+            Target::Scope(scope) => Ok(scope),
+            _ => Err(()),
+        }).collect()
+    }
+
+    fn follow_links(&self, scope: ScopeRef, class: u64) -> Result<Vec<Target>, ()> {
+        let mut seen = vec![scope];
+        let mut pending = vec![scope];
+        while let Some(current) = pending.pop() {
+            self.spend()?;
+            for PreparedItem { node, item, .. } in self.link_items(current)? {
+                let Action::Globals { classes, module: Some(module), .. } = item.action else { continue };
+                if classes != 0 && classes & class == 0 || !self.holds(node, item.when)? { continue }
+                let source = self.operand(node, module)?;
+                let source = self.resolve(node, text(&source).ok_or(())?).known().ok_or(())?.ok_or(())?;
+                if !seen.contains(&source) {
+                    seen.push(source);
+                    pending.push(source);
+                }
+            }
+        }
+        Ok(seen.into_iter().map(Target::Scope).collect())
     }
 
     /// A module answer kept for the file, like [`super::super::values`]'
@@ -752,6 +797,8 @@ mod tests {
         /// something still being decided.
         unknown_globals: bool,
         cyclic_globals: bool,
+        /// Only the first file is a global root: the other is reached by link.
+        one_global_root: bool,
     }
 
     impl Files {
@@ -785,6 +832,7 @@ mod tests {
                 operands: Default::default(),
                 unknown_globals: false,
                 cyclic_globals: false,
+                one_global_root: false,
             }
         }
     }
@@ -819,6 +867,7 @@ mod tests {
             self.global_queries.set(self.global_queries.get() + 1);
             if self.cyclic_globals { semantic.values().note_cycle_read() }
             if self.unknown_globals { return Known::Unknown }
+            if self.one_global_root { return Known::Yes(vec![ScopeRef { file: 0, scope: 0 }]) }
             Known::Yes(vec![ScopeRef { file: 0, scope: 0 }, ScopeRef { file: 1, scope: 0 }])
         }
         fn condition(&self, _: Leaf, _: u32, semantic: &Semantic<'_>) -> Known<bool> {
@@ -1264,6 +1313,42 @@ mod tests {
             assert_eq!(files.module_queries.get(), loads);
             assert_eq!(files.star_queries.get(), filters);
         }
+    }
+
+    #[test]
+    fn plain_global_links_are_followed_once_for_every_name() {
+        let link = Action::Globals { first: false, classes: 1, asks: 0, target: None, module: Some(1), named: None };
+        let linked = || {
+            let mut files = Files::new();
+            files.one_global_root = true;
+            files.trees[0].nodes[1].matcher = 3;
+            let mut tables = tables(false);
+            tables.kinds.push(KindNames::default());
+            tables.kinds[3].modules.items.push(Conditional { action: link.clone(), when: None });
+            (files, tables)
+        };
+
+        let (files, tables) = linked();
+        let question = QueryContext::default();
+        let semantic = Semantic::new(&files, &tables, &question);
+        assert_eq!(semantic.modules().global(0, "X", 1), Known::Yes(vec![target(1)]));
+        assert_eq!(semantic.modules().global(0, "P", 1), Known::Yes(Vec::new()));
+        assert_eq!(files.module_queries.get(), 1);
+
+        // A file linking to itself is no cycle: the linked file is read once.
+        let (mut files, mut tables) = linked();
+        files.trees[1].nodes[2].matcher = 3;
+        tables.kinds[3].modules.items.push(Conditional { action: link.clone(), when: None });
+        let question = QueryContext::default();
+        let semantic = Semantic::new(&files, &tables, &question);
+        assert_eq!(semantic.modules().global(0, "X", 1), Known::Yes(vec![target(1)]));
+
+        // A link that cannot be followed says nothing about any name.
+        let (mut files, tables) = linked();
+        files.operands.insert((NodeRef { file: 0, node: 1 }, 1), Known::Unknown);
+        let question = QueryContext::default();
+        let semantic = Semantic::new(&files, &tables, &question);
+        assert_eq!(semantic.modules().global(0, "X", 1), Known::Unknown);
     }
 
     #[test]

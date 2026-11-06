@@ -834,9 +834,10 @@ impl Linter {
         let run = Run { path: &unit.path, lang: unit.lang, text: &unit.text, lines: unit.lines(), file: &unit.rel, active: &[], settings: None };
         let native = self.native_facts(front, &unit.parsed.tree, &run, (&*unit.path, Path::new(&unit.rel)), unit.parsed.state.clone());
         let index = unit.parsed.tree.module_index(&self.grammar.names, &unit.text, &|text| native.name_key(text), None);
-        if !index.mentions(name, u64::MAX, PublicationKind::Globals) { return false }
+        let links = index.links(unit.parsed.tree.root);
+        if links.is_empty() && !index.mentions(name, u64::MAX, PublicationKind::Globals) { return false }
         let plans: Vec<_> = index.plans(unit.parsed.tree.root, Some((name, u64::MAX)), PublicationKind::Globals)
-            .into_iter().map(|plan| (plan.node, plan.item.when)).collect();
+            .into_iter().chain(links).map(|plan| (plan.node, plan.item.when)).collect();
         !plans.is_empty() && self.alone(path, |world| world::any_holds(world, &plans)).unwrap_or(true)
     }
 

@@ -69,15 +69,19 @@ fn layout_property_quote_site(owner, group) = {
     redundant_number: redundant_number, keyword: keyword, name: name, offset: owner.offset
   }
 }
+fn layout_property_quote_owners(n) = when {
+  n is ts_object then n.property.nodes
+  n is (ts_interface, ts_type_literal, ts_enum) then n.member.nodes
+  n is (ts_import, ts_export) then overlapping(ts_import_attribute, n.offset, n.end_offset)
+  else then [n]
+}
+fn layout_property_quote_written(owner) = {
+  value key: if owner is ts_enum_member then owner.name.node else owner.key.node
+  value key is (ts_string, ts_import_attribute_key, ts_import_attribute_string)
+}
 fn layout_property_quote_sites(n) = {
   value group: n is (ts_object, ts_interface, ts_type_literal, ts_enum)
-  value owners: when {
-    n is ts_object then n.property.nodes
-    n is (ts_interface, ts_type_literal, ts_enum) then n.member.nodes
-    n is (ts_import, ts_export) then overlapping(ts_import_attribute, n.offset, n.end_offset)
-    else then [n]
-  }
-  value sites: flat_map(owners, owner =>
+  value sites: flat_map(layout_property_quote_owners(n), owner =>
     if owner is ts_import_attribute then [layout_property_quote_site(owner, false), layout_property_quote_site(owner, true)]
     else if owner is (ts_property, ts_pattern_property, ts_property_signature, ts_method_signature, ts_enum_member)
       then [layout_property_quote_site(owner, group)] else [])
@@ -88,6 +92,8 @@ in ts_property, ts_pattern_property, ts_property_signature, ts_enum_member, ts_o
   option keywords boolean = false "require quotes on reserved words"
   option unnecessary boolean = true "report redundant quotes"
   option numbers boolean = false "require quoted numeric keys"
+  # With no key quoted and no keyword policy this style has nothing to say.
+  when style != "consistent-as-needed" || keywords || any(layout_property_quote_owners(node), owner => layout_property_quote_written(owner))
   let property_sites layout_property_quote_sites(node)
   let property_any_quoted any(property_sites, s => s.quoted)
   let property_necessary any(property_sites, s => s.quoted && !s.redundant || keywords && s.keyword)

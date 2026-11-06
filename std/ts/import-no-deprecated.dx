@@ -44,7 +44,9 @@ in ts_program let import_deprecated_defaults {
   map (item) item.default_import.node.text
 }
 
+in ts_program let import_deprecated_any count(import_deprecated_names) > 0 || count(import_deprecated_defaults) > 0
 in ts_identifier rule es-import-no-deprecated:use {
+  when ts_program.import_deprecated_any
   when contains(ts_program.import_deprecated_names, text) || contains(ts_program.import_deprecated_defaults, text)
   when resolved == "import"
   when containing(ts_jsx_opening) == null && containing(ts_jsx_closing) == null

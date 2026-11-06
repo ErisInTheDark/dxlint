@@ -207,6 +207,7 @@ fn condition_callback(n) = if n is (ts_arrow, ts_function) then when {
   else then null
 } else null
 fn condition_array_method(n) = n.callee is (ts_member, ts_index) && contains(["every", "filter", "find", "findIndex", "findLast", "findLastIndex", "some"], n.callee.static_name)
+in ts_call let condition_array_call condition_array_method(node)
 fn condition_array_callback(n) = condition_array_method(n) && strict_boolean_array(n.callee.object.node)
 fn condition_literal_arm(arm) = {
   value parts: filter(arm, part => part.identity.kind == "value")

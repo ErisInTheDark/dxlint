@@ -79,7 +79,7 @@ fn regexp_initialised_binding(n) = {
 in ts_program let regexp_mentioned contains(source, "RegExp")
 in ts_call, ts_new let regexp_candidate {
   value callee: unparenthesised_node(node.callee.node)
-  value callee is ts_identifier && (callee.text == "RegExp" || ts_module_program(node).regexp_mentioned && regexp_initialised_binding(callee))
+  value callee is ts_identifier && (callee.text == "RegExp" || ts_program.regexp_mentioned && regexp_initialised_binding(callee))
     || callee is (ts_member, ts_index) && ts_global_method_name(callee) == "RegExp"
     || callee is (ts_non_null, ts_as, ts_satisfies, ts_type_assertion, ts_conditional, ts_logical)
 }

@@ -76,18 +76,17 @@ fn includes_quote(text) = "'" {
 } "'"
 
 in ts_binary rule es-prefer-includes {
-  let negative includes_negative(operator.text, ts_runtime_number(right.node))
-  when negative != null
   let info includes_index_call(left.node)
   when info != null
+  let negative includes_negative(operator.text, ts_runtime_number(right.node))
+  when negative != null
   warn "Use 'includes()' method instead."
   let replacement includes_index_replacement(source, node, info, negative)
   fix if replacement != null as replacement
 }
 in ts_call rule es-prefer-includes:regex {
-  when count(argument) == 1
+  when collection_test_call
   let method unparenthesised_node(callee.node)
-  when collection_method(method, "test")
   let receiver first(argument.nodes)
   when string_boundary_receiver(receiver, false)
   let pattern_text includes_regex(method.object.node)

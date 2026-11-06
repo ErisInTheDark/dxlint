@@ -316,7 +316,8 @@ pub fn hoist(e: &CExpr, lowered: VExpr, functions: &[UserFn]) -> VExpr {
             CExpr::Const(_) | CExpr::Param(_) | CExpr::Opt(_) | CExpr::Template(_) | CExpr::Hole(..) | CExpr::List(_)
             | CExpr::Call(..) | CExpr::Not(_) | CExpr::Neg(_) | CExpr::Binary(..) | CExpr::If(..) | CExpr::Record(_)
             | CExpr::Key(..) | CExpr::Each(_) | CExpr::Bind(..) | CExpr::Nullish(..) | CExpr::NonEmpty(_)
-            | CExpr::Member(..) | CExpr::Path(..) | CExpr::Test(..) | CExpr::TestDfa(..) => true,
+            | CExpr::Member(..) | CExpr::Path(..) | CExpr::Test(..) | CExpr::TestDfa(..)
+            | CExpr::Builtin(crate::expr::Builtin::File) => true,
             CExpr::UserCall(i, _) => depth > 0 && functions.get(*i as usize).and_then(|function| function.body.get())
                 .is_some_and(|body| closed(body, functions, depth - 1)),
             _ => false,
