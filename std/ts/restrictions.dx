@@ -47,42 +47,40 @@ in ts_program let export_usage_sites {
   filter (statement) statement is (ts_export, ts_export_assignment)
   flat_map (statement) export_usage_statement_sites(statement, source)
 }
-group export_usage_owner ts_export, ts_export_assignment, ts_export_specifier, ts_declarator
-in ts_export, ts_export_assignment let export_usage_top_level parent is ts_program
-in ts_export_specifier let export_usage_top_level parent.export_usage_top_level
-in ts_declarator let export_usage_top_level parent.parent is ts_export && parent.parent.export_usage_top_level
-fn export_usage_reported(sites, owner, names, tags) = {
+fn export_usage_reports(sites, names, tags) = {
   value sites
-  filter (site) site.owner == owner && contains(names, site.name)
-    && find(sites, other => other.name == site.name).owner == owner
+  reported: filter (site) contains(names, site.name)
+    && find(sites, other => other.name == site.name).owner == site.owner
     && !any(sites, other => other.name == site.name && export_usage_tagged(other.before, tags))
+  unique_by (site) site.owner
+  map (site) { at: site.at, names: map(filter(reported, other => other.owner == site.owner), other => other.name) }
 }
 @macro export_usage_options {
   option ignore string[] = [] "files whose imports don't count: globs, relative to the config"
   option keepTags string[] = [] "comment tags before an export that keep it, such as @public"
 }
-in export_usage_owner rule es-no-unused-exports {
+# Per program, not per export: the graph answers with the whole file's table.
+in ts_program rule es-no-unused-exports {
   @export_usage_options
-  when export_usage_top_level
   let use module_export_users(node, [], ignore)
   when use != null && !use.is_entry && !use.is_ignored
   let unused { value use.exports; filter (row) count(row.importers) == 0; map (row) row.name }
-  let reported export_usage_reported(ts_program.export_usage_sites, node, unused, keepTags)
-  when count(reported) > 0
-  report at first(reported).at
-  warn "Nothing imports this export: {join(map(reported, site => site.name), ', ')}."
+  each found in export_usage_reports(export_usage_sites, unused, keepTags) {
+    report at found.at
+    warn "Nothing imports this export: {join(found.names, ', ')}."
+  }
 }
-in export_usage_owner rule es-export-only-used-from {
+in ts_program rule es-export-only-used-from {
   default option from string[] = [] "the files that alone may use an export this way: globs, relative to the config"
   @export_usage_options
-  when len(from) > 0 && export_usage_top_level
+  when len(from) > 0
   let use module_export_users(node, from, ignore)
   when use != null && !use.is_stop && !use.is_ignored
   let only { value use.exports; filter (row) row.reaches_stop && !row.reaches_entry; map (row) row.name }
-  let reported export_usage_reported(ts_program.export_usage_sites, node, only, keepTags)
-  when count(reported) > 0
-  report at first(reported).at
-  warn "Only {join(from, ', ')} use this export: {join(map(reported, site => site.name), ', ')}. Move it there."
+  each found in export_usage_reports(export_usage_sites, only, keepTags) {
+    report at found.at
+    warn "Only {join(from, ', ')} use this export: {join(found.names, ', ')}. Move it there."
+  }
 }
 
 schema restriction_import_path {
