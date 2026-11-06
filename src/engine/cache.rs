@@ -99,6 +99,7 @@ pub struct Cache {
     /// Content hashes of the files this run looked up: other files' saved
     /// text reads of them check against these instead of reading again.
     texts: std::sync::RwLock<crate::fx_hash::FxHashMap<PathBuf, u64>>,
+    kinds: std::sync::RwLock<crate::fx_hash::FxHashMap<PathBuf, super::reads::PathKind>>,
     /// Texts of changed files that scans test ([`Cache::current_text`]).
     current: std::sync::RwLock<crate::fx_hash::FxHashMap<PathBuf, Option<Arc<str>>>>,
     fresh: Mutex<HashMap<String, Fresh>>,
@@ -132,6 +133,7 @@ impl Cache {
             scan_reads: saved.scans.iter().map(|_| OnceLock::new()).collect(),
             listings: Default::default(),
             texts: Default::default(),
+            kinds: Default::default(),
             current: Default::default(),
             saved,
             fresh: Mutex::default(),
@@ -244,17 +246,31 @@ impl Cache {
             // A text read that found nothing still finds nothing while no
             // file is there: its directory's listing answers that.
             Dep::Text(path, super::reads::MISSING) => !self.listed_file(path),
-            dep @ Dep::Text(path, hash) => {
-                let seen = self.texts.read().expect("cache texts").get(&**path).copied();
-                seen.map_or_else(|| linter.holds(dep), |seen| seen == *hash)
-            }
-            // A part of an unchanged file holds; a changed one needs a look.
-            dep @ Dep::Part(parts, _) => {
-                let seen = self.texts.read().expect("cache texts").get(&*parts.path).copied();
-                seen == Some(parts.hash) || linter.holds(dep)
-            }
+            Dep::Text(path, hash) => self.text_hash(path) == *hash,
+            // A part or the outside of an unchanged file holds; a changed one
+            // needs a look.
+            dep @ Dep::Part(parts, _) => self.text_hash(&parts.path) == parts.hash || linter.holds(dep),
+            dep @ Dep::Outside(path, bodies) => self.text_hash(path) == bodies.hash || linter.holds(dep),
+            Dep::Requested(request, hash) => super::reads::request_holds(request, *hash, &|path| self.path_kind(path)),
             dep => linter.holds(dep),
         })
+    }
+
+    /// What is at `path`, probed once however many saved requests ask: every
+    /// program lists the same library files.
+    fn path_kind(&self, path: &Path) -> super::reads::PathKind {
+        if let Some(&kind) = self.kinds.read().expect("cache kinds").get(path) { return kind }
+        let kind = super::reads::path_kind(path);
+        self.kinds.write().expect("cache kinds").insert(path.to_owned(), kind);
+        kind
+    }
+
+    /// `path`'s content hash, read once however many saved reads ask.
+    fn text_hash(&self, path: &Path) -> u64 {
+        if let Some(&seen) = self.texts.read().expect("cache texts").get(path) { return seen }
+        let (_, hash) = super::reads::read_unrecorded(path);
+        self.texts.write().expect("cache texts").insert(path.to_owned(), hash);
+        hash
     }
 
     /// Whether `path` is a file, from its directory's listing (read once per

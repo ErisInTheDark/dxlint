@@ -299,7 +299,7 @@ impl Dep {
             Dep::Text(p, h) => content(p).1 == *h,
             // An edit inside a body needs a parse to confirm: the engine's
             // `Linter::holds` does that.
-            Dep::Outside(p, bodies) => bodies.edit(text(p).as_ref()) == Some(None),
+            Dep::Outside(p, bodies) => content(p).1 == bodies.hash,
             // What changed needs a parse to tell: the engine's `Linter::holds`.
             Dep::Part(parts, _) => content(&parts.path).1 == parts.hash,
             Dep::IsFile(p, b) => file_exists(p) == *b,
@@ -897,7 +897,7 @@ fn file_exists(path: &Path) -> bool {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum DiskKind { Missing, File, Directory }
+pub(crate) enum DiskKind { Missing, File, Directory }
 
 /// What is at `path`. Module resolution probes thousands of paths: on Windows
 /// `Path::is_file` opens each one, where its attributes are a far cheaper ask.
@@ -1083,57 +1083,74 @@ fn request_admits(request: &DiscoveryRequest, path: &Path) -> bool {
 }
 
 fn request_walk(request: &DiscoveryRequest) -> Option<(Vec<PathBuf>, u64)> {
+    request_walk_probing(request, &disk_kind)
+}
+
+/// Whether a recorded request still finds what it found, `probe` answering
+/// what is at a path: a caller checking many requests probes each path once.
+pub(crate) fn request_holds(request: &DiscoveryRequest, hash: u64, probe: &dyn Fn(&Path) -> PathKind) -> bool {
+    request_walk_probing(request, &|path| probe(path)).map_or(MISSING, |(_, current)| current) == hash
+}
+
+/// What is at a path, for [`request_holds`]'s probe ([`path_kind`]).
+pub(crate) type PathKind = DiskKind;
+
+pub(crate) fn path_kind(path: &Path) -> PathKind {
+    disk_kind(path)
+}
+
+fn request_walk_probing(request: &DiscoveryRequest, disk_kind: &dyn Fn(&Path) -> DiskKind) -> Option<(Vec<PathBuf>, u64)> {
     let globs = request_globs(request)?;
     let exclude = globs.1.clone();
     let wanted = |path: &Path| request_wants(request, &globs, path);
-    let root = request.root.clone();
-    let dirs_excluded = exclude.clone();
-    let mut walker = ignore::WalkBuilder::new(&request.root);
-    let mut overrides = ignore::overrides::OverrideBuilder::new(&request.root);
-    // An override keeps ignored directories an include names, but ignores
-    // everything else: only for includes that all name a directory.
-    let literal_part = |glob: &str| !glob.split('/').next().unwrap_or_default().contains(['*', '?', '[', '{']);
-    let named = if request.include.iter().all(|glob| literal_part(glob)) { &*request.include } else { &[] };
-    for glob in named {
-        let mut prefix = String::new();
-        for part in glob.split('/').take_while(|part| !part.contains(['*', '?', '[', '{'])) {
-            if !prefix.is_empty() { prefix.push('/'); }
-            prefix.push_str(part);
-            overrides.add(&prefix).ok()?;
-        }
-        if !prefix.is_empty() {
-            overrides.add(&format!("{prefix}/**")).ok()?;
-        }
-    }
-    walker.overrides(overrides.build().ok()?);
-    walker.filter_entry(move |entry| entry.path().strip_prefix(&root).is_ok_and(|rel| !dirs_excluded.matches(rel)));
     let mut found = Vec::new();
     // Includes naming files outright (a program's library files, one
     // request each) need no walk of their directory.
     let literal_files = request.include.iter().map(|glob| {
         if glob.is_empty() || glob.contains(['*', '?', '[', '{']) { return None }
         let path = glob.split('/').fold(request.root.clone(), |path, part| path.join(part));
-        match std::fs::metadata(&path) {
-            Ok(metadata) if metadata.is_file() => Some(Some(path)),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Some(None),
-            _ => None,
+        match disk_kind(&path) {
+            DiskKind::File => Some(Some(path)),
+            DiskKind::Missing => Some(None),
+            DiskKind::Directory => None,
         }
     }).collect::<Option<Vec<_>>>();
-    match std::fs::metadata(&request.root) {
-        Ok(metadata) if metadata.is_dir() && literal_files.is_some() => {
+    match disk_kind(&request.root) {
+        DiskKind::Directory if literal_files.is_some() => {
             // As the walk would: no file below an excluded directory.
             let under_excluded = |path: &Path| path.strip_prefix(&request.root).is_ok_and(|rel| rel.ancestors().skip(1)
                 .any(|dir| !dir.as_os_str().is_empty() && exclude.matches(dir)));
             found.extend(literal_files.into_iter().flatten().flatten().filter(|path| wanted(path) && !under_excluded(path)));
         }
-        Ok(metadata) if metadata.is_dir() => {
+        DiskKind::Directory => {
+            let root = request.root.clone();
+            let dirs_excluded = exclude.clone();
+            let mut walker = ignore::WalkBuilder::new(&request.root);
+            let mut overrides = ignore::overrides::OverrideBuilder::new(&request.root);
+            // An override keeps ignored directories an include names, but ignores
+            // everything else: only for includes that all name a directory.
+            let literal_part = |glob: &str| !glob.split('/').next().unwrap_or_default().contains(['*', '?', '[', '{']);
+            let named = if request.include.iter().all(|glob| literal_part(glob)) { &*request.include } else { &[] };
+            for glob in named {
+                let mut prefix = String::new();
+                for part in glob.split('/').take_while(|part| !part.contains(['*', '?', '[', '{'])) {
+                    if !prefix.is_empty() { prefix.push('/'); }
+                    prefix.push_str(part);
+                    overrides.add(&prefix).ok()?;
+                }
+                if !prefix.is_empty() {
+                    overrides.add(&format!("{prefix}/**")).ok()?;
+                }
+            }
+            walker.overrides(overrides.build().ok()?);
+            walker.filter_entry(move |entry| entry.path().strip_prefix(&root).is_ok_and(|rel| !dirs_excluded.matches(rel)));
             for entry in walker.build() {
                 let entry = entry.ok()?;
                 if entry.file_type().is_some_and(|kind| kind.is_file()) && wanted(entry.path()) { found.push(entry.into_path()); }
             }
         }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        _ => return None,
+        DiskKind::Missing => {}
+        DiskKind::File => return None,
     }
     let buffers = buffers().read().ok()?;
     found.extend(buffers.files_under(&request.root).into_iter().filter(|path| wanted(path)));

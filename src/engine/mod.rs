@@ -815,7 +815,8 @@ impl Linter {
     /// holds: the text is the same, or differs inside one body that the new
     /// text still parses as a body spanning exactly the edit.
     fn outside_holds(&self, path: &Path, bodies: &reads::Bodies) -> bool {
-        let (text, _) = reads::read_unrecorded(path);
+        let (text, hash) = reads::read_unrecorded(path);
+        if hash == bodies.hash { return true }
         match bodies.edit(text.as_ref()) {
             Some(None) => true,
             Some(Some(edited)) => self.unit_quiet(path, None).1.is_some_and(|unit| text.as_deref() == Some(&*unit.text)

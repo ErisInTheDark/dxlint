@@ -288,8 +288,14 @@ impl<'a> Queries<'a> {
             let world = self.semantic.world;
             let mut seen: crate::fx_hash::FxHashSet<ScopeRef> = roots.iter().copied().collect();
             let mut reached = Vec::new();
+            // A root another root reaches adds nothing: reach is transitive.
+            let mut covered = crate::fx_hash::FxHashSet::default();
             for &root in &roots {
-                reached.extend(self.global_reach(root, class)?.into_iter().filter(|scope| seen.insert(*scope)));
+                if covered.contains(&root) { continue }
+                for scope in self.global_reach(root, class)? {
+                    covered.insert(scope);
+                    if seen.insert(scope) { reached.push(scope) }
+                }
             }
             let root_count = roots.len();
             let mut targets = Vec::new();
