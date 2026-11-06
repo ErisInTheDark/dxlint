@@ -361,6 +361,9 @@ pub struct Resolved {
     pub asked: Table<ReferenceLookup>,
     /// Declarations by scope and name, built on first ask ([`Resolved::index`]).
     index: std::sync::OnceLock<ScopeIndex>,
+    /// Declaring node -> the first explicit name it declares, built on first
+    /// ask ([`Resolved::declared_by`]).
+    declared_by: std::sync::OnceLock<crate::fx_hash::FxHashMap<u32, u32>>,
     /// Node -> the innermost scope it sits in (its own when it opens one),
     /// `within` fields respected; [`NO_SCOPE`] outside every scope.
     scope_of: Vec<u32>,
@@ -1431,6 +1434,19 @@ fn visible(decls: &[Declared], start: u32, want: u64) -> Option<u32> {
 }
 
 impl Resolved {
+    /// The first explicit name `owner` declares (implicit ones, a function's
+    /// `arguments`, are keyed by their declaring node and never name it).
+    pub fn declared_by(&self, owner: u32) -> Option<u32> {
+        self.declared_by.get_or_init(|| {
+            let mut first = crate::fx_hash::FxHashMap::<u32, u32>::default();
+            for (&name, &(_, owner, ..)) in self.declared.iter() {
+                if self.implicit.contains_key(&name) { continue }
+                first.entry(owner).and_modify(|kept| *kept = (*kept).min(name)).or_insert(name);
+            }
+            first
+        }).get(&owner).copied()
+    }
+
     /// The declaration of `classes` that `node` (a use or a declaration)
     /// stands for: among merged declarations (`interface X` + `namespace
     /// X`), the first that declares one of them, else the first.

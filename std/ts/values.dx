@@ -942,21 +942,28 @@ in ts_class, ts_interface {
     fits truthy in members
   }
 }
+fn ts_value_name_needs_arguments(n) = {
+  value local: map(filter(name_binding(n).declarations ?? [], item => item.parent is (ts_class, ts_interface, ts_type_alias)),
+    item => map(item.parent.type_parameter.nodes, parameter => parameter.default != null))
+  # A plain local declaration settles it: merged declarations share parameters.
+  value if count(local) > 0 && all(local, parameters => count(parameters) == 0) then false else {
+    value remote: map(filter(value_sources(n).sites ?? [], site => contains(["ts_class", "ts_interface", "ts_type_alias"], site.kind)),
+      site => map(site_field(n, site, "type_parameter") ?? [], parameter => count(site_field(n, parameter, "default") ?? []) > 0))
+    value declarations: flat_map([local, remote], group => group)
+    value any(declarations, parameters => any(parameters, (parameter, index) =>
+      all(declarations, other => !any(other, (defaulted, at) => at == index && defaulted))))
+  }
+}
+in ts_identifier let ts_value_needs_arguments ts_value_name_needs_arguments(node)
 in ts_type_reference {
   # `Promise` without its required arguments is an error type, read as any.
   # Merged declarations share their parameters: one declaring a default is enough.
-  let ts_value_reference_error name is ts_identifier && (ts_value_missing_name(name.node, "type") || count(type_argument.nodes) == 0 && {
-    value local: map(filter(name_binding(name.node).declarations ?? [], item => item.parent is (ts_class, ts_interface, ts_type_alias)),
-      item => map(item.parent.type_parameter.nodes, parameter => parameter.default != null))
-    # A plain local declaration settles it: merged declarations share parameters.
-    value if count(local) > 0 && all(local, parameters => count(parameters) == 0) then false else {
-      value remote: map(filter(value_sources(name.node).sites ?? [], site => contains(["ts_class", "ts_interface", "ts_type_alias"], site.kind)),
-        site => map(site_field(node, site, "type_parameter") ?? [], parameter => count(site_field(node, parameter, "default") ?? []) > 0))
-      value declarations: flat_map([local, remote], group => group)
-      value any(declarations, parameters => any(parameters, (parameter, index) =>
-        all(declarations, other => !any(other, (defaulted, at) => at == index && defaulted))))
-    }
-  })
+  let ts_value_reference_error name is ts_identifier && (ts_value_missing_name(name.node, "type")
+    || count(type_argument.nodes) == 0 && {
+      # Asked of the name's declaration in this file: every use agrees.
+      value bound: name.node.scope_declaration
+      value if bound is ts_identifier then bound.ts_value_needs_arguments else ts_value_name_needs_arguments(name.node)
+    })
   arguments type_argument
   when ts_value_reference_error { fits any, error open }
   when name is ts_qualified_name { unwraps name }

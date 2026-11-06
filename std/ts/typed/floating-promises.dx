@@ -4,8 +4,8 @@ define {
 
 in ts_node let floating_promise_arms value_parts(node)
 in ts_await let floating_promise_arms value_parts(ts_awaited_value(node, argument.node))
-# A promise or an array has a carrier: a value without one needs no describing.
-in ts_node let floating_promise_candidate value_may_have_carrier(node)
+# A promise or an array is an object: anything else needs no describing.
+in ts_node let floating_promise_candidate node could object
 in ts_await let floating_promise_candidate true
 in ts_node let floating_promise_safe_call false
 in ts_node let floating_promise_safe_types []
@@ -95,6 +95,7 @@ fn floating_promise_exempt(part, safe_promises, safe_calls) = part is ts_assignm
   || type_value_allowed(part.floating_promise_safe_types, part) != false
 fn floating_promise_is_promise(part, check_thenables, safe_promises) = part not ts_await
   && (check_thenables || part.floating_promise_candidate != false)
+  && part could thenable
   && any(part.floating_promise_arms ?? [], arm => floating_promise_arm(arm, part, check_thenables, safe_promises))
 fn floating_promise_is_array(part, check_thenables, safe_promises) = part.floating_promise_candidate != false
   && floating_promise_array(part.floating_promise_arms, part, check_thenables, safe_promises)

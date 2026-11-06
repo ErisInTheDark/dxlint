@@ -365,6 +365,9 @@ pub(super) struct Snapshot {
     /// Each listed program's inputs as a set: every world asks whether its
     /// linted file is one.
     input_sets: RwLock<FxHashMap<(u64, u64), Arc<crate::fx_hash::FxHashSet<PathBuf>>>>,
+    /// Which needles each text (by hash) spells.
+    mentions: RwLock<FxHashMap<u64, Vec<(Box<str>, bool)>>>,
+    pub(super) text_holds: TextHolds,
     /// [`Snapshot::listed_inputs`] by (revision, program).
     listed: Mutex<FxHashMap<(u64, u64), (Arc<Vec<PathBuf>>, Arc<Reads>, Arc<[reads::Dep]>)>>,
     /// Module resolution's file probes and reads, once per path and revision.
@@ -567,7 +570,7 @@ impl Surveyed {
     /// sketch alone).
     fn may_publish(&self, at: usize, name: &str, text: &(Survey, Sketches)) -> bool {
         let mut holds = [false];
-        text.1.mark(name, &text.0, &mut holds);
+        text.1.mark(name, &text.0, &mut holds, &TextHolds::default());
         self.sources[at].2 || holds[0]
     }
 }
@@ -591,6 +594,22 @@ const SKETCH_BITS: usize = 256 * 64;
 
 pub(super) type Words = Arc<Sketches>;
 
+/// Which texts spell which global names: programs of one run mostly share
+/// their libraries, so each pair is searched once. By the text's address,
+/// which a run's survey keeps alive.
+#[derive(Default)]
+pub(super) struct TextHolds(RwLock<FxHashMap<Box<str>, FxHashMap<usize, bool>>>);
+
+impl TextHolds {
+    fn holds(&self, name: &str, text: &Arc<str>, search: impl FnOnce() -> bool) -> bool {
+        let at = Arc::as_ptr(text).cast::<u8>() as usize;
+        if let Some(found) = self.0.read().expect("run text holds").get(name).and_then(|texts| texts.get(&at)) { return *found }
+        let found = search();
+        self.0.write().expect("run text holds").entry(name.into()).or_default().insert(at, found);
+        found
+    }
+}
+
 fn trigram_bit(gram: &[u8]) -> usize {
     let packed = u32::from(gram[0]) | u32::from(gram[1]) << 8 | u32::from(gram[2]) << 16;
     (packed.wrapping_mul(0x9E37_79B1) >> 15) as usize % SKETCH_BITS
@@ -600,7 +619,7 @@ impl Sketches {
     /// Marks in `holding` (one flag per input of `survey`, which these
     /// sketches were built from) exactly the inputs whose text contains
     /// `name`, as a substring search of every text would.
-    pub(super) fn mark(&self, name: &str, survey: &Survey, holding: &mut [bool]) {
+    pub(super) fn mark(&self, name: &str, survey: &Survey, holding: &mut [bool], known: &TextHolds) {
         let finder = memchr::memmem::Finder::new(name.as_bytes());
         let mut candidates = self.readable.to_vec();
         for bit in name.as_bytes().windows(3).map(trigram_bit) {
@@ -611,7 +630,7 @@ impl Sketches {
                 let input = index * 64 + word.trailing_zeros() as usize;
                 word &= word - 1;
                 let (Some((_, Some(text), _)), Some(holds)) = (survey.get(input), holding.get_mut(input)) else { continue };
-                if finder.find(text.as_bytes()).is_some() { *holds = true }
+                if known.holds(name, text, || finder.find(text.as_bytes()).is_some()) { *holds = true }
             }
         }
     }
@@ -660,7 +679,7 @@ impl Snapshot {
     /// hold: an editor's next lint after a keystroke redoes only what read
     /// the edited files.
     pub(super) fn carry(self, to: u64, keep: &mut Keep<'_>) -> Snapshot {
-        let Snapshot { revision, paths, catalogs, units, modules, augmentations, prefetched: _, input_sets: _, listed: _, probes, listings, texts,
+        let Snapshot { revision, paths, catalogs, units, modules, augmentations, prefetched: _, input_sets: _, mentions: _, text_holds: _, listed: _, probes, listings, texts,
             candidates, surveys, words, configurations, metadata, packages, values, facts: _, tested: _, frames, editor } = self;
         // A survey holds while its listing does; inputs whose text changed
         // are read again, and what was built from them patched to match.
@@ -688,6 +707,8 @@ impl Snapshot {
             augmentations: carried_in_place(augmentations, to, keep),
             prefetched: Default::default(),
             input_sets: Default::default(),
+            mentions: Default::default(),
+            text_holds: Default::default(),
             listed: Default::default(),
             probes: carried(probes, |path, (at, found)| keep(at, None, Some(&*path)).then_some((path, (to, found)))),
             listings: carried(listings, |dir, (at, listing)| keep(at, None, Some(&*dir)).then_some((dir, (to, listing)))),
@@ -806,6 +827,16 @@ impl Snapshot {
 
     /// Runs `load` once per program for this run; concurrent callers wait
     /// for it instead of loading the same files in the same order.
+    /// Whether the text hashing to `hash` spells `needle`, searched once.
+    pub(super) fn text_mentions(&self, hash: u64, needle: &str, find: impl FnOnce() -> bool) -> bool {
+        if let Some(needles) = self.mentions.read().expect("run mentions").get(&hash) {
+            if let Some((_, found)) = needles.iter().find(|(known, _)| &**known == needle) { return *found }
+        }
+        let found = find();
+        self.mentions.write().expect("run mentions").entry(hash).or_default().push((needle.into(), found));
+        found
+    }
+
     /// Whether `path` is one of the inputs listed under `key`.
     pub(super) fn is_input(&self, key: (u64, u64), inputs: &[PathBuf], path: &std::path::Path) -> bool {
         if let Some(set) = self.input_sets.read().expect("run input sets").get(&key) { return set.contains(path) }
@@ -952,7 +983,7 @@ mod tests {
         let sketches = sketch_texts(&survey);
         for name in ["Promise", "Map", "Set", "Pr", "x", "WeakMap", "absent", "filler 69"] {
             let mut holding = vec![false; survey.len()];
-            sketches.mark(name, &survey, &mut holding);
+            sketches.mark(name, &survey, &mut holding, &TextHolds::default());
             let expected: Vec<bool> = survey.iter().map(|(_, text, _)| text.as_deref().is_some_and(|text| text.contains(name))).collect();
             assert_eq!(holding, expected, "{name}");
         }

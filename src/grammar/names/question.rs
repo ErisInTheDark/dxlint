@@ -579,6 +579,10 @@ pub trait World {
     fn path(&self, _file: u32) -> Option<&std::path::Path> { None }
     fn tree(&self, file: u32) -> Option<&crate::grammar::Tree>;
     fn text(&self, file: u32) -> Option<&str>;
+    /// Whether the file's text spells `needle` anywhere.
+    fn text_mentions(&self, file: u32, needle: &str) -> Option<bool> {
+        Some(memchr::memmem::find(self.text(file)?.as_bytes(), needle.as_bytes()).is_some())
+    }
     /// The file's resolved names (scopes, declarations, references).
     fn names(&self, file: u32) -> Option<&super::Resolved>;
     /// The file's declarations by scope and name, keyed by its front end.

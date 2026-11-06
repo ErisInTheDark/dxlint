@@ -843,7 +843,7 @@ impl<'a> Files<'a> {
                             // searched for it, not every input per name.
                             let sketches = snapshot.words((settings, program), || super::program::sketch_texts(&sources)).get();
                             let mut holding = vec![false; sources.len()];
-                            sketches.mark(name, &sources, &mut holding);
+                            sketches.mark(name, &sources, &mut holding, &snapshot.text_holds);
                             sources.iter().zip(holding).enumerate()
                                 .filter(|(_, ((_, _, hinted), holds))| *hinted || *holds)
                                 .map(|(at, _)| u32::try_from(at).expect("inputs fit u32")).collect()
@@ -1588,6 +1588,15 @@ impl World for Files<'_> {
     fn text(&self, file: u32) -> Option<&str> {
         if file == 0 { self.0.note_linted_read(); return Some(self.0.ctx.source); }
         Some(&self.0.views.get(file.checked_sub(1)?)?.unit.text)
+    }
+
+    fn text_mentions(&self, file: u32, needle: &str) -> Option<bool> {
+        let find = |text: &str| memchr::memmem::find(text.as_bytes(), needle.as_bytes()).is_some();
+        // Every importer asks of a popular file: once per text and needle.
+        match (self.0.snapshot, file.checked_sub(1).and_then(|view| self.0.views.get(view))) {
+            (Some(snapshot), Some(view)) => Some(snapshot.text_mentions(view.unit.hash, needle, || find(&view.unit.text))),
+            _ => World::text(self, file).map(find),
+        }
     }
 
     fn names(&self, file: u32) -> Option<&Resolved> {

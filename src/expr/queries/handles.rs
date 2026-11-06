@@ -510,8 +510,10 @@ fn site_text(semantic: &Semantic<'_>, _: crate::grammar::names::question::Leaf, 
 /// that doesn't can't hold what a scan of it would look for.
 fn site_mentions(semantic: &Semantic<'_>, _: crate::grammar::names::question::Leaf, args: &[Value<'static>]) -> Known<Value<'static>> {
     let (Some((file, _)), Some(needle)) = (args.first().and_then(site_of), args.get(1)) else { return Known::Yes(Value::Null) };
-    let Some(text) = semantic.world.text(file) else { return Known::Unknown };
-    Known::Yes(Value::Bool(memchr::memmem::find(text.as_bytes(), needle.text().as_bytes()).is_some()))
+    match semantic.world.text_mentions(file, &needle.text()) {
+        Some(mentions) => Known::Yes(Value::Bool(mentions)),
+        None => Known::Unknown,
+    }
 }
 
 /// The children of a `{file, node}` site under one field, in any program
@@ -621,15 +623,12 @@ fn site_record(semantic: &Semantic<'_>, node: crate::grammar::names::question::N
 
 /// The name a node declares: itself when it is a declared name, else the
 /// first name whose declaring node it is. Null for none or computed names.
-/// Implicit declarations (a function's `arguments`) are keyed by their
-/// declaring node and never name it.
 fn declared_name(semantic: &Semantic<'_>, node: crate::grammar::names::question::NodeRef) -> Value<'static> {
     let Some(names) = semantic.world.names(node.file) else { return Value::Null };
-    let explicit = |name: &u32| !names.implicit.contains_key(name);
-    let name = if names.declared.contains_key(&node.node) && explicit(&node.node) {
+    let name = if names.declared.contains_key(&node.node) && !names.implicit.contains_key(&node.node) {
         Some(node.node)
     } else {
-        names.declared.iter().filter(|(name, &(_, owner, ..))| owner == node.node && explicit(name)).map(|(&name, _)| name).min()
+        names.declared_by(node.node)
     };
     let Some(name) = name else { return Value::Null };
     match names.keys.get(&name) {

@@ -22,7 +22,7 @@ in ts_declarator rule es-no-undef-init {
 }
 
 fn parse_int_target(n) = if enabled_global_identifier(n, "parseInt") || n is (ts_member, ts_index) && n.static_name == "parseInt" && { value n.object.node; unparenthesised_node; enabled_global_identifier "Number" } then n.text else null
-in ts_call let parse_int_name { value callee.node; unparenthesised_node; parse_int_target }
+in ts_call let parse_int_name if contains(callee.text, "parseInt") || contains(callee.text, "\\") then { value callee.node; unparenthesised_node; parse_int_target } else null
 fn valid_radix(value) = value.type == "number" && value.value >= 2 && value.value <= 36 && value.value % 1 == 0
 fn invalid_radix(n) = n is ts_identifier && n.text == "undefined" && n.resolved == "global" || (n is (ts_number, ts_string, ts_boolean, ts_null, ts_regex, ts_bigint) || n is ts_unary && contains(["+", "-"], n.operator) && n.argument is ts_number) && !valid_radix(n.literal_value)
 

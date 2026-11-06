@@ -169,7 +169,7 @@ in ts_node let structure_padding_categories structure_padding_unlabel.nonempty ?
 in ts_node let structure_padding_multiline position(offset).js_line != position(end_offset).js_line
 fn structure_padding_receiver(n) = n.structure_padding_receiver.nonempty ?? n.structure_unwrapped
 fn structure_padding_is_require(n) = n.callee is ts_identifier && n.callee.text == "require"
-fn structure_padding_blank(text) = { value text; replace "\r\n" "\n"; re_test /[\n\r\u2028\u2029]\s*[\n\r\u2028\u2029]/ }
+fn structure_padding_blank(text) = { value if contains(text, "\r") then replace(text, "\r\n", "\n") else text; re_test /[\n\r\u2028\u2029]\s*[\n\r\u2028\u2029]/ }
 fn padding_plainly_blank(gap) = !contains(gap, "/") && structure_padding_blank(gap)
 fn structure_padding_gap_end(previous, next, source) = {
   value end: if previous is ts_method_signature then previous.member_terminal_token.end else previous.end_offset
