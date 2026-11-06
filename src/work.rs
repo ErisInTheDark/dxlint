@@ -289,9 +289,18 @@ fn now() -> u64 {
     VM.load(Ordering::Relaxed) + ALLOCS.load(Ordering::Relaxed)
 }
 
+/// CPU ticks, for real time per fact: native loops count here, unlike [`now`].
+fn ticks() -> u64 {
+    #[cfg(target_arch = "x86_64")]
+    // SAFETY: reading the time stamp counter has no preconditions.
+    unsafe { std::arch::x86_64::_rdtsc() }
+    #[cfg(not(target_arch = "x86_64"))]
+    0
+}
+
 thread_local! {
-    /// Per open fact, its nested facts' work so far.
-    static OPEN: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
+    /// Per open fact, its nested facts' work and ticks so far.
+    static OPEN: RefCell<Vec<(u64, u64)>> = const { RefCell::new(Vec::new()) };
 }
 
 struct Fact {
@@ -302,6 +311,7 @@ struct Fact {
     first: u64,
     label: String,
     loose: u64,
+    ticks: u64,
 }
 
 static FACTS: Mutex<Option<FxHashMap<(&'static str, u64), Fact>>> = Mutex::new(None);
@@ -312,38 +322,99 @@ pub struct Guard {
     loose: u64,
     label: String,
     start: u64,
+    /// Before its own bookkeeping, which its parent must not count.
+    entered: u64,
+    started: u64,
 }
 
 /// Opens fact `kind` until the guard drops; `key` gives its strict key,
 /// loose key and a label for reading the report.
 pub fn enter(kind: &'static str, key: impl FnOnce() -> (u64, u64, String)) -> Guard {
+    let entered = ticks();
     PAUSED.store(true, Ordering::Relaxed);
     let (strict, loose, label) = key();
-    OPEN.with(|open| open.borrow_mut().push(0));
+    OPEN.with(|open| open.borrow_mut().push((0, 0)));
     PAUSED.store(false, Ordering::Relaxed);
-    Guard { kind, strict, loose, label, start: now() }
+    Guard { kind, strict, loose, label, start: now(), entered, started: ticks() }
 }
 
 impl Drop for Guard {
     fn drop(&mut self) {
+        let ended = ticks();
         let total = now() - self.start;
         PAUSED.store(true, Ordering::Relaxed);
-        let nested = OPEN.with(|open| {
-            let mut open = open.borrow_mut();
-            let nested = open.pop().unwrap_or(0);
-            if let Some(parent) = open.last_mut() { *parent += total }
-            nested
-        });
-        let own = total.saturating_sub(nested);
+        let nested = OPEN.with(|open| open.borrow_mut().pop().unwrap_or((0, 0)));
+        let own = total.saturating_sub(nested.0);
+        let own_ticks = (ended - self.started).saturating_sub(nested.1);
         let mut facts = FACTS.lock().expect("census");
         let fact = facts.get_or_insert_with(FxHashMap::default).entry((self.kind, self.strict)).or_insert_with(|| Fact {
-            calls: 0, own: 0, inclusive: 0, first: own, label: std::mem::take(&mut self.label), loose: self.loose,
+            calls: 0, own: 0, inclusive: 0, first: own, label: std::mem::take(&mut self.label), loose: self.loose, ticks: 0,
         });
         fact.calls += 1;
         fact.own += own;
         fact.inclusive += total;
+        fact.ticks += own_ticks;
         drop(facts);
+        let whole = ticks() - self.entered;
+        OPEN.with(|open| if let Some(parent) = open.borrow_mut().last_mut() { parent.0 += total; parent.1 += whole });
         PAUSED.store(false, Ordering::Relaxed);
+    }
+}
+
+/// Ticks per second, measured against the clock from the first call to the
+/// second: printed times are seconds of real work, without the census's own.
+fn ticks_per_second() -> f64 {
+    let (clock, before) = (std::time::Instant::now(), ticks());
+    while clock.elapsed() < std::time::Duration::from_millis(50) { std::hint::spin_loop() }
+    (ticks() - before) as f64 / clock.elapsed().as_secs_f64()
+}
+
+/// The own time of every fact of each kind, biggest first: the ruler for
+/// native work, which the work count can't see.
+fn report_time(facts: &FxHashMap<(&'static str, u64), Fact>) {
+    let rate = ticks_per_second();
+    let seconds = |ticks: u64| ticks as f64 / rate;
+    let mut kinds: FxHashMap<&str, (u64, u64)> = FxHashMap::default();
+    let mut named: FxHashMap<(&str, &str), (u64, u64)> = FxHashMap::default();
+    for ((kind, _), fact) in facts {
+        let row = kinds.entry(kind).or_default();
+        row.0 += fact.ticks;
+        row.1 += fact.calls;
+        if matches!(*kind, "rule" | "attribute" | "let.compute.linted" | "let.compute.foreign") {
+            let row = named.entry((kind, fact.label.split(' ').next().unwrap_or(""))).or_default();
+            row.0 += fact.ticks;
+            row.1 += fact.calls;
+        }
+    }
+    let mut kinds: Vec<_> = kinds.into_iter().collect();
+    kinds.sort_by_key(|(_, (ticks, _))| std::cmp::Reverse(*ticks));
+    let total: u64 = kinds.iter().map(|(_, (ticks, _))| *ticks).sum();
+    eprintln!("time: {:.1} s in facts, own time of each kind (s, calls, ns/call):", seconds(total));
+    for (kind, (ticks, calls)) in kinds.iter().take(30) {
+        let short: String = kind.chars().take(110).collect();
+        eprintln!("{:>8.2} {calls:>10} {:>8.0}  {short}", seconds(*ticks), seconds(*ticks) * 1e9 / (*calls).max(1) as f64);
+    }
+    // Calls by callee name: what overload selection and inference spend on.
+    let mut calls: FxHashMap<&str, (u64, u64, u64)> = FxHashMap::default();
+    for ((kind, _), fact) in facts.iter().filter(|((kind, _), _)| kind.contains("select::Candidate")) {
+        let _ = kind;
+        let callee = fact.label.split('(').next().unwrap_or("").rsplit(['.', ' ']).next().unwrap_or("");
+        let row = calls.entry(callee).or_default();
+        row.0 += fact.ticks;
+        row.1 += fact.inclusive;
+        row.2 += fact.calls;
+    }
+    let mut calls: Vec<_> = calls.into_iter().collect();
+    calls.sort_by_key(|(_, (_, inclusive, _))| std::cmp::Reverse(*inclusive));
+    eprintln!("time: selection by callee name (own s, inclusive work, asks):");
+    for (name, (ticks, inclusive, asks)) in calls.iter().take(40) {
+        eprintln!("{:>8.2} {inclusive:>10} {asks:>7}  {name}", seconds(*ticks));
+    }
+    let mut named: Vec<_> = named.into_iter().collect();
+    named.sort_by_key(|(_, (ticks, _))| std::cmp::Reverse(*ticks));
+    eprintln!("time: rules and `let`s by own time (s, calls, ns/call):");
+    for ((kind, name), (ticks, calls)) in named.iter().take(60) {
+        eprintln!("{:>8.2} {calls:>10} {:>8.0}  {kind} {name}", seconds(*ticks), seconds(*ticks) * 1e9 / (*calls).max(1) as f64);
     }
 }
 
@@ -352,6 +423,7 @@ pub fn report() {
     PAUSED.store(true, Ordering::Relaxed);
     let (vm, allocs) = (VM.load(Ordering::Relaxed), ALLOCS.load(Ordering::Relaxed));
     eprintln!("work: {} = {vm} vm + {allocs} allocs", vm + allocs);
+    if let Some(facts) = FACTS.lock().expect("census").as_ref() { report_time(facts) }
     eprintln!("in facts that ran out of budget: {} work, {} facts", RAN_OUT.load(Ordering::Relaxed), RAN_OUT_FACTS.load(Ordering::Relaxed));
     report_fact_steps();
     let facts = FACTS.lock().expect("census");
