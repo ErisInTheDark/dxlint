@@ -91,7 +91,7 @@ impl Queries<'_> {
 
     pub(super) fn spend(&self) -> Result<(), ()> {
         if self.batch.is_some_and(|batch| batch.revision != self.semantic.world.revision()) { return Err(()) }
-        self.semantic.question.budget.step().then_some(()).ok_or(())
+        self.semantic.question.budget.hop().then_some(()).ok_or(())
     }
 
     pub(super) fn holds(&self, node: NodeRef, condition: Option<u32>) -> Result<bool, ()> {

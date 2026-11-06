@@ -112,7 +112,7 @@ impl<S: Source> Modules<'_, S> {
         let mut stack = vec![self.frame(root.clone(), question, retained, kind, revision)];
         memo.insert(root.clone(), Answer::Active);
         while let Some(frame) = stack.last_mut() {
-            if self.source.revision() != revision || question.budget.limited() || !question.budget.step() {
+            if self.source.revision() != revision || question.budget.limited() || !question.budget.hop() {
                 return Known::Unknown;
             }
             if frame.unknown {
@@ -198,7 +198,7 @@ impl<S: Source> Modules<'_, S> {
             excluded
         } else { false };
         for entry in entries {
-            if !question.budget.step() {
+            if !question.budget.hop() {
                 frame.unknown = true;
                 break;
             }
