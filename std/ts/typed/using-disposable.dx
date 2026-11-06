@@ -24,14 +24,66 @@ fn using_disposable_kind(n) = {
   }
 }
 in ts_node let using_disposable_held using_disposable_kind(node)
-in ts_declarator let using_disposable_initializer using_disposable_kind(init.node)
+# Iterators inherit dispose only from the bare lib `Disposable` interface;
+# disposing them means nothing.
+fn using_disposable_inherited_by_iterator(n, key) = value_has_member(n, "next", null) == true && {
+  value lookup: value_lookup(n, key)
+  value lookup != null && all(lookup.alternatives, alternative => all(alternative.sources, source =>
+    source.site != null && contains(["Disposable", "AsyncDisposable"], site_parent(n, source.site).name)))
+}
+# Ownership moves when the value leaves the function or goes into something
+# that outlives it, so `using` would dispose a live resource. An argument stays
+# borrowed: only `new` takes ownership.
+fn using_disposable_carriers(read) = {
+  value read
+  walk (current) if current.parent is (ts_parenthesized, ts_as, ts_satisfies, ts_non_null, ts_type_assertion, ts_logical, ts_array) || (current.parent is ts_conditional && current.parent.test.node != current) then current.parent.node else null
+}
+fn using_disposable_leaves(carrier) = when {
+  carrier.parent is (ts_new, ts_return, ts_yield, ts_property) then true
+  carrier.parent is ts_arrow then carrier.parent.body.node == carrier
+  carrier.parent is ts_assignment then carrier.parent.right.node == carrier && carrier.parent.left is ts_member
+  else then false
+}
+fn using_disposable_aliases(binding) = {
+  value binding.references
+  flat_map (read) using_disposable_carriers(read)
+  map (carrier) when {
+    carrier.parent is ts_assignment && carrier.parent.right.node == carrier then carrier.parent.left.declaration
+    carrier.parent is ts_declarator && carrier.parent.init.node == carrier && carrier.parent.name is ts_identifier then carrier.parent.name.node
+    else then null
+  }
+  filter (alias) alias != null
+}
+fn using_disposable_escapes(binding) = binding != null && {
+  value binding
+  walk (current) using_disposable_aliases(current)
+  any (current) any(current.references, read => any(using_disposable_carriers(read), carrier => using_disposable_leaves(carrier)))
+}
+fn using_disposable_stored(assignment) = assignment.left is ts_member || using_disposable_escapes(assignment.left.declaration)
+fn using_disposable_declared(initializer) = {
+  value kind: using_disposable_kind(initializer)
+  value if kind == null then null
+    else if using_disposable_inherited_by_iterator(initializer, {global: "Symbol", class: "value", path: [if kind == "async" then "asyncDispose" else "dispose"]}) then null
+    else kind
+}
+in ts_declarator let using_disposable_initializer {
+  value kind: using_disposable_declared(init.node)
+  value if kind != null && !using_disposable_escapes(name) then kind else null
+}
 
 in ts_declarator.name rule es-use-using-disposable:declare {
   when !re_test(ts_variable_declaration.kind.text ?? "", /using/) && parent.using_disposable_initializer != null
-  warn if parent.using_disposable_initializer == "async" then "Async disposable resources should be declared with `await using`." else "Disposable resources should be declared with `using`."
+  # `using` cannot bind a pattern: destructuring drops the resource itself.
+  warn when {
+    node is ts_identifier && parent.using_disposable_initializer == "async" then "Async disposable resources should be declared with `await using`."
+    node is ts_identifier then "Disposable resources should be declared with `using`."
+    parent.using_disposable_initializer == "async" then "Async disposable resources should be held with `await using` before destructuring."
+    else then "Disposable resources should be held with `using` before destructuring."
+  }
 }
 in ts_expression_statement.expression rule es-use-using-disposable:hold {
-  when using_disposable_held != null
+  let held_assignment unparenthesised_node(node)
+  when using_disposable_held != null && !(held_assignment is ts_assignment && using_disposable_stored(held_assignment))
   warn if using_disposable_held == "async" then "Async disposable resources should be held with `await using`." else "Disposable resources should be held with `using`."
 }
 

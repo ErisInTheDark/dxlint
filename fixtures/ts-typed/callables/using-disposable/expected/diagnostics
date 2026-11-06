@@ -9,3 +9,12 @@ input.ts:22:1-22:12 es-use-using-disposable:hold#0
 input.ts:23:1-23:9 es-use-using-disposable:hold#1
 input.ts:24:1-24:15 es-use-using-disposable:hold#1
 input.ts:29:1-29:16 es-use-using-disposable:hold#1
+input.ts:39:7-39:16 es-use-using-disposable:declare#3
+input.ts:48:1-48:7 es-use-using-disposable:hold#1
+input.ts:61:31-61:32 es-use-using-disposable:declare#1
+input.ts:62:29-62:30 es-use-using-disposable:declare#1
+input.ts:63:37-63:47 es-use-using-disposable:hold#1
+input.ts:64:24-64:25 es-use-using-disposable:declare#1
+input.ts:64:40-64:41 es-use-using-disposable:declare#1
+input.ts:64:47-64:52 es-use-using-disposable:hold#1
+input.ts:64:54-64:59 es-use-using-disposable:hold#1

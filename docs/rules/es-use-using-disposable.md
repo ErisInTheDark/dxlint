@@ -48,4 +48,13 @@ void open();
 | `es-use-using-disposable:declare` | a `const`, `let` or `var` initialized with a disposable value, on its name |
 | `es-use-using-disposable:hold` | an expression statement whose value is disposable |
 
-A value counts as disposable when it has a `[Symbol.dispose]` or `[Symbol.asyncDispose]` member; one with both is reported as asynchronous. This includes library iterators under `lib: ["esnext"]`, such as what `map.values()` returns. A value typed `any` is not reported.
+A value counts as disposable when it has a `[Symbol.dispose]` or `[Symbol.asyncDispose]` member; one with both is reported as asynchronous. A value typed `any` is not reported.
+
+`es-use-using-disposable:declare` also leaves out:
+
+- a binding whose value is returned, yielded, passed to `new`, or stored on a member or in an object literal, including through casts, conditionals, arrays, aliases and concise arrow functions, because `using` would dispose a resource that is still live
+- iterators whose dispose comes only from the library's `Disposable` or `AsyncDisposable`, such as what `map.values()` returns
+
+Destructuring a disposable value is reported with its own message: `using` can't bind a pattern, and destructuring drops the resource, so hold it first.
+
+`es-use-using-disposable:hold` leaves out an assignment that stores the value on a member or in a variable left out as above. Passing a value to a function still reports: the caller keeps ownership.
