@@ -56,7 +56,7 @@ pub(in crate::grammar::names) fn lower_shape(
 impl Values<'_> {
     pub fn product_info(&self, at: Leaf) -> Known<Option<Product>> {
         let Target::Product(id) = at.target else { return Known::Yes(None) };
-        if !self.question.budget.step() { return Known::Unknown }
+        if !self.question.budget.hop() { return Known::Unknown }
         match self.question.product(id) {
             Some(product) if self.tables.products.get(product.shape.0 as usize).is_some_and(Option::is_some) => Known::Yes(Some(product)),
             _ => Known::Unknown,
@@ -175,6 +175,10 @@ impl Values<'_> {
     }
 
     pub(super) fn product_inherited(&self, at: Leaf, product: &Product) -> Known<Option<NodeValue>> {
+        self.memoized(&self.semantic.values.product_bases, at, || self.compute_product_base(at, product))
+    }
+
+    fn compute_product_base(&self, at: Leaf, product: &Product) -> Known<Option<NodeValue>> {
         let Some(shape) = self.product_shape(product) else { return Known::Unknown };
         let recipe = if product.readonly { shape.readonly_inherits.as_ref().or(shape.inherits.as_ref()) } else { shape.inherits.as_ref() };
         match recipe {

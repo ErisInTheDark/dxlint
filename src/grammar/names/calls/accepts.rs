@@ -456,7 +456,7 @@ impl<'a, 'world> Run<'a, 'world> {
         let mut seen: Vec<Vec<Leaf>> = Vec::new();
         while let Some(row) = pending.pop() {
             for &leaf in &row {
-                if !values.question.budget.step() { return false }
+                if !values.question.budget.hop() { return false }
                 let Known::Yes(bases) = values.bases(leaf) else { return false };
                 for base in bases {
                     let NodeValue::Alternatives(rows) = base else { continue };

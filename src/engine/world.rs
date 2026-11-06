@@ -506,11 +506,18 @@ impl<'a> LintWorld<'a> {
             .map(|tree| crate::engine::Profile::root_scope(tree.node(node).matcher as usize));
         let answer = self.semantic.run(&files, &self.ctx.grammar.names, |semantic| {
             let Known::Yes(at) = semantic.leaf(at) else { return Known::Unknown };
+            #[cfg(feature = "work")]
+            crate::work::fact_steps_open();
             let answer = match semantic.question.budget.nest() {
                 Some(_nested) => self.evaluating(Some(ActiveQuestion { semantic, at }), uncertainty, || run(semantic, at)),
                 None => Known::Unknown,
             };
             let budget = &semantic.question.budget;
+            #[cfg(feature = "work")]
+            {
+                crate::work::fact_steps_close();
+                crate::work::fact_steps("root", budget.root_spent(), || semantic.values().census_leaf(at).2);
+            }
             if let (Some(profile), Some(tree)) = (self.ctx.profile, World::tree(&files, file)) {
                 let used = u64::from(crate::grammar::names::question::Budget::per_question() - budget.remaining());
                 profile.record_root(tree.node(node).matcher as usize, used, budget.limited());

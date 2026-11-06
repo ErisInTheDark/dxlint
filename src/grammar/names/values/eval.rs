@@ -93,7 +93,7 @@ pub(super) fn evaluate_optional(values: &Values<'_>, at: Leaf, expression: &Valu
 pub(super) fn sites(values: &Values<'_>, at: Leaf, mut expression: &Value) -> Known<Vec<Leaf>> {
     let mut fallbacks = Vec::new();
     loop {
-        if !values.question.budget.step() { return Known::Unknown }
+        if !values.question.budget.hop() { return Known::Unknown }
         match expression {
             // Filtering a value narrows what it may hold, never where it lives.
             Value::Excludes { from: Some(inner), .. } => expression = inner,

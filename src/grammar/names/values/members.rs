@@ -304,7 +304,7 @@ impl Values<'_> {
             if alternative.is_empty() { return Known::Unknown }
             let mut row = Vec::new();
             for &leaf in alternative {
-                if !self.question.budget.step() { return Known::Unknown }
+                if !self.question.budget.hop() { return Known::Unknown }
                 let members = if shape {
                     let Known::Yes(at) = self.semantic.leaf(leaf) else { return Known::Unknown };
                     self.direct_members(at, MemberRequest::Shape)
@@ -418,7 +418,7 @@ impl Values<'_> {
         let mut bases = Vec::new();
         for (views, base, when) in &kind.member_bases {
             if *views != 0 && classes & views == 0 { continue }
-            if !self.question.budget.step() { return Known::Unknown }
+            if !self.question.budget.hop() { return Known::Unknown }
             match when.map_or(Known::Yes(true), |condition| self.world.condition(at, condition, self.semantic)) {
                 Known::Yes(false) => continue,
                 Known::Unknown => return Known::Unknown,

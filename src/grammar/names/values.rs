@@ -210,6 +210,9 @@ pub(crate) struct State {
     member_closed: Memo<Leaf, Known<bool>>,
     bound_arguments: Memo<Leaf, Known<Option<NodeValue>>>,
     carriers: Memo<Leaf, Known<Option<Carrier>>>,
+    /// What each product inherits its members from (`Array<T>` of `T[]`):
+    /// every trait and member question about it asks.
+    product_bases: Memo<Leaf, Known<Option<NodeValue>>>,
     /// Globals named without arguments whose frames don't depend on where
     /// they are named (`Symbol` in every `Symbol.dispose` key), by importer.
     instances: Memo<(u32, Box<str>, u64), NodeValue>,
@@ -229,6 +232,7 @@ impl State {
         self.member_closed.forget(dirty);
         self.bound_arguments.forget(dirty);
         self.carriers.forget(dirty);
+        self.product_bases.forget(dirty);
         self.instances.forget(dirty);
         self.ran_out.borrow_mut().clear();
         self.provisional.borrow_mut().clear();
@@ -373,6 +377,10 @@ impl Values<'_> {
         let answer = self.question.budget.fact(units, compute);
         #[cfg(feature = "work")]
         crate::work::fact_end(started, answer.as_ref().err().copied() == Some(super::question::Cut::RanOut));
+        #[cfg(feature = "work")]
+        if answer.as_ref().err().copied() == Some(super::question::Cut::RanOut) {
+            crate::work::fact_steps(std::any::type_name::<R>(), self.question.budget.last_spent().max(50), || "ran out".to_owned());
+        }
         self.note_ended(tag, answer.as_ref().err().copied());
         answer
     }

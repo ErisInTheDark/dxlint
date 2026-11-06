@@ -138,6 +138,12 @@ impl Budget {
         self.spent.get()
     }
 
+    /// What the root question has spent so far of its own allowance.
+    #[cfg(feature = "work")]
+    pub(crate) fn root_spent(&self) -> u32 {
+        Self::per_question() - self.left_when_cut.get().unwrap_or(self.left.get())
+    }
+
     pub(crate) fn trace(&self, on: bool) {
         self.traced.set(on);
     }
@@ -175,8 +181,8 @@ impl Budget {
         }
     }
 
-    /// A step of a walk over a built graph: a bit test, nowhere near a
-    /// semantic step, so many pay for one unit.
+    /// A step of a walk or a lookup (a built graph, a tree, a kept answer),
+    /// nowhere near a semantic step: many pay for one unit.
     pub fn hop(&self) -> bool {
         const HOPS_PER_UNIT: u32 = 32;
         let hops = self.hops.get().wrapping_add(1);
@@ -300,6 +306,8 @@ impl Budget {
         debug_assert_eq!(self.facts.get(), 0, "a fact left open past its root");
         self.left.set(Self::per_question());
         self.limited.set(false);
+        #[cfg(feature = "work")]
+        self.left_when_cut.set(None);
     }
 
     pub(crate) fn limited(&self) -> bool {

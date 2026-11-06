@@ -259,8 +259,10 @@ impl Calls<'_> {
             // asker: several questions' worth.
             values.memoized_with(memo, call, || self.question.budget.step().then(|| self.question.budget.nest()).flatten(),
                 || if attached_selection() { select::candidates(call, &values) } else {
-                    self.question.budget.sized(SELECTION_QUESTIONS.saturating_mul(super::question::Budget::per_question()), || select::candidates(call, &values))
-                        .unwrap_or(Known::Unknown)
+                    let answer = self.question.budget.sized(SELECTION_QUESTIONS.saturating_mul(super::question::Budget::per_question()), || select::candidates(call, &values));
+                    #[cfg(feature = "work")]
+                    crate::work::fact_steps("selection", self.question.budget.last_spent(), || values.census_leaf(call).2);
+                    answer.unwrap_or(Known::Unknown)
                 })
         })
     }

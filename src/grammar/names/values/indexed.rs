@@ -63,7 +63,7 @@ impl Values<'_> {
                 },
                 IndexedMode::Keyed(_) | IndexedMode::Keys { .. } => None,
             };
-            if !self.question.budget.step() { return Known::Unknown }
+            if !self.question.budget.hop() { return Known::Unknown }
             match recipe.when.map_or(Known::Yes(true), |when| self.world.condition(at, when, self.semantic)) {
                 Known::Yes(false) => continue,
                 Known::Unknown => return Known::Unknown,

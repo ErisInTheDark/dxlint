@@ -13,7 +13,7 @@ impl Values<'_> {
         for row in rows.iter() {
             let mut parts = Vec::with_capacity(row.len());
             for &leaf in row {
-                if !self.question.budget.step() { return NodeValue::Unknown }
+                if !self.question.budget.hop() { return NodeValue::Unknown }
                 parts.push(self.values(leaf));
             }
             let same = normal && parts.iter().zip(row).all(|(part, &leaf)| *part == NodeValue::leaf(leaf));
