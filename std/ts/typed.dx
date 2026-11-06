@@ -11,6 +11,7 @@ import .ts/typed/errors
 import .ts/typed/awaitability
 import .ts/typed/optional-chains
 import .ts/typed/floating-promises
+import .ts/typed/using-disposable
 import .ts/typed/unbound-method
 import .ts/typed/template-expressions
 import .ts/typed/readonly-members

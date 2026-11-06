@@ -1,0 +1,11 @@
+input.ts:10:7-10:13 es-use-using-disposable:declare#1
+input.ts:11:5-11:16 es-use-using-disposable:declare#0
+input.ts:12:5-12:15 es-use-using-disposable:declare#0
+input.ts:13:7-13:12 es-use-using-disposable:declare#1
+input.ts:14:7-14:12 es-use-using-disposable:declare#1
+input.ts:15:7-15:14 es-use-using-disposable:declare#1
+input.ts:21:1-21:7 es-use-using-disposable:hold#1
+input.ts:22:1-22:12 es-use-using-disposable:hold#0
+input.ts:23:1-23:9 es-use-using-disposable:hold#1
+input.ts:24:1-24:15 es-use-using-disposable:hold#1
+input.ts:29:1-29:16 es-use-using-disposable:hold#1

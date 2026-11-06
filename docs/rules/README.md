@@ -1,6 +1,6 @@
 # Rules
 
-Every rule dxlint ships, 437 in all. Turn one on with `rule <name>` after importing its language; see [basic.md](../basic.md).
+Every rule dxlint ships, 438 in all. Turn one on with `rule <name>` after importing its language; see [basic.md](../basic.md).
 
 - **Types**: the rule reads type information (from your `tsconfig.json`; TypeScript itself never runs).
 - **Fix**: `autofix` rules are fixed by `dxlint --fix` and by the editor's quick fixes.
@@ -408,6 +408,7 @@ Pages are adapted from the documentation of [ESLint](https://eslint.org/docs/lat
 | [es-unified-signatures](es-unified-signatures.md) | Reports overloads that could be combined using a union, an optional parameter or a rest parameter. |  |  |  | 100% |
 | [es-use-isnan](es-use-isnan.md) | Reports comparisons with `NaN`, including `Number.NaN`. |  |  | bugs | 100% |
 | [es-use-unknown-in-catch-callback-variable](es-use-unknown-in-catch-callback-variable.md) | Requires Promise rejection callback parameters to have type `unknown` rather than `any` or a narrower assumed error type. | yes |  |  | 100% |
+| [es-use-using-disposable](es-use-using-disposable.md) | Reports disposable values stored or discarded without `using` or `await using`. | yes |  |  |  |
 | [es-valid-typeof](es-valid-typeof.md) | Reports comparisons between `typeof` results and invalid type names. |  |  | bugs | 100% |
 | [es-vars-on-top](es-vars-on-top.md) | Requires `var` declarations to appear together at the start of their function, program or class static block. |  |  |  | 100% |
 | [es-wrap-iife](es-wrap-iife.md) | Requires parentheses around immediately invoked function expressions. |  | autofix |  | 100% |

@@ -357,6 +357,7 @@ separate bundles.
 | `.ts/typed/nullish-coalescing` | stable nullish replacements, primitive exclusions and context selection, imported by `.ts/typed`; diagnostic-only |
 | `.ts/typed/template-expressions` | unnecessary template interpolation checks and raw-escape-preserving, precedence-safe fixes, imported by `.ts/typed` |
 | `.ts/typed/floating-promises` | floating promises, including discarded arrays and tuples with immediate promise elements, imported by `.ts/typed` |
+| `.ts/typed/using-disposable` | disposable values held without `using` or `await using`: `es-use-using-disposable` variants `declare` and `hold`; imported by `.ts/typed`, diagnostic-only |
 | `.ts/comments` | JS/TS comment layers (`ts_line_comment`, `ts_block_comment`, group `ts_comment`) under the code layer; imported by `.ts` and by modules that read comments |
 | `.ts/tokens` | shared token edges, pairs, code-token text and comment-aware gaps over the active front end; imported by `.ts` |
 | `.ts/precedence` | operator precedence and grouping of expression operands; imported by `.ts/structure` |

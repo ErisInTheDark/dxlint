@@ -1,0 +1,4 @@
+import .ts
+rule es-use-using-disposable*
+ignore "node_modules/**"
+ignore "tsconfig.json"

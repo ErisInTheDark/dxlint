@@ -1,0 +1,38 @@
+# Disposable values held without `using`.
+
+define {
+
+# A statement or initializer whose value cannot be an object never reaches a
+# typed question.
+fn using_disposable_primitive(bare) = bare is (ts_null, ts_boolean, ts_number, ts_bigint, ts_string, ts_template, ts_array, ts_arrow, ts_function, ts_regex)
+  || bare is ts_update
+  || bare is ts_unary && contains(["void", "typeof", "delete", "!", "+", "-", "~"], bare.operator)
+  || bare is ts_binary && contains(["<", ">", "<=", ">=", "==", "!=", "===", "!==", "in", "instanceof",
+    "+", "-", "*", "/", "%", "**", "&", "|", "^", "<<", ">>", ">>>"], bare.operator)
+  || bare is ts_assignment && contains(["+=", "-=", "*=", "/=", "%=", "**=", "<<=", ">>=", ">>>=", "&=", "|=", "^="], bare.operator)
+# An object literal without computed keys or spreads declares only named
+# members, so it cannot carry Symbol.dispose or Symbol.asyncDispose.
+fn using_disposable_plain_object(bare) = bare is ts_object
+  && !any(bare.property.nodes, member => member is ts_spread || member.key is ts_computed_key)
+fn using_disposable_kind(n) = {
+  value bare: unparenthesised_node(n)
+  value if bare is ts_assignment && bare.operator == "=" then using_disposable_kind(bare.right.node)
+    else if bare == null || using_disposable_primitive(bare) || using_disposable_plain_object(bare) then null else {
+    value if !(n could object) then null
+      else if value_has_member(n, {global: "Symbol", class: "value", path: ["asyncDispose"]}, null) == true then "async"
+      else if value_has_member(n, {global: "Symbol", class: "value", path: ["dispose"]}, null) == true then "sync" else null
+  }
+}
+in ts_node let using_disposable_held using_disposable_kind(node)
+in ts_declarator let using_disposable_initializer using_disposable_kind(init.node)
+
+in ts_declarator.name rule es-use-using-disposable:declare {
+  when !re_test(ts_variable_declaration.kind.text ?? "", /using/) && parent.using_disposable_initializer != null
+  warn if parent.using_disposable_initializer == "async" then "Async disposable resources should be declared with `await using`." else "Disposable resources should be declared with `using`."
+}
+in ts_expression_statement.expression rule es-use-using-disposable:hold {
+  when using_disposable_held != null
+  warn if using_disposable_held == "async" then "Async disposable resources should be held with `await using`." else "Disposable resources should be held with `using`."
+}
+
+}
