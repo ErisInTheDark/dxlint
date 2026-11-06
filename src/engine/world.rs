@@ -47,6 +47,8 @@ struct ProgramMemo<'a> {
     selected: RefCell<Selection<'a>>,
     inputs: RefCell<crate::fx_hash::FxHashMap<*const Settings, super::reads::Cached<Option<Inputs>>>>,
     roots: RefCell<crate::fx_hash::FxHashMap<(*const Settings, Box<str>), super::reads::Cached<Known<Vec<ScopeRef>>>>>,
+    /// Per program, each surveyed input's file here plus one (0: not asked).
+    survey_files: RefCell<crate::fx_hash::FxHashMap<*const Settings, Vec<u32>>>,
     catalogs: RefCell<crate::fx_hash::FxHashMap<(*const Settings, u64), super::reads::Cached<Arc<super::program::Catalog>>>>,
     modules: RefCell<crate::fx_hash::FxHashMap<(u32, *const Settings), ModuleAnswers>>,
     /// The linted text's hash: a run-shared answer computed from the linted
@@ -814,7 +816,8 @@ impl<'a> Files<'a> {
             let question = QueryContext::once();
             let roots = (|| {
                 let Known::Yes((paths, listing, _)) = self.timed("modules.roots.inputs", || self.input_paths(selected)) else { return Known::Unknown };
-                let (paths, files): (Arc<[PathBuf]>, Arc<super::reads::Reads>) = match self.timed("modules.roots.candidates", || match (self.0.snapshot, hinted) {
+                enum Candidates { Surveyed(super::program::Survey, Arc<[u32]>), Listed(Vec<PathBuf>) }
+                let (candidates, files): (Candidates, Arc<super::reads::Reads>) = match self.timed("modules.roots.candidates", || match (self.0.snapshot, hinted) {
                     (Some(snapshot), true) if self.shares(snapshot) => {
                         let Known::Yes((program, _)) = self.program_identity(selected) else { return Known::Unknown };
                         let settings = selected as *const Settings as usize;
@@ -845,11 +848,11 @@ impl<'a> Files<'a> {
                                 .filter(|(_, ((_, _, hinted), holds))| *hinted || *holds)
                                 .map(|(at, _)| u32::try_from(at).expect("inputs fit u32")).collect()
                         });
-                        Known::Yes((shared.get().iter().map(|&at| sources[at as usize].0.clone()).collect(), files))
+                        Known::Yes((Candidates::Surveyed(sources, shared.get()), files))
                     }
                     _ => {
                         let (candidates, files) = self.candidate_inputs(&paths, &listing, hinted, |text| selected.globals.may_publish(text, name));
-                        Known::Yes((candidates.into(), files))
+                        Known::Yes((Candidates::Listed(candidates), files))
                     }
                 }) {
                     Known::Yes(found) => found,
@@ -859,14 +862,32 @@ impl<'a> Files<'a> {
                 // (`depends_on_file` records the ones that can).
                 let hints = selected.globals.name_hints.clone().into_boxed_slice();
                 super::reads::note_scan(&Arc::new(super::reads::Scan { files, test: super::reads::ScanTest::Global { name: name.into(), hints } }));
-                self.timed("modules.roots.prefetch", || self.prefetch_inputs(selected, &paths));
+                self.timed("modules.roots.prefetch", || self.prefetch_inputs(selected, || match &candidates {
+                    Candidates::Surveyed(sources, positions) => positions.iter().map(|&at| sources[at as usize].0.clone()).collect(),
+                    Candidates::Listed(paths) => paths.clone(),
+                }));
                 let attached = self.timed("modules.roots.attach", || {
                     let mut roots = Vec::new();
                     let mut seen = crate::fx_hash::FxHashSet::default();
-                    for path in paths.iter() {
-                        if !question.budget.step() { return None }
-                        let file = self.0.file_quiet(path)?;
-                        if seen.insert(file) { roots.push(ScopeRef { file, scope: 0 }); }
+                    match &candidates {
+                        Candidates::Surveyed(sources, positions) => {
+                            // A survey position's file, once per world: thousands
+                            // of names share these candidates.
+                            let key = selected as *const Settings;
+                            let mut files = self.0.program.survey_files.borrow_mut().remove(&key).unwrap_or_else(|| vec![0; sources.len()]);
+                            for &at in positions.iter() {
+                                if !question.budget.step() { return None }
+                                let slot = &mut files[at as usize];
+                                if *slot == 0 { *slot = self.0.file_quiet(&sources[at as usize].0)? + 1 }
+                                if seen.insert(*slot - 1) { roots.push(ScopeRef { file: *slot - 1, scope: 0 }); }
+                            }
+                            self.0.program.survey_files.borrow_mut().insert(key, files);
+                        }
+                        Candidates::Listed(paths) => for path in paths {
+                            if !question.budget.step() { return None }
+                            let file = self.0.file_quiet(path)?;
+                            if seen.insert(file) { roots.push(ScopeRef { file, scope: 0 }); }
+                        },
                     }
                     Some((roots, seen))
                 });
@@ -890,12 +911,15 @@ impl<'a> Files<'a> {
     /// Loads the program's input units once per run on all threads. Lint
     /// threads otherwise wait on one builder parsing them in sequence; its
     /// sequential pass after this records the reads.
-    fn prefetch_inputs(self, selected: &Settings, paths: &[PathBuf]) {
+    fn prefetch_inputs(self, selected: &Settings, paths: impl FnOnce() -> Vec<PathBuf>) {
+        // Alone, there is nothing to load ahead of.
+        if self.0.linter.rule_jobs <= 1 { return }
         let (Some(snapshot), Known::Yes(_)) = (self.0.snapshot, self.program_identity(selected)) else { return };
+        let paths = paths();
         let mut hasher = crate::fx_hash::FxHasher::default();
-        std::hash::Hash::hash(paths, &mut hasher);
+        std::hash::Hash::hash(&paths, &mut hasher);
         let linter = self.0.linter;
-        snapshot.prefetch(std::hash::Hasher::finish(&hasher), || linter.prefetch_units(paths, snapshot, |units| units.for_each(drop)));
+        snapshot.prefetch(std::hash::Hasher::finish(&hasher), || linter.prefetch_units(&paths, snapshot, |units| units.for_each(drop)));
     }
 
     fn timed<T>(self, query: &'static str, run: impl FnOnce() -> T) -> T {
@@ -1126,10 +1150,11 @@ impl<'a> Files<'a> {
             return Known::Yes(known.clone());
         }
         let Known::Yes((paths, _, program)) = self.timed("modules.identity.inputs", || self.input_paths(selected)) else { return Known::Unknown };
-        // File names first: whole-path comparison parses every component.
-        let name = self.0.path.file_name();
-        let outside = self.timed("modules.identity.scan", || (!paths.iter().any(|path| path.file_name() == name && path == self.0.path))
-            .then(|| self.0.path.to_owned()));
+        let input = self.timed("modules.identity.scan", || match self.0.snapshot {
+            Some(snapshot) => snapshot.is_input((self.0.revision(), program), &paths, self.0.path),
+            None => paths.iter().any(|path| path == self.0.path),
+        });
+        let outside = (!input).then(|| self.0.path.to_owned());
         self.0.program.outside.borrow_mut().insert(selected as *const Settings, (program, outside.clone()));
         Known::Yes((program, outside))
     }
@@ -1417,7 +1442,7 @@ impl<'a> Files<'a> {
             files: Arc::new(super::reads::Reads { deps: scanned, ..Default::default() }),
             test: super::reads::ScanTest::Ambient { hints, classes },
         }));
-        self.prefetch_inputs(selected, &candidates);
+        self.prefetch_inputs(selected, || candidates.clone());
         // Only files that open a module scope of these classes contribute;
         // the scan stands for the others while they still open none, and
         // one that does is read whole: nothing here records its parts.

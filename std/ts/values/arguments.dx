@@ -4,7 +4,7 @@ define {
 
 in ts_identifier {
   let ts_value_implicit_arguments ts_arguments_owner(node) != null
-  when ts_value_implicit_arguments {
+  when text == "arguments" && ts_value_implicit_arguments {
     unwraps instance "IArguments"
     widens instance "IArguments"
   }

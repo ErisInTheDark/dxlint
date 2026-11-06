@@ -362,6 +362,9 @@ pub(super) struct Snapshot {
     augmentations: RwLock<FxHashMap<ModuleKey, (u64, Cached<Arc<Augmentations>>)>>,
     /// Program inputs (by input list hash) whose units were loaded in parallel.
     prefetched: Mutex<FxHashMap<u64, Arc<std::sync::OnceLock<()>>>>,
+    /// Each listed program's inputs as a set: every world asks whether its
+    /// linted file is one.
+    input_sets: RwLock<FxHashMap<(u64, u64), Arc<crate::fx_hash::FxHashSet<PathBuf>>>>,
     /// [`Snapshot::listed_inputs`] by (revision, program).
     listed: Mutex<FxHashMap<(u64, u64), (Arc<Vec<PathBuf>>, Arc<Reads>, Arc<[reads::Dep]>)>>,
     /// Module resolution's file probes and reads, once per path and revision.
@@ -657,7 +660,7 @@ impl Snapshot {
     /// hold: an editor's next lint after a keystroke redoes only what read
     /// the edited files.
     pub(super) fn carry(self, to: u64, keep: &mut Keep<'_>) -> Snapshot {
-        let Snapshot { revision, paths, catalogs, units, modules, augmentations, prefetched: _, listed: _, probes, listings, texts,
+        let Snapshot { revision, paths, catalogs, units, modules, augmentations, prefetched: _, input_sets: _, listed: _, probes, listings, texts,
             candidates, surveys, words, configurations, metadata, packages, values, facts: _, tested: _, frames, editor } = self;
         // A survey holds while its listing does; inputs whose text changed
         // are read again, and what was built from them patched to match.
@@ -684,6 +687,7 @@ impl Snapshot {
             modules: carried_in_place(modules, to, keep),
             augmentations: carried_in_place(augmentations, to, keep),
             prefetched: Default::default(),
+            input_sets: Default::default(),
             listed: Default::default(),
             probes: carried(probes, |path, (at, found)| keep(at, None, Some(&*path)).then_some((path, (to, found)))),
             listings: carried(listings, |dir, (at, listing)| keep(at, None, Some(&*dir)).then_some((dir, (to, listing)))),
@@ -802,6 +806,15 @@ impl Snapshot {
 
     /// Runs `load` once per program for this run; concurrent callers wait
     /// for it instead of loading the same files in the same order.
+    /// Whether `path` is one of the inputs listed under `key`.
+    pub(super) fn is_input(&self, key: (u64, u64), inputs: &[PathBuf], path: &std::path::Path) -> bool {
+        if let Some(set) = self.input_sets.read().expect("run input sets").get(&key) { return set.contains(path) }
+        let set = Arc::new(inputs.iter().cloned().collect::<crate::fx_hash::FxHashSet<_>>());
+        let holds = set.contains(path);
+        self.input_sets.write().expect("run input sets").insert(key, set);
+        holds
+    }
+
     pub(super) fn prefetch(&self, program: u64, load: impl FnOnce()) {
         let slot = self.prefetched.lock().expect("run prefetch").entry(program).or_default().clone();
         slot.get_or_init(load);
