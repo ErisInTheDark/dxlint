@@ -509,8 +509,6 @@ fn lint_project(output: &mut Output<'_>, args: &LintArgs, project: &mut Project,
                 let apart: Vec<&Path> = nested.iter().filter(|c| !folded.contains(c)).filter_map(|c| c.parent()).collect();
                 let mut outermost: Vec<PathBuf> = apart.iter().filter(|dir| !apart.iter().any(|other| other != *dir && dir.starts_with(other))).map(|dir| dir.to_path_buf()).collect();
                 skipping.lock().expect("skipped folders").append(&mut outermost);
-                // Lint the biggest files first: a big file found late would
-                // otherwise be the tail every other thread waits on.
                 files.into_iter().filter(|(_, path)| {
                     // Explicitly named files are linted even if ignored by git;
                     // files a Workbench view lacks are not there at all.
@@ -519,13 +517,15 @@ fn lint_project(output: &mut Output<'_>, args: &LintArgs, project: &mut Project,
                         && (linter.wants(path) || (explicit.iter().any(|e| e == path) && !linter.is_ignored(path)))
                 }).collect()
             };
-            queue.sort_unstable_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+            // In path order, a program's files lie together: its answers can
+            // go once they are done ([`crate::engine::LintRun::retiring`]).
+            queue.sort_unstable_by(|a, b| a.1.cmp(&b.1));
             let next = std::sync::atomic::AtomicUsize::new(0);
             let threads = jobs.min(queue.len().max(1));
             // File and rule workers share one budget, rather than multiplying it.
             linter.set_rule_jobs(jobs / threads);
             let linter = &*linter;
-            let run = linter.run();
+            let run = linter.run().retiring();
             let working = std::sync::atomic::AtomicUsize::new(0);
             std::thread::scope(|w| {
                 if let (Some(every), Some(profile)) = (watch_every(), linter.profile.as_ref()) {

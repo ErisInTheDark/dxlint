@@ -1155,6 +1155,7 @@ impl<'a> Files<'a> {
             None => paths.iter().any(|path| path == self.0.path),
         });
         let outside = (!input).then(|| self.0.path.to_owned());
+        if let Some(snapshot) = self.0.snapshot { snapshot.using_program(selected as *const Settings as usize, program) }
         self.0.program.outside.borrow_mut().insert(selected as *const Settings, (program, outside.clone()));
         Known::Yes((program, outside))
     }
@@ -1870,8 +1871,8 @@ impl World for Files<'_> {
         let Some(path) = self.shared_path(file) else { return compute() };
         let Some(snapshot) = self.0.snapshot.filter(|&snapshot| snapshot.editor.is_none() && self.shares(snapshot)) else { return compute() };
         let Known::Yes(Some(selected)) = self.program_selected() else { return compute() };
-        let Known::Yes((program, outside)) = self.program_identity(selected) else { return compute() };
-        let key = (self.0.revision(), selected as *const Settings as usize, program, outside, path);
+        // A file's own syntax and names: no program changes them.
+        let key = (self.0.revision(), selected as *const Settings as usize, path);
         if let Some(found) = snapshot.tested_answer(&key) {
             // A root in this world's linted file has other ids here: scan.
             let local: Option<Vec<_>> = found.value.iter().map(|(path, node, owners)| {

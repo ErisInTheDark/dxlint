@@ -440,6 +440,13 @@ pub struct LintRun<'a> {
 }
 
 impl LintRun<'_> {
+    /// For a run whose files come grouped by program: answers of a program
+    /// and units no lint has used for a while are dropped, not kept to its end.
+    pub fn retiring(self) -> Self {
+        self.programs.retire_idle();
+        self
+    }
+
     /// Each file on one thread: for background work, where splitting a big
     /// file only duplicates its facts in memory.
     pub fn serial(self) -> Self {
@@ -902,7 +909,9 @@ impl Linter {
     }
 
     fn lint_in(&self, programs: &program::Snapshot, rule_jobs: usize, path: &Path, text: &str) -> Vec<Diagnostic> {
-        self.lint_rules(programs, rule_jobs, path, text, None)
+        let found = self.lint_rules(programs, rule_jobs, path, text, None);
+        programs.lint_ended(&self.units);
+        found
     }
 
     /// A lint with the rules `only` marks (`None`: all).

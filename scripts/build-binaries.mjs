@@ -7,7 +7,7 @@
 // `pip install ziglang`, `rustup target add aarch64-apple-darwin`. Zig's own
 // linker built binaries that crash at start. Apple Silicon only: Intel Macs
 // get no binary.
-// One cargo run builds every target side by side, on all cores.
+// One cargo run builds every target side by side, one job per target.
 // Building every platform stamps package/source.sha256; a partial build
 // removes the stamp, so publishing waits for a full one.
 import fs from "node:fs";
@@ -64,7 +64,7 @@ const building = (wanted.length ? [...new Set(wanted)] : Object.keys(platforms))
 const env = Object.assign({ ...process.env }, ...building.map(platform => platform.env?.() ?? {}));
 const hash = sourceHash();
 removeStamp();
-const result = spawnSync("cargo", ["build", "--release", "--locked", "--bin", "dxlint", ...building.flatMap(platform => ["--target", platform.target])],
+const result = spawnSync("cargo", ["build", "--release", "--locked", "--bin", "dxlint", "-j", String(building.length), ...building.flatMap(platform => ["--target", platform.target])],
   { cwd: root, stdio: "inherit", env });
 if (result.status !== 0) process.exit(result.status ?? 1);
 for (const { name, target, built, shipped, refresh } of building) {

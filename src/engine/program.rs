@@ -406,7 +406,19 @@ pub(super) struct Snapshot {
     frames: RwLock<(FxHashMap<Arc<StableBinding>, u32>, Vec<Arc<StableBinding>>)>,
     /// An editor's run: each file's last lint, for its next one.
     pub(super) editor: Option<super::editing::Memories>,
+    /// Lints finished so far.
+    lints: std::sync::atomic::AtomicU64,
+    /// When set ([`Snapshot::retire_idle`]), each program's last use, in
+    /// [`Self::lints`].
+    uses: Mutex<Option<FxHashMap<(usize, u64), u64>>>,
 }
+
+/// Lints a program or unit may sit unused before it goes. Too few costs
+/// computing it again, never a different answer.
+const PROGRAM_IDLE_LINTS: u64 = 32;
+const UNIT_IDLE_LINTS: u64 = 512;
+/// Lints between sweeps of the run's units.
+const UNIT_SWEEP_LINTS: u64 = 16;
 
 /// A leaf by file path: the same node in another world's file ids.
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -485,8 +497,8 @@ pub(super) enum StableFact {
     Members(Box<[StableMember]>),
 }
 
-/// (revision, settings, program, outside, scanned file).
-pub(super) type TestedKey = (u64, usize, u64, Option<PathBuf>, reads::DepPath);
+/// (revision, settings, scanned file).
+pub(super) type TestedKey = (u64, usize, reads::DepPath);
 pub(super) type TestedRoot = (reads::DepPath, u32, Vec<u32>);
 
 type PackageProbe = crate::grammar::names::modules::resolution::Probe<std::path::PathBuf>;
@@ -668,9 +680,61 @@ pub(super) enum StableTarget {
 }
 
 /// One file's run unit: its text hash and the unit, when it parses.
-type UnitSlot = std::sync::OnceLock<(u64, Option<Arc<super::units::Unit>>)>;
+#[derive(Default)]
+struct UnitSlot {
+    loaded: std::sync::OnceLock<(u64, Option<Arc<super::units::Unit>>)>,
+    /// [`Snapshot::lints`] when a lint last asked for this unit.
+    last_asked: std::sync::atomic::AtomicU64,
+}
 
 impl Snapshot {
+    pub(super) fn retire_idle(&self) {
+        *self.uses.lock().expect("program uses") = Some(Default::default());
+    }
+
+    /// A lint is using program (`settings`, `program`).
+    pub(super) fn using_program(&self, settings: usize, program: u64) {
+        if let Some(uses) = &mut *self.uses.lock().expect("program uses") {
+            uses.insert((settings, program), self.lints.load(std::sync::atomic::Ordering::Relaxed));
+        }
+    }
+
+    /// A lint ended: programs and units idle since long are dropped, here
+    /// and from `kept`, the units kept between runs.
+    pub(super) fn lint_ended(&self, kept: &Mutex<FxHashMap<PathBuf, Arc<super::units::Unit>>>) {
+        let now = self.lints.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        let retired: Vec<(usize, u64)> = {
+            let mut guard = self.uses.lock().expect("program uses");
+            let Some(uses) = &mut *guard else { return };
+            let idle: Vec<_> = uses.iter().filter(|(_, &last)| last + PROGRAM_IDLE_LINTS < now).map(|(&key, _)| key).collect();
+            for key in &idle { uses.remove(key); }
+            idle
+        };
+        for (settings, program) in retired { self.forget_program(settings, program) }
+        if now % UNIT_SWEEP_LINTS == 0 {
+            let mut forgotten = Vec::new();
+            self.units.write().expect("run units").retain(|path, (_, slot)| {
+                let keep = slot.last_asked.load(std::sync::atomic::Ordering::Relaxed) + UNIT_IDLE_LINTS >= now;
+                if !keep { forgotten.push(path.clone()) }
+                keep
+            });
+            let mut kept = kept.lock().expect("unit cache");
+            for path in forgotten { kept.remove(&path); }
+        }
+    }
+
+    /// Drops what the run keeps for one program alone.
+    fn forget_program(&self, settings: usize, program: u64) {
+        let other = |s: usize, p: u64| s != settings || p != program;
+        self.values.write().expect("run values").retain(|key, _| other(key.1, key.2));
+        self.facts.write().expect("run facts").retain(|key, _| other(key.1, key.2));
+        self.modules.write().expect("run modules").retain(|key, _| other(key.settings, key.program));
+        self.augmentations.write().expect("run augmentations").retain(|key, _| other(key.settings, key.program));
+        self.candidates.lock().expect("run slots").retain(|key, _| other(key.0, key.1));
+        self.surveys.lock().expect("run slots").retain(|key, _| other(key.0, key.1));
+        self.words.lock().expect("run slots").retain(|key, _| other(key.0, key.1));
+    }
+
     pub(super) fn new(revision: u64) -> Snapshot {
         Snapshot { revision, ..Default::default() }
     }
@@ -680,7 +744,7 @@ impl Snapshot {
     /// the edited files.
     pub(super) fn carry(self, to: u64, keep: &mut Keep<'_>) -> Snapshot {
         let Snapshot { revision, paths, catalogs, units, modules, augmentations, prefetched: _, input_sets: _, mentions: _, text_holds: _, listed: _, probes, listings, texts,
-            candidates, surveys, words, configurations, metadata, packages, values, facts: _, tested: _, frames, editor } = self;
+            candidates, surveys, words, configurations, metadata, packages, values, facts: _, tested: _, frames, editor, lints: _, uses: _ } = self;
         // A survey holds while its listing does; inputs whose text changed
         // are read again, and what was built from them patched to match.
         let mut patched: FxHashMap<(usize, u64), Vec<usize>> = FxHashMap::default();
@@ -700,7 +764,7 @@ impl Snapshot {
             paths: paths.carry(to, keep),
             catalogs: catalogs.carry(to, keep),
             units: carried(units, |path, (at, slot)| {
-                let names = slot.get().and_then(|(_, unit)| unit.as_ref()?.names.get()).map(|names| &*names.reads);
+                let names = slot.loaded.get().and_then(|(_, unit)| unit.as_ref()?.names.get()).map(|names| &*names.reads);
                 keep(at, names, Some(&*path)).then(|| (path, (to, slot.clone())))
             }),
             modules: carried_in_place(modules, to, keep),
@@ -726,6 +790,8 @@ impl Snapshot {
             tested: Default::default(),
             frames,
             editor,
+            lints: Default::default(),
+            uses: Default::default(),
         }
     }
 
@@ -740,13 +806,14 @@ impl Snapshot {
             match units.get(path) {
                 Some((at, slot)) if *at == revision => slot.clone(),
                 _ => {
-                    let slot = Arc::new(UnitSlot::new());
+                    let slot = Arc::new(UnitSlot::default());
                     units.insert(path.to_owned(), (revision, slot.clone()));
                     slot
                 }
             }
         });
-        slot.get_or_init(load).clone()
+        slot.last_asked.store(self.lints.load(std::sync::atomic::Ordering::Relaxed), std::sync::atomic::Ordering::Relaxed);
+        slot.loaded.get_or_init(load).clone()
     }
 
     /// Whether `path` is a file, probed once per revision; the caller

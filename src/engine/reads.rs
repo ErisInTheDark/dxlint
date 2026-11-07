@@ -32,7 +32,7 @@ impl PartialEq for DepPath {
 }
 impl Eq for DepPath {}
 impl Hash for DepPath {
-    fn hash<H: Hasher>(&self, state: &mut H) { self.0.as_os_str().as_encoded_bytes().hash(state) }
+    fn hash<H: Hasher>(&self, state: &mut H) { Arc::as_ptr(&self.0).cast::<u8>().hash(state) }
 }
 impl PartialOrd for DepPath {
     fn partial_cmp(&self, other: &DepPath) -> Option<std::cmp::Ordering> { Some(self.cmp(other)) }
