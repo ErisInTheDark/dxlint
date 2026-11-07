@@ -65,6 +65,8 @@ enum Fresh {
     /// The saved entry still holds.
     Kept,
     New { content: u64, reads: Arc<Reads>, diags: Vec<Diagnostic> },
+    /// Its reads in [`Cache::tables`] already ([`Cache::compacting`]).
+    Interned { content: u64, refs: Refs, diags: Vec<Diagnostic> },
 }
 
 /// What a saved cache holds.
@@ -103,6 +105,10 @@ pub struct Cache {
     /// Texts of changed files that scans test ([`Cache::current_text`]).
     current: std::sync::RwLock<crate::fx_hash::FxHashMap<PathBuf, Option<Arc<str>>>>,
     fresh: Mutex<HashMap<String, Fresh>>,
+    /// The tables the next save writes; with [`Self::compact`], this run's
+    /// reads go in as they come, and need not stay alive to the end.
+    tables: Mutex<Tables>,
+    compact: bool,
     /// Something new to write.
     changed: AtomicBool,
     hits: AtomicUsize,
@@ -137,9 +143,18 @@ impl Cache {
             current: Default::default(),
             saved,
             fresh: Mutex::default(),
+            tables: Mutex::default(),
+            compact: false,
             changed: AtomicBool::new(false),
             hits: AtomicUsize::new(0),
         }
+    }
+
+    /// For a whole run that never asks what a result read ([`Self::reads_of`]):
+    /// results keep their reads as table entries, far smaller than the reads.
+    pub fn compacting(mut self) -> Cache {
+        self.compact = true;
+        self
     }
 
     /// Whether a save would have something new to write.
@@ -306,7 +321,12 @@ impl Cache {
 
     /// Remembers this run's result for `rel`.
     pub fn store(&self, rel: &str, text: &str, diags: &[Diagnostic], reads: Arc<Reads>) {
-        let fresh = Fresh::New { content: hash_bytes(text.as_bytes()), reads, diags: diags.to_vec() };
+        let content = hash_bytes(text.as_bytes());
+        let fresh = if self.compact {
+            Fresh::Interned { content, refs: self.tables.lock().expect("cache tables").result(&reads), diags: diags.to_vec() }
+        } else {
+            Fresh::New { content, reads, diags: diags.to_vec() }
+        };
         self.fresh.lock().expect("cache lock").insert(rel.to_string(), fresh);
         self.changed.store(true, Ordering::Relaxed);
     }
@@ -325,7 +345,7 @@ impl Cache {
             std::fs::read(&self.path).ok().filter(|bytes| Some(hash_bytes(bytes)) != self.opened)
                 .and_then(|bytes| decode(&bytes, self.key, &self.root))
         };
-        let mut tables = Tables::new(&self.saved);
+        let mut tables = self.tables.into_inner().unwrap_or_default();
         let state_id = |states: &RuleStates, known: &mut Vec<RuleStates>| -> u32 {
             match known.iter().position(|seen| seen == states) {
                 Some(at) => at as u32,
@@ -337,18 +357,19 @@ impl Cache {
         for (rel, f) in &fresh {
             entries.push(match f {
                 Fresh::New { content, reads, diags } => (rel, *content, tables.reads(reads), diags, 0),
+                Fresh::Interned { content, refs, diags } => (rel, *content, refs.clone(), diags, 0),
                 Fresh::Kept => {
                     let e = &self.saved.entries[rel];
-                    (rel, e.content, tables.saved_refs(&e.refs), &e.diags, 0)
+                    (rel, e.content, tables.saved_refs(&self.saved, &e.refs), &e.diags, 0)
                 }
             });
         }
         if !prune {
             let others = newer.as_ref().unwrap_or(&self.saved);
-            tables.read_saved_from(others);
+            tables.reading_another_save();
             for (rel, e) in others.entries.iter().filter(|(k, _)| !fresh.contains_key(*k)) {
                 let state = others.rule_states.get(e.state as usize).map_or(0, |states| state_id(states, &mut known));
-                entries.push((rel, e.content, tables.saved_refs(&e.refs), &e.diags, state));
+                entries.push((rel, e.content, tables.saved_refs(others, &e.refs), &e.diags, state));
             }
         }
         entries.sort_unstable_by(|a, b| a.0.cmp(b.0));
@@ -411,48 +432,44 @@ fn key(fingerprint: u64) -> u64 {
 
 /// The tables being written: deps, groups and scans interned, groups and
 /// scans by content.
-struct Tables<'a> {
-    saved: &'a Saved,
+#[derive(Default)]
+struct Tables {
     deps: Vec<Dep>,
     dep_ids: HashMap<Dep, u32>,
-    groups: Vec<Refs>,
-    group_ids: HashMap<Refs, u32>,
-    /// Groups already interned, by address (alive as long as the run's
-    /// results) or by saved index.
-    by_address: HashMap<usize, u32>,
+    groups: Vec<Arc<Refs>>,
+    group_ids: HashMap<Arc<Refs>, u32>,
+    /// Results interned since dead addresses were last dropped.
+    interned: u32,
+    /// Groups already interned, by address or by saved index. A weak
+    /// reference holds the address: no later group can take it, though what
+    /// the group held is gone once its readers are.
+    by_address: HashMap<usize, (std::sync::Weak<Reads>, u32)>,
     by_saved: HashMap<u32, u32>,
     scans: Vec<SavedScan>,
     scan_ids: HashMap<SavedScan, u32>,
     /// Scans already interned, as for groups.
-    scan_by_address: HashMap<usize, u32>,
+    scan_by_address: HashMap<usize, (std::sync::Weak<Scan>, u32)>,
     scan_by_saved: HashMap<u32, u32>,
     /// File versions part reads name, by address.
     parts: Vec<Arc<crate::parts::FileParts>>,
     part_ids: HashMap<usize, u32>,
 }
 
-impl<'a> Tables<'a> {
-    fn new(saved: &'a Saved) -> Self {
-        Tables {
-            saved,
-            parts: Vec::new(),
-            part_ids: HashMap::new(),
-            deps: Vec::new(),
-            dep_ids: HashMap::new(),
-            groups: Vec::new(),
-            group_ids: HashMap::new(),
-            by_address: HashMap::new(),
-            by_saved: HashMap::new(),
-            scans: Vec::new(),
-            scan_ids: HashMap::new(),
-            scan_by_address: HashMap::new(),
-            scan_by_saved: HashMap::new(),
+impl Tables {
+    /// `reads` of one result, as table entries.
+    fn result(&mut self, reads: &Reads) -> Refs {
+        // A dead group can't be met again, and its address can go.
+        const DROP_DEAD_EVERY: u32 = 64;
+        self.interned += 1;
+        if self.interned % DROP_DEAD_EVERY == 0 {
+            self.by_address.retain(|_, (group, _)| group.strong_count() > 0);
+            self.scan_by_address.retain(|_, (scan, _)| scan.strong_count() > 0);
         }
+        self.reads(reads)
     }
 
-    /// Saved refs from now on index `saved`.
-    fn read_saved_from(&mut self, saved: &'a Saved) {
-        self.saved = saved;
+    /// Saved indexes from now on are another save's.
+    fn reading_another_save(&mut self) {
         self.by_saved.clear();
         self.scan_by_saved.clear();
     }
@@ -469,21 +486,21 @@ impl<'a> Tables<'a> {
 
     fn reads_scan(&mut self, s: &Arc<Scan>) -> u32 {
         let address = Arc::as_ptr(s) as usize;
-        if let Some(&id) = self.scan_by_address.get(&address) {
-            return id;
+        if let Some((_, id)) = self.scan_by_address.get(&address) {
+            return *id;
         }
         let files = self.reads_group(&s.files);
         let id = self.scan(SavedScan { files, test: s.test.clone() });
-        self.scan_by_address.insert(address, id);
+        self.scan_by_address.insert(address, (Arc::downgrade(s), id));
         id
     }
 
-    fn saved_scan(&mut self, i: u32) -> u32 {
+    fn saved_scan(&mut self, from: &Saved, i: u32) -> u32 {
         if let Some(&id) = self.scan_by_saved.get(&i) {
             return id;
         }
-        let saved = &self.saved.scans[i as usize];
-        let files = self.saved_group(saved.files);
+        let saved = &from.scans[i as usize];
+        let files = self.saved_group(from, saved.files);
         let id = self.scan(SavedScan { files, test: saved.test.clone() });
         self.scan_by_saved.insert(i, id);
         id
@@ -511,6 +528,7 @@ impl<'a> Tables<'a> {
             return id;
         }
         let id = self.groups.len() as u32;
+        let refs = Arc::new(refs);
         self.groups.push(refs.clone());
         self.group_ids.insert(refs, id);
         id
@@ -525,28 +543,27 @@ impl<'a> Tables<'a> {
 
     fn reads_group(&mut self, g: &Arc<Reads>) -> u32 {
         let address = Arc::as_ptr(g) as usize;
-        if let Some(&id) = self.by_address.get(&address) {
-            return id;
+        if let Some((_, id)) = self.by_address.get(&address) {
+            return *id;
         }
         let refs = self.reads(g);
         let id = self.group(refs);
-        self.by_address.insert(address, id);
+        self.by_address.insert(address, (Arc::downgrade(g), id));
         id
     }
 
-    fn saved_refs(&mut self, refs: &Refs) -> Refs {
-        let saved = self.saved;
+    fn saved_refs(&mut self, saved: &Saved, refs: &Refs) -> Refs {
         let deps = refs.deps.iter().map(|&i| self.dep(&saved.deps[i as usize])).collect();
-        let groups = refs.groups.iter().map(|&i| self.saved_group(i)).collect();
-        let scans = refs.scans.iter().map(|&i| self.saved_scan(i)).collect();
+        let groups = refs.groups.iter().map(|&i| self.saved_group(saved, i)).collect();
+        let scans = refs.scans.iter().map(|&i| self.saved_scan(saved, i)).collect();
         sorted(Refs { deps, groups, scans })
     }
 
-    fn saved_group(&mut self, i: u32) -> u32 {
+    fn saved_group(&mut self, saved: &Saved, i: u32) -> u32 {
         if let Some(&id) = self.by_saved.get(&i) {
             return id;
         }
-        let refs = self.saved_refs(&self.saved.groups[i as usize].clone());
+        let refs = self.saved_refs(saved, &saved.groups[i as usize]);
         let id = self.group(refs);
         self.by_saved.insert(i, id);
         id
@@ -1106,6 +1123,26 @@ mod tests {
         let saved = Cache::open(&linter);
         assert!(saved.lookup(&linter, "first", "first").is_some());
         assert!(saved.lookup(&linter, "second", "second").is_some());
+    }
+
+    #[test]
+    fn results_interned_as_they_come_save_what_they_read() {
+        let root = project("interned");
+        let linter = crate::engine::tests::linter_at(&root, "");
+        let compact = Cache::open(&linter).compacting();
+        let read = |path: &str| Dep::Text(super::super::reads::dep_path(&root.join(path)), 1);
+        // Groups die between results, and their addresses may come back.
+        for rel in ["a", "b"] {
+            let group = Arc::new(Reads { deps: vec![read(rel)], ..Default::default() });
+            compact.store(rel, rel, &[], Arc::new(Reads { groups: vec![group], ..Default::default() }));
+        }
+        compact.save(true).expect("save");
+        let saved = Cache::open(&linter);
+        for rel in ["a", "b"] {
+            let reads = saved.saved_reads(rel).expect("saved");
+            assert_eq!(reads.groups.len(), 1, "{rel}");
+            assert_eq!(reads.groups[0].deps, vec![read(rel)], "{rel}");
+        }
     }
 
     #[test]

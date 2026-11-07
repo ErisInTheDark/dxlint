@@ -477,7 +477,7 @@ fn lint_project(output: &mut Output<'_>, args: &LintArgs, project: &mut Project,
     }
     // Profiling measures linting, so it never reads results instead; another
     // budget gives other results than cached ones.
-    let cache = (!args.no_cache && !args.profile && !args.fix_preview && args.semantic_budget.is_none()).then(|| Cache::open(&linter));
+    let cache = (!args.no_cache && !args.profile && !args.fix_preview && args.semantic_budget.is_none()).then(|| Cache::open(&linter).compacting());
     let cwd = output.cwd;
     let Scope { roots, named, whole, walked, exiting } = scope;
     let jobs = args.jobs.map_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get()), |n| n.get());
