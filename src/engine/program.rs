@@ -397,9 +397,7 @@ pub(super) struct Snapshot {
     /// linted file reading a declaration in a shared module computes the
     /// same value ([`super::world`]'s `shared_value`). `None`: unknown, and
     /// unknown for every linted file alike.
-    values: RwLock<FxHashMap<ValueKey, Cached<Option<StableValue>>>>,
-    /// Facts derived from those values, the same way.
-    facts: RwLock<FxHashMap<RunFactKey, Cached<StableFact>>>,
+    answers: RwLock<FxHashMap<ProgramKey, Arc<ProgramAnswers>>>,
     /// Other files' tested roots: (root's file, root, owners in the file).
     tested: RwLock<FxHashMap<TestedKey, Cached<Arc<[TestedRoot]>>>>,
     /// Frames those values are read in, interned run-wide.
@@ -451,8 +449,38 @@ pub(super) struct StableBinding {
 /// A value's rows by stable leaf, and how far they are normalized.
 pub(super) type StableValue = (Arc<[Box<[StableLeaf]>]>, crate::grammar::names::question::Normal);
 
-/// (revision, settings, program, outside, leaf).
-pub(super) type ValueKey = (u64, usize, u64, Option<PathBuf>, StableLeaf);
+/// (settings, program, outside).
+type ProgramKey = (usize, u64, Option<PathBuf>);
+
+/// What every linted file of one program derives alike. A table per program
+/// keeps its keys short, and goes whole when the program is done.
+#[derive(Default)]
+pub(super) struct ProgramAnswers {
+    values: RwLock<FxHashMap<ValueKey, Cached<Option<StableValue>>>>,
+    /// Facts derived from those values, the same way.
+    facts: RwLock<FxHashMap<RunFactKey, Cached<StableFact>>>,
+}
+
+impl ProgramAnswers {
+    pub(super) fn value_answer(&self, key: &ValueKey) -> Option<Cached<Option<StableValue>>> {
+        self.values.read().expect("run values").get(key).cloned()
+    }
+
+    pub(super) fn keep_value(&self, key: ValueKey, answer: Cached<Option<StableValue>>) {
+        self.values.write().expect("run values").insert(key, answer);
+    }
+
+    pub(super) fn fact_answer(&self, key: &RunFactKey) -> Option<Cached<StableFact>> {
+        self.facts.read().expect("run facts").get(key).cloned()
+    }
+
+    pub(super) fn keep_fact(&self, key: RunFactKey, answer: Cached<StableFact>) {
+        self.facts.write().expect("run facts").insert(key, answer);
+    }
+}
+
+/// (revision, leaf).
+pub(super) type ValueKey = (u64, StableLeaf);
 
 /// A [`crate::grammar::names::question::FactKey`] by path.
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -465,8 +493,8 @@ pub(super) enum StableFactKey {
     Accepts(StableValue, StableValue),
 }
 
-/// (revision, settings, program, outside, fact).
-pub(super) type RunFactKey = (u64, usize, u64, Option<PathBuf>, StableFactKey);
+/// (revision, fact).
+pub(super) type RunFactKey = (u64, StableFactKey);
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub(super) enum StableKey {
@@ -726,8 +754,7 @@ impl Snapshot {
     /// Drops what the run keeps for one program alone.
     fn forget_program(&self, settings: usize, program: u64) {
         let other = |s: usize, p: u64| s != settings || p != program;
-        self.values.write().expect("run values").retain(|key, _| other(key.1, key.2));
-        self.facts.write().expect("run facts").retain(|key, _| other(key.1, key.2));
+        self.answers.write().expect("run answers").retain(|key, _| other(key.0, key.1));
         self.modules.write().expect("run modules").retain(|key, _| other(key.settings, key.program));
         self.augmentations.write().expect("run augmentations").retain(|key, _| other(key.settings, key.program));
         self.candidates.lock().expect("run slots").retain(|key, _| other(key.0, key.1));
@@ -744,7 +771,7 @@ impl Snapshot {
     /// the edited files.
     pub(super) fn carry(self, to: u64, keep: &mut Keep<'_>) -> Snapshot {
         let Snapshot { revision, paths, catalogs, units, modules, augmentations, prefetched: _, input_sets: _, mentions: _, text_holds: _, listed: _, probes, listings, texts,
-            candidates, surveys, words, configurations, metadata, packages, values, facts: _, tested: _, frames, editor, lints: _, uses: _ } = self;
+            candidates, surveys, words, configurations, metadata, packages, answers, tested: _, frames, editor, lints: _, uses: _ } = self;
         // A survey holds while its listing does; inputs whose text changed
         // are read again, and what was built from them patched to match.
         let mut patched: FxHashMap<(usize, u64), Vec<usize>> = FxHashMap::default();
@@ -784,9 +811,12 @@ impl Snapshot {
             metadata,
             packages: carried(packages, |(at, settings, root, subpath, conditions), answer|
                 keep(at, Some(&answer.reads), None).then(|| ((to, settings, root, subpath, conditions), answer))),
-            values: carried(values, |(at, settings, program, outside, leaf), answer|
-                keep(at, Some(&answer.reads), None).then(|| ((to, settings, program, outside, leaf), answer))),
-            facts: Default::default(),
+            answers: RwLock::new(answers.into_inner().expect("run answers").into_iter().map(|(program, table)| {
+                let values = table.values.read().expect("run values").iter()
+                    .filter(|((at, _), answer)| keep(*at, Some(&answer.reads), None))
+                    .map(|((_, leaf), answer)| ((to, leaf.clone()), answer.clone())).collect();
+                (program, Arc::new(ProgramAnswers { values: RwLock::new(values), facts: Default::default() }))
+            }).collect()),
             tested: Default::default(),
             frames,
             editor,
@@ -934,12 +964,11 @@ impl Snapshot {
         self.modules.write().expect("run modules").insert(key, (revision, answer));
     }
 
-    pub(super) fn value_answer(&self, key: &ValueKey) -> Option<Cached<Option<StableValue>>> {
-        self.values.read().expect("run values").get(key).cloned()
-    }
-
-    pub(super) fn keep_value(&self, key: ValueKey, answer: Cached<Option<StableValue>>) {
-        self.values.write().expect("run values").insert(key, answer);
+    /// What this program's linted files share.
+    pub(super) fn answers(&self, settings: usize, program: u64, outside: &Option<PathBuf>) -> Arc<ProgramAnswers> {
+        let key = (settings, program, outside.clone());
+        if let Some(found) = self.answers.read().expect("run answers").get(&key) { return found.clone() }
+        self.answers.write().expect("run answers").entry(key).or_default().clone()
     }
 
     pub(super) fn tested_answer(&self, key: &TestedKey) -> Option<Cached<Arc<[TestedRoot]>>> {
@@ -950,15 +979,7 @@ impl Snapshot {
         self.tested.write().expect("run tested roots").insert(key, answer);
     }
 
-    pub(super) fn fact_answer(&self, key: &RunFactKey) -> Option<Cached<StableFact>> {
-        self.facts.read().expect("run facts").get(key).cloned()
-    }
-
-    pub(super) fn keep_fact(&self, key: RunFactKey, answer: Cached<StableFact>) {
-        self.facts.write().expect("run facts").insert(key, answer);
-    }
-
-    /// `binding`'s run-wide frame id.
+    ///`binding`'s run-wide frame id.
     pub(super) fn stable_frame(&self, binding: StableBinding) -> StableFrame {
         if let Some(&id) = self.frames.read().expect("run frames").0.get(&binding) { return StableFrame::Bound(id) }
         let mut frames = self.frames.write().expect("run frames");

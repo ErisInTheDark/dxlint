@@ -27,13 +27,16 @@ pub enum V {
     /// A node's own source (`text`): plain text, nothing further to read.
     Source(u32),
     /// A config text constant.
-    Str(&'static str),
+    Str(ConstText),
     /// Text in a VM text pool: the file's, or evaluation scratch
     /// ([`values::SCRATCH_TEXT`]). Source substrings stay borrows.
     Text(u32),
     List(values::Handle),
     Record(u16, values::Handle),
 }
+
+// Every evaluation step returns one: past two words it goes through memory.
+const _: () = assert!(std::mem::size_of::<Option<V>>() == 16);
 
 /// [`V::fingerprint`] of null and of empty text.
 const EMPTY_FINGERPRINT: u64 = 0xE;
@@ -53,32 +56,70 @@ pub(crate) fn text_fingerprint(text: &str) -> u64 {
 
 /// Text constants from configs, interned for the process: configs repeat
 /// the same few strings, so the pool stays small across reloads.
-type Pool = (crate::fx_hash::FxHashMap<&'static str, u32>, Vec<&'static str>);
+type Pool = (crate::fx_hash::FxHashMap<&'static str, ConstText>, Vec<ConstText>);
+
+/// A pooled text constant: one word (a [`V`] stays small enough to return in
+/// registers), one per distinct text, so equal constants are the same pointer.
+#[derive(Clone, Copy)]
+pub struct ConstText(&'static PooledText);
+
+struct PooledText {
+    text: &'static str,
+    index: u32,
+}
+
+impl ConstText {
+    fn text(self) -> &'static str { self.0.text }
+    fn index(self) -> u32 { self.0.index }
+}
+
+impl PartialEq for ConstText {
+    fn eq(&self, other: &Self) -> bool { std::ptr::eq(self.0, other.0) }
+}
+
+impl std::fmt::Debug for ConstText {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { self.0.text.fmt(f) }
+}
+
+/// [`intern`]'s constants by index, read without a lock: every record read of
+/// a text value asks. Past its end, the pool answers.
+const INDEXED_TEXTS: usize = 1 << 16;
+static TEXT_INDEX: [std::sync::atomic::AtomicPtr<PooledText>; INDEXED_TEXTS] = [const { std::sync::atomic::AtomicPtr::new(std::ptr::null_mut()) }; INDEXED_TEXTS];
 
 fn pool() -> &'static std::sync::RwLock<Pool> {
     static POOL: OnceLock<std::sync::RwLock<Pool>> = OnceLock::new();
     POOL.get_or_init(Default::default)
 }
 
-/// The pooled copy of a text constant, and its index (stored in records).
-fn intern(text: &str) -> (&'static str, u32) {
-    if let Some((&s, &i)) = pool().read().expect("pool lock").0.get_key_value(text) {
-        return (s, i);
+/// The pooled copy of a text constant.
+fn intern(text: &str) -> ConstText {
+    if let Some(&found) = pool().read().expect("pool lock").0.get(text) {
+        return found;
     }
     let mut pool = pool().write().expect("pool lock");
-    if let Some((&s, &i)) = pool.0.get_key_value(text) {
-        return (s, i);
+    if let Some(&found) = pool.0.get(text) {
+        return found;
     }
-    let s: &'static str = Box::leak(text.into());
-    let i = pool.1.len() as u32;
-    pool.0.insert(s, i);
-    pool.1.push(s);
-    (s, i)
+    let text: &'static str = Box::leak(text.into());
+    let index = pool.1.len() as u32;
+    let pooled: &'static PooledText = Box::leak(Box::new(PooledText { text, index }));
+    if let Some(slot) = TEXT_INDEX.get(index as usize) {
+        slot.store(std::ptr::from_ref(pooled).cast_mut(), std::sync::atomic::Ordering::Release);
+    }
+    let found = ConstText(pooled);
+    pool.0.insert(text, found);
+    pool.1.push(found);
+    found
 }
 
-/// A text constant by the index [`intern`] gave it.
-fn interned(i: u32) -> &'static str {
-    pool().read().expect("pool lock").1[i as usize]
+/// A text constant by its [`ConstText::index`].
+fn interned(index: u32) -> ConstText {
+    if let Some(slot) = TEXT_INDEX.get(index as usize) {
+        // SAFETY: set once to a leaked constant, before its index can reach
+        // a record.
+        return ConstText(unsafe { &*slot.load(std::sync::atomic::Ordering::Acquire) });
+    }
+    pool().read().expect("pool lock").1[index as usize]
 }
 
 /// A [`V`] in one word (the record cell coding), for tables that keep many.
@@ -102,7 +143,7 @@ impl V {
     fn text<'s>(self, tree: &Tree, source: &'s str) -> Option<&'s str> {
         match self {
             V::Node(id) | V::Source(id) => Some(tree.text(source, id)),
-            V::Str(s) => Some(s),
+            V::Str(s) => Some(s.text()),
             _ => None,
         }
     }
@@ -118,7 +159,7 @@ impl V {
                 let n = tree.node(id);
                 n.end > n.start
             }
-            V::Str(s) => !s.is_empty(),
+            V::Str(s) => !s.text().is_empty(),
             V::List(_) | V::Record(..) | V::Text(_) => unreachable!("file values need their arena"),
         }
     }
@@ -155,6 +196,7 @@ impl V {
             // Nodes are equal when they are the same node; compare their
             // source with templates (`"{a}" == "{b}"`).
             (V::Node(a), V::Node(b)) => a == b,
+            (V::Str(a), V::Str(b)) => a == b,
             (V::Null, V::Null) => true,
             (V::Bool(a), V::Bool(b)) => a == b,
             (V::Num(a), V::Num(b)) => a == b,
@@ -178,7 +220,7 @@ impl V {
                 Value::Node(id, crate::expr::value::Text::Borrowed(&source[n.start as usize..n.end as usize]))
             }
             V::Source(id) => Value::Str(crate::expr::value::Text::Read(tree.text(source, id))),
-            V::Str(s) => Value::from(s),
+            V::Str(s) => Value::from(s.text()),
             V::List(_) | V::Record(..) | V::Text(_) => unreachable!("file values need their arena"),
         }
     }
@@ -616,7 +658,7 @@ fn constant(v: &Value) -> Option<V> {
         Value::Null => V::Null,
         Value::Bool(b) => V::Bool(*b),
         Value::Num(n) => V::Num(*n),
-        Value::Str(s) => V::Str(intern(s).0),
+        Value::Str(s) => V::Str(intern(s)),
         _ => return None,
     })
 }
@@ -822,7 +864,7 @@ fn lower_in<'a>(e: &'a CExpr, g: &Scope<'a, '_>, args: &[Lowered], bound: u16) -
             ("get", [record, key]) => VExpr::Get(boxed(record)?, boxed(key)?),
             ("contains", [haystack, needle]) => VExpr::Contains(boxed(haystack)?, boxed(needle)?),
             ("re_test", [text, CExpr::Const(Value::Str(pattern))]) if crate::expr::re::compile(pattern).is_ok() => {
-                VExpr::ReTest(boxed(text)?, intern(pattern).0)
+                VExpr::ReTest(boxed(text)?, intern(pattern).text())
             }
             ("starts_with", [text, prefix]) => VExpr::StartsWith(boxed(text)?, boxed(prefix)?),
             ("ends_with", [text, suffix]) => VExpr::EndsWith(boxed(text)?, boxed(suffix)?),
@@ -859,7 +901,7 @@ fn lower_in<'a>(e: &'a CExpr, g: &Scope<'a, '_>, args: &[Lowered], bound: u16) -
         CExpr::Template(parts) => {
             let parts = all(parts);
             match &*parts {
-                [VExpr::Const(V::Str(text))] => VExpr::Const(V::Str(text)),
+                [VExpr::Const(V::Str(text))] => VExpr::Const(V::Str(*text)),
                 _ => VExpr::Template(parts),
             }
         }
@@ -1746,7 +1788,7 @@ fn ev_inner<H: Host>(h: &Runtime<'_, H>, node: u32, e: &VExpr, f: &mut Vec<V>) -
         }
         VExpr::IsNull(value) => V::Bool(ev(h, node, value, f)? == V::Null),
         VExpr::NonEmpty(value) => match ev(h, node, value, f)? {
-            V::Str("") => V::Null,
+            V::Str(text) if text.text().is_empty() => V::Null,
             V::Node(id) | V::Source(id) if tree.node(id).end == tree.node(id).start => V::Null,
             v @ (V::List(_) | V::Record(..) | V::Text(_)) if !h.truthy(v) => V::Null,
             v => v,
@@ -2243,7 +2285,7 @@ fn ev_rare<H: Host>(h: &Runtime<'_, H>, node: u32, e: &VExpr, f: &mut Vec<V>) ->
             V::Node(id) => match tree.node(id).matcher {
                 crate::grammar::ROOT => h.pack(&Value::from(format!(".{}", h.grammar().langs[h.host.lang()].name)))?,
                 crate::grammar::TEXT => V::Null,
-                m => V::Str(intern(&h.grammar().matchers[m as usize].name).0),
+                m => V::Str(intern(&h.grammar().matchers[m as usize].name)),
             },
             _ => V::Null,
         },
@@ -2635,7 +2677,7 @@ mod tests {
         let never = VExpr::Each(EachKind::Any, source(), Box::new(VExpr::Const(V::Bool(false))), bind);
         assert_eq!(eval(&host, 3, &never).unwrap().value, V::Bool(false));
         assert_eq!(host.yielded.replace(0), 3);
-        let error = || VExpr::Call(functions::lookup("num").unwrap(), vec![VExpr::Const(V::Str("bad"))].into());
+        let error = || VExpr::Call(functions::lookup("num").unwrap(), vec![VExpr::Const(V::Str(intern("bad")))].into());
         let failed = VExpr::Each(EachKind::Any, source(), Box::new(error()), bind);
         assert!(eval(&host, 3, &failed).is_none());
         assert_eq!(host.yielded.replace(0), 1);
@@ -2645,7 +2687,7 @@ mod tests {
         assert_eq!(eval(&host, 3, &VExpr::First(empty)).unwrap().value, V::Null);
         let mapped = || Box::new(Seq::Stage(SeqStage::Map, source(), Box::new(VExpr::If(
             Box::new(VExpr::Binary(BinOp::Eq, Box::new(VExpr::Bound(0)), Box::new(VExpr::Const(V::Node(1))))),
-            Box::new(VExpr::Call(functions::lookup("num").unwrap(), vec![VExpr::Const(V::Str("bad"))].into())),
+            Box::new(VExpr::Call(functions::lookup("num").unwrap(), vec![VExpr::Const(V::Str(intern("bad")))].into())),
             Box::new(VExpr::Const(V::Num(1.0))),
         )), bind));
         // A decided answer never computes later items (their errors

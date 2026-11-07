@@ -1,4 +1,4 @@
-use super::{intern, interned, V};
+use super::{interned, V};
 use crate::grammar::Tree;
 use crate::grammar::names::question::Known;
 use std::cell::RefCell;
@@ -39,7 +39,7 @@ pub(super) fn encode(v: V) -> u64 {
         V::Num(n) => !(if n.is_nan() { f64::NAN } else { n }).to_bits(),
         V::Node(id) => NODE_TAG | u64::from(id),
         V::Source(id) => SOURCE_TAG | u64::from(id),
-        V::Str(s) => STR_TAG | u64::from(intern(s).1),
+        V::Str(s) => STR_TAG | u64::from(s.index()),
         V::List(handle) => LIST_TAG | u64::from(handle.bits()),
         V::Record(shape, handle) => RECORD_TAG | (u64::from(shape) << 35) | u64::from(handle.bits()),
         V::Text(handle) => FILE_TEXT_TAG | u64::from(handle),
@@ -596,7 +596,7 @@ mod tests {
     fn stored_values_round_trip_and_stay_distinct_from_states() {
         for v in [
             V::Null, V::Bool(false), V::Bool(true), V::Num(0.0), V::Num(-0.0), V::Num(1.5), V::Num(f64::INFINITY),
-            V::Num(f64::NEG_INFINITY), V::Num(-1e300), V::Node(0), V::Node(u32::MAX), V::Source(7), V::Str(intern("a").0), V::Str(intern("").0),
+            V::Num(f64::NEG_INFINITY), V::Num(-1e300), V::Node(0), V::Node(u32::MAX), V::Source(7), V::Str(crate::vm::intern("a")), V::Str(crate::vm::intern("")),
             V::List(super::super::values::Handle::from_bits(0x8000_0000)),
             V::Record(u16::MAX, super::super::values::Handle::from_bits(0xbfff_ffff)),
             V::Text(u32::MAX),

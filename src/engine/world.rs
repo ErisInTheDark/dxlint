@@ -51,6 +51,10 @@ struct ProgramMemo<'a> {
     survey_files: RefCell<crate::fx_hash::FxHashMap<*const Settings, Vec<u32>>>,
     catalogs: RefCell<crate::fx_hash::FxHashMap<(*const Settings, u64), super::reads::Cached<Arc<super::program::Catalog>>>>,
     modules: RefCell<crate::fx_hash::FxHashMap<(u32, *const Settings), ModuleAnswers>>,
+    /// Per program settings, what its linted files share.
+    answers: RefCell<crate::fx_hash::FxHashMap<*const Settings, Arc<super::program::ProgramAnswers>>>,
+    /// Each file's resolution context under a program.
+    contexts: RefCell<crate::fx_hash::FxHashMap<(u32, *const Settings), super::reads::Cached<Value<'static>>>>,
     /// The linted text's hash: a run-shared answer computed from the linted
     /// file's own tree (not a run unit) records it.
     linted_hash: std::cell::OnceCell<u64>,
@@ -701,10 +705,20 @@ impl<'a> Files<'a> {
     fn resolution_context(self, at: Leaf, semantic: &Semantic<'_>) -> Known<Value<'static>> {
         let Some(ctx) = self.0.here(at) else { return Known::Unknown };
         let Known::Yes(Some(settings)) = self.program_selected() else { return Known::Unknown };
+        let key = (ctx.file_id, settings as *const Settings);
+        if let Some(found) = self.0.program.contexts.borrow().get(&key) {
+            super::reads::note_group(&found.reads);
+            return Known::Yes(found.value.clone());
+        }
         // A fact about the program, on an allowance of its own: "is strict
         // on" must not read as off because the asking question is nearly spent.
-        semantic.question.budget.sized(Budget::DEFAULT, || self.0.asking(semantic, at, || Resolver { host: &self, settings }.context(ctx.file_id, semantic.question)))
-            .unwrap_or(Known::Unknown)
+        let answer = super::reads::Cached::compute(|| semantic.question.budget.sized(Budget::DEFAULT, || self.0.asking(semantic, at, || Resolver { host: &self, settings }.context(ctx.file_id, semantic.question)))
+            .unwrap_or(Known::Unknown));
+        super::reads::note_group(&answer.reads);
+        if let Known::Yes(value) = &answer.value {
+            self.0.program.contexts.borrow_mut().insert(key, super::reads::Cached { value: value.clone(), reads: answer.reads.clone() });
+        }
+        answer.value
     }
 
     fn program_selected(self) -> Known<Option<&'a Settings>> {
@@ -1185,16 +1199,25 @@ impl<'a> Files<'a> {
 
     /// Where the run keeps `leaf`'s value, when every linted file of this
     /// program would compute the same one.
-    fn value_key(self, leaf: Leaf, semantic: &Semantic<'_>) -> Option<(&'a super::program::Snapshot, super::program::ValueKey)> {
+    fn value_key(self, leaf: Leaf, semantic: &Semantic<'_>) -> Option<(Arc<super::program::ProgramAnswers>, super::program::ValueKey)> {
         let snapshot = self.0.snapshot.filter(|&snapshot| self.shares(snapshot))?;
         let stable = self.stable_leaf(leaf, semantic)?;
-        let Known::Yes(Some(selected)) = self.program_selected() else { return None };
-        let Known::Yes((program, outside)) = self.program_identity(selected) else { return None };
-        Some((snapshot, (self.0.revision(), selected as *const Settings as usize, program, outside, stable)))
+        Some((self.program_answers(snapshot)?, (self.0.revision(), stable)))
     }
 
-    fn taken_value(self, snapshot: &super::program::Snapshot, key: &super::program::ValueKey, semantic: &Semantic<'_>) -> Option<NodeValue> {
-        let found = snapshot.value_answer(key)?;
+    /// What this world's program shares between its linted files.
+    fn program_answers(self, snapshot: &super::program::Snapshot) -> Option<Arc<super::program::ProgramAnswers>> {
+        let Known::Yes(Some(selected)) = self.program_selected() else { return None };
+        let key = selected as *const Settings;
+        if let Some(found) = self.0.program.answers.borrow().get(&key) { return Some(found.clone()) }
+        let Known::Yes((program, outside)) = self.program_identity(selected) else { return None };
+        let answers = snapshot.answers(key as usize, program, &outside);
+        self.0.program.answers.borrow_mut().insert(key, answers.clone());
+        Some(answers)
+    }
+
+    fn taken_value(self, answers: &super::program::ProgramAnswers, key: &super::program::ValueKey, semantic: &Semantic<'_>) -> Option<NodeValue> {
+        let found = answers.value_answer(key)?;
         let value = match &found.value {
             Some(value) => self.local_value(value, semantic)?,
             None => NodeValue::Unknown,
@@ -1303,7 +1326,7 @@ impl<'a> Files<'a> {
     /// Where the run keeps fact `key`, when every linted file of this
     /// program would derive the same one. Not in an editor's run, whose
     /// lints record finer reads than a shared answer carries.
-    fn run_fact_key(self, key: &FactKey, semantic: &Semantic<'_>) -> Option<(&'a super::program::Snapshot, super::program::RunFactKey)> {
+    fn run_fact_key(self, key: &FactKey, semantic: &Semantic<'_>) -> Option<(Arc<super::program::ProgramAnswers>, super::program::RunFactKey)> {
         use super::program::StableFactKey as Stable;
         let snapshot = self.0.snapshot.filter(|&snapshot| snapshot.editor.is_none() && self.shares(snapshot))?;
         let stable = match key {
@@ -1314,9 +1337,7 @@ impl<'a> Files<'a> {
             FactKey::Members(leaf) => Stable::Members(self.stable_leaf(*leaf, semantic)?),
             FactKey::Accepts(expected, actual) => Stable::Accepts(self.stable_value(expected, semantic)?, self.stable_value(actual, semantic)?),
         };
-        let Known::Yes(Some(selected)) = self.program_selected() else { return None };
-        let Known::Yes((program, outside)) = self.program_identity(selected) else { return None };
-        Some((snapshot, (self.0.revision(), selected as *const Settings as usize, program, outside, stable)))
+        Some((self.program_answers(snapshot)?, (self.0.revision(), stable)))
     }
 
     fn stable_key(self, key: &crate::grammar::names::values::Key) -> Option<super::program::StableKey> {
@@ -1828,8 +1849,8 @@ impl World for Files<'_> {
     }
 
     fn shared_value_kept(&self, leaf: Leaf, semantic: &Semantic<'_>) -> Option<NodeValue> {
-        let (snapshot, key) = self.value_key(leaf, semantic)?;
-        self.taken_value(snapshot, &key, semantic)
+        let (answers, key) = self.value_key(leaf, semantic)?;
+        self.taken_value(&answers, &key, semantic)
     }
 
     fn shared_value(&self, leaf: Leaf, semantic: &Semantic<'_>, compute: &mut dyn FnMut() -> NodeValue) -> NodeValue {
@@ -1838,12 +1859,12 @@ impl World for Files<'_> {
         let skip = |reason: usize| if let (Some(profile), Some(started)) = (profile, started) {
             super::Profile::add(&profile.shared_value_skips[reason], super::Profile::thread_steps() - started);
         };
-        let Some((snapshot, key)) = self.value_key(leaf, semantic) else {
+        let Some((answers, key)) = self.value_key(leaf, semantic) else {
             let value = compute();
             skip(if self.stable_frame(leaf.frame, semantic).is_none() { 0 } else { 1 });
             return value;
         };
-        if let Some(value) = self.taken_value(snapshot, &key, semantic) { return value }
+        if let Some(value) = self.taken_value(&answers, &key, semantic) { return value }
         let values = semantic.values();
         let before = values.root_reads();
         let mark = values.cycle_mark();
@@ -1860,7 +1881,7 @@ impl World for Files<'_> {
         match stable {
             Ok(stable) => {
                 if let Some(profile) = profile { super::Profile::add(&profile.shared_value_publishes, 1) }
-                snapshot.keep_value(key, super::reads::Cached { value: stable, reads: super::reads::shared(answer.reads.clone()) });
+                answers.keep_value(key, super::reads::Cached { value: stable, reads: super::reads::shared(answer.reads.clone()) });
             }
             Err(reason) => skip(reason),
         }
@@ -1899,8 +1920,8 @@ impl World for Files<'_> {
     }
 
     fn shared_fact(&self, key: &FactKey, semantic: &Semantic<'_>, compute: &mut dyn FnMut() -> Option<Fact>) -> Option<Fact> {
-        let Some((snapshot, stable)) = self.run_fact_key(key, semantic) else { return compute() };
-        if let Some(found) = snapshot.fact_answer(&stable) {
+        let Some((answers, stable)) = self.run_fact_key(key, semantic) else { return compute() };
+        if let Some(found) = answers.fact_answer(&stable) {
             if let Some(fact) = self.local_fact(&found.value, semantic) {
                 super::reads::note_group(&found.reads);
                 return Some(fact);
@@ -1912,7 +1933,7 @@ impl World for Files<'_> {
         super::reads::note_group(&answer.reads);
         if values.root_reads() == before && !semantic.question.budget.limited() && !values.cycled_since(mark) {
             if let Some(fact) = answer.value.as_ref().and_then(|fact| self.stable_fact(fact, semantic)) {
-                snapshot.keep_fact(stable, super::reads::Cached { value: fact, reads: super::reads::shared(answer.reads.clone()) });
+                answers.keep_fact(stable, super::reads::Cached { value: fact, reads: super::reads::shared(answer.reads.clone()) });
             }
         }
         answer.value

@@ -113,6 +113,17 @@ mod windows {
         fn SymSetOptions(options: u32) -> u32;
         fn SymInitializeW(process: Handle, search: *const u16, invade: i32) -> i32;
         fn SymFromAddrW(process: Handle, address: u64, displacement: *mut u64, symbol: *mut SymbolInfo) -> i32;
+        fn SymGetLineFromAddrW64(process: Handle, address: u64, displacement: *mut u32, line: *mut LineInfo) -> i32;
+    }
+
+    /// IMAGEHLP_LINEW64.
+    #[repr(C)]
+    struct LineInfo {
+        size: u32,
+        key: *mut std::ffi::c_void,
+        line: u32,
+        file: *const u16,
+        address: u64,
     }
 
     pub struct Sampler {
@@ -320,6 +331,21 @@ mod windows {
                 String::from_utf16_lossy(&symbol.name[..length]).into()
             }).clone()
         }
+
+        /// `address`'s source file and line (the innermost inlined one).
+        pub fn line(&self, address: u64) -> std::rc::Rc<str> {
+            let mut line = LineInfo { size: std::mem::size_of::<LineInfo>() as u32, key: std::ptr::null_mut(), line: 0, file: std::ptr::null(), address: 0 };
+            let mut displacement = 0u32;
+            // SAFETY: a sized IMAGEHLP_LINEW64; on success `file` is a
+            // terminated string dbghelp owns, copied at once.
+            unsafe {
+                if SymGetLineFromAddrW64(self.process, address, &mut displacement, &mut line) == 0 || line.file.is_null() { return "?".into() }
+                let length = (0..).take_while(|&at| *line.file.add(at) != 0).count();
+                let file = String::from_utf16_lossy(std::slice::from_raw_parts(line.file, length));
+                let short = file.rsplit(['\\', '/']).next().unwrap_or(&file);
+                format!("{short}:{}", line.line).into()
+            }
+        }
     }
 
     fn report(samples: &[[u64; DEPTH]]) -> String {
@@ -388,6 +414,15 @@ mod windows {
         for (part, counts) in focus.iter().zip(&callers) {
             out.push('\n');
             out.push_str(&table(counts, &format!("callers of {part} (`>`: callees)")));
+        }
+        // Self samples of each function named in DXLINT_SAMPLE_LINES, by line.
+        for part in std::env::var("DXLINT_SAMPLE_LINES").iter().flat_map(|list| list.split(';')) {
+            let mut lines: HashMap<std::rc::Rc<str>, usize> = HashMap::new();
+            for frames in samples {
+                if symbols.name(frames[0]).contains(part) { *lines.entry(symbols.line(frames[0])).or_default() += 1 }
+            }
+            out.push('\n');
+            out.push_str(&table(&lines, &format!("lines of {part}")));
         }
         out
     }
