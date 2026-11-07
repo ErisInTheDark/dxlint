@@ -143,7 +143,7 @@ impl Cache {
             current: Default::default(),
             saved,
             fresh: Mutex::default(),
-            tables: Mutex::default(),
+            tables: Mutex::new(Tables { writer: Writer { root: linter.root.clone(), ..Writer::default() }, ..Tables::default() }),
             compact: false,
             changed: AtomicBool::new(false),
             hits: AtomicUsize::new(0),
@@ -346,6 +346,7 @@ impl Cache {
                 .and_then(|bytes| decode(&bytes, self.key, &self.root))
         };
         let mut tables = self.tables.into_inner().unwrap_or_default();
+        tables.writer.root = self.root.clone();
         let state_id = |states: &RuleStates, known: &mut Vec<RuleStates>| -> u32 {
             match known.iter().position(|seen| seen == states) {
                 Some(at) => at as u32,
@@ -374,7 +375,7 @@ impl Cache {
         }
         entries.sort_unstable_by(|a, b| a.0.cmp(b.0));
 
-        let mut w = Writer { out: Vec::new(), root: &self.root, strings: Vec::new(), string_ids: HashMap::new() };
+        let mut w = std::mem::take(&mut tables.writer);
         w.var(known.len() as u64);
         for states in &known {
             w.var(states.len() as u64);
@@ -387,16 +388,12 @@ impl Cache {
         for parts in &tables.parts {
             w.parts(parts);
         }
-        w.var(tables.deps.len() as u64);
-        for d in &tables.deps {
-            w.dep(d, &tables.part_ids);
-        }
+        w.var(u64::from(tables.dep_count));
+        w.out.append(&mut tables.dep_bytes);
         // Groups name scans and scans name groups: both counts come first.
         w.var(tables.scans.len() as u64);
-        w.var(tables.groups.len() as u64);
-        for g in &tables.groups {
-            w.refs(g);
-        }
+        w.var(u64::from(tables.group_count));
+        w.out.append(&mut tables.group_bytes);
         for s in &tables.scans {
             w.scan(s);
         }
@@ -413,7 +410,7 @@ impl Cache {
         }
         // Written aside and renamed over, so a reader never sees half a file.
         let tmp = self.path.with_extension(format!("tmp{}", std::process::id()));
-        std::fs::write(&tmp, w.finish(self.key))?;
+        w.write_to(&tmp, self.key)?;
         std::fs::rename(&tmp, &self.path).inspect_err(|_| {
             let _ = std::fs::remove_file(&tmp);
         })
@@ -434,10 +431,15 @@ fn key(fingerprint: u64) -> u64 {
 /// scans by content.
 #[derive(Default)]
 struct Tables {
-    deps: Vec<Dep>,
-    dep_ids: HashMap<Dep, u32>,
-    groups: Vec<Arc<Refs>>,
-    group_ids: HashMap<Arc<Refs>, u32>,
+    /// Deps and groups go to bytes as they come, kept by hash: a whole run's
+    /// reads are the biggest thing it holds otherwise.
+    writer: Writer,
+    dep_bytes: Vec<u8>,
+    dep_count: u32,
+    dep_ids: HashMap<u64, u32>,
+    group_bytes: Vec<u8>,
+    group_count: u32,
+    group_ids: HashMap<u64, u32>,
     /// Results interned since dead addresses were last dropped.
     interned: u32,
     /// Groups already interned, by address or by saved index. A weak
@@ -507,7 +509,8 @@ impl Tables {
     }
 
     fn dep(&mut self, dep: &Dep) -> u32 {
-        if let Some(&id) = self.dep_ids.get(dep) {
+        let hash = content_hash(dep);
+        if let Some(&id) = self.dep_ids.get(&hash) {
             return id;
         }
         if let Dep::Part(parts, _) = dep {
@@ -517,20 +520,24 @@ impl Tables {
                 self.parts.push(parts.clone());
             }
         }
-        let id = self.deps.len() as u32;
-        self.deps.push(dep.clone());
-        self.dep_ids.insert(dep.clone(), id);
+        let id = self.dep_count;
+        self.dep_count += 1;
+        let Tables { writer, dep_bytes, part_ids, .. } = self;
+        writer.into_section(dep_bytes, |w| w.dep(dep, part_ids));
+        self.dep_ids.insert(hash, id);
         id
     }
 
     fn group(&mut self, refs: Refs) -> u32 {
-        if let Some(&id) = self.group_ids.get(&refs) {
+        let hash = content_hash(&refs);
+        if let Some(&id) = self.group_ids.get(&hash) {
             return id;
         }
-        let id = self.groups.len() as u32;
-        let refs = Arc::new(refs);
-        self.groups.push(refs.clone());
-        self.group_ids.insert(refs, id);
+        let id = self.group_count;
+        self.group_count += 1;
+        let Tables { writer, group_bytes, .. } = self;
+        writer.into_section(group_bytes, |w| w.refs(&refs));
+        self.group_ids.insert(hash, id);
         id
     }
 
@@ -570,6 +577,13 @@ impl Tables {
     }
 }
 
+fn content_hash(value: &impl std::hash::Hash) -> u64 {
+    use std::hash::Hasher;
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    value.hash(&mut hash);
+    hash.finish()
+}
+
 fn sorted(mut refs: Refs) -> Refs {
     refs.deps.sort_unstable();
     refs.deps.dedup();
@@ -587,9 +601,10 @@ const SEVERITIES: [Severity; 5] = [Severity::Off, Severity::Hint, Severity::Info
 /// Encodes the body, then [`Writer::finish`] puts the header and string
 /// table in front: every string (rule, message, directory, file name) is
 /// stored once.
-struct Writer<'a> {
+#[derive(Default)]
+struct Writer {
     out: Vec<u8>,
-    root: &'a Path,
+    root: PathBuf,
     strings: Vec<String>,
     string_ids: HashMap<String, u32>,
 }
@@ -606,18 +621,28 @@ fn write_var(out: &mut Vec<u8>, mut v: u64) {
     }
 }
 
-impl Writer<'_> {
-    fn finish(self, key: u64) -> Vec<u8> {
-        let mut file = Vec::with_capacity(self.out.len() + 64 * self.strings.len());
-        file.extend_from_slice(MAGIC);
-        file.extend_from_slice(&key.to_le_bytes());
-        write_var(&mut file, self.strings.len() as u64);
+impl Writer {
+    /// The file: its header and strings in front of the body.
+    fn write_to(self, path: &Path, key: u64) -> io::Result<()> {
+        use std::io::Write;
+        let mut header = Vec::with_capacity(64 * self.strings.len());
+        header.extend_from_slice(MAGIC);
+        header.extend_from_slice(&key.to_le_bytes());
+        write_var(&mut header, self.strings.len() as u64);
         for s in &self.strings {
-            write_var(&mut file, s.len() as u64);
-            file.extend_from_slice(s.as_bytes());
+            write_var(&mut header, s.len() as u64);
+            header.extend_from_slice(s.as_bytes());
         }
-        file.extend_from_slice(&self.out);
-        file
+        let mut file = std::fs::File::create(path)?;
+        file.write_all(&header)?;
+        file.write_all(&self.out)
+    }
+
+    /// What `write` writes, into `section` instead of the body.
+    fn into_section(&mut self, section: &mut Vec<u8>, write: impl FnOnce(&mut Self)) {
+        std::mem::swap(&mut self.out, section);
+        write(self);
+        std::mem::swap(&mut self.out, section);
     }
 
     fn var(&mut self, v: u64) {
@@ -639,7 +664,8 @@ impl Writer<'_> {
 
     /// A directory and a name; paths below the root are kept relative.
     fn path(&mut self, p: &Path) {
-        let (flag, p) = match p.strip_prefix(self.root) {
+        let root = std::mem::take(&mut self.root);
+        let (flag, p) = match p.strip_prefix(&root) {
             Ok(rel) => (0, rel),
             Err(_) => (1, p),
         };
@@ -654,6 +680,7 @@ impl Writer<'_> {
                 self.str("");
             }
         }
+        self.root = root;
     }
 
     /// Sorted ids, as gaps (mostly one byte each).
@@ -1170,7 +1197,7 @@ mod tests {
             in outer.inner rule inner warn "inner" fix as "B"
         "#);
         let diagnostics = linter.lint(&root.join("file.t"), "abc");
-        let mut writer = Writer { out: Vec::new(), root, strings: Vec::new(), string_ids: HashMap::new() };
+        let mut writer = Writer { out: Vec::new(), root: root.to_path_buf(), strings: Vec::new(), string_ids: HashMap::new() };
         for diagnostic in &diagnostics {
             writer.diag(diagnostic);
         }
@@ -1188,7 +1215,7 @@ mod tests {
             [(3, name_hash("a"))].into_iter().collect(), None));
         let read = Arc::new(PartReads::new([Read::Statement(1), Read::Name(name_hash("a")), Read::UsesOf(3)]));
         let dep = Dep::Part(parts.clone(), read.clone());
-        let mut writer = Writer { out: Vec::new(), root, strings: Vec::new(), string_ids: HashMap::new() };
+        let mut writer = Writer { out: Vec::new(), root: root.to_path_buf(), strings: Vec::new(), string_ids: HashMap::new() };
         writer.parts(&parts);
         writer.dep(&dep, &[(Arc::as_ptr(&parts) as usize, 0)].into_iter().collect());
         let mut reader = Reader { bytes: &writer.out, at: 0, root, strings: writer.strings };
@@ -1209,7 +1236,7 @@ mod tests {
         super::super::reads::set_buffer(&first, "");
         let request = crate::grammar::names::modules::resolution::DiscoveryRequest { root: root.to_owned(), include: vec!["src/**".into()], exclude: vec!["generated/**".into()], extensions: vec![".ts".into()] };
         let (_, reads) = super::super::reads::track(|| super::super::reads::requested(&request));
-        let mut writer = Writer { out: Vec::new(), root, strings: Vec::new(), string_ids: HashMap::new() };
+        let mut writer = Writer { out: Vec::new(), root: root.to_path_buf(), strings: Vec::new(), string_ids: HashMap::new() };
         writer.dep(&reads.deps[0], &HashMap::new());
         let mut reader = Reader { bytes: &writer.out, at: 0, root, strings: writer.strings };
         let dep = reader.dep(&[]).expect("cached discovery");

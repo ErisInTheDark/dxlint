@@ -738,7 +738,12 @@ impl Snapshot {
             for key in &idle { uses.remove(key); }
             idle
         };
-        for (settings, program) in retired { self.forget_program(settings, program) }
+        if !retired.is_empty() {
+            for (settings, program) in retired { self.forget_program(settings, program) }
+            // A program's worth of pages went free: the system can have them.
+            crate::alloc::trim();
+            crate::alloc::release();
+        }
         if now % UNIT_SWEEP_LINTS == 0 {
             let mut forgotten = Vec::new();
             self.units.write().expect("run units").retain(|path, (_, slot)| {

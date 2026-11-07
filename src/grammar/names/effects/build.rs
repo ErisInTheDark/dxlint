@@ -105,11 +105,14 @@ struct Builder<'a, S> {
     steps: Vec<Step>,
     edges: Vec<Vec<StepId>>,
     slots: Vec<Option<Fragment>>,
+    /// Taken slots, to use again: a big body would otherwise keep one per node.
+    free_slots: Vec<Slot>,
     tasks: Vec<Task>,
 }
 
 impl<S: Source> Builder<'_, S> {
     fn slot(&mut self) -> Slot {
+        if let Some(free) = self.free_slots.pop() { return free }
         let id = self.slots.len();
         self.slots.push(None);
         id
@@ -135,6 +138,7 @@ impl<S: Source> Builder<'_, S> {
     }
 
     fn take(&mut self, slot: Slot) -> Fragment {
+        self.free_slots.push(slot);
         self.slots[slot].take().expect("finished execution fragment")
     }
 
@@ -480,7 +484,7 @@ pub fn execution(source: &impl Source, entry: Leaf, question: &QueryContext) -> 
 pub fn execution_sized(source: &impl Source, entry: Leaf, question: &QueryContext) -> (Known<super::Execution>, usize) {
     let _owner = crate::alloc::heap::Owner::enter(crate::alloc::heap::EFFECTS);
     let _site = crate::engine::StepSite::enter("effects.build");
-    let mut builder = Builder { source, question, steps: Vec::new(), edges: Vec::new(), slots: Vec::new(), tasks: Vec::new() };
+    let mut builder = Builder { source, question, steps: Vec::new(), edges: Vec::new(), slots: Vec::new(), free_slots: Vec::new(), tasks: Vec::new() };
     let out = builder.slot();
     builder.tasks.push(Task::Node { node: entry, out });
     if builder.run().is_none() { return (Known::Unknown, builder.steps.len()) }
