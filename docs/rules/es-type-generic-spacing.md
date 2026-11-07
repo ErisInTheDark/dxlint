@@ -51,6 +51,10 @@ rule es-type-generic-spacing {
 
 These options do not allow spaces just inside the angle brackets.
 
+## Differences from upstream
+
+- Without `before`, a function declaration (including `declare function` and overloads) may have a space before its `<` (`function wrap <T>(value: T)`); upstream reports it. Named function expressions and classes are still checked.
+
 ## Variants
 
 | Variant | Checks |

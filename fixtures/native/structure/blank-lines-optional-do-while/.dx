@@ -1,0 +1,2 @@
+import .ts
+rule es-no-blank-lines-in-optional-blocks

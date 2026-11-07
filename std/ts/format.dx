@@ -12,7 +12,7 @@ define {
 # ---- blank lines ---------------------------------------------------------
 
 # No blank lines between a header and its single-statement body.
-in ts_if.consequent, ts_while.body, ts_for.body, ts_for_in.body, ts_for_of.body rule es-no-blank-lines-in-optional-blocks warn "Avoid blank lines between a conditional or loop statement and its single non-block statement." {
+in ts_if.consequent, ts_while.body, ts_do_while.body, ts_for.body, ts_for_in.body, ts_for_of.body rule es-no-blank-lines-in-optional-blocks warn "Avoid blank lines between a conditional or loop statement and its single non-block statement." {
   when not ts_block && !space_before.comments && space_before.blank_lines > 0
   let optional_header { value space_before.text; re_find /^[ \t]*/; nonempty } ?? ""
   let optional_indent { value space_before.text; re_find /[ \t]*\z/; nonempty } ?? ""

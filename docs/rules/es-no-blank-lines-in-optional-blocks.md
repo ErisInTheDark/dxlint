@@ -32,4 +32,4 @@ if (ready)
   run();
 ```
 
-Applies to `if`, `while`, `for`, `for...in` and `for...of` bodies. Braced bodies and gaps containing comments are not checked.
+Applies to `if`, `while`, `do...while`, `for`, `for...in` and `for...of` bodies. Braced bodies and gaps containing comments are not checked.

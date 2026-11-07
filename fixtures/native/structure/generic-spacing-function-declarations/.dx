@@ -1,0 +1,5 @@
+import .ts
+rule es-type-generic-spacing
+files "before.ts" {
+  rule es-type-generic-spacing { set before true }
+}

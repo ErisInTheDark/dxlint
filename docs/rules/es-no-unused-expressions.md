@@ -40,6 +40,7 @@ getValue()!;
 | `allowShortCircuit` | `boolean` | `false` | Allow short-circuit expressions with an effectful result, such as `ready && run()`. |
 | `allowTernary` | `boolean` | `false` | Allow ternaries when both branches are effectful. |
 | `allowTaggedTemplates` | `boolean` | `false` | Allow tagged-template expression statements. |
+| `allowSequences` | `boolean` | `false` | Allow comma sequences whose every item has an effect, such as an unbraced body `if (wide) width = 2, height = 1;`. `ready, run();` is still reported. |
 | `enforceForJSX` | `boolean` | `false` | Report unused JSX expressions. |
 | `ignoreDirectives` | `boolean` | `false` | Ignore directive prologues, including when targeting ES3. |
 
@@ -53,5 +54,6 @@ rule es-no-unused-expressions {
 ## Differences from upstream
 
 - The upstream TypeScript rule extends ESLint's core rule. dxlint includes both JavaScript and TypeScript expression handling in this rule.
+- `allowSequences` has no upstream equivalent; upstream reports every comma sequence statement.
 
 Adapted from the [typescript-eslint](https://typescript-eslint.io/rules/no-unused-expressions) and [ESLint](https://eslint.org/docs/latest/rules/no-unused-expressions) documentation (MIT).

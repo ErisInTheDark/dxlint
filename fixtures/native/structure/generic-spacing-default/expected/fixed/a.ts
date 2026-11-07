@@ -1,4 +1,4 @@
-function named<T>() {}
+function named <T>() {}
 class Box<T> {}
 type Item<T> = T;
 const called = fn<T>();

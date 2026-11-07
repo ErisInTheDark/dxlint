@@ -1,1 +1,1 @@
-function task<T> (value: T) { work(); work(); }
+function task <T> (value: T) { work(); work(); }

@@ -95,20 +95,23 @@ in ts_call rule es-no-var-requires {
   warn "Require statement not part of import statement."
 }
 
-in ts_array, ts_arrow, ts_binary, ts_class, ts_function, ts_identifier, ts_member, ts_index, ts_meta_property, ts_object, ts_sequence, ts_template, ts_this, ts_number, ts_string, ts_boolean, ts_bigint, ts_null, ts_regex let statement_effect false
+in ts_array, ts_arrow, ts_binary, ts_class, ts_function, ts_identifier, ts_member, ts_index, ts_meta_property, ts_object, ts_template, ts_this, ts_number, ts_string, ts_boolean, ts_bigint, ts_null, ts_regex let statement_effect false
 in ts_unary let statement_effect contains(["delete", "void"], operator)
 in ts_logical let statement_effect { kind: "logical", right: right.statement_effect }
 in ts_conditional let statement_effect { kind: "conditional", left: consequent.statement_effect, right: alternate.statement_effect }
+in ts_sequence let statement_effect { kind: "sequence", items: [] expression.statement_effect }
 in ts_tagged_template let statement_effect { kind: "tagged" }
 in ts_jsx_element, ts_jsx_fragment let statement_effect { kind: "jsx" }
 in ts_parenthesized, ts_as, ts_type_assertion, ts_non_null, ts_instantiation forward statement_effect from expression
-fn expression_allowed(shape, short, ternary, tagged, jsx) = {
+fn expression_allowed(shape, short, ternary, tagged, jsx, sequences) = {
   value shape
   walk (part) if part.kind == "logical" && short then part.right
-    else if part.kind == "conditional" && ternary then [part.left, part.right] else []
+    else if part.kind == "conditional" && ternary then [part.left, part.right]
+    else if part.kind == "sequence" && sequences then part.items else []
   all (part) if type_of(part) == "bool" then part
     else if part.kind == "logical" then short
     else if part.kind == "conditional" then ternary
+    else if part.kind == "sequence" then sequences
     else if part.kind == "tagged" then tagged
     else if part.kind == "jsx" then !jsx else true
 }
@@ -116,9 +119,10 @@ in ts_expression_statement rule es-no-unused-expressions {
   option allowShortCircuit boolean = false "Allow effectful short circuit expressions."
   option allowTernary boolean = false "Allow ternaries with effectful branches."
   option allowTaggedTemplates boolean = false "Allow tagged templates."
+  option allowSequences boolean = false "Allow comma sequences whose every item has an effect."
   option enforceForJSX boolean = false "Report unused JSX expressions."
   option ignoreDirectives boolean = false "Ignore directive prologues."
-  when !(directive_statement && (ecma_version >= 5 || ignoreDirectives)) && !expression_allowed(expression.statement_effect, allowShortCircuit, allowTernary, allowTaggedTemplates, enforceForJSX)
+  when !(directive_statement && (ecma_version >= 5 || ignoreDirectives)) && !expression_allowed(expression.statement_effect, allowShortCircuit, allowTernary, allowTaggedTemplates, enforceForJSX, allowSequences)
   warn "Expected an assignment or function call and instead saw an expression."
 }
 

@@ -1,4 +1,3 @@
-a.ts:1:27-1:28 es-type-generic-spacing#0
 a.ts:1:29-1:30 es-type-generic-spacing:inner-open#0
 a.ts:1:31-1:32 es-type-generic-spacing:inner-close#0
 a.ts:2:19-2:30 es-type-generic-spacing:inner-open#0

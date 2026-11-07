@@ -1,0 +1,5 @@
+allowed.ts:10:1-10:14 es-no-unused-expressions#0
+allowed.ts:11:1-11:23 es-no-unused-expressions#0
+allowed.ts:9:1-9:10 es-no-unused-expressions#0
+default.ts:5:1-5:14 es-no-unused-expressions#0
+default.ts:6:1-6:12 es-no-unused-expressions#0

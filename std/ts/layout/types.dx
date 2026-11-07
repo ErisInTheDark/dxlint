@@ -116,6 +116,8 @@ in ts_open_angle, ts_close_angle let layout_generic_edge parent is layout_generi
   when layout_generic_edge
 }
 
+# A function declaration, never an expression (an arrow's body is one).
+fn layout_function_declaration(n) = n is ts_function && n is (ts_node.body, ts_node.declaration, ts_if.consequent, ts_if.alternate) && n.parent not ts_arrow
 in ts_open_angle rule es-type-generic-spacing {
   @layout_generic_policy
   when parent not (ts_arrow, ts_function_type, ts_call_signature)
@@ -123,6 +125,8 @@ in ts_open_angle rule es-type-generic-spacing {
   when previous_token != null
   let generic_space layout_comma_space(space_before.text, true)
   when before != (generic_space != "")
+  # Without `before`, a function declaration may space its `<` either way.
+  when before || !layout_function_declaration(parent.node)
   report at { start: offset - byte_len(generic_space), end: offset }
   fix at { start: offset - byte_len(generic_space), end: offset } as if before then " " else ""
   warn "Generic spaces mismatch"
