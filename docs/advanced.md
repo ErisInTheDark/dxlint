@@ -1254,7 +1254,7 @@ import { dxlintTransform } from "@inthedark/dxlint/esbuild";
 await esbuild.build({ plugins: [dxlintTransform()] });
 ```
 
-`dxlintTransform({ readFile })` takes each file's content from `readFile(path)` (a string or bytes, or a promise of one) instead of the disk: a build over another checkout's view or unsaved buffers. Both talk to `dxlint map`, one long-lived process per build. `fixtures/engine/transform-state` is a worked example.
+`dxlintTransform({ readFile })` takes each file's content from `readFile(path)` (a string or bytes, or a promise of one) instead of the disk: a build over another checkout's view or unsaved buffers. A build whose own `onLoad` does more with each file maps it with `dxlintMapper()` instead: `await mapper.transform(path, content)` gives `{ contents }` (TypeScript with an inline source map) or `{ errors }` as esbuild messages, and `mapper.close()` ends it. All of them talk to `dxlint map`, one long-lived process per build. `fixtures/engine/transform-state` is a worked example.
 
 ## Editor and tooling
 

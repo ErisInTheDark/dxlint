@@ -56,6 +56,31 @@ function location(file, content, start, length) {
 }
 
 /**
+ * The project's `.dx` transforms as a function, for builds whose own `onLoad`
+ * does more with a file: one long-lived `dxlint map`, started on first use.
+ * `transform` gives TypeScript `contents` with an inline source map, or esbuild
+ * `errors` (and no `contents`) when the transform reports problems.
+ * @returns {{ transform(fileName: string, content: string): Promise<{ contents?: string, errors: { text: string, location: object }[] }>, close(): void }}
+ */
+export function dxlintMapper() {
+	let mapper;
+	return {
+		async transform(fileName, content) {
+			mapper ??= server();
+			const result = await mapper.request("transform", { fileName, content, sourceMap: true });
+			const errors = result.diagnostics.map(problem => ({ text: problem.messageText, location: location(fileName, content, problem.start, problem.length) }));
+			if (errors.length > 0) return { errors };
+			const map = Buffer.from(result.sourceMap).toString("base64");
+			return { contents: `${result.text}\n//# sourceMappingURL=data:application/json;base64,${map}`, errors };
+		},
+		close() {
+			mapper?.close();
+			mapper = undefined;
+		},
+	};
+}
+
+/**
  * @param {{ filter?: RegExp, readFile?: (path: string) => string | Uint8Array | Promise<string | Uint8Array> }} [options]
  * `filter`: files to map, by default `.wts`. `readFile`: a file's content as
  * the build should see it (an editor buffer, another checkout's view); by
@@ -65,17 +90,13 @@ export function dxlintTransform({ filter = /\.wts$/, readFile: readContent = pat
 	return {
 		name: "dxlint-transform",
 		setup(build) {
-			let mapper;
-			build.onStart(() => { mapper ??= server(); });
-			build.onDispose(() => { mapper?.close(); });
+			const mapper = dxlintMapper();
+			build.onDispose(() => mapper.close());
 			build.onLoad({ filter }, async args => {
 				const read = await readContent(args.path);
 				const content = typeof read === "string" ? read : Buffer.from(read).toString("utf8");
-				const result = await mapper.request("transform", { fileName: args.path, content, sourceMap: true });
-				const errors = result.diagnostics.map(problem => ({ text: problem.messageText, location: location(args.path, content, problem.start, problem.length) }));
-				if (errors.length > 0) return { errors };
-				const map = Buffer.from(result.sourceMap).toString("base64");
-				return { contents: `${result.text}\n//# sourceMappingURL=data:application/json;base64,${map}`, loader: "ts", resolveDir: dirname(args.path) };
+				const { contents, errors } = await mapper.transform(args.path, content);
+				return contents === undefined ? { errors } : { contents, loader: "ts", resolveDir: dirname(args.path) };
 			});
 		},
 	};
