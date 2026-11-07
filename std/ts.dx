@@ -16,6 +16,7 @@ language .js {
   option impliedStrict boolean | null = null "Strict code without an explicit directive."
   option globalReturn boolean | null = null "Wrap script declarations in a function scope, without CommonJS globals."
   option memberModifiers string[] = [] "More words a class member may start with, for syntax a transform maps away."
+  option memberInitializers string[] = [] "More tokens that may introduce a class member's initializer, as `=` does, for syntax a transform maps away."
 }
 
 native ts

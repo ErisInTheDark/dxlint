@@ -4,9 +4,12 @@ lang js "*.js" "*.mjs" "*.cjs" "*.jsx" "*.ts" "*.tsx" "*.mts" "*.cts" "*.wts"
 language .js {
   files "*.wts"
   set memberModifiers ["state", "derived"]
+  set memberInitializers ["=>"]
 }
 
 # `state` and `derived` class members to kitsui Fields (kitsui2 .bench/derived/EMIT.md).
+# A derived member's `=` may be `=>` (computed, maybe more than once): the
+# transform rewrites whatever lies between key and initializer.
 # Output stays on the same lines: nothing here writes a line break. What the
 # user wrote stays where it is, so errors in it land where they wrote it.
 

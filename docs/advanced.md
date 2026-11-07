@@ -1231,7 +1231,7 @@ in ts_class_property transform state-field {
 }
 ```
 
-`memberModifiers` adds words a class member may start with. Any file of the language the native front end reads is parsed by it, so `.wts` above is TypeScript with one more modifier, and rules lint it directly.
+`memberModifiers` adds words a class member may start with, and `memberInitializers` tokens that may stand for a member's `=` (`set memberInitializers ["=>"]` reads `derived total => a + b;`, its `init` the expression as usual; a transform replaces the token before `init`). Any file of the language the native front end reads is parsed by them, so `.wts` above is TypeScript with one more modifier, and rules lint it directly.
 
 | | `rule ... fix` | `transform` |
 | --- | --- | --- |

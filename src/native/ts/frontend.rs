@@ -66,12 +66,16 @@ impl Frontend for Ts {
 
     fn parse(&self, text: &str, path: &Path, options: &[(&str, &Value<'static>)]) -> Result<Parsed, (u32, String)> {
         // Defaults come first, settings after: the last one holds.
-        let modifiers: Vec<&str> = options.iter().rfind(|(name, _)| *name == "memberModifiers").into_iter()
-            .flat_map(|(_, value)| match value {
-                Value::List(items) => items.iter().filter_map(|item| match item { Value::Str(text) => Some(&**text), _ => None }).collect(),
-                _ => Vec::new(),
-            }).collect();
-        let parsed = super::parse_with(text, super::reads(path).unwrap_or(false), &modifiers)?;
+        let words = |option: &str| -> Vec<&str> {
+            options.iter().rfind(|(name, _)| *name == option).into_iter()
+                .flat_map(|(_, value)| match value {
+                    Value::List(items) => items.iter().filter_map(|item| match item { Value::Str(text) => Some(&**text), _ => None }).collect(),
+                    _ => Vec::new(),
+                }).collect()
+        };
+        let (modifiers, initializers) = (words("memberModifiers"), words("memberInitializers"));
+        let extensions = super::Extensions { member_modifiers: &modifiers, member_initializers: &initializers };
+        let parsed = super::parse_with(text, super::reads(path).unwrap_or(false), &extensions)?;
         Ok(Parsed { nodes: parsed.nodes, root: parsed.root, state: None })
     }
 

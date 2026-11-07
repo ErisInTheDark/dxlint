@@ -8,4 +8,7 @@ class Item extends Base {
 	derived own = this.quality + this.seed;
 	derived total = this.attack + (this.mainHand?.attack ?? 0);
 	derived listed = this.items.map(item => item.attack);
+	derived doubled => this.attack * 2;
+	derived scaled: number => Math.round(
+		this.attack * this.quality);
 }

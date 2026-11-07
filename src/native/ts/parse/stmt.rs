@@ -502,7 +502,8 @@ impl<'s> Parser<'s> {
             let t = self.type_()?;
             kids.add(Field::Type, t);
         }
-        if self.eat("=") {
+        if self.is("=") || self.member_initializers.iter().any(|token| self.is(token)) {
+            self.bump();
             let i = self.assign_in()?;
             kids.add(Field::Init, i);
         }
@@ -894,6 +895,26 @@ mod tests {
             assert_eq!(ids.len(), 1, "{src}");
             assert!(parsed.nodes[ids[0] as usize].children.iter().all(|edge| edge.label != Field::Modifier as u16), "{src}");
         }
+    }
+
+    #[test]
+    fn member_initializer_tokens_stand_for_equals_only_when_configured() {
+        use crate::native::ts::{parse_with, Extensions};
+        let extensions = Extensions { member_modifiers: &["derived"], member_initializers: &["=>"] };
+        // The initializer's text, after a function type's own arrow.
+        for (src, init) in [
+            ("class C { derived a => this.b * 2; }", "this.b * 2"),
+            ("class C { derived a: number => Math.round(\n\tthis.b); }", "Math.round(\n\tthis.b)"),
+            ("class C { derived f: () => void => () => {}; }", "() => {}"),
+            ("class C { a = 1; }", "1"),
+        ] {
+            let parsed = parse_with(src, false, &extensions).unwrap_or_else(|error| panic!("{src}: {error:?}"));
+            let property = parsed.nodes.iter().find(|node| node.matcher == Kind::ClassProp as u32).expect("property");
+            let edge = property.children.iter().find(|edge| edge.label == Field::Init as u16).expect("init");
+            let node = &parsed.nodes[edge.node as usize];
+            assert_eq!(&src[node.start as usize..node.end as usize], init, "{src}");
+        }
+        assert!(parse("class C { a => 1; }", false).is_err());
     }
 
     #[test]
