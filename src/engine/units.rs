@@ -60,6 +60,18 @@ impl Linter {
         }).clone()
     }
 
+    /// Drops what is inside `unit`'s opaque bodies from its tree: other files
+    /// read a unit, and they never step inside those.
+    fn without_bodies(&self, unit: &mut Unit) {
+        let insides = self.opaque_body_nodes(unit);
+        let ranges: Vec<(u32, u32)> = insides.iter().map(|&body| &unit.parsed.tree.nodes[body as usize]).map(|body| (body.start, body.end)).collect();
+        let bodies = (!ranges.is_empty()).then(|| Arc::new(reads::Bodies::new(&unit.text, ranges)));
+        if bodies.is_some() {
+            unit.parsed.tree = unit.parsed.tree.without_insides(&insides);
+        }
+        let _ = unit.bodies.set(bodies);
+    }
+
     /// What work entering the body at `offset` read of `unit`: its text
     /// outside the other bodies. `None` when no body holds `offset`.
     pub(super) fn entered(&self, unit: &Unit, offset: u32) -> Option<Arc<reads::Bodies>> {
@@ -182,7 +194,9 @@ impl Linter {
             let mut parsed = self.parse(path, &text, plan).ok()?;
             let path_read = reads::dep_path(path);
             parsed.tree.owner = Some(Arc::new(crate::parts::Owner::new(path_read.clone(), hash)));
-            let unit = Arc::new(Unit { path: path_read, rel: rel.to_string_lossy().replace('\\', "/"), lang, text, hash, parsed, names: OnceLock::new(), lines: OnceLock::new(), bodies: OnceLock::new(), entered: OnceLock::new() });
+            let mut unit = Unit { path: path_read, rel: rel.to_string_lossy().replace('\\', "/"), lang, text, hash, parsed, names: OnceLock::new(), lines: OnceLock::new(), bodies: OnceLock::new(), entered: OnceLock::new() };
+            self.without_bodies(&mut unit);
+            let unit = Arc::new(unit);
             self.units.lock().expect("unit cache").insert(path.to_owned(), unit.clone());
             Some(unit)
         };

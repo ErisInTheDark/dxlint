@@ -573,8 +573,8 @@ impl Linter {
             let mut lower =|e: &CExpr, item: bool| crate::vm::lower_condition(e, functions, locals, values, item);
             rule.locals_vm = rule.locals.iter().map(|e| crate::vm::hoist(e, lower(e, false), functions)).collect();
             // Guards run before the items, with the item slot null.
-            rule.node_when_vm = rule.node_when.iter().map(|e| lower(e, item)).collect();
-            rule.when_vm = rule.when.iter().map(|e| lower(e, item)).collect();
+            rule.node_when_vm = crate::vm::cheap_conditions_first(rule.node_when.iter().map(|e| lower(e, item)).collect(), &rule.locals_vm);
+            rule.when_vm = crate::vm::cheap_conditions_first(rule.when.iter().map(|e| lower(e, item)).collect(), &rule.locals_vm);
             rule.each_vm = rule.each.as_ref().map(|e| lower(e, false));
             for clause in rule.fix.iter_mut().chain(&mut rule.suggestions).flat_map(FixPlan::clauses_mut) {
                 clause.vm = Some(lower(&clause.expr, item));
@@ -798,6 +798,12 @@ impl Linter {
     /// The byte ranges of `unit`'s opaque bodies (`opaque` name items whose
     /// syntax condition holds).
     fn opaque_ranges(&self, unit: &units::Unit) -> Vec<(u32, u32)> {
+        let tree = &unit.parsed.tree;
+        self.opaque_body_nodes(unit).iter().filter_map(|&body| tree.nodes.get(body as usize)).map(|body| (body.start, body.end)).collect()
+    }
+
+    /// `unit`'s opaque body nodes.
+    fn opaque_body_nodes(&self, unit: &units::Unit) -> Vec<u32> {
         let names = &self.grammar.names;
         let tree = &unit.parsed.tree;
         if !tree.nodes.iter().any(|node| names.kinds.get(node.matcher as usize).is_some_and(|kind| !kind.opaque.is_empty())) { return Vec::new() }
@@ -806,7 +812,7 @@ impl Linter {
         let memo = AttrMemo::default();
         let reindented = RefCell::default();
         let ctx = self.tree_ctx(unit.lang, tree, (&unit.text, unit.lines(), &unit.rel), &memo, &reindented, native.as_deref());
-        let mut ranges = Vec::new();
+        let mut bodies = Vec::new();
         for (id, node) in tree.nodes.iter().enumerate() {
             let Some(kind) = names.kinds.get(node.matcher as usize) else { continue };
             for (path, when) in &kind.opaque {
@@ -820,10 +826,10 @@ impl Linter {
                 for &label in path {
                     reached = reached.iter().flat_map(|&at| tree.fields(at, label)).collect();
                 }
-                ranges.extend(reached.iter().filter_map(|&body| tree.nodes.get(body as usize)).map(|body| (body.start, body.end)));
+                bodies.extend(reached);
             }
         }
-        ranges
+        bodies
     }
 
     /// Whether `bodies` (a file's text outside its opaque bodies) still

@@ -455,6 +455,17 @@ impl VExpr {
         }
     }
 
+    /// Reads only the tree, the option table or what is already bound:
+    /// asks no semantic question and runs no `let`.
+    fn is_cheap(&self) -> bool {
+        match self {
+            VExpr::Bound(_) | VExpr::Option(_) | VExpr::Hoisted(_) => true,
+            VExpr::Not(a) | VExpr::IsNull(a) | VExpr::IsTests(a, _) | VExpr::IsValue(a, _) | VExpr::NonEmpty(a) => a.is_cheap(),
+            VExpr::Binary(_, a, b) => a.is_cheap() && b.is_cheap(),
+            other => other.is_syntactic(),
+        }
+    }
+
     /// Small value-only bodies cost less than a second per-node cache.
     pub(crate) fn is_direct(&self) -> bool {
         fn cost(e: &VExpr, remaining: &mut u8) -> bool {
@@ -471,6 +482,39 @@ impl VExpr {
         }
         cost(self, &mut 8)
     }
+}
+
+/// `a op b` (`&&`, `||`) with its cheap terms first. Both give a boolean and
+/// every term is pure, so order only decides what work a short circuit skips.
+fn cheap_first(op: BinOp, a: VExpr, b: VExpr) -> VExpr {
+    fn terms(op: BinOp, e: VExpr, into: &mut Vec<VExpr>) {
+        match e {
+            VExpr::Binary(inner, a, b) if inner == op => {
+                terms(op, *a, into);
+                terms(op, *b, into);
+            }
+            other => into.push(other),
+        }
+    }
+    let mut all = Vec::new();
+    terms(op, a, &mut all);
+    terms(op, b, &mut all);
+    let (cheap, rest): (Vec<VExpr>, Vec<VExpr>) = all.into_iter().partition(VExpr::is_cheap);
+    cheap.into_iter().chain(rest)
+        .reduce(|chain, term| VExpr::Binary(op, Box::new(chain), Box::new(term)))
+        .expect("a binary expression has terms")
+}
+
+/// A rule's `when`s with the cheap ones first, for [`cheap_first`]'s reason;
+/// `locals` are the rule's lowered `let`s.
+pub fn cheap_conditions_first(conditions: Vec<VExpr>, locals: &[VExpr]) -> Vec<VExpr> {
+    let cheap = |e: &VExpr| match e {
+        VExpr::Local(local) => locals.get(usize::from(*local)).is_some_and(VExpr::is_cheap),
+        VExpr::Not(inner) => matches!(&**inner, VExpr::Local(local) if locals.get(usize::from(*local)).is_some_and(VExpr::is_cheap)) || inner.is_cheap(),
+        other => other.is_cheap(),
+    };
+    let (first, rest): (Vec<VExpr>, Vec<VExpr>) = conditions.into_iter().partition(|e| cheap(e));
+    first.into_iter().chain(rest).collect()
 }
 
 /// Where an item stage's lambda binds its item (and index, if it takes one).
@@ -840,6 +884,7 @@ fn lower_in<'a>(e: &'a CExpr, g: &Scope<'a, '_>, args: &[Lowered], bound: u16) -
             let present = VExpr::FieldPresent(*label);
             if *op == BinOp::Ne { present } else { VExpr::Not(Box::new(present)) }
         }
+        CExpr::Binary(op @ (BinOp::And | BinOp::Or), a, b) => cheap_first(*op, *boxed(a)?, *boxed(b)?),
         CExpr::Binary(op, a, b) => VExpr::Binary(*op, boxed(a)?, boxed(b)?),
         CExpr::Not(inner) => VExpr::Not(boxed(inner)?),
         CExpr::Neg(inner) => VExpr::Neg(boxed(inner)?),

@@ -164,6 +164,16 @@ pub(super) fn walker(roots: &[PathBuf], jobs: usize, keep: impl Fn(&ignore::DirE
     walker
 }
 
+/// The order to lint `queue` in, by place in it. A run's peak is what has
+/// piled up so far plus one file, so one worker takes the giants while little
+/// has. Several would hold them all at once, which costs more than the pile.
+fn lint_order(queue: &[(u64, PathBuf)], threads: usize) -> Vec<usize> {
+    const GIANT: u64 = 256 * 1024;
+    let mut order: Vec<usize> = (0..queue.len()).collect();
+    if threads == 1 { order.sort_by_key(|&index| queue[index].0 < GIANT) }
+    order
+}
+
 fn lint_file(linter: &Linter, run: &LintRun<'_>, cache: Option<&Cache>, path: &Path, fix: bool) -> Msg {
     // Another Workbench thread's file: reported, never rewritten.
     let fix = fix && !super::workbench::holds(path);
@@ -525,6 +535,7 @@ fn lint_project(output: &mut Output<'_>, args: &LintArgs, project: &mut Project,
             queue.sort_unstable_by(|a, b| a.1.cmp(&b.1));
             let next = std::sync::atomic::AtomicUsize::new(0);
             let threads = jobs.min(queue.len().max(1));
+            let order = lint_order(&queue, threads);
             // File and rule workers share one budget, rather than multiplying it.
             linter.set_rule_jobs(jobs / threads);
             let linter = &*linter;
@@ -541,7 +552,7 @@ fn lint_project(output: &mut Output<'_>, args: &LintArgs, project: &mut Project,
                 lanes.supervise(threads, || next.load(std::sync::atomic::Ordering::Relaxed) < queue.len(), || {
                     working.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     let tx = tx.clone();
-                    let (queue, next, working) = (&queue, &next, &working);
+                    let (queue, order, next, working) = (&queue, &order, &next, &working);
                     let run = &run;
                     std::thread::Builder::new().stack_size(crate::engine::WORKER_STACK).spawn_scoped(w, move || {
                         let _lane = Lane(lanes);
@@ -549,10 +560,14 @@ fn lint_project(output: &mut Output<'_>, args: &LintArgs, project: &mut Project,
                         // A trim walks every page the pool holds: now and then.
                         for linted in 1usize.. {
                             if lanes.surplus(threads) { break }
-                            let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                            let Some((_, path)) = queue.get(index) else { break };
+                            let Some(&index) = order.get(next.fetch_add(1, std::sync::atomic::Ordering::Relaxed)) else { break };
+                            let (_, path) = &queue[index];
                             if tx.send((index, lint_file(linter, run, cache, path, fix))).is_err() {
                                 break;
+                            }
+                            if crate::alloc::heap::files_on() {
+                                let (now, peak) = crate::alloc::heap::stretch();
+                                eprintln!("heapfile {} {} {}", peak / 1048576, now / 1048576, path.display());
                             }
                             if linted % TRIM_EVERY == 0 { crate::alloc::trim() }
                         }

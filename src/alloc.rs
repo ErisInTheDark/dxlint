@@ -334,6 +334,31 @@ fn pool_usage() -> [(&'static str, usize, usize); 4] {
     [("work", work.0, work.1), ("editor", editor.0, editor.1), ("lasting", lasting.0, lasting.1), ("shards", shards.0, shards.1)]
 }
 
+/// Per block size, across the pools no thread owns: (size, pages, bytes handed out).
+fn class_usage() -> Vec<(usize, usize, usize)> {
+    let mut rows: Vec<(usize, usize, usize)> = (0..CLASSES).map(|class| ((class + 1) * QUANTUM, 0, 0)).collect();
+    let mut count = |pool: &Pool| {
+        for (row, class) in rows.iter_mut().zip(&pool.classes) {
+            for list in [class.available, class.full] {
+                let mut page = list.0;
+                // SAFETY: the caller holds the pool; listed pages are its.
+                while !page.is_null() {
+                    unsafe {
+                        row.1 += 1;
+                        row.2 += (*page).used * (*page).size;
+                        page = (*page).next;
+                    }
+                }
+            }
+        }
+    };
+    // SAFETY: parked pools belong to no thread; the rest are held by their lock.
+    unsafe { for parked in &PARKED { for pool in parked.lock().iter() { count(&*pool.0) } } }
+    count(&LASTING.lock());
+    for shard in &POOLS { count(&shard.lock()) }
+    rows
+}
+
 /// The system memory behind the store.
 mod system {
     use super::{PAGE, SEGMENT};
@@ -959,10 +984,24 @@ pub mod heap {
     pub(super) fn add(owner: u8, bytes: isize) {
         LIVE[owner as usize].fetch_add(bytes, Ordering::Relaxed);
         let total = TOTAL.fetch_add(bytes, Ordering::Relaxed) + bytes;
+        STRETCH_PEAK.fetch_max(total, Ordering::Relaxed);
         if bytes > 0 && total as usize > PEAK.load(Ordering::Relaxed) {
             PEAK.store(total as usize, Ordering::Relaxed);
             for (at, live) in AT_PEAK.iter().zip(&LIVE) { at.store(live.load(Ordering::Relaxed), Ordering::Relaxed) }
         }
+    }
+
+    static STRETCH_PEAK: AtomicIsize = AtomicIsize::new(0);
+    static FILES_MODE: AtomicU8 = AtomicU8::new(0);
+
+    /// `DXLINT_HEAP_FILES` as well: each linted file prints the most and the
+    /// final live heap across it.
+    pub fn files_on() -> bool { on() && switch(&FILES_MODE, c"DXLINT_HEAP_FILES") }
+
+    /// Live bytes now, and the most live since the last call.
+    pub fn stretch() -> (isize, isize) {
+        let now = TOTAL.load(Ordering::Relaxed);
+        (now, STRETCH_PEAK.swap(now, Ordering::Relaxed))
     }
 
     /// `(owner, live bytes at the peak, live bytes now)` and the peak.
@@ -1001,6 +1040,11 @@ pub mod heap {
             mib(peak as isize), rows.join(", "), page(pooled_pages), mib(POOLED.load(Ordering::Relaxed)), pools.join(", "), page(kept), page(released),
             mib((released * super::LINK) as isize), mib(LARGE.load(Ordering::Relaxed)),
         );
+        let mut classes = super::class_usage();
+        classes.sort_by_key(|&(_, pages, used)| std::cmp::Reverse(pages * super::PAGE - used));
+        let rows: Vec<String> = classes.iter().take(16)
+            .map(|&(size, pages, used)| format!("{size}: {:.1} of {:.1}", mib(used as isize), page(pages))).collect();
+        summary.push_str(&format!("\nblock sizes with the most unused room (used of pages, MiB): {}", rows.join(", ")));
         if let Some(sites) = sites::report() {
             summary.push('\n');
             summary.push_str(&sites);

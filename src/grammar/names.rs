@@ -139,7 +139,7 @@ pub struct KindNames {
     pub calls: calls::KindCalls,
     /// `generics`: paths to the ordered formal type parameters.
     pub generics: Vec<(Vec<u16>, Option<u32>)>,
-    /// `opaque`: paths to bodies other files see only by entering them.
+    /// `opaque`: paths to bodies other files never read inside.
     pub opaque: Vec<(Vec<u16>, Option<u32>)>,
     pub constraints: Vec<(Value, Option<u32>)>,
     pub defaults: Vec<(Value, Option<u32>)>,

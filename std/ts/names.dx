@@ -85,9 +85,9 @@ in ts_rest { targets argument }
 in ts_function, ts_arrow, ts_method, ts_function_type, ts_method_signature, ts_call_signature {
   declares value, query parameter in nearest function hoisted
 }
-# Other files see these bodies only by entering them: the declared return
-# type (or a constructor's or setter's role) stands for what they do, so an
-# edit inside one concerns only the files that stepped in.
+# Other files never read inside these bodies: the declared return type (or a
+# constructor's or setter's role) stands for what they do. An edit inside one
+# concerns nobody else, and other files' view of this file leaves it empty.
 in ts_function, ts_arrow { opaque body when return_type != null }
 in ts_method { opaque body when return_type != null || kind == "constructor" || kind == "set" }
 in ts_parameter { targets name }

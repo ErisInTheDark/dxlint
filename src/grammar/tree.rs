@@ -297,6 +297,56 @@ impl Tree {
         }
     }
 
+    /// This tree without the nodes under each of `insides`, which stay as
+    /// leaves with their spans. The other nodes keep their order, with new ids.
+    pub fn without_insides(&self, insides: &[u32]) -> Tree {
+        let n = self.nodes.len();
+        let mut dropped = vec![false; n];
+        let mut pending: Vec<u32> = insides.iter().flat_map(|&inside| self.edges_of(inside).iter().map(|edge| edge.node)).collect();
+        while let Some(id) = pending.pop() {
+            if !std::mem::replace(&mut dropped[id as usize], true) {
+                pending.extend(self.edges_of(id).iter().map(|edge| edge.node));
+            }
+        }
+        let mut to = vec![NONE; n];
+        let mut kept = 0;
+        for id in 0..n {
+            if !dropped[id] {
+                to[id] = kept;
+                kept += 1;
+            }
+        }
+        let kept = kept as usize;
+        let survives = |id: u32| to[id as usize] != NONE;
+        let mut nodes = Vec::with_capacity(kept);
+        let mut parent = Vec::with_capacity(kept);
+        let mut label = Vec::with_capacity(kept);
+        let mut first = Vec::with_capacity(kept + 1);
+        let mut edges = Vec::with_capacity(self.edges.len().min(kept));
+        for id in (0..n).filter(|&id| !dropped[id]) {
+            nodes.push(self.nodes[id]);
+            parent.push(self.parent_of(id as u32).map_or(NONE, |p| to[p as usize]));
+            label.push(self.label[id]);
+            first.push(edges.len() as u32);
+            edges.extend(self.edges_of(id as u32).iter().filter(|edge| survives(edge.node))
+                .map(|edge| Edge { label: edge.label, node: to[edge.node as usize] }));
+        }
+        first.push(edges.len() as u32);
+        edges.shrink_to_fit();
+        let mapped = |ids: &[u32]| -> Vec<u32> { ids.iter().filter(|&&id| survives(id)).map(|&id| to[id as usize]).collect() };
+        Tree {
+            nodes, first, edges, parent, label,
+            field_indices: OnceLock::new(), descendants: OnceLock::new(), module_index: OnceLock::new(),
+            order: mapped(&self.order),
+            root: to[self.root as usize],
+            holes: self.holes.iter().filter(|hole| survives(hole.0)).map(|&(node, start, end)| (to[node as usize], start, end)).collect(),
+            too_deep: self.too_deep,
+            layer_roots: self.layer_roots.iter().filter(|layer| survives(layer.0)).map(|&(root, layer)| (to[root as usize], layer)).collect(),
+            overlapping: mapped(&self.overlapping),
+            regions: None, owner: self.owner.clone(),
+        }
+    }
+
     /// What `edit` changed between `previous` (the tracked tree of the old
     /// text) and this tracked tree renumbered after it
     /// ([`Tree::renumbered_after`]): the chunks whose nodes were removed,
@@ -683,6 +733,27 @@ mod tests {
         assert_eq!(tree.label(4), None);
         assert_eq!(tree.fields(5, 10), [1]);
         assert_eq!(tree.fields(1, 20), [0]);
+    }
+
+    #[test]
+    fn dropping_insides_keeps_the_rest_of_the_tree_connected() {
+        let edge = |node, label| Edge { node, label };
+        let node = |start, end, children| Node { matcher: TEXT, start, end, children };
+        let tree = Tree::from_native(vec![
+            node(0, 1, Vec::new()),
+            node(3, 4, Vec::new()),
+            node(2, 5, vec![edge(1, 20)]),
+            node(6, 7, Vec::new()),
+            Node { matcher: ROOT, start: 0, end: 8, children: vec![edge(0, 10), edge(2, 11), edge(3, 12)] },
+        ], 4);
+        let without = tree.without_insides(&[2]);
+        assert_eq!(without.nodes.len(), 4);
+        let (body, after) = (without.fields(without.root, 11)[0], without.fields(without.root, 12)[0]);
+        assert!(without.children(body).is_empty());
+        assert_eq!((without.nodes[body as usize].start, without.nodes[body as usize].end), (2, 5));
+        assert_eq!(without.parent(after), Some(without.root));
+        assert_eq!(without.order.len(), 4);
+        assert_eq!((without.nodes[after as usize].start, without.label(after)), (6, Some(12)));
     }
 
     #[test]

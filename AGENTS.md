@@ -7,11 +7,12 @@ Rust linter; rules in `.dx` (docs/advanced.md). Binary `dxlint`.
 - test: `cargo test` (stable Rust owners only: VM, parser, patterns/DFA, cache/reads, type APIs, CLI/LSP; rule behaviour lives in fixtures)
 - rule fixtures: `dxlint fixtures [paths...] [--bless]` (default `fixtures/`)
 - package binaries: `npm run build:binaries` (Windows, Linux, macOS; setup in its header); any change to `src/` or Cargo files ships with it in the same batch (publishing refuses binaries whose `package/source.sha256` stamp is stale)
+- Windows binary's PGO profile: `npm run build:profile <project>...` (needs `rustup component add llvm-tools-preview`; lints real projects on an instrumented build), commit `scripts/dxlint-win32-x64.profdata`, then `build:binaries`; refresh when big engine changes landed, a stale one only gains less
 - self-lint: `cargo run --release --` (uses `.dx`); must stay clean
 - perf check: `dxlint --stats --no-cache <big file>`; compare before/after engine changes
 - CPU profile (Windows, no admin): env `DXLINT_SAMPLE=<report>` on a build with debug line tables; `DXLINT_SAMPLE_CALLERS=a;>b` adds callers of `a`, callees of `b`; `DXLINT_SAMPLE_AFTER=<s>` skips startup (a server's scan). Budget steps are not time: profile before trusting them
 - work census: `cargo build --release --features work`, then `--no-cache --jobs 1`: a work count that repeats exactly on a busy machine, each fact's own work with exact repeats, rules and `let`s by own work and own time, which sees native loops (budget steps by source line, facts by own steps; `DXLINT_WORK_SITES=1` adds each expression, slow; `DXLINT_WORK_FACT_SITES=<steps>` adds where facts that heavy spent theirs; scratch/tools/work-run.ps1; scratch/tools/quick.ps1 = same on 139 fixed files in seconds, for first answers). The work count sees native loops only through what they call: confirm wins in CPU (scratch/tools/cpu-ab.ps1)
-- memory: env `DXLINT_HEAP_STATS=1` prints live heap by owner and where allocator pages sit (CLI end, LSP shutdown; LSP adds kept reads by dep kind); add `DXLINT_HEAP_SITES=1` (Windows, debug line tables) to list large blocks by call stack
+- memory: env `DXLINT_HEAP_STATS=1` prints live heap by owner and where allocator pages sit (CLI end, LSP shutdown; LSP adds kept reads by dep kind); add `DXLINT_HEAP_SITES=1` (Windows, debug line tables) to list large blocks by call stack, `DXLINT_HEAP_FILES=1` to print each linted file's peak and final heap (stderr)
 - cross-file deps (`src/parts.rs`): env `DXLINT_RELINT_CHECK=1` makes the language server lint afresh every file an edit's dep check kept, and print any that differ (slow; replays: scratch/lsp-load/hub.mjs)
 
 ## Layout
@@ -49,6 +50,7 @@ Rust linter; rules in `.dx` (docs/advanced.md). Binary `dxlint`.
 - with every rule on (`rule *`), std must build without errors (`engine/tests.rs` checks)
 - native code reads the filesystem only through `engine/reads.rs` (self-lint enforces); shared project answers keep their `Reads` (`Cached`); directory searches go through a registered `Discovery`. Else `.dxcache` replays stale results
 - lint output depends only on file text, config tokens and recorded reads
+- units (other files' views) have no nodes inside `opaque` bodies (`engine/units.rs`): a language's `opaque` item promises no rule or fact needs them from another file
 
 ## Scratch
 
