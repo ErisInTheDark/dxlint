@@ -55,8 +55,13 @@ function location(file, content, start, length) {
 	return { file, line, column, length, lineText: content.split("\n")[line - 1] ?? "" };
 }
 
-/** @param {{ filter?: RegExp }} [options] Files to map; by default `.wts`. */
-export function dxlintTransform({ filter = /\.wts$/ } = {}) {
+/**
+ * @param {{ filter?: RegExp, readFile?: (path: string) => string | Uint8Array | Promise<string | Uint8Array> }} [options]
+ * `filter`: files to map, by default `.wts`. `readFile`: a file's content as
+ * the build should see it (an editor buffer, another checkout's view); by
+ * default the disk's.
+ */
+export function dxlintTransform({ filter = /\.wts$/, readFile: readContent = path => readFile(path, "utf8") } = {}) {
 	return {
 		name: "dxlint-transform",
 		setup(build) {
@@ -64,7 +69,8 @@ export function dxlintTransform({ filter = /\.wts$/ } = {}) {
 			build.onStart(() => { mapper ??= server(); });
 			build.onDispose(() => { mapper?.close(); });
 			build.onLoad({ filter }, async args => {
-				const content = await readFile(args.path, "utf8");
+				const read = await readContent(args.path);
+				const content = typeof read === "string" ? read : Buffer.from(read).toString("utf8");
 				const result = await mapper.request("transform", { fileName: args.path, content, sourceMap: true });
 				const errors = result.diagnostics.map(problem => ({ text: problem.messageText, location: location(args.path, content, problem.start, problem.length) }));
 				if (errors.length > 0) return { errors };
