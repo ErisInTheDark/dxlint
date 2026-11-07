@@ -7,13 +7,15 @@
 // `pip install ziglang`, `rustup target add aarch64-apple-darwin`. Zig's own
 // linker built binaries that crash at start. Apple Silicon only: Intel Macs
 // get no binary.
+// The Windows build uses the profile scripts/build-profile.mjs leaves: it runs
+// ~15% faster, and a stale profile only gains less.
 // One cargo run builds every target side by side, one job per target.
 // Building every platform stamps package/source.sha256; a partial build
 // removes the stamp, so publishing waits for a full one.
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { root, removeStamp, sourceHash, writeStamp } from "./binary-sources.mjs";
+import { root, removeStamp, sourceHash, windowsProfile, writeStamp } from "./binary-sources.mjs";
 const platforms = {
   // The host build: it also refreshes target/release/dxlint.exe, for editors pointed there.
   "win32-x64": { target: "x86_64-pc-windows-msvc", built: "dxlint.exe", shipped: "dxlint-win32-x64.exe", env: windowsEnv, refresh: "dxlint.exe" },
@@ -23,7 +25,8 @@ const platforms = {
 
 function windowsEnv() {
   if (process.platform !== "win32") throw new Error("win32-x64 builds on Windows only");
-  return {};
+  if (!fs.existsSync(windowsProfile)) return {};
+  return { CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: `-Cprofile-use=${windowsProfile.replaceAll("\\", "/")} -Cllvm-args=-pgo-warn-missing-function=false` };
 }
 
 // rust-lld as ld64.lld, finding libSystem in the ziglang Python package.

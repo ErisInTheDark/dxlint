@@ -4,6 +4,7 @@
   "description": "Development scripts; the published package is package/",
   "scripts": {
     "build:binaries": "node scripts/build-binaries.mjs",
+    "build:profile": "node scripts/build-profile.mjs",
     "docs:rules": "node scripts/rules-index.mjs",
     "pack": "node scripts/publish-package.mjs --pack",
     "package:vsix": "npm --prefix editors/vscode run package"
