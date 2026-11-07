@@ -1200,7 +1200,9 @@ each file could declare it: an edit to a file that neither names the global
 nor declares an ambient module (`namespace N {}` does not) keeps those
 results. Results with problems are kept too, so a warm run only lints what
 changed. Any change to the rules
-(comments and blank lines aside) or to the dxlint binary starts afresh.
+(comments and blank lines aside) or to the dxlint binary starts afresh, except
+for `command` outputs: those stay while the command's line and its reported
+inputs are the same.
 
 `--no-cache` lints everything without reading or writing the cache, and
 `--profile` implies it. `--stats` shows how many files came from the cache.
@@ -1252,7 +1254,7 @@ import { dxlintTransform } from "@inthedark/dxlint/esbuild";
 await esbuild.build({ plugins: [dxlintTransform()] });
 ```
 
-Both talk to `dxlint map`, one long-lived process per build. `fixtures/engine/transform-state` is a worked example.
+`dxlintTransform({ readFile })` takes each file's content from `readFile(path)` (a string or bytes, or a promise of one) instead of the disk: a build over another checkout's view or unsaved buffers. Both talk to `dxlint map`, one long-lived process per build. `fixtures/engine/transform-state` is a worked example.
 
 ## Editor and tooling
 

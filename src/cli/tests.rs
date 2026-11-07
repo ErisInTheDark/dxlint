@@ -463,7 +463,9 @@ in .t match word /WORD/ {{
 in .t match shout /SHOUT/
 in shout rule other {other} "other"
 "#);
-    let count = "require('fs').appendFileSync('runs.txt', 'x'); process.stdout.write('dxlint-input a.t\\n')";
+    // A failed run is kept only by the process that ran it (a successful one
+    // outlives config edits), so each run of `stays` shows as a command run.
+    let count = "require('fs').appendFileSync('runs.txt', 'x'); process.exit(1)";
     let dir = project("cli-cache-per-rule", &[(".dx", &config("warn", "")), ("count.js", count), ("a.t", "WORD SHOUT")]);
     let runs = || std::fs::read_to_string(dir.join("runs.txt")).map_or(0, |runs| runs.len());
     let lint = || {

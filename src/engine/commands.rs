@@ -57,6 +57,15 @@ enum Slot {
     Running,
 }
 
+/// A successful run as saved between processes; inputs relative to the root.
+pub struct KeptRun {
+    pub name: String,
+    pub argv: Vec<String>,
+    pub args: Vec<String>,
+    pub payload: Arc<str>,
+    pub inputs: Vec<(String, u64)>,
+}
+
 /// Called with a finished background run's marker path.
 type Finished = dyn Fn(PathBuf) + Send + Sync;
 
@@ -208,6 +217,32 @@ impl Commands {
         for marker in failed {
             reads::set_buffer(&marker, "retrying");
             finished(marker);
+        }
+    }
+
+    /// The finished runs worth keeping past this process: their outputs
+    /// depend on their command and inputs, not on this dxlint or its rules.
+    pub fn kept_runs(&self) -> Vec<KeptRun> {
+        let runs = self.runs.lock().expect("command runs");
+        runs.iter().filter_map(|((name, args), slot)| {
+            let Slot::Done(run) = slot else { return None };
+            let payload = run.result.as_ref().ok()?.clone();
+            let argv = self.declared.get(name)?.argv.clone();
+            let inputs = run.inputs.iter().map(|(path, hash)| {
+                (path.strip_prefix(&self.root).unwrap_or(path).to_string_lossy().replace('\\', "/"), *hash)
+            }).collect();
+            Some(KeptRun { name: name.clone(), argv, args: args.clone(), payload, inputs })
+        }).collect()
+    }
+
+    /// Takes back runs a previous process kept, for commands still declared
+    /// alike. Each holds only while its inputs do, as any finished run.
+    pub fn restore(&self, kept: Vec<KeptRun>) {
+        let mut runs = self.runs.lock().expect("command runs");
+        for run in kept {
+            if self.declared.get(&run.name).is_none_or(|declared| declared.argv != run.argv) { continue }
+            let inputs = run.inputs.into_iter().map(|(path, hash)| (crate::config::source::normalize_path(&self.root.join(path)), hash)).collect();
+            runs.entry((run.name, run.args)).or_insert_with(|| Slot::Done(Arc::new(Run { result: Ok(run.payload), inputs })));
         }
     }
 

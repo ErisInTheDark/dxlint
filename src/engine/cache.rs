@@ -25,7 +25,7 @@ use super::reads::{hash_bytes, Dep, Reads, Scan, ScanTest};
 
 pub const FILE_NAME: &str = ".dxcache";
 /// Bumped whenever the encoding changes.
-const MAGIC: &[u8; 4] = b"ZLCE";
+const MAGIC: &[u8; 4] = b"ZLCF";
 
 /// Deps, groups and scans, by index into the tables.
 #[derive(Default, Clone, PartialEq, Eq, Hash)]
@@ -112,6 +112,8 @@ pub struct Cache {
     /// Something new to write.
     changed: AtomicBool,
     hits: AtomicUsize,
+    /// Whose finished runs the file keeps, whatever else invalidates it.
+    commands: Arc<super::commands::Commands>,
 }
 
 impl Cache {
@@ -122,11 +124,13 @@ impl Cache {
         let key = key(linter.fingerprint);
         let bytes = std::fs::read(&path).ok();
         let opened = bytes.as_deref().map(hash_bytes);
+        if let Some(runs) = bytes.as_deref().and_then(decode_runs) { linter.commands.restore(runs) }
         let saved = bytes.and_then(|bytes| decode(&bytes, key, &linter.root)).unwrap_or_default();
         let mut rules_now: RuleStates = linter.rules.iter().map(|rule| rule.name.clone()).zip(linter.rule_states.iter().copied()).collect();
         rules_now.sort_unstable();
         rules_now.dedup();
         Cache {
+            commands: linter.commands.clone(),
             rules_now,
             opened,
             path,
@@ -410,7 +414,7 @@ impl Cache {
         }
         // Written aside and renamed over, so a reader never sees half a file.
         let tmp = self.path.with_extension(format!("tmp{}", std::process::id()));
-        w.write_to(&tmp, self.key)?;
+        w.write_to(&tmp, self.key, &encode_runs(&self.commands.kept_runs()))?;
         std::fs::rename(&tmp, &self.path).inspect_err(|_| {
             let _ = std::fs::remove_file(&tmp);
         })
@@ -623,10 +627,12 @@ fn write_var(out: &mut Vec<u8>, mut v: u64) {
 
 impl Writer {
     /// The file: its header and strings in front of the body.
-    fn write_to(self, path: &Path, key: u64) -> io::Result<()> {
+    fn write_to(self, path: &Path, key: u64, runs: &[u8]) -> io::Result<()> {
         use std::io::Write;
-        let mut header = Vec::with_capacity(64 * self.strings.len());
+        let mut header = Vec::with_capacity(64 * self.strings.len() + runs.len());
         header.extend_from_slice(MAGIC);
+        header.extend_from_slice(&(runs.len() as u64).to_le_bytes());
+        header.extend_from_slice(runs);
         header.extend_from_slice(&key.to_le_bytes());
         write_var(&mut header, self.strings.len() as u64);
         for s in &self.strings {
@@ -863,9 +869,61 @@ impl Writer {
     }
 }
 
+/// The file's command runs: they sit before its key, as they outlive it.
+fn encode_runs(runs: &[super::commands::KeptRun]) -> Vec<u8> {
+    fn text(out: &mut Vec<u8>, text: &str) {
+        write_var(out, text.len() as u64);
+        out.extend_from_slice(text.as_bytes());
+    }
+    fn texts(out: &mut Vec<u8>, list: &[String]) {
+        write_var(out, list.len() as u64);
+        for item in list { text(out, item) }
+    }
+    let mut out = Vec::new();
+    write_var(&mut out, runs.len() as u64);
+    for run in runs {
+        text(&mut out, &run.name);
+        texts(&mut out, &run.argv);
+        texts(&mut out, &run.args);
+        text(&mut out, &run.payload);
+        write_var(&mut out, run.inputs.len() as u64);
+        for (path, hash) in &run.inputs {
+            text(&mut out, path);
+            out.extend_from_slice(&hash.to_le_bytes());
+        }
+    }
+    out
+}
+
+fn decode_runs(bytes: &[u8]) -> Option<Vec<super::commands::KeptRun>> {
+    let mut r = Reader { bytes, at: 0, root: Path::new(""), strings: Vec::new() };
+    if r.take(4)? != MAGIC { return None }
+    let len = usize::try_from(r.u64()?).ok()?;
+    let mut r = Reader { bytes: r.take(len)?, at: 0, root: Path::new(""), strings: Vec::new() };
+    fn text(r: &mut Reader<'_>) -> Option<String> {
+        let len = usize::try_from(r.var()?).ok()?;
+        String::from_utf8(r.take(len)?.to_vec()).ok()
+    }
+    fn texts(r: &mut Reader<'_>) -> Option<Vec<String>> {
+        (0..r.var()?).map(|_| text(r)).collect()
+    }
+    (0..r.var()?).map(|_| Some(super::commands::KeptRun {
+        name: text(&mut r)?,
+        argv: texts(&mut r)?,
+        args: texts(&mut r)?,
+        payload: text(&mut r)?.into(),
+        inputs: (0..r.var()?).map(|_| Some((text(&mut r)?, r.u64()?))).collect::<Option<Vec<_>>>()?,
+    })).collect()
+}
+
 fn decode(bytes: &[u8], key: u64, root: &Path) -> Option<Saved> {
     let mut r = Reader { bytes, at: 0, root, strings: Vec::new() };
-    if r.take(4)? != MAGIC || r.u64()? != key {
+    if r.take(4)? != MAGIC {
+        return None;
+    }
+    let runs = usize::try_from(r.u64()?).ok()?;
+    r.take(runs)?;
+    if r.u64()? != key {
         return None;
     }
     for _ in 0..r.var()? {
@@ -1150,6 +1208,33 @@ mod tests {
         let saved = Cache::open(&linter);
         assert!(saved.lookup(&linter, "first", "first").is_some());
         assert!(saved.lookup(&linter, "second", "second").is_some());
+    }
+
+    #[test]
+    fn command_outputs_outlive_a_change_of_rules_until_their_input_changes() {
+        let root = project("command-runs");
+        std::fs::write(root.join("input.txt"), "one").expect("input");
+        // Each run appends to `runs`: how many there were shows through its length.
+        let command = r#"command counted "node -e \"const fs=require('fs');fs.appendFileSync('runs','x');console.log('dxlint-input input.txt');console.log('payload')\"""#;
+        let runs = || std::fs::read_to_string(root.join("runs")).map_or(0, |text| text.len());
+        let answer = |linter: &Linter| linter.commands.answer("counted", &[]);
+        let linter = crate::engine::tests::linter_at(&root, command);
+        let first = Cache::open(&linter);
+        assert_eq!(answer(&linter), super::super::commands::Answer::Ready("payload\n".into()));
+        store(&first, "a");
+        first.save(false).expect("save");
+        assert_eq!(runs(), 1);
+        // Other rules: results are gone, the output is not.
+        let other = crate::engine::tests::linter_at(&root, &format!("{command}\nlang t \"*.t\""));
+        let second = Cache::open(&other);
+        assert!(second.lookup(&other, "a", "a").is_none());
+        assert_eq!(answer(&other), super::super::commands::Answer::Ready("payload\n".into()));
+        assert_eq!(runs(), 1);
+        std::fs::write(root.join("input.txt"), "two").expect("input");
+        let changed = crate::engine::tests::linter_at(&root, command);
+        let _opened = Cache::open(&changed);
+        answer(&changed);
+        assert_eq!(runs(), 2);
     }
 
     #[test]
