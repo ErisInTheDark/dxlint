@@ -54,7 +54,7 @@ fn import_deprecation_doc(n, site) = {
 fn import_remote_sites(n, sites) = filter(sites ?? [], site => import_remote_site(n, site))
 # `export { /** @deprecated */ X }`: the specifier carries the documentation,
 # not `X`'s declaration. Found among the statements of the declaring file.
-fn import_specifier_docs(n, site, name) = {
+fn import_specifier_docs(n, site, name) = if !site_mentions(n, site, "@deprecated") then [] else {
   value root: last(walk([site], current => site_parent(n, current)))
   value exports: filter(site_field(n, root, "body") ?? [], statement => statement.kind == "ts_export")
   value specifiers: flat_map(exports, statement => site_field(n, statement, "specifier") ?? [])
