@@ -82,7 +82,9 @@ impl Linter {
         let (tree, state, native_done, tokens_done) = match plan.front {
             Some(index) => {
                 let front = &self.grammar.natives[index];
-                let mut parsed = front.frontend.parse(text, path)?;
+                let rel = self.relative(path);
+                let options: Vec<_> = self.language_options.values(plan.lang, &rel).collect();
+                let mut parsed = front.frontend.parse(text, path, &options)?;
                 let native_done = std::time::Instant::now();
                 if plan.tokens.iter().any(|&wanted| wanted) {
                     front.frontend.attach_tokens(text, &mut parsed, plan.tokens);
@@ -174,7 +176,7 @@ impl Linter {
             let _owner = crate::alloc::heap::Owner::enter(crate::alloc::heap::UNITS);
             let rel = self.relative(path);
             let lang = self.grammar.lang_for(&rel)?;
-            let front = self.grammar.natives.iter().position(|front| front.frontend.accepts(path));
+            let front = self.grammar.native_for(path, lang);
             let tokens = front.and_then(|index| self.unit_token_kinds.get(index)).map_or(&[][..], Vec::as_slice);
             let plan = ParsePlan { lang, front, layers: true, overlays: &self.unit_overlays, child_layers: self.unit_child_layers, tokens };
             let mut parsed = self.parse(path, &text, plan).ok()?;

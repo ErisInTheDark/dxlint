@@ -462,7 +462,7 @@ impl<'s> Parser<'s> {
         const MODS: &[&str] =
             &["public", "private", "protected", "static", "readonly", "abstract", "override", "declare", "accessor", "async"];
         while self.tok.tok == Tok::Ident
-            && MODS.contains(&self.cur())
+            && (MODS.contains(&self.cur()) || self.member_modifiers.iter().any(|word| word == self.cur()))
             && if self.is_word("static") { self.word_is_accessor() } else { self.word_is_modifier() }
         {
             let m = self.token_text();

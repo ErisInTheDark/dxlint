@@ -5,6 +5,7 @@ mod eval;
 mod fixtures;
 mod info;
 mod lint;
+mod map;
 mod render;
 mod suggest;
 mod workbench;
@@ -181,6 +182,8 @@ pub enum Format {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Serve `transform`s over stdio: a TypeScript content mapper, and bundlers
+    Map,
     /// Check on-disk rule scenarios (default: fixtures/)
     Fixtures {
         paths: Vec<PathBuf>,
@@ -296,6 +299,11 @@ where
         }
         return crate::lsp::run(input, stdout, &mut stderr);
     }
+    if matches!(&cli.command, Some(Command::Map)) {
+        let mut no_output = std::io::sink();
+        let mut output = Output { cwd, stdout: &mut no_output, stderr: &mut stderr };
+        return map::run(&mut output, &mut std::io::BufReader::new(input), &mut stdout);
+    }
     let mut output = Output { cwd, stdout: &mut stdout, stderr: &mut stderr };
     if matches!(&cli.command, Some(Command::Conformance)) {
         if cli.lint.sources.is_some() || !cli.lint.paths.is_empty() || cli.lint.fix || cli.lint.fix_preview
@@ -365,6 +373,7 @@ where
         },
         Some(Command::Functions) => info::functions(&mut output),
         Some(Command::Conformance) => unreachable!("conformance owns its input"),
+        Some(Command::Map) => unreachable!("map owns its streams"),
         Some(Command::Lsp) => unreachable!("LSP owns its streams"),
     }
 }

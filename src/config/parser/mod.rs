@@ -457,7 +457,7 @@ impl<'a> Parser<'a> {
         if !first.is_ident("in") { return false }
         for ahead in 1.. {
             let Some(token) = self.ts.peek_raw(ahead) else { return false };
-            if token.is_ident("rule") { return true }
+            if token.is_ident("rule") || token.is_ident("transform") { return true }
             if token.kind == Tk::Newline || token.is_ident("let") || token.is_ident("match") || &*token.text == "{" { return false }
         }
         false
@@ -504,6 +504,7 @@ impl<'a> Parser<'a> {
             (Tk::Ident, "in") => self.context_item(),
             (Tk::Ident, "match") => self.matcher(ctx),
             (Tk::Ident, "rule") => self.rule(ctx),
+            (Tk::Ident, "transform") if ctx.is_some() => self.rule(ctx),
             (Tk::Ident, "indent") => self.indent(ctx),
             (Tk::Ident, "let") => self.attr(ctx),
             (Tk::Ident, "forward") => self.forward(ctx),
@@ -566,7 +567,7 @@ impl<'a> Parser<'a> {
                 self.block(&ctx, t.span);
             }
             Some(t) if t.is_ident("match") => self.matcher(Some(&ctx)),
-            Some(t) if t.is_ident("rule") => self.rule(Some(&ctx)),
+            Some(t) if t.is_ident("rule") || t.is_ident("transform") => self.rule(Some(&ctx)),
             Some(t) if t.is_ident("indent") => self.indent(Some(&ctx)),
             Some(t) if t.is_ident("let") => self.attr(Some(&ctx)),
             Some(t) if t.is_ident("forward") => self.forward(Some(&ctx)),
@@ -2046,6 +2047,7 @@ impl<'a> Parser<'a> {
         let Some(name) = self.glued_name("a rule name", false) else { return };
         let targets: Vec<Target> = ctx.parents.iter().map(target_of).collect();
         let mut def = RuleDef::new(name, targets);
+        def.transform = kw.is_ident("transform");
         def.defined_only = self.defining > 0;
         self.rule_tail(&mut def, None);
         let existing = self.config.rules.iter().position(|r| r.name.text == def.name.text);

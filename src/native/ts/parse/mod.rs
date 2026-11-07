@@ -37,6 +37,8 @@ impl Kids {
 }
 
 pub struct Parser<'s> {
+    /// More words a class member may start with, from the language's options.
+    pub member_modifiers: Vec<String>,
     lx: Lexer<'s>,
     src: &'s str,
     tok: Token,
@@ -77,7 +79,7 @@ impl<'s> Parser<'s> {
     pub fn new(src: &'s str, jsx: bool) -> Self {
         let mut lx = Lexer::new(src);
         let tok = lx.next_token();
-        Parser { lx, src, tok, prev_end: 0, nodes: Vec::new(), jsx, depth: 0, no_in: false, in_gen: false, no_cond: false, heritage: false, error: None }
+        Parser { member_modifiers: Vec::new(), lx, src, tok, prev_end: 0, nodes: Vec::new(), jsx, depth: 0, no_in: false, in_gen: false, no_cond: false, heritage: false, error: None }
     }
 
     /// Parses the whole file; the root is the last node.

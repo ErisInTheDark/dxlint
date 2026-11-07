@@ -1293,6 +1293,7 @@ fn rule(def: &RuleDef, g: &Grammar, schemas: &Schemas, attrs: &AttrNames, uses: 
         all_tokens: reads_children || helper_tokens || on_tokens && reads_siblings,
         token_fields: targets_tokens || own_tokens,
         target_layers,
+        transform: def.transform,
         name: def.name.text.clone(),
         span: def.name.span,
         targets,

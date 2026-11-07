@@ -413,7 +413,7 @@ pub(crate) fn ts_linter() -> &'static Linter {
 /// front end to build its [`crate::native::ts::syntax::Syntax`] with.
 pub(crate) fn ts_tree(text: &str, path: &Path) -> (crate::grammar::Tree, &'static crate::grammar::NativeFront) {
     let front = &ts_linter().grammar.natives[0];
-    let parsed = front.frontend.parse(text, path).expect("parses");
+    let parsed = front.frontend.parse(text, path, &[]).expect("parses");
     (crate::grammar::Tree::from_native(front.remap(parsed.nodes), parsed.root), front)
 }
 

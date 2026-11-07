@@ -10,6 +10,7 @@ use super::kinds::{field_shape, Kind, ALL_FIELDS, ALL_KINDS, KINDS};
 use super::syntax::Syntax;
 use super::tokens::Lexed;
 use crate::engine::frontend::{FieldShape, FileInput, Frontend, Native, Parsed};
+use crate::expr::Value;
 
 pub struct Ts;
 
@@ -59,8 +60,18 @@ impl Frontend for Ts {
         super::reads(path).is_some()
     }
 
-    fn parse(&self, text: &str, path: &Path) -> Result<Parsed, (u32, String)> {
-        let parsed = super::parse(text, super::reads(path).unwrap_or(false))?;
+    fn sample_file(&self) -> &'static str {
+        "file.ts"
+    }
+
+    fn parse(&self, text: &str, path: &Path, options: &[(&str, &Value<'static>)]) -> Result<Parsed, (u32, String)> {
+        // Defaults come first, settings after: the last one holds.
+        let modifiers: Vec<&str> = options.iter().rfind(|(name, _)| *name == "memberModifiers").into_iter()
+            .flat_map(|(_, value)| match value {
+                Value::List(items) => items.iter().filter_map(|item| match item { Value::Str(text) => Some(&**text), _ => None }).collect(),
+                _ => Vec::new(),
+            }).collect();
+        let parsed = super::parse_with(text, super::reads(path).unwrap_or(false), &modifiers)?;
         Ok(Parsed { nodes: parsed.nodes, root: parsed.root, state: None })
     }
 

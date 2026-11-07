@@ -12,6 +12,7 @@ mod fix;
 pub mod frontend;
 mod inspect;
 pub(crate) mod language_options;
+pub mod transform;
 mod message;
 mod module_graph;
 mod profile;
@@ -71,6 +72,8 @@ pub enum NodeSelection {
 }
 
 pub struct Rule {
+    /// Written `transform`: runs only when a file is mapped ([`transform`]).
+    pub transform: bool,
     pub name: String,
     pub span: Span,
     pub targets: Vec<Target>,
@@ -459,6 +462,11 @@ impl LintRun<'_> {
 
     pub fn lint_tracked(&self, path: &Path, text: &str) -> (Vec<Diagnostic>, Reads) {
         reads::track(|| self.lint(path, text))
+    }
+
+    /// [`Self::lint`] with only the rules `only` marks.
+    pub(crate) fn lint_only(&self, path: &Path, text: &str, only: &[bool]) -> Vec<Diagnostic> {
+        crate::parts::linting(path, || self.linter.lint_rules(&self.programs, self.rule_jobs, path, text, Some(only)))
     }
 
     /// [`Self::lint_tracked`] with only the rules `only` marks.
@@ -923,7 +931,8 @@ impl Linter {
         let Some(lang) = self.grammar.lang_for(&rel) else { return Vec::new() };
         let settings = self.scopes.for_file(&rel, &self.rules);
         let severity = |i: usize| settings.as_ref().map_or(self.rules[i].severity, |s| s.severity[i]);
-        let active: Vec<bool> = self.rules.iter().enumerate().map(|(i, f)| only.is_none_or(|only| only[i]) && f.applies_to(&rel, lang, severity(i))).collect();
+        // A transform runs only when asked for: mapping a file, never linting it.
+        let active: Vec<bool> = self.rules.iter().enumerate().map(|(i, f)| only.map_or(!f.transform, |only| only[i]) && f.applies_to(&rel, lang, severity(i))).collect();
         if !active.iter().any(|a| *a) {
             return Vec::new();
         }
@@ -933,7 +942,7 @@ impl Linter {
         let mut targets = vec![false; self.grammar.matchers.len()];
         let (mut wants_layers, mut wants_native) = (false, false);
         // The native front end reading this file, if any.
-        let accepting = self.grammar.natives.iter().position(|front| front.frontend.accepts(path));
+        let accepting = self.grammar.native_for(path, lang);
         // Token kinds the active rules use (a node per token costs): the
         // ones they target, and brackets for `opener.x`. All of them when a
         // read would see the difference (`children.x`, `previous.x` on a token).

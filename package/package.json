@@ -34,10 +34,21 @@
   "bin": {
     "dxlint": "bin/dxlint"
   },
+  "exports": {
+    "./esbuild": "./esbuild.mjs",
+    "./package.json": "./package.json"
+  },
+  "typescript": {
+    "contentMapper": {
+      "exec": ["node", "bin/dxlint", "map"],
+      "dynamicConfig": true
+    }
+  },
   "files": [
     "bin",
     "std",
     "rules",
+    "esbuild.mjs",
     "README.md",
     "LICENSE"
   ]

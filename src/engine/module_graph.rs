@@ -568,7 +568,7 @@ impl Linter {
         let nothing = || (Arc::from([]), links.then(Arc::default));
         let rel = self.relative(path);
         let Some(lang) = self.grammar.lang_for(&rel) else { return nothing() };
-        let front = self.grammar.natives.iter().position(|front| front.frontend.accepts(path));
+        let front = self.grammar.native_for(path, lang);
         let plan = ParsePlan { lang, front, layers: false, overlays: &[], child_layers: false, tokens: &[] };
         let Ok(parsed) = self.parse(path, &text, plan) else { return nothing() };
         let tree = &parsed.tree;

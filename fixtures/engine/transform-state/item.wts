@@ -1,0 +1,11 @@
+class Item extends Base {
+	state quality = 1;
+	@SaveProperty() state bonus?: number;
+	private state seed = 0;
+	state mainHand?: Item;
+	derived baseAttack = this.description.attack + (this.bonus ?? 0);
+	derived attack = Math.round(this.baseAttack * this.quality);
+	derived own = this.quality + this.seed;
+	derived total = this.attack + (this.mainHand?.attack ?? 0);
+	derived listed = this.items.map(item => item.attack);
+}

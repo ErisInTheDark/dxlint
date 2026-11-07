@@ -1,0 +1,150 @@
+import .ts
+
+lang js "*.js" "*.mjs" "*.cjs" "*.jsx" "*.ts" "*.tsx" "*.mts" "*.cts" "*.wts"
+language .js {
+  files "*.wts"
+  set memberModifiers ["state", "derived"]
+}
+
+# `state` and `derived` class members to kitsui Fields (kitsui2 .bench/derived/EMIT.md).
+# Output stays on the same lines: nothing here writes a line break. What the
+# user wrote stays where it is, so errors in it land where they wrote it.
+
+in ts_class_property let st_state { value modifier.nodes; find (m) m == "state" }
+in ts_class_property let st_derived { value modifier.nodes; find (m) m == "derived" }
+in ts_class_property let st_visibility { value modifier.nodes; filter (m) m != "state" && m != "derived"; map (m) "{m} "; join "" }
+in ts_class_property let st_class ts_class.node
+in ts_class_property let st_prefix "_${st_class.name}$"
+in ts_class let st_states { value member.nodes; filter (m) m is ts_class_property && m.st_state != null; map (m) "{m.key}" }
+in ts_class let st_deriveds { value member.nodes; filter (m) m is ts_class_property && m.st_derived != null; map (m) "{m.key}" }
+in ts_class let st_any count(st_states) + count(st_deriveds) > 0
+# A word holds 22 bits. (`/` opens a regex here: this is 1/22, a hair over.)
+fn st_word_of(n) = floor(n * 0.0454545454545455)
+in ts_class let st_words { value st_deriveds; map (d, i) i; filter (i) i % 22 == 0; map (i) st_word_of(i) }
+fn st_member(owner, name) = find(owner.member.nodes, m => m is ts_class_property && "{m.key}" == name)
+
+# What an initializer reads. Paths are outermost member chains and bare names.
+fn st_root(n) = { value [n]; walk (c) if c is ts_member then c.object.node else null; last }
+fn st_nodes(e) = { value [e] e.descendants(ts_node) }
+fn st_chains(e) = { value st_nodes(e); filter (m) m is ts_member && !(m is ts_member.object) && !(m is ts_call.callee) && st_root(m) is (ts_this, ts_super, ts_identifier) }
+fn st_names(e) = {
+  value st_nodes(e)
+  filter (n) n is ts_identifier && n != "undefined" && n != "NaN" && n != "Infinity"
+    && (n == e || n is (ts_binary.left, ts_binary.right, ts_logical.left, ts_logical.right, ts_conditional.test, ts_conditional.consequent,
+      ts_conditional.alternate, ts_call.argument, ts_unary.argument, ts_parenthesized.expression, ts_array.element, ts_property.value, ts_template.expression))
+}
+fn st_path(n) = when {
+  n is ts_identifier then "{n}"
+  n.object is ts_this then "this.{n.property}"
+  n.object is ts_super then "super.{n.property}"
+  else then st_path(n.object.node) "?.{n.property}"
+}
+fn st_pure_call(call) = call.callee is ts_identifier
+  || call.callee is ts_member && (call.callee.object is ts_identifier || call.callee.object is ts_call && st_pure_call(call.callee.object.node))
+fn st_volatile(e) = any(st_nodes(e), n => n is (ts_arrow, ts_function, ts_for, ts_for_in, ts_for_of, ts_while, ts_do_while, ts_index, ts_new)
+  || n is ts_call && !st_pure_call(n))
+fn st_own(chain, owner) = chain.object is ts_this && (contains(owner.st_states, "{chain.property}") || contains(owner.st_deriveds, "{chain.property}"))
+fn st_own_deriveds(e, owner) = { value st_chains(e); filter (c) st_own(c, owner) && contains(owner.st_deriveds, "{c.property}"); map (c) st_member(owner, "{c.property}") }
+
+in ts_class_property let st_is_volatile st_derived != null && st_volatile(init.node)
+in ts_class_property let st_is_guarded st_derived != null && !st_is_volatile && (
+  any(st_chains(init.node), c => !st_own(c, st_class)) || count(st_names(init.node)) > 0
+  || any(st_own_deriveds(init.node, st_class), d => d.st_is_guarded))
+# Own state and unguarded own deriveds are mask edges; everything else is a guard.
+fn st_guards(m) = if m.st_is_volatile then [] else {
+  value owner: m.st_class
+  value st_chains(m.init.node) st_names(m.init.node)
+  filter (c) c is ts_identifier || !st_own(c, owner) || contains(owner.st_deriveds, "{c.property}") && st_member(owner, "{c.property}").st_is_guarded
+  map (c) st_path(c)
+  unique_by (path) path
+}
+in ts_class_property let st_guard_paths if st_derived != null then st_guards(node) else []
+fn st_edges(m) = {
+  value owner: m.st_class
+  value st_chains(m.init.node)
+  filter (c) st_own(c, owner) && !contains(m.st_guard_paths, st_path(c))
+  map (c) "{c.property}"
+  unique_by (name) name
+}
+in ts_class_property let st_number index_of(st_class.st_deriveds, "{key}")
+in ts_class_property let st_word st_word_of(st_number)
+in ts_class_property let st_bit "(1 << {st_number % 22})"
+
+in ts_program transform st-imports {
+  when any(descendants(ts_class), c => c.st_any)
+  fix at { start: 0, end: 0 } as "import {{ Fields as $$Fields, HostState as $$HostState }} from \"@inthedark/kitsui\"; const $$F = $$Fields; "
+}
+
+in ts_class transform st-named error "a class with `state` or `derived` members needs a name and its own statement" {
+  when st_any && (name == null || !(parent is (ts_program, ts_export, ts_block)))
+}
+
+in ts_class transform st-words {
+  when count(st_deriveds) > 0
+  let first_member first(member.nodes)
+  let words { value st_words; map (w) "_${name}$d{w} = 0x3FFFFF | $$F.generation; declare _${name}$x{w}: number; "; join "" }
+  fix at { start: first_member.offset, end: first_member.offset } as words
+}
+
+in ts_class transform st-table {
+  when st_any && name != null
+  let states { value st_states; map (s) "\"{s}\""; join ", " }
+  let members { value member.nodes; filter (m) m is ts_class_property && m.st_derived != null }
+  let deriveds { value members; map (m) "{m.key}: [" { value st_edges(m); map (d) "\"{d}\""; join ", " } "]"; join ", " }
+  let guarded { value members; filter (m) m.st_is_guarded; map (m) "\"{m.key}\""; join ", " }
+  let volatile { value members; filter (m) m.st_is_volatile; map (m) "\"{m.key}\""; join ", " }
+  let decorated {
+    value member.nodes
+    filter (m) m is ts_class_property && (m.st_state != null || m.st_derived != null)
+    flat_map (m) map(m.decorator.nodes, d => " " re_replace("{d}", /^@\s*/, "") "({name}.prototype, \"{m.key}\");")
+    join ""
+  }
+  fix at { start: end_offset, end: end_offset } as (" $$F.define({name}, {{ name: \"{name}\", state: [{states}], derived: {{ {deriveds} }}, guarded: [{guarded}], volatile: [{volatile}] }});" decorated)
+}
+
+in ts_class_property transform st-decorators {
+  when st_state != null || st_derived != null
+  each d in decorator.nodes {
+    fix at d as ""
+  }
+}
+
+in ts_class_property transform st-field {
+  when st_state != null
+  let name "{key}"
+  let slot "{st_prefix}{name}"
+  let words st_class.st_words
+  let dirty { value words; map (w) "this.{st_prefix}d{w} |= this.{st_prefix}m{w}_{name}; "; join "" }
+  let masks { value words; map (w) "declare {st_prefix}m{w}_{name}: number; "; join "" }
+  let after type.end_offset ?? optional.end_offset ?? key.end_offset
+  fix {
+    at { start: first(modifier.nodes).offset, end: key.offset } as "{st_prefix}"
+    at { start: after, end: after } as (if init == null then " = undefined" else "")
+    at { start: end_offset, end: end_offset } as (" {st_visibility}get {name} () {{ return this.{slot}; }} "
+      "{st_visibility}set {name} (v) {{ if (this.{slot} !== v) {{ this.{slot} = v; {dirty}if ($$F.observing !== 0) $$HostState.onWrite(); }} }} "
+      "get ${name} (): import(\"@inthedark/kitsui\").State<this[\"{name}\"]> {{ return $$HostState.of(this, \"{name}\", true) as any; }} {masks}")
+  }
+}
+
+in ts_class_property transform st-derived {
+  when st_derived != null
+  let name "{key}"
+  let word "{st_prefix}d{st_word}"
+  let value_slot "{st_prefix}v_{name}"
+  let guards st_guard_paths
+  let slots { value guards; map (g, i) "{st_prefix}s_{name}_{i}: any = undefined; "; join "" }
+  let snapshots { value guards; map (g, i) "const s{i} = {g}; "; join "" }
+  let fresh { value guards; map (g, i) " && s{i} === this.{st_prefix}s_{name}_{i}"; join "" }
+  let arguments { value guards; map (g, i) "s{i}"; join ", " }
+  let parameters { value guards; map (g, i) "s{i}: any"; join ", " }
+  let keep { value guards; map (g, i) "this.{st_prefix}s_{name}_{i} = s{i}; "; join "" }
+  let annotation if type == null then "" else ": {type}"
+  fix {
+    at { start: first(modifier.nodes).offset, end: key.offset } as ("{value_slot}: any = undefined; {slots}declare {st_prefix}c_{name}: any; {st_visibility}get ")
+    at { start: key.end_offset, end: init.offset } as (" () {{ {snapshots}return ((this.{word} ^ $$F.generation) & ({st_bit} | 0x3FC00000)) === 0{fresh} ? this.{value_slot} as never : this.{st_prefix}r_{name}({arguments}); }} "
+      "{st_prefix}r_{name} ({parameters}) {{ if (((this.{word} ^ $$F.generation) & 0x3FC00000) !== 0) this.{word} = 0x3FFFFF | $$F.generation; $$F.enter(); try {{ let v{annotation} = ")
+    at { start: init.end_offset, end: end_offset } as ("; const c = this.{st_prefix}c_{name}; if (c !== null) v = $$F.chain(c, this, v) as any; {keep}this.{value_slot} = v; "
+      "this.{word} = (this.{word} & ~{st_bit}) | (this.{st_prefix}x{st_word} & {st_bit}); return v; }} finally {{ $$F.exit(); }} }} "
+      "get ${name} (): import(\"@inthedark/kitsui\").State<this[\"{name}\"]> {{ return $$HostState.of(this, \"{name}\", false) as any; }}")
+  }
+}

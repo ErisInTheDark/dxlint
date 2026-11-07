@@ -291,6 +291,12 @@ impl Grammar {
         self.langs.iter().position(|l| l.name == name)
     }
 
+    /// The native front end reading `path`, a file of language `lang`: the
+    /// files it names itself, and every file of a language holding its own.
+    pub fn native_for(&self, path: &Path, lang: usize) -> Option<usize> {
+        self.natives.iter().position(|front| front.frontend.accepts(path) || self.lang_for(Path::new(front.frontend.sample_file())) == Some(lang))
+    }
+
     pub fn lang_for(&self, rel_path: &Path) -> Option<usize> {
         // Later definitions win, so users can override std languages.
         self.langs.iter().rposition(|l| l.owns(rel_path))

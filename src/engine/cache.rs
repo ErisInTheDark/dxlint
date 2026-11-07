@@ -213,7 +213,7 @@ impl Cache {
             // Reports of no rule are the file's own: they don't change.
             old == new
         }).cloned().collect();
-        let rerun = linter.rules.iter().zip(&linter.rule_states).map(|(rule, state)| was(&rule.name) != Some(*state)).collect();
+        let rerun = linter.rules.iter().zip(&linter.rule_states).map(|(rule, state)| !rule.transform && was(&rule.name) != Some(*state)).collect();
         Some(Found::Partly { kept, rerun })
     }
 

@@ -18,6 +18,7 @@ See [everyday use](basic.md) for running dxlint and the [TypeScript library](ts.
 - [Imports and macros](#imports-and-macros)
 - [Defining a language](#defining-a-language): [items](#items), [contexts](#context-blocks), [layers](#layers), [patterns](#patterns), [native layers](#native-layers)
 - [Performance and caching](#performance-and-caching)
+- [Transforms: syntax of your own](#transforms-syntax-of-your-own)
 - [Editor and tooling](#editor-and-tooling), including [packed sources](#packed-sources)
 
 ## Rules
@@ -1206,6 +1207,52 @@ changed. Any change to the rules
 A run over the whole project forgets files that no longer exist. The editor
 uses the same cache for its workspace scan, and re-lints the files an edit
 affects as you type, open or not. Add `.dxcache` to `.gitignore`.
+
+## Transforms: syntax of your own
+
+A `transform` has a rule's body, and its `fix` is what a file compiles to, for TypeScript and for your bundler alike:
+
+```dx
+lang js "*.js" "*.mjs" "*.cjs" "*.jsx" "*.ts" "*.tsx" "*.mts" "*.cts" "*.wts"
+language .js {
+  files "*.wts"
+  set memberModifiers ["state"]
+}
+
+in ts_class_property let state_word { value modifier.nodes; find (m) m == "state" }
+in ts_class_property transform state-field {
+  when state_word != null
+  fix {
+    at { start: state_word.offset, end: key.offset } as "$_"
+    at { start: end_offset, end: end_offset } as " get {key} () {{ return this.$_{key}; }}"
+  }
+}
+```
+
+`memberModifiers` adds words a class member may start with. Any file of the language the native front end reads is parsed by it, so `.wts` above is TypeScript with one more modifier, and rules lint it directly.
+
+| | `rule ... fix` | `transform` |
+| --- | --- | --- |
+| Runs | linting, `--fix` | only when a file is mapped; linting never runs it |
+| Overlapping edits | skipped, retried next pass | an error, one pass only |
+| Reports without a fix | diagnostics | mapping errors |
+
+Text between edits maps back to the source exactly, so leave what users wrote in place and edit around it, and errors in it land where they wrote it. Write no line breaks and lines stay right everywhere. Output must depend on the file and config alone: TypeScript keeps it by the file's text, so reading another file would go stale. Check across files with ordinary rules. Keep reports for what stops the transform: TypeScript treats them as syntax errors, which hide type errors for the whole program.
+
+To use them, in `tsconfig.json` (run with `tsc --runExternalCode`; spell `.wts` in imports, with `allowImportingTsExtensions`):
+
+```json
+"contentMappers": [{ "package": "@inthedark/dxlint", "extensions": [".wts"] }]
+```
+
+and for esbuild, which gets the same output with a source map:
+
+```js
+import { dxlintTransform } from "@inthedark/dxlint/esbuild";
+await esbuild.build({ plugins: [dxlintTransform()] });
+```
+
+Both talk to `dxlint map`, one long-lived process per build. `fixtures/engine/transform-state` is a worked example.
 
 ## Editor and tooling
 

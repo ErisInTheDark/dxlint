@@ -145,8 +145,11 @@ pub trait Frontend: Sync {
 
     /// Whether this front end reads `path`.
     fn accepts(&self, path: &Path) -> bool;
-    /// Parses a file, or says where (byte offset) and why it could not.
-    fn parse(&self, text: &str, path: &Path) -> Result<Parsed, (u32, String)>;
+    /// A file name it reads: its language's files are all its to read.
+    fn sample_file(&self) -> &'static str;
+    /// Parses a file under its language's options, or says where (byte
+    /// offset) and why it could not.
+    fn parse(&self, text: &str, path: &Path, options: &[(&str, &Value<'static>)]) -> Result<Parsed, (u32, String)>;
     /// Adds token nodes of the `wanted` kinds (by kind number).
     fn attach_tokens(&self, text: &str, parsed: &mut Parsed, wanted: &[bool]);
     /// The fact object of one parsed file.

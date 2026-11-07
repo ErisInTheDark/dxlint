@@ -9,7 +9,7 @@ mod convert;
 mod live_cache;
 mod projects;
 mod scan;
-mod transport;
+pub(crate) mod transport;
 mod uri;
 
 use std::collections::{HashMap, HashSet};

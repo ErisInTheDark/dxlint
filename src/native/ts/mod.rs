@@ -37,7 +37,13 @@ pub fn reads(path: &Path) -> Option<bool> {
 
 /// Parses a file, or says where (byte offset) and why it could not.
 pub fn parse(src: &str, jsx: bool) -> Result<Parsed, (u32, String)> {
+    parse_with(src, jsx, &[])
+}
+
+/// [`parse`], with more words a class member may start with.
+pub fn parse_with(src: &str, jsx: bool, member_modifiers: &[&str]) -> Result<Parsed, (u32, String)> {
     let mut p = parse::Parser::new(src, jsx);
+    p.member_modifiers = member_modifiers.iter().map(|&word| word.to_owned()).collect();
     match p.parse_program() {
         Ok(root) => Ok(Parsed { nodes: std::mem::take(&mut p.nodes), root, tokens: None }),
         Err(_) => Err(p.error.take().unwrap_or((0, "syntax error".into()))),
