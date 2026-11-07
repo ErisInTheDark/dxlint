@@ -469,6 +469,9 @@ fn skipped_note(output: &mut Output<'_>, linter: &Linter, skipped: Vec<PathBuf>,
 fn lint_project(output: &mut Output<'_>, args: &LintArgs, project: &mut Project, sources: Option<&Sources>, scope: Scope<'_>, started: Instant, tally: &mut Tally) {
     let Project { linter, config_ok, load_time, lex_time, build_time, build_phases, .. } = project;
     tally.config_ok &= *config_ok;
+    // Loading a config leaves far more free than it keeps, on pages lint
+    // workers, with pools of their own, would never use.
+    crate::alloc::release();
     if args.profile {
         linter.enable_profile();
     }
