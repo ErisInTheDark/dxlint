@@ -1201,7 +1201,10 @@ fn rule(def: &RuleDef, g: &Grammar, schemas: &Schemas, attrs: &AttrNames, uses: 
     }
     scope.param_read = None;
     let message = def.message.as_ref().and_then(|m| scope.compile(m, errors));
-    let fix = def.fix.as_ref().and_then(|fix| fix_plan(&scope, None, fix, errors));
+    let fix = match &def.fix {
+        Some(rewrite) if def.transform => fix_plan(&scope, None, &super::transform::marked_rewrite(rewrite), errors),
+        fix => fix.as_ref().and_then(|fix| fix_plan(&scope, None, fix, errors)),
+    };
     let suggestions = def.suggestions.iter().filter_map(|s| fix_plan(&scope, Some(&s.title), &s.fix, errors)).collect();
     let report_at = def.report_at.as_ref().and_then(|s| scope.compile(s, errors));
     // `indent X by n`: `n` reads X (its fields when X names only layers) and

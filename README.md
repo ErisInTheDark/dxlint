@@ -23,7 +23,7 @@ warn: Promises must be awaited, end with a call to .catch, end with a call to .t
 
 - **it's over 200× faster than eslint+typescript-eslint.** because apples to apples requires eslint *without* its caching enabled, and dxlint's cache is intrinsic. (even without that, it's also twice as fast and significantly less memory hungry)
 - **and it has almost perfect eslint parity.** 99.4% of eslint's and typescript-eslint's test cases give the same result. type-aware rules read your `tsconfig.json` *without running typescript*
-- **everything is overrideable, you own it all.** built-in rules, and even the typescript parser, are `.dx` files: override them, tweak them, extend the grammar with syntax of your own, or describe a whole new language
+- **everything is overrideable, you own it all.** built-in rules, and even the typescript parser, are `.dx` files: override them, tweak them, extend the grammar with [syntax of your own](docs/advanced.md#transforms-syntax-of-your-own) that typescript and esbuild see through, or describe a whole new language
 - **plus a high quality vscode extension too!** extremely fast, with diagnostics, with a proper `.dx` lsp
 
 ## getting started
@@ -47,8 +47,9 @@ ignore "dist" "src/generated/**"
 | `dxlint --fix` | apply fixes |
 | `dxlint rules` | list every rule with its options |
 | `dxlint describe <name>` | explain a rule, option or anything else in the config |
+| `dxlint map <files>` | show what files using your own syntax become ([transforms](docs/advanced.md#transforms-syntax-of-your-own)) |
 
-exit code 1 means errors were found, 2 means the config is broken.&nbsp;
+`dx` works as a shorter name for `dxlint`. exit code 1 means errors were found, 2 means the config is broken.&nbsp;
 
 don't forget to add `.dxcache` to `.gitignore`!!!
 

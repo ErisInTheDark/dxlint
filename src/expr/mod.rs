@@ -12,6 +12,7 @@ pub mod queries;
 pub(crate) mod fold;
 pub mod indent;
 mod lookaround;
+pub mod protocol;
 pub mod numeric;
 pub mod text;
 pub(crate) mod re;
@@ -1866,9 +1867,15 @@ impl<'a> Ctx<'a> {
     /// Whether the config's `fn` `check` accepts `value` (a schema's
     /// `check`), evaluated without a node; `None` when it cannot tell.
     pub fn accepts(grammar: &Grammar, check: &str, value: &Value<'static>) -> Option<bool> {
-        let index = u32::try_from(grammar.function(check)?).ok()?;
-        let call = CExpr::UserCall(index, vec![CExpr::Const(value.clone())]);
-        static_eval::StaticEval::new(&[], &grammar.functions).eval(&call).ok().map(|answer| answer.truthy())
+        Self::call_static(grammar, check, vec![value.clone()]).ok().map(|answer| answer.truthy())
+    }
+
+    /// The config's `fn` `name` called with `args`, without a node.
+    pub fn call_static(grammar: &Grammar, name: &str, args: Vec<Value<'static>>) -> Result<Value<'static>, String> {
+        let index = grammar.function(name).and_then(|index| u32::try_from(index).ok()).ok_or_else(|| format!("no `fn {name}`"))?;
+        let call = CExpr::UserCall(index, args.into_iter().map(CExpr::Const).collect());
+        const STEPS: usize = 100_000_000;
+        static_eval::StaticEval::with_budget(&grammar.functions, STEPS).eval(&call)
     }
 
     /// Text of a template without a node: holes that need one stay as

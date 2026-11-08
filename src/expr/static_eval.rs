@@ -18,6 +18,12 @@ impl<'a> StaticEval<'a> {
         Self { options, functions, remaining: Cell::new(MAX_FN_VISITS) }
     }
 
+    /// For a whole computation without a node (a `protocol` method), not a
+    /// constant folded at compile time: `steps` expression visits.
+    pub(super) fn with_budget(functions: &'a [UserFn], steps: usize) -> Self {
+        Self { options: &[], functions, remaining: Cell::new(steps) }
+    }
+
     pub(super) fn eval(&self, e: &CExpr) -> Result<Value<'static>, String> {
         Frame { owner: self, params: &[], calls: &[] }.eval(e)
     }

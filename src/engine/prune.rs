@@ -354,6 +354,10 @@ fn prune_config(config: &mut Config, runtime: bool) {
             value_names(value, &mut needed);
         }
     }
+    // Protocol methods answer `dxlint map` requests.
+    for protocol in &config.protocols {
+        needed.extend(protocol.methods.iter().map(|(_, function)| function.clone()));
+    }
     // Option values are checked while the config builds.
     for schema in &config.schemas {
         if let crate::config::schema::Schema::Checked(_, check) = &schema.schema { needed.insert(check.text.clone()); }

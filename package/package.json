@@ -32,7 +32,8 @@
     "arm64"
   ],
   "bin": {
-    "dxlint": "bin/dxlint"
+    "dxlint": "bin/dxlint",
+    "dx": "bin/dxlint"
   },
   "exports": {
     "./esbuild": "./esbuild.mjs",
@@ -40,7 +41,7 @@
   },
   "typescript": {
     "contentMapper": {
-      "exec": ["node", "bin/dxlint", "map"],
+      "exec": ["node", "bin/dxlint", "map", "--protocol", ".ts/content-mapper"],
       "dynamicConfig": true
     }
   },

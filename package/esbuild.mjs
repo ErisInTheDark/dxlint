@@ -1,5 +1,6 @@
 // An esbuild plugin mapping files through a project's `.dx` transforms, the
-// same way `tsc` sees them: one long-lived `dxlint map` for the whole build.
+// same way `tsc` sees them: one long-lived `dxlint map` for the whole build,
+// spoken to in its own protocol (`map { path, text, sourceMap }`).
 import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -48,10 +49,12 @@ function server() {
 }
 
 /** Byte offset of a problem as esbuild's line and column. */
-function location(file, content, start, length) {
-	const before = Buffer.from(content).subarray(0, start).toString();
+function location(file, content, start, end) {
+	const bytes = Buffer.from(content);
+	const before = bytes.subarray(0, start).toString();
 	const line = before.split("\n").length;
 	const column = before.length - (before.lastIndexOf("\n") + 1);
+	const length = bytes.subarray(start, end).toString().length;
 	return { file, line, column, length, lineText: content.split("\n")[line - 1] ?? "" };
 }
 
@@ -67,8 +70,8 @@ export function dxlintMapper() {
 	return {
 		async transform(fileName, content) {
 			mapper ??= server();
-			const result = await mapper.request("transform", { fileName, content, sourceMap: true });
-			const errors = result.diagnostics.map(problem => ({ text: problem.messageText, location: location(fileName, content, problem.start, problem.length) }));
+			const result = await mapper.request("map", { path: fileName, text: content, sourceMap: true });
+			const errors = result.problems.map(problem => ({ text: problem.message, location: location(fileName, content, problem.offset, problem.end_offset) }));
 			if (errors.length > 0) return { errors };
 			const map = Buffer.from(result.sourceMap).toString("base64");
 			return { contents: `${result.text}\n//# sourceMappingURL=data:application/json;base64,${map}`, errors };

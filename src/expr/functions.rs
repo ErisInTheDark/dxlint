@@ -247,6 +247,48 @@ pub static FUNCTIONS: &[Function] = &[
         call: super::re::matches,
     },
     Function {
+        name: "map_file",
+        signature: "map_file(path, text)",
+        doc: "in a `protocol` method: `text` of `path` as its config's transforms map it, `{ text, pieces: [{ output, source, kind }], problems: [{ message, offset, end_offset }] }`; spans are `{ offset, end_offset }` byte ranges, `kind` is `kept`, `copy`, `mirror` or `renamed`",
+        min: 2,
+        max: 2,
+        call: |a| super::protocol::with("map_file", |host| host.map_file(&a[0].text(), &a[1].text())),
+    },
+    Function {
+        name: "config_identity",
+        signature: "config_identity(path)",
+        doc: "in a `protocol` method: text that changes whenever what `path`'s mappings depend on besides file text does (its config, the dxlint build)",
+        min: 1,
+        max: 1,
+        call: |a| super::protocol::with("config_identity", |host| host.config_identity(&a[0].text())),
+    },
+    Function {
+        name: "config_files",
+        signature: "config_files(path)",
+        doc: "in a `protocol` method: the config files whose edits change `path`'s mappings",
+        min: 1,
+        max: 1,
+        call: |a| super::protocol::with("config_files", |host| host.config_files(&a[0].text())),
+    },
+    Function {
+        name: "mapped_text",
+        signature: "mapped_text(kind, value, offset, end_offset, text)",
+        doc: "what a transform's `rewrite` template turns `{value}` into: `text` marked as a `copy`, `mirror` or `renamed` piece of `value`'s span (written for you; `mirror(node)` and `renamed(node, text)` choose the kind)",
+        min: 5,
+        max: 5,
+        call: |a| Ok(match (&a[2], &a[3]) {
+            (Value::Num(start), Value::Num(end)) => {
+                let kind = match &*a[0].text() {
+                    "mirror" => crate::engine::transform::PieceKind::Mirror,
+                    "renamed" => crate::engine::transform::PieceKind::Renamed,
+                    _ => crate::engine::transform::PieceKind::Copy,
+                };
+                Value::from(crate::engine::transform::copy_mark::mark(kind, *start as usize, *end as usize, &a[4].text()))
+            }
+            _ => Value::from(a[4].text().into_owned()),
+        }),
+    },
+    Function {
         name: "code_of",
         signature: "code_of(text)",
         doc: "the Unicode code point of the text's first character; null for empty text",

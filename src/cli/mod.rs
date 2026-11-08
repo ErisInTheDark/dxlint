@@ -182,8 +182,9 @@ pub enum Format {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Serve `transform`s over stdio: a TypeScript content mapper, and bundlers
-    Map,
+    /// What files map to through their `transform`s: printed, or served over
+    /// stdio to build tools (dxlint's protocol, or a `--protocol` adapter)
+    Map(map::MapArgs),
     /// Check on-disk rule scenarios (default: fixtures/)
     Fixtures {
         paths: Vec<PathBuf>,
@@ -299,10 +300,22 @@ where
         }
         return crate::lsp::run(input, stdout, &mut stderr);
     }
-    if matches!(&cli.command, Some(Command::Map)) {
-        let mut no_output = std::io::sink();
-        let mut output = Output { cwd, stdout: &mut no_output, stderr: &mut stderr };
-        return map::run(&mut output, &mut std::io::BufReader::new(input), &mut stdout);
+    if let Some(Command::Map(args)) = &cli.command {
+        if cli.lint.sources.is_some() || !cli.lint.paths.is_empty() || cli.lint.fix || cli.lint.fix_preview
+            || cli.lint.jobs.is_some() || cli.lint.stats || cli.lint.profile || cli.lint.no_cache || cli.lint.semantic_budget.is_some()
+            || cli.lint.format != Format::Human {
+            let mut output = Output { cwd, stdout: &mut stdout, stderr: &mut stderr };
+            render::error(&mut output, "map accepts only --config, --protocol and file paths");
+            return 2;
+        }
+        // Serving, stdout carries only protocol messages.
+        if args.paths.is_empty() {
+            let mut no_output = std::io::sink();
+            let mut output = Output { cwd, stdout: &mut no_output, stderr: &mut stderr };
+            return map::run(&mut output, args, &cli.config, &mut std::io::BufReader::new(input), &mut stdout);
+        }
+        let mut output = Output { cwd, stdout: &mut stdout, stderr: &mut stderr };
+        return map::run(&mut output, args, &cli.config, &mut std::io::BufReader::new(std::io::empty()), &mut std::io::sink());
     }
     let mut output = Output { cwd, stdout: &mut stdout, stderr: &mut stderr };
     if matches!(&cli.command, Some(Command::Conformance)) {
@@ -373,7 +386,7 @@ where
         },
         Some(Command::Functions) => info::functions(&mut output),
         Some(Command::Conformance) => unreachable!("conformance owns its input"),
-        Some(Command::Map) => unreachable!("map owns its streams"),
+        Some(Command::Map(_)) => unreachable!("map owns its streams"),
         Some(Command::Lsp) => unreachable!("LSP owns its streams"),
     }
 }

@@ -81,7 +81,7 @@
         { "include": "#regex" },
         { "match": "\\b(drop|override|define)\\b", "name": "storage.modifier.dx" },
         {
-          "match": "\\b(import|lang|language|group|match|in|layer|rule|indent|dedent|by|like|set|ignore|option|schema|when|fix|as|files|report|let|native|forward|from|fn)\\b",
+          "match": "\\b(import|lang|language|group|match|in|layer|rule|indent|dedent|by|like|set|ignore|option|schema|when|fix|suggest|rewrite|transform|protocol|method|as|files|report|let|native|forward|from|fn)\\b",
           "name": "keyword.other.dx"
         },
         { "match": "\\b(until|or|is|not)\\b", "name": "keyword.operator.word.dx" },

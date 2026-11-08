@@ -65,6 +65,9 @@ pub struct Config {
     pub names: Vec<NameDef>,
     /// `parser name in lang { ... }`: structured grammars.
     pub parsers: Vec<ParserDecl>,
+    /// `protocol name { method m (params) = expr }`: protocols `dxlint map`
+    /// serves; each method is a `fn` of `params`.
+    pub protocols: Vec<Protocol>,
     /// `exclusive a, b, ...`: traits no possible value has together.
     pub exclusive: Vec<Exclusive>,
     /// `trait a implies b, c`: every value fitting `a` fits `b` and `c` too.
@@ -127,6 +130,21 @@ pub struct FnDef {
     pub name: Name,
     pub params: Vec<Name>,
     pub body: Expr,
+}
+
+#[derive(Clone, Debug)]
+pub struct Protocol {
+    pub name: Name,
+    /// Each request method and the `fn` answering it.
+    pub methods: Vec<(Name, String)>,
+}
+
+impl Protocol {
+    /// The name of the `fn` answering `method` of protocol `protocol`: no
+    /// `fn` a config writes can have it.
+    pub fn function_name(protocol: &str, method: &str) -> String {
+        format!("protocol:{protocol}:{method}")
+    }
 }
 
 /// `macro name(params) body`, as written.

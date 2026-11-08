@@ -912,6 +912,8 @@ in rs_function.name rule fn-snake-case warn "function names are snake_case" fix 
 | `in A forward x, y from field` | `A`'s nodes pass attributes `x` and `y` up from a field, see [Attributes](#attributes) |
 | `parser name in lang { ... }`, `native name` | a grammar for syntax patterns cannot own, and making it its language's front end, see [Parsers](#parsers) |
 | `extend parser name { ... }` | change an imported parser, see [Extending a parser](#extending-a-parser) |
+| `in A transform name ... { rewrite ... }` | what files map to for other tools, see [Transforms](#transforms-syntax-of-your-own) |
+| `protocol name { method m (params) = expr }` | an adapter `dxlint map --protocol` serves, see [Adapters](#adapters-speaking-a-tools-own-protocol) |
 | `override <definition>`, `drop ...` | replace or remove what an import defined, see [Changing imported definitions](#changing-imported-definitions-override-drop) |
 | `ignore "glob" "!glob"` | never lint matching files (`!` takes some back; the last matching glob decides) |
 | `files "glob" "!glob" { lines }` | `rule` lines, `severity` and ruleset imports for matching files only, see [Turning rules on](#turning-rules-on-and-configuring-them) |
@@ -1275,7 +1277,10 @@ affects as you type, open or not. Add `.dxcache` to `.gitignore`.
 
 ## Transforms: syntax of your own
 
-A `transform` has a rule's body, and its `fix` is what a file compiles to, for TypeScript and for your bundler alike:
+A **transform** says what a file *maps to*: the text your compiler, bundler or
+any other tool reads instead of what you wrote. Together with an
+[extended parser](#extending-a-parser) it gives a language syntax of your own,
+which rules lint directly in the original file:
 
 ```dx
 lang js "*.js" "*.mjs" "*.cjs" "*.jsx" "*.ts" "*.tsx" "*.mts" "*.cts" "*.wts"
@@ -1287,37 +1292,132 @@ extend parser ts {
 in ts_class_property let state_word { value modifier.nodes; find (m) m == "state" }
 in ts_class_property transform state-field {
   when state_word != null
-  fix {
-    at { start: state_word.offset, end: key.offset } as "$_"
-    at { start: end_offset, end: end_offset } as " get {key} () {{ return this.$_{key}; }}"
+  rewrite {
+    at { start: state_word.offset, end: key.offset } as "private $_"
+    at { start: end_offset, end: end_offset } as " get {key} () {{ return this.$_{mirror(key)}; }}"
   }
+}
+in ts_class transform state-named error "a class with `state` members needs a name" {
+  when name == null && any(member.nodes, m => m.state_word != null)
 }
 ```
 
-New syntax is an [extension of the parser](#extending-a-parser): `class_modifier` takes words a class member may start with, and `class_initializer` tokens that may stand for a member's `=` (`production class_initializer |= "=>"` reads `derived total => a + b;`, its `init` the expression as usual; a transform replaces the token before `init`). `files "*.wts"` keeps it to those files, so `.wts` above is TypeScript with one more modifier, and rules lint it directly.
+`class Item { state quality = 1; }` in `item.wts` maps to
+`class Item { private $_quality = 1; get quality () { return this.$_quality; } }`.
 
-| | `rule ... fix` | `transform` |
+### Clauses
+
+A transform is written like a rule (`in <layers> transform name ...`), with
+these clauses:
+
+| clause | meaning |
+|---|---|
+| `when expr` | the transform applies where every `when` holds |
+| `rewrite as expr`, `rewrite { at <span> as expr ... }` | what that text maps to: the node, or each `at { start, end }` byte span; several spans rewrite together |
+| `error "message"` (on the head line) | a problem in the mapped file where it applies, reported by the tool as a syntax error; a transform with no `rewrite` only reports |
+| `each`, `let`, `files` | as in rules |
+
+Rules repair code with `fix`; transforms map it with `rewrite`, and each word
+in the other's place is a config error, as is `suggest` in a transform.
+
+| | `rule ... fix` | `transform ... rewrite` |
 | --- | --- | --- |
 | Runs | linting, `--fix` | only when a file is mapped; linting never runs it |
 | Overlapping edits | skipped, retried next pass | an error, one pass only |
-| Reports without a fix | diagnostics | mapping errors |
+| Reports | diagnostics | mapping errors |
 
-Text between edits maps back to the source exactly, so leave what users wrote in place and edit around it, and errors in it land where they wrote it. Write no line breaks and lines stay right everywhere. Output must depend on the file and config alone: TypeScript keeps it by the file's text, so reading another file would go stale. Check across files with ordinary rules. Keep reports for what stops the transform: TypeScript treats them as syntax errors, which hide type errors for the whole program.
+### What maps back
 
-To use them, in `tsconfig.json` (run with `tsc --runExternalCode`; spell `.wts` in imports, with `allowImportingTsExtensions`):
+Every piece of the output is one of these, and tools map positions (errors,
+navigation, debugging) by them:
+
+| piece | written | maps |
+|---|---|---|
+| kept | text no `rewrite` touches | exactly, to where it was |
+| copy | `{node}` in a `rewrite` template | to that node: errors in it point there, and tools take you to it for the node |
+| mirror | `{mirror(node)}` | errors point at the node; tools don't take you here, so a second copy doesn't compete with the first |
+| renamed | `{renamed(node, "$_{node}")}` | the whole text stands for the node under another name, so errors about `$_x` can name `x` |
+| made up | everything else (`"private $_"`, `{str(node)}`, joined or replaced text) | nowhere |
+
+Keep what users wrote in place and rewrite around it, and copy nodes rather
+than rebuilding their text: errors then land where they were written. Write
+no line breaks and every line stays where it was, too. Output must depend on
+the file and config alone, since tools keep it by the file's text; check
+across files with ordinary rules. Keep reports for what stops the transform:
+a compiler treats them as syntax errors, which can hide its other errors.
+
+### Seeing and serving what files map to
+
+`dxlint map item.wts` prints what a file maps to (several files get a
+`==> path <==` header each), problems to stderr with exit code 1; `--config`
+maps every file with one config instead of each file's nearest `.dx`.
+
+`dxlint map` with no files serves requests over stdin and stdout, one
+long-lived process for a whole build: configs load once and files map in
+milliseconds. Any tool that reads files can use it: send each file's text,
+use the mapped text instead, and map positions back with the pieces. Messages
+are JSON-RPC 2.0, each framed by a `Content-Length: <bytes>` header and a
+blank line, as in the language server protocol:
+
+| method | params | result |
+|---|---|---|
+| `initialize` | `{}` | `{ protocolVersion: 1, positionEncoding: "utf-8" }` |
+| `map` | `{ path, text, sourceMap? }` | `{ text, pieces: [{ output, source, kind }], problems: [{ message, offset, end_offset }], sourceMap? }` |
+
+Positions are byte offsets; `output` and `source` are `{ offset, end_offset }`
+spans of the mapped and the original text, `kind` is `kept`, `copy`, `mirror`
+or `renamed`. `sourceMap: true` adds a version 3 source map (columns in
+UTF-16, every piece a mapping).
+
+### Adapters: speaking a tool's own protocol
+
+A tool that starts its own mapper process and expects its own protocol gets
+an adapter: a `protocol` declared in `.dx`, served by
+`dxlint map --protocol <module or file>`. Each method answers one request
+method from its `params`:
+
+```dx
+protocol typescript {
+  method initialize (params) = { protocolVersion: 1, positionEncoding: "utf-8" }
+  method transform (params) = my_translation(map_file(params.fileName, params.content))
+}
+```
+
+Methods are expressions with three functions only they can call:
+`map_file(path, text)` (the mapping as `map` returns it), `config_identity(path)`
+(text that changes whenever the config `path` falls under does; it reads the
+config afresh) and `config_files(path)`. Write the translation as ordinary
+`fn`s.
+
+### Integrations
+
+**TypeScript 7** reads `.wts` (or any extension) through std's adapter,
+`.ts/content-mapper`: in `tsconfig.json`
 
 ```json
 "contentMappers": [{ "package": "@inthedark/dxlint", "extensions": [".wts"] }]
 ```
 
-and for esbuild, which gets the same output with a source map:
+then `tsc --runExternalCode` (spell `.wts` in imports, with
+`allowImportingTsExtensions`). It maps copies to verbatim segments, mirrors
+to segments no language feature uses, and renamed text to aliases.
+
+**esbuild** gets the same output with a source map:
 
 ```js
 import { dxlintTransform } from "@inthedark/dxlint/esbuild";
 await esbuild.build({ plugins: [dxlintTransform()] });
 ```
 
-`dxlintTransform({ readFile })` takes each file's content from `readFile(path)` (a string or bytes, or a promise of one) instead of the disk: a build over another checkout's view or unsaved buffers. A build whose own `onLoad` does more with each file maps it with `dxlintMapper()` instead: `await mapper.transform(path, content)` gives `{ contents }` (TypeScript with an inline source map) or `{ errors }` as esbuild messages, and `mapper.close()` ends it. All of them talk to `dxlint map`, one long-lived process per build. `fixtures/engine/transform-state` is a worked example.
+`dxlintTransform({ readFile })` takes each file's content from `readFile(path)`
+(a string or bytes, or a promise of one) instead of the disk: a build over
+another checkout's view or unsaved buffers. A build whose own `onLoad` does
+more with each file maps it with `dxlintMapper()` instead:
+`await mapper.transform(path, content)` gives `{ contents }` (TypeScript with
+an inline source map) or `{ errors }` as esbuild messages, and
+`mapper.close()` ends it.
+
+`fixtures/engine/transform-state` is a worked example.
 
 ## Editor and tooling
 

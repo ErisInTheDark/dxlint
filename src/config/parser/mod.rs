@@ -29,7 +29,7 @@ use crate::pattern::Pat;
 /// macros or matchers.
 const RESERVED: &[&str] = &[
     "import", "macro", "lang", "group", "match", "in", "layer", "rule", "indent", "dedent", "like", "set", "ignore", "option", "when",
-    "fix", "as", "files", "report", "until", "or", "if", "then", "else", "true", "false", "null", "off", "hint", "info",
+    "fix", "rewrite", "protocol", "as", "files", "report", "until", "or", "if", "then", "else", "true", "false", "null", "off", "hint", "info",
     "warn", "error", "native", "let", "drop", "override", "forward", "is", "define", "schema", "each", "language",
 ];
 
@@ -483,6 +483,7 @@ impl<'a> Parser<'a> {
             (Tk::Ident, "import") => self.import(),
             (Tk::Ident, "@macro") => { self.macro_def(); }
             (Tk::Ident, "fn") => self.fn_def(),
+            (Tk::Ident, "protocol") => self.protocol(),
             (Tk::Ident, "lang") => self.lang(),
             (Tk::Ident, "language") => self.language_options(),
             (Tk::Ident, "group") => self.group(),
@@ -1729,6 +1730,49 @@ impl<'a> Parser<'a> {
         self.end_of_item();
     }
 
+    /// `protocol name { method m (params) = expr ... }`: each method a `fn`.
+    fn protocol(&mut self) {
+        let start = self.bump().expect("protocol item").span;
+        let Some(name) = self.ident("a protocol name") else { return };
+        self.skip(false, true);
+        if self.expect(Tk::LBrace, "`{` after the protocol name").is_none() { return }
+        let mut methods: Vec<(Name, String)> = Vec::new();
+        loop {
+            let Some(token) = self.peek() else {
+                self.errors.push(ConfigError::new(start, "unclosed protocol"));
+                break;
+            };
+            if token.kind == Tk::RBrace {
+                self.bump();
+                break;
+            }
+            let before = self.errors.len();
+            if !token.is_ident("method") {
+                self.errors.push(ConfigError::new(token.span, "protocol items are `method name (params) = expr`"));
+                self.bump();
+            } else {
+                self.bump();
+                if let Some(method) = self.ident("a method name") {
+                    let params = (self.expect(Tk::LParen, "`(` and the request's parameter name").is_some())
+                        .then(|| self.ident("the request's parameter name")).flatten();
+                    let body = params.as_ref().and_then(|_| self.expect(Tk::RParen, "`)`"))
+                        .and_then(|_| self.expect(Tk::Eq, "`=` before the method's answer"))
+                        .and_then(|_| self.expr());
+                    if let (Some(param), Some(body)) = (params, body) {
+                        if methods.iter().any(|(known, _)| known.text == method.text) {
+                            self.errors.push(ConfigError::new(method.span, format!("method `{}` is answered twice", method.text)));
+                        }
+                        let function = Protocol::function_name(&name.text, &method.text);
+                        self.config.functions.push(FnDef { name: Name { text: function.clone(), span: method.span }, params: vec![param], body });
+                        methods.push((method, function));
+                    }
+                }
+            }
+            if self.errors.len() > before { self.recover(); } else { self.end_of_item(); }
+        }
+        self.config.protocols.push(Protocol { name, methods });
+    }
+
     /// `@macro name ...`; returns the name when it was defined.
     fn macro_def(&mut self) -> Option<Rc<str>> {
         let overriding = self.overriding.take();
@@ -2217,9 +2261,9 @@ impl<'a> Parser<'a> {
             }
         }
         self.skip(false, true);
-        if self.ts.peek_raw(0).is_some_and(|t| t.is_ident("fix")) {
+        if let Some(word) = self.ts.peek_raw(0).filter(|t| t.is_ident("fix") || t.is_ident("rewrite")).cloned() {
             self.ts.next_raw();
-            def.fix = self.fix_def(false);
+            if self.edit_clause_fits(def, &word) { def.fix = self.fix_def(false); }
         }
         if self.errors.len() == before {
             self.skip(false, true);
@@ -2233,6 +2277,19 @@ impl<'a> Parser<'a> {
         // After a broken head, the caller skips the rest of the line, body
         // included.
         def.broken |= self.errors.len() > before;
+    }
+
+    /// Whether `word` (`fix` or `rewrite`) is the edit clause `def` takes: a
+    /// rule's `fix` repairs code; a transform's `rewrite` is what the file
+    /// maps to. Reports the other.
+    fn edit_clause_fits(&mut self, def: &RuleDef, word: &Token) -> bool {
+        match (def.transform, &*word.text) {
+            (true, "fix") => self.errors.push(ConfigError::new(word.span, "a transform says what the file maps to with `rewrite`, not `fix`")
+                .note("`rewrite { at <span> as \"text\" }`; `fix` belongs to rules, which repair code")),
+            (false, "rewrite") => self.errors.push(ConfigError::new(word.span, "`rewrite` belongs to transforms; a rule repairs code with `fix`")),
+            _ => return true,
+        }
+        false
     }
 
     /// A rule was replaced or dropped: configuration naming it exactly went
@@ -2510,7 +2567,7 @@ impl<'a> Parser<'a> {
         let ends = match self.ts.peek_raw(0) {
             None => true,
             Some(t) => matches!(t.kind, Tk::Newline | Tk::RBrace)
-                || t.kind == Tk::LBrace && !pipeline || t.is_ident("fix") || t.is_ident("set"),
+                || t.kind == Tk::LBrace && !pipeline || t.is_ident("fix") || t.is_ident("rewrite") || t.is_ident("set"),
         };
         if !ends {
             def.message = self.expr();
@@ -2596,9 +2653,11 @@ impl<'a> Parser<'a> {
                         self.message_after_severity(def);
                     }
                 }
-                (Tk::Ident, "fix") => {
+                (Tk::Ident, "fix" | "rewrite") => {
                     self.bump();
-                    if def.fix.is_some() {
+                    if !self.edit_clause_fits(def, &t) {
+                        // Reported; the loop skips the clause.
+                    } else if def.fix.is_some() {
                         self.errors.push(
                             ConfigError::new(t.span, format!("rule `{}` already has a fix", def.name.text))
                                 .note("a rule has at most one fix: the expression saying what the text should be"),
@@ -2608,6 +2667,10 @@ impl<'a> Parser<'a> {
                     }
                 }
                 // `suggest "title" ...`: a fix offered as a choice.
+                (Tk::Ident, "suggest") if def.transform => {
+                    self.bump();
+                    self.errors.push(ConfigError::new(t.span, "a transform offers no suggestions: its `rewrite` is what the file maps to"));
+                }
                 (Tk::Ident, "suggest") => {
                     self.bump();
                     self.skip(false, true);

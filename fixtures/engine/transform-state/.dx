@@ -75,7 +75,7 @@ in ts_class_property let st_bit "(1 << {st_number % 22})"
 
 in ts_program transform st-imports {
   when any(descendants(ts_class), c => c.st_any)
-  fix at { start: 0, end: 0 } as "import {{ Fields as $$Fields, HostState as $$HostState }} from \"@inthedark/kitsui\"; const $$F = $$Fields; "
+  rewrite at { start: 0, end: 0 } as "import {{ Fields as $$Fields, HostState as $$HostState }} from \"@inthedark/kitsui\"; const $$F = $$Fields; "
 }
 
 in ts_class transform st-named error "a class with `state` or `derived` members needs a name and its own statement" {
@@ -86,7 +86,7 @@ in ts_class transform st-words {
   when count(st_deriveds) > 0
   let first_member first(member.nodes)
   let words { value st_words; map (w) "private _${name}$d{w} = 0x3FFFFF | $$F.generation; private declare _${name}$x{w}: number; "; join "" }
-  fix at { start: first_member.offset, end: first_member.offset } as words
+  rewrite at { start: first_member.offset, end: first_member.offset } as words
 }
 
 in ts_class transform st-table {
@@ -102,13 +102,13 @@ in ts_class transform st-table {
     flat_map (m) map(m.decorator.nodes, d => " " re_replace("{d}", /^@\s*/, "") "({name}.prototype, \"{m.key}\");")
     join ""
   }
-  fix at { start: end_offset, end: end_offset } as (" $$F.define({name}, {{ name: \"{name}\", state: [{states}], derived: {{ {deriveds} }}, guarded: [{guarded}], volatile: [{volatile}] }});" decorated)
+  rewrite at { start: end_offset, end: end_offset } as (" $$F.define({name}, {{ name: \"{name}\", state: [{states}], derived: {{ {deriveds} }}, guarded: [{guarded}], volatile: [{volatile}] }});" decorated)
 }
 
 in ts_class_property transform st-decorators {
   when st_state != null || st_derived != null
   each d in decorator.nodes {
-    fix at d as ""
+    rewrite at d as ""
   }
 }
 
@@ -120,7 +120,7 @@ in ts_class_property transform st-field {
   let dirty { value words; map (w) "this.{st_prefix}d{w} |= this.{st_prefix}m{w}_{name}; "; join "" }
   let masks { value words; map (w) "private declare {st_prefix}m{w}_{name}: number; "; join "" }
   let after type.end_offset ?? optional.end_offset ?? key.end_offset
-  fix {
+  rewrite {
     at { start: first(modifier.nodes).offset, end: key.offset } as "private {st_prefix}"
     at { start: after, end: after } as (if init == null then " = undefined" else "")
     at { start: end_offset, end: end_offset } as (" {st_visibility}get {name} () {{ return this.{slot}; }} "
@@ -142,7 +142,7 @@ in ts_class_property transform st-derived {
   let parameters { value guards; map (g, i) "s{i}: any"; join ", " }
   let keep { value guards; map (g, i) "this.{st_prefix}s_{name}_{i} = s{i}; "; join "" }
   let annotation if type == null then "" else ": {type}"
-  fix {
+  rewrite {
     at { start: first(modifier.nodes).offset, end: key.offset } as ("private {value_slot}: any = undefined; {slots}private declare {st_prefix}c_{name}: any; {st_visibility}get ")
     at { start: key.end_offset, end: init.offset } as (" () {{ {snapshots}return ((this.{word} ^ $$F.generation) & ({st_bit} | 0x3FC00000)) === 0{fresh} ? this.{value_slot} as never : this.{st_prefix}r_{name}({arguments}); }} "
       "private {st_prefix}r_{name} ({parameters}) {{ if (((this.{word} ^ $$F.generation) & 0x3FC00000) !== 0) this.{word} = 0x3FFFFF | $$F.generation; $$F.enter(); try {{ let v{annotation} = ")

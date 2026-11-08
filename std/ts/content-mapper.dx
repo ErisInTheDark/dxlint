@@ -1,0 +1,48 @@
+# TypeScript's content-mapper protocol (TypeScript 7: `contentMappers` in
+# tsconfig, `tsc --runExternalCode`), as an adapter over dxlint's neutral
+# mapping. Served by `dxlint map --protocol .ts/content-mapper`, which the
+# npm package's manifest names. Kept text and copies are verbatim segments
+# (mirrors take part in no language feature, so tools land on the copy),
+# renamed text is an alias; segments split where another piece's span
+# starts or ends, as TypeScript wants original spans equal or disjoint.
+
+protocol typescript {
+  method initialize (params) = { protocolVersion: 1, positionEncoding: "utf-8", diagnosticSource: "dxlint" }
+  method openProject (params) = { configIdentity: config_identity(params.configFileName), watchedFiles: config_files(params.configFileName) }
+  method closeProject (params) = null
+  method transform (params) = ts_content_mapping(map_file(params.fileName, params.content))
+}
+
+define {
+
+fn ts_mapper_cuts(pieces) = { value pieces; flat_map (p) [p.source.offset, p.source.end_offset]; unique; sort }
+
+# A same-text piece as segments split at every cut inside its span:
+# `[virtual start, length, original start, length]`.
+fn ts_mapper_segments(p, cuts) = {
+  value inside: { value cuts; filter (c) c > p.source.offset && c < p.source.end_offset }
+  value starts: [p.source.offset] inside
+  value { value starts; zip (inside [p.source.end_offset]) (start, end) [p.output.offset + start - p.source.offset, end - start, start, end - start] }
+}
+
+# Renamed text maps as a whole; across a cut it maps nowhere.
+fn ts_mapper_alias(p, cuts) = if any(cuts, c => c > p.source.offset && c < p.source.end_offset) then []
+  else [[p.output.offset, p.output.end_offset - p.output.offset, p.source.offset, p.source.end_offset - p.source.offset, 2]]
+
+# Kind 0 is verbatim; a sixth element 0 turns every language feature off.
+fn ts_mapper_tuple(p, segment) = if p.kind == "mirror" then segment [0, 0] else segment [0]
+
+fn ts_mapper_mappings(pieces) = {
+  value cuts: ts_mapper_cuts(pieces)
+  value pieces
+  flat_map (p) if p.kind == "renamed" then ts_mapper_alias(p, cuts) else map(ts_mapper_segments(p, cuts), s => ts_mapper_tuple(p, s))
+}
+
+fn ts_content_mapping(mapped) = {
+  text: mapped.text,
+  extension: ".ts",
+  mappings: ts_mapper_mappings(mapped.pieces),
+  diagnostics: map(mapped.problems, p => { messageText: p.message, start: p.offset, length: p.end_offset - p.offset }),
+}
+
+}

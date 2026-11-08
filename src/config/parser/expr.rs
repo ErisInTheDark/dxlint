@@ -409,7 +409,7 @@ impl Parser<'_> {
         self.ts.peek_raw(0).is_some_and(|t| match t.kind {
             Tk::Str | Tk::Num | Tk::Regex | Tk::LBrack | Tk::LParen | Tk::InvOpen => true,
             // `set` ends a rule line's message: `rule x error "..." set never`.
-            Tk::Ident => !matches!(&*t.text, "then" | "else" | "fix" | "as" | "if" | "is" | "not" | "could" | "always" | "by" | "from" | "in" | "when" | "class" | "set"),
+            Tk::Ident => !matches!(&*t.text, "then" | "else" | "fix" | "rewrite" | "as" | "if" | "is" | "not" | "could" | "always" | "by" | "from" | "in" | "when" | "class" | "set"),
             _ => false,
         })
     }

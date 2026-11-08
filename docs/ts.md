@@ -317,6 +317,7 @@ separate bundles.
 |---|---|
 | `.ts` | the `ts` parser (`.ts/grammar`) for every JS and TS file: `ts_*` layers, comments (`ts_comment`) and lines (`ts_line`), the groups `ts_node`, `ts_code`, `ts_function_like`, `ts_loop`, `ts_statement`, and the eslint, @stylistic and typescript-eslint ports |
 | `.ts/grammar` | the TypeScript/JavaScript grammar (`parser ts in js`), imported by `.ts`; extension points `class_modifier` and `class_initializer` |
+| `.ts/content-mapper` | TypeScript 7's content-mapper protocol as a `protocol` adapter over `dxlint map` (the npm package's manifest serves it); see [Transforms](advanced.md#integrations) |
 | `.ts/javascript` | JavaScript's value rules as `fn`s (`js_number`, `js_string`, `js_compare`, `js_re_test`, ...) and the `js_regex` schema, imported by the topic files that use them; see [functions](advanced.md#expressions) |
 | `.ts/import-attributes` | shared pattern-owned import/export attributes for key spacing and trailing commas; loaded by the rule modules that need it |
 | `.ts/conditions` | type-aware condition policy, imported by `.ts`; optional-chain suggestions remain diagnostic-only |
