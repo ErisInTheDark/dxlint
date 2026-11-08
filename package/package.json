@@ -1,6 +1,6 @@
 {
   "name": "@inthedark/dxlint",
-  "version": "0.1.14",
+  "version": "0.1.15",
   "description": "let you and your agents own your linter",
   "license": "MIT",
   "repository": {
@@ -41,7 +41,13 @@
   },
   "typescript": {
     "contentMapper": {
-      "exec": ["node", "bin/dxlint", "map", "--protocol", ".ts/content-mapper"],
+      "exec": [
+        "node",
+        "bin/dxlint",
+        "map",
+        "--protocol",
+        ".ts/content-mapper"
+      ],
       "dynamicConfig": true
     }
   },
