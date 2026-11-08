@@ -5,7 +5,7 @@
 //! schema := term ('|' term)*
 //! term   := atom ('[' range? ']')*            T[], T[1..]
 //! atom   := (int | number | string) ('(' range ')')?
-//!         | boolean | any | null | regex | js_regex | literal | name
+//!         | boolean | any | null | regex | literal | name
 //!         | 'enum(' word (',' word)* ')'           bare-word members
 //!         | '(' schema ')' | '{' member* '}'
 //! range  := num? '..' num?
@@ -45,12 +45,16 @@ pub(super) fn literal(e: &Expr) -> Result<Value<'static>, ConfigError> {
 type Range = (Option<f64>, Option<f64>);
 
 impl Parser<'_> {
-    /// `schema name <schema> "doc"`
+    /// `schema name <schema> [check <fn>] "doc"`
     pub(super) fn schema_item(&mut self) {
         self.bump();
         let overriding = self.overriding.take();
         let Some(name) = self.ident("a schema name") else { return };
-        let Some(schema) = self.schema() else { return };
+        let Some(mut schema) = self.schema() else { return };
+        if self.word("check") {
+            let Some(check) = self.ident("a `fn` name checking each value") else { return };
+            schema = Schema::Checked(Box::new(schema), check);
+        }
         let doc = self.doc();
         self.end_of_item();
         if let Some(prev) = self.config.schemas.iter().position(|s| s.name.text == name.text) {
@@ -243,7 +247,6 @@ impl Parser<'_> {
                     "any" => Schema::Any,
                     "null" => Schema::Null,
                     "regex" => Schema::Regex,
-                    "js_regex" => Schema::JsRegex,
                     "true" => Schema::Lit(Value::Bool(true)),
                     "false" => Schema::Lit(Value::Bool(false)),
                     "str" | "num" | "bool" => {
@@ -272,7 +275,7 @@ impl Parser<'_> {
             }
             _ => {
                 self.errors.push(ConfigError::new(t.span, format!("expected a type, found {}", t.describe())).note(
-                    "types: string, number, int, boolean, any, null, regex, js_regex, enum(a, b), a literal (\"x\", 3, true), T[], { key: T }, a | b, int(0..), or a `schema` name",
+                    "types: string, number, int, boolean, any, null, regex, enum(a, b), a literal (\"x\", 3, true), T[], { key: T }, a | b, int(0..), or a `schema` name",
                 ));
                 None
             }

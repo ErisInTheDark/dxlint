@@ -13,6 +13,8 @@ pub(super) use inline::ScopeRule;
 
 use std::collections::HashSet;
 
+use crate::fx_hash::FxHashMap;
+
 use crate::pattern::dfa::{Dfa, Lexer};
 use crate::pattern::syntax::{Definition, Expr, Precedence, TokenMatch};
 use crate::pattern::Pat;
@@ -25,6 +27,8 @@ pub(super) struct Program {
     pub trivia: Vec<Dfa>,
     pub trivia_lexer: Option<Lexer>,
     pub line_break: Dfa,
+    /// The line break pattern's texts, when it is a few literals.
+    pub line_break_literals: Option<Vec<Vec<u8>>>,
     pub predicates: Vec<Dfa>,
     pub goals: Vec<(Vec<u16>, bool)>,
     pub lexers: Vec<Option<Lexer>>,
@@ -39,7 +43,21 @@ pub(super) struct Program {
     pub trivia_first: crate::pattern::prefilter::ByteSet,
     pub goal_changes: Vec<Vec<crate::pattern::prefilter::ByteSet>>,
     pub goal_tokens: Vec<Vec<bool>>,
+    /// Every literal text the grammar compares tokens against, by id: a
+    /// token's text is looked up once when it is lexed, so checks compare ids.
+    pub words: FxHashMap<Box<[u8]>, u32>,
+    /// Token kinds whose texts can be words (the rest skip the lookup).
+    pub worded: Vec<bool>,
+    /// Per predicate: the sorted words it matches, when its language is
+    /// those literals; else its DFA decides.
+    pub predicate_words: Vec<Option<Box<[u32]>>>,
 }
+
+/// A token whose text is no grammar literal.
+pub(super) const NO_WORD: u32 = u32::MAX;
+
+/// Most literals a predicate may list and still be answered by word ids.
+const PREDICATE_WORDS: usize = 64;
 
 pub(super) enum Op {
     Token(Terminal),
@@ -69,7 +87,8 @@ pub(super) enum Op {
 #[derive(Clone)]
 pub(super) struct Terminal {
     pub tokens: Vec<u16>,
-    pub text: Option<String>,
+    /// The literal text's [`Program::words`] id.
+    pub word: Option<u32>,
     pub emit: Option<u16>,
     pub expected: std::sync::Arc<str>,
 }
@@ -161,6 +180,7 @@ impl Program {
             trivia: definition.trivia.iter().map(dfa).collect::<Result<_, _>>()?,
             trivia_lexer: Lexer::new(&definition.trivia.iter().collect::<Vec<_>>()),
             line_break: dfa(&definition.line_break)?,
+            line_break_literals: definition.line_break.literals(PREDICATE_WORDS),
             predicates: Vec::new(),
             goals: definition.goals.iter().map(|goal| {
                 Ok((goal.tokens.iter().map(|name| index(definition.tokens.iter().map(|token| token.name.as_str()), name, "goal token"))
@@ -170,6 +190,7 @@ impl Program {
             instructions: instructions::Instructions::default(),
             token_first: definition.tokens.iter().map(|token| first_bytes(&token.pattern)).collect(), trivia_first,
             goal_changes: Vec::new(), goal_tokens: Vec::new(),
+            words: FxHashMap::default(), worded: Vec::new(), predicate_words: Vec::new(),
         };
         for (tokens, _) in &mut program.goals { tokens.sort_unstable(); tokens.dedup(); }
         program.goal_tokens = program.goals.iter().map(|(tokens, _)| {
@@ -192,12 +213,37 @@ impl Program {
             let expression = program.expression(definition, &production.body)?;
             program.productions.push(expression);
         }
+        program.worded = program.worded_kinds();
         let nullable = program.validate()?;
         program.first = first::compile(&program);
         program.starts = first::starts(&program, &program.first);
         program.lowered = lower::compile(&program, &nullable);
         program.instructions = instructions::compile(&program);
         Ok(program)
+    }
+
+    fn word(&mut self, text: &[u8]) -> u32 {
+        let next = self.words.len() as u32;
+        *self.words.entry(text.into()).or_insert(next)
+    }
+
+    /// Kinds a word can be lexed as, plus every kind a literal terminal names.
+    fn worded_kinds(&self) -> Vec<bool> {
+        let mut worded: Vec<bool> = self.tokens.iter().map(|dfa| {
+            let mut cache = dfa.cache();
+            self.words.keys().any(|word| dfa.anchored(&mut cache, word, 0) == Some(word.len()))
+        }).collect();
+        let mut mark = |terminal: &Terminal| if terminal.word.is_some() {
+            for token in &terminal.tokens { worded[*token as usize] = true; }
+        };
+        for op in &self.expressions {
+            match op {
+                Op::Token(terminal) => mark(terminal),
+                Op::Terminator { explicit, before, .. } => { mark(explicit); before.iter().for_each(&mut mark); }
+                _ => {}
+            }
+        }
+        worded
     }
 
     fn field(&self, name: &str) -> Result<u16, String> {
@@ -213,7 +259,7 @@ impl Program {
         index(definition.nodes.iter().map(|node| node.name.as_str()), name, "node")
     }
 
-    fn terminal(&self, definition: &Definition, token: &TokenMatch) -> Result<Terminal, String> {
+    fn terminal(&mut self, definition: &Definition, token: &TokenMatch) -> Result<Terminal, String> {
         let tokens = if token.token.is_empty() {
             let text = token.text.as_deref().ok_or("a literal needs text")?;
             let tokens: Vec<_> = self.tokens.iter().enumerate().filter_map(|(id, dfa)| {
@@ -229,7 +275,7 @@ impl Program {
         Ok(Terminal {
             expected: token.text.as_deref().unwrap_or(&definition.tokens[tokens[0] as usize].name).into(),
             tokens,
-            text: token.text.clone(),
+            word: token.text.as_deref().map(|text| self.word(text.as_bytes())),
             emit: token.emit.as_deref().map(|kind| Self::kind(definition, kind)).transpose()?,
         })
     }
@@ -247,6 +293,12 @@ impl Program {
                 }
                 let predicate = self.predicates.len();
                 self.predicates.push(Dfa::whole(pattern, &|_| None)?);
+                let words = pattern.literals(PREDICATE_WORDS).map(|literals| {
+                    let mut words: Vec<u32> = literals.iter().filter(|text| !text.is_empty()).map(|text| self.word(text)).collect();
+                    words.sort_unstable();
+                    words.into_boxed_slice()
+                });
+                self.predicate_words.push(words);
                 Op::TokenPattern { predicate, emit: emit.as_deref().map(|kind| Self::kind(definition, kind)).transpose()? }
             }
             Expr::Call { production, min_binding_power } => Op::Call(
@@ -291,6 +343,7 @@ impl Program {
                     }
                     let predicate = self.predicates.len();
                     self.predicates.push(Dfa::new(pattern, &|_| None)?);
+                    self.predicate_words.push(None);
                     Ok::<_, String>(predicate)
                 }).transpose()?;
                 Op::SameText(

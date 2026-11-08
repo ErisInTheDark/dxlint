@@ -107,4 +107,48 @@ impl Pat {
         });
         found
     }
+
+    /// Every text this pattern matches whole, when that is a finite set of
+    /// at most `limit` case-sensitive literals.
+    pub fn literals(&self, limit: usize) -> Option<Vec<Vec<u8>>> {
+        let mut out = match self {
+            Pat::Empty => vec![Vec::new()],
+            Pat::Lit { bytes, fold: false } => vec![bytes.clone()],
+            Pat::Class(class) => {
+                let parts = class.parts();
+                if parts.negated || !parts.named.is_empty() || !parts.not_named.is_empty() { return None; }
+                let count: usize = parts.ranges.iter().map(|(low, high)| (*high as usize).saturating_sub(*low as usize) + 1).sum();
+                if count > limit { return None; }
+                parts.ranges.iter().flat_map(|(low, high)| *low..=*high).map(|c| c.to_string().into_bytes()).collect()
+            }
+            Pat::Capture { inner, .. } => inner.literals(limit)?,
+            Pat::Repeat { inner, min: 1, max: Some(1), .. } => inner.literals(limit)?,
+            Pat::Repeat { inner, min: 0, max: Some(1), .. } => {
+                let mut out = inner.literals(limit)?;
+                out.push(Vec::new());
+                out
+            }
+            Pat::Alt(items) => {
+                let mut out = Vec::new();
+                for item in items {
+                    out.extend(item.literals(limit)?);
+                    if out.len() > limit { return None; }
+                }
+                out
+            }
+            Pat::Seq(items) => {
+                let mut out = vec![Vec::new()];
+                for item in items {
+                    let next = item.literals(limit)?;
+                    if out.len() * next.len() > limit { return None; }
+                    out = out.iter().flat_map(|left| next.iter().map(move |right| [left.as_slice(), right].concat())).collect();
+                }
+                out
+            }
+            _ => return None,
+        };
+        out.sort_unstable();
+        out.dedup();
+        (out.len() <= limit).then_some(out)
+    }
 }

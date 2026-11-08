@@ -1,3 +1,4 @@
+import .ts/javascript
 # String and collection method policies.
 import .ts/constants
 

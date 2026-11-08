@@ -1,3 +1,4 @@
+import .ts/javascript
 # .ts/restrictions: eslint core rules that limit or forbid things by
 # configuration: sizes (max-*, complexity), restricted names, imports,
 # properties and syntax, identifier shapes, sort orders, comment and

@@ -1,4 +1,4 @@
-
+import .ts/javascript
 lang t "*.t"
 match paren /\(/ until /\)/
 in .t, paren {

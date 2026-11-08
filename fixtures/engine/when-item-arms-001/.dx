@@ -1,6 +1,7 @@
 # `when x is { ... }` and `when { ... }` item arms: the first holding arm's
 # items apply, `else then` where none does.
 lang js "*.ts"
+import .ts/grammar
 native ts
 
 in ts_binary {

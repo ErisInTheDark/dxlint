@@ -1,4 +1,5 @@
 use super::{Op, Program};
+use crate::pattern::prefilter::ByteSet;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Probe {
@@ -42,39 +43,72 @@ pub(crate) struct Start {
     pub goals: Vec<(u16, GoalStart)>,
 }
 
-/// One goal's starting tokens: plain token ids, then token expressions
-/// needing their text or a pattern.
+/// One goal's starting tokens: plain token ids, words (sorted, each with the
+/// kind it must be or `None` for any), then token patterns only their DFA
+/// can answer.
 pub(crate) struct GoalStart {
     tokens: Box<[u64]>,
+    words: Vec<(u32, Option<u16>)>,
     pub residual: Vec<usize>,
+    /// Every byte a starting token can begin with: a goal whose head byte
+    /// is not here is ruled out without lexing it.
+    pub bytes: ByteSet,
 }
 
 impl GoalStart {
     fn new(program: &Program) -> Self {
-        Self { tokens: vec![0; program.tokens.len().div_ceil(64)].into(), residual: Vec::new() }
+        Self { tokens: vec![0; program.tokens.len().div_ceil(64)].into(), words: Vec::new(), residual: Vec::new(), bytes: ByteSet::default() }
     }
 
-    pub fn has(&self, token: u16) -> bool {
-        self.tokens[token as usize / 64] & (1 << (token % 64)) != 0
+    /// Whether a token of this kind and word starts it, short of residual patterns.
+    pub fn has(&self, token: u16, word: u32) -> bool {
+        if self.tokens[token as usize / 64] & (1 << (token % 64)) != 0 { return true; }
+        if self.words.is_empty() { return false; }
+        let from = self.words.partition_point(|(own, _)| *own < word);
+        self.words[from..].iter().take_while(|(own, _)| *own == word).any(|(_, kind)| kind.is_none_or(|kind| kind == token))
     }
 
-    fn add(&mut self, program: &Program, expression: usize) {
+    fn add(&mut self, program: &Program, texts: &[&[u8]], expression: usize) {
+        let word_byte =|bytes: &mut ByteSet, word: u32| match texts[word as usize].first() {
+            Some(byte) => bytes.insert(*byte),
+            None => *bytes = ByteSet::full(),
+        };
         match &program.expressions[expression] {
-            Op::Token(terminal) if terminal.text.is_none() => {
-                for token in &terminal.tokens { self.tokens[*token as usize / 64] |= 1 << (token % 64); }
+            Op::Token(terminal) => match terminal.word {
+                None => for token in &terminal.tokens {
+                    self.tokens[*token as usize / 64] |= 1 << (token % 64);
+                    self.bytes.union(&program.token_first[*token as usize]);
+                },
+                Some(word) => {
+                    self.words.extend(terminal.tokens.iter().map(|token| (word, Some(*token))));
+                    word_byte(&mut self.bytes, word);
+                }
+            },
+            Op::TokenPattern { predicate, .. } if program.predicate_words[*predicate].is_some() => {
+                for word in program.predicate_words[*predicate].iter().flatten() {
+                    self.words.push((*word, None));
+                    word_byte(&mut self.bytes, *word);
+                }
             }
-            _ => if !self.residual.contains(&expression) { self.residual.push(expression) },
+            _ => {
+                if !self.residual.contains(&expression) { self.residual.push(expression) }
+                self.bytes = ByteSet::full();
+            }
         }
+        self.words.sort_unstable();
+        self.words.dedup();
     }
 }
 
 pub(super) fn starts(program: &Program, first: &[Option<First>]) -> Vec<Option<Start>> {
+    let mut texts: Vec<&[u8]> = vec![&[]; program.words.len()];
+    for (text, word) in &program.words { texts[*word as usize] = text; }
     first.iter().map(|first| {
         let first = first.as_ref().filter(|first| !first.nullable && first.skip_safe)?;
         let mut start = Start { current: GoalStart::new(program), goals: Vec::new() };
         for probe in &first.probes {
             match probe.goal {
-                None => start.current.add(program, probe.expression),
+                None => start.current.add(program, &texts, probe.expression),
                 Some(goal) => {
                     let index = match start.goals.iter().position(|(own, _)| *own == goal) {
                         Some(index) => index,
@@ -83,7 +117,7 @@ pub(super) fn starts(program: &Program, first: &[Option<First>]) -> Vec<Option<S
                             start.goals.len() - 1
                         }
                     };
-                    start.goals[index].1.add(program, probe.expression);
+                    start.goals[index].1.add(program, &texts, probe.expression);
                 }
             }
         }

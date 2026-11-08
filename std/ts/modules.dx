@@ -1,3 +1,4 @@
+import .ts/javascript
 import .ts/comments
 
 @macro ts_module_profile(profile, order, condition) {

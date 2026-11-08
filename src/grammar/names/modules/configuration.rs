@@ -104,14 +104,15 @@ impl Frame {
                 spend(question)?;
                 let name = value.text().ok_or(())?;
                 // A relative or rooted name is a path from this file; any
-                // other names a package's file, looked up in `node_modules`
-                // like an import.
+                // other names a package's file, looked up in the package
+                // directories like an import.
                 let relative = Path::new(name).is_absolute() || [".", ".."].iter()
                     .any(|dots| name == *dots || name.strip_prefix(dots).is_some_and(|rest| rest.starts_with(['/', '\\'])));
                 let candidates: Vec<PathBuf> = if relative {
                     vec![clean(&directory.join(name))]
                 } else {
-                    directory.ancestors().map(|ancestor| clean(&ancestor.join("node_modules").join(name))).collect()
+                    directory.ancestors().flat_map(|ancestor| resolver.settings.packages.directories.iter()
+                        .map(move |packages| clean(&ancestor.join(&**packages).join(name)))).collect()
                 };
                 let mut found = None;
                 'candidates: for candidate in candidates {

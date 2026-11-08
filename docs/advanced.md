@@ -16,7 +16,7 @@ See [everyday use](basic.md) for running dxlint and the [TypeScript library](ts.
 - [Debugging rules](#debugging-rules)
 - [Changing imported definitions](#changing-imported-definitions-override-drop)
 - [Imports and macros](#imports-and-macros)
-- [Defining a language](#defining-a-language): [items](#items), [contexts](#context-blocks), [layers](#layers), [patterns](#patterns), [native layers](#native-layers)
+- [Defining a language](#defining-a-language): [items](#items), [contexts](#context-blocks), [layers](#layers), [patterns](#patterns), [parsers](#parsers)
 - [Performance and caching](#performance-and-caching)
 - [Transforms: syntax of your own](#transforms-syntax-of-your-own)
 - [Editor and tooling](#editor-and-tooling), including [packed sources](#packed-sources)
@@ -236,8 +236,7 @@ in ts_program rule es-padding-line-between-statements {
 | type | takes |
 |---|---|
 | `string`, `number`, `int`, `boolean`, `any`, `null` | values of that kind (`int`: whole numbers) |
-| `regex` | a string that is a valid regex in the Rust `re_test` dialect |
-| `js_regex` | a string that is a valid JavaScript regex in Unicode (`u`) mode, checked when config loads |
+| `regex` | a string that is a valid regex in the `re_test` dialect |
 | `"x"`, `3`, `true` | exactly that value |
 | `enum(a, b-c)` | one of the bare names, stored as a string |
 | `a \| b` | either; a union may continue on a line starting with `\|` |
@@ -253,7 +252,11 @@ Checking a value fills in record defaults, so a rule can read every key
 option's default must fit its own type. `override schema name ...` replaces
 a named type.
 
-Use `option pattern js_regex = "^(?!internal_).+$"` with `js_re_test(text, pattern, "u")`, or `"iu"` to ignore case.
+`schema name T check f "doc"` also runs the config's `fn f` on every value
+when the config loads, refusing those it answers false for. `.ts` declares
+`schema js_regex string check js_regex_valid`: use `option pattern js_regex =
+"^(?!internal_).+$"` with `js_re_test(text, pattern, "u")`, or `"iu"` to
+ignore case.
 
 ## Turning rules on and configuring them
 
@@ -521,7 +524,17 @@ the neighbour itself with `is` (`previous is ts_comma`).
 `split`, `lines`, `join`, `sort`, `unique`, `reverse`, `first`, `last`,
 `compact`, `sum`, `any`,
 `count`, `slice`, `str`, `num`, `nonempty`, `min`, `max`, `abs`, `round`,
-`compare_text`, `js_compare`, `js_number`, `js_string`, `js_bigint`, `js_re_test`.
+`compare_text`, `json_string`, `integer_radix`, and for building language
+value rules: `parse_number`, `big_integer`, `compare_integers`,
+`number_digits`, `int32`, `uint32`, `bits`, `float_divide`, `pow`,
+`utf16_at`, `code_of`, `text_units`, `text_from_units`, `re_matches`.
+
+`re_test` also takes flat lookaround groups (`(?=`, `(?!`, `(?<=`, `(?<!`; a
+leading `(?i)` holds inside them), which the other `re_*` functions do not.
+Such a match is bounded: past 10 million steps it is a rule error, never a
+silent non-match.
+
+`.ts` declares JavaScript's own value rules in `.ts/javascript`, all `fn`s:
 
 | function | value |
 |---|---|
@@ -530,16 +543,21 @@ the neighbour itself with `is` (`previous is ts_comma`).
 | `js_number_binary(operator, left, right)` | a JavaScript numeric binary operator (`+ - * / % ** & \| ^ << >> >>>`) on two numbers with JavaScript's results (NaN, Infinity, ToInt32 for bitwise); null for other operators or non-number operands |
 | `js_number_unary(operator, value)` | a JavaScript numeric unary operator (`- + ~`) on a number; null otherwise |
 | `js_number_to_precision(value, digits)` | JavaScript `value.toPrecision(digits)` for whole `digits` 1..100 (`(2.5, 1)` → `3`, `(1e-7, 2)` → `1.0e-7`); null otherwise |
-| `integer_radix(value, radix)` | a whole finite number in `radix` 2..36, lowercase, exact for every double (`(255, 16)` → `ff`); null for fractions, infinities and other radixes |
 | `js_char_at(text, index)` | JavaScript `text[index]`: the UTF-16 unit at `index` as text (lone surrogate → U+FFFD); null when out of range or not a whole number |
-| `json_string(text)` | the text as a JSON string literal, quotes included (`JSON.stringify` of a string), for messages that print strings like JavaScript does |
+| `js_compare(a, b)` | -1, 0 or 1 as JavaScript's `<` orders two literal values: strings by UTF-16 unit, bigints exactly, otherwise as numbers; null when unordered |
 | `js_string(text)` | decodes a quoted JavaScript string literal, including escapes and line continuations; null for invalid syntax. Lone surrogates become U+FFFD (distinct lone surrogates can therefore coincide) |
+| `js_string_parts(text)` | a quoted string or substitution-free template as `{text, spans, units}`, with each scalar's and UTF-16 unit's byte span in the literal |
 | `js_bigint(text)` | a JavaScript bigint literal as exact decimal text, including radix prefixes and separators; null for invalid syntax |
-| `js_re_test(text, pattern, flags?)` | stateless JavaScript regex matching (`flags` defaults to empty); unsupported syntax and work exhaustion fail the rule. `re_test` keeps its existing regex dialect |
+| `js_re_test(text, pattern, flags)` | an ECMAScript regex match, as the engine's `re_test` after `js_regex_source` translates it; null when it has no translation |
+| `regex_flags_error(flags, allowed)` | what `RegExp`'s constructor says about `flags`, as eslint's no-invalid-regexp words it; null when fine |
 
-`js_re_test` uses a bounded JavaScript subset with `i`, `m`, `s`, `u` flags and flat positive/negative lookaheads. Nested assertions, lookbehind, backreferences, named groups, control escapes and Unicode case-insensitive word boundaries fail explicitly. Multiline anchors recognise LF, CR, U+2028 and U+2029, including positions inside CRLF. Legacy `i` supports ordinary Unicode folding; characters in fold groups that differ from JavaScript's non-`u` uppercase canonicalisation (such as Kelvin sign, long s and astral case pairs) fail explicitly in patterns or values. Use `u` for those groups. Strings cannot preserve lone surrogates, and non-`u` astral matching uses Unicode scalars rather than UTF-16 units.
-
-Regex sources are limited to 64 KiB and 128 nested groups; assertion patterns allow 64 assertions. Assertion/multiline execution allows 50,000 states per compiled program and 10 million state visits per match, shared with its assertion checks. Exhaustion produces a rule error, never a silent non-match.
+`js_re_test` takes flags `i`, `m`, `s` and `u`, lookarounds that do not nest,
+and named groups. JavaScript's `\d`, `\w`, `\s` and `.` keep their ASCII and
+line-terminator meanings, and multiline anchors recognise LF, CR, U+2028 and
+U+2029. Backreferences, control escapes, surrogate escapes, Unicode
+case-insensitive word boundaries, and (without `u`) case-insensitive text
+whose JavaScript case rules part from Unicode folding (Kelvin sign, long s,
+astral letters) have no translation. Patterns are limited to 64 KiB.
 
 ```dx
 group restricted_syntax ts_with
@@ -892,7 +910,8 @@ in rs_function.name rule fn-snake-case warn "function names are snake_case" fix 
 | `define { items }` | items inside define; their rules stay off until turned on |
 | `in A let name expr` | an attribute computed for `A`'s nodes, see [Attributes](#attributes) |
 | `in A forward x, y from field` | `A`'s nodes pass attributes `x` and `y` up from a field, see [Attributes](#attributes) |
-| `native ts` | TypeScript/JavaScript syntax as `ts_*` layers, see [Native layers](ts.md#syntax-layers) |
+| `parser name in lang { ... }`, `native name` | a grammar for syntax patterns cannot own, and making it its language's front end, see [Parsers](#parsers) |
+| `extend parser name { ... }` | change an imported parser, see [Extending a parser](#extending-a-parser) |
 | `override <definition>`, `drop ...` | replace or remove what an import defined, see [Changing imported definitions](#changing-imported-definitions-override-drop) |
 | `ignore "glob" "!glob"` | never lint matching files (`!` takes some back; the last matching glob decides) |
 | `files "glob" "!glob" { lines }` | `rule` lines, `severity` and ruleset imports for matching files only, see [Turning rules on](#turning-rules-on-and-configuring-them) |
@@ -912,7 +931,7 @@ globs with a `/` match the path relative to the config file (`src/**/*.rs`,
 
 Names are whole words (`ts_expression_statement`, `previous_line`), except
 for language prefixes (`ts_`, `rs_`, `js_`, `py_`) and the ESTree field names
-native layers keep (`init`, `quasi`, `consequent`).
+the TypeScript grammar keeps (`init`, `quasi`, `consequent`).
 
 ### Context blocks
 
@@ -1170,11 +1189,55 @@ Lookarounds may hold any regex of this subset (lookbehinds can be unbounded,
 lookbehinds and lookaheads also speed matching up: they tell dxlint which
 positions can start a match. Backreferences are not supported.
 
-### Native layers
+### Parsers
 
-A native front end supplies syntax nodes and fields instead of pattern matchers. Rules, attributes and expressions read these nodes in the same way as pattern-defined layers.
+Some syntax is beyond patterns: context-sensitive keywords, operator precedence, a `<` that is a type argument or a comparison. A `parser` declares a grammar for it, in `.dx` like everything else; TypeScript itself is one (`std/ts/grammar.dx`).
 
-Pattern children inside a native node fill the gaps between its other children. Named-layer matchers search its whole text; pattern matchers attached to a language root search the whole file and sit under its program node. See [TypeScript syntax layers](ts.md#syntax-layers) for `native ts` and examples.
+```dx
+parser toy in js {
+  trivia /\s+/                      # skipped between tokens
+  line_break /[\r\n]/
+  token word /[a-z]+/
+  token plus "+"
+  goal code { word plus }           # tokens one lexical context may read
+  node toy_program { item: toy_sum* }
+  node toy_sum { left: toy_sum | text, operator: text, right: text }
+  production sum precedence word {
+    left 1 operator:"+" => toy_sum(left, operator, right)
+  }
+  root toy_program = item:sum* end
+}
+native toy
+```
+
+- **`node`** declares a node kind and its fields; with `native`, each is a layer (`in toy_sum rule ...`) and its fields read as usual (`left`, `right.text`)
+- **`production name = ...`** is one named piece of the grammar, used by name from others; a production named after a node builds that node. `root` is the one a file starts from. Bodies are sequences, `|` alternatives, `?` `*` `+`, `name:x` fields, `emit(kind, ...)`, `try(...)`, `peek(...)`, `not(...)`, `same_line`, `goal(g, ...)` and `precedence` tables
+- **`token name pattern`** reads one token; `as kind` after it makes its tokens token layers of a declared `node kind {}` (`token comma "," as ts_comma`); `lines` after the pattern marks content laid out by its own lines (JSX text), so a line starting inside it is no line inside a token. `name_escape /re/` decodes escapes in names (`a` is `a`): a match stands for the character its first matching group names in hex
+- **`flag name`** is a context bit (`set(f, ...)`, `clear(f, ...)`, `if(f, yes, no)`, `if(f, yes)` failing while off); `flag jsx option` starts as the file's boolean language option `jsx`, so `files` blocks can turn syntax on for some files
+- **`native toy`** makes the parser its language's front end: it reads every file of `js`, its node kinds become layers, and the groups `toy_node` (every node kind) and `toy_code` (those holding code) list them
+
+Pattern children inside a parser's node fill the gaps between its other children. Named-layer matchers search its whole text; pattern matchers attached to a language root search the whole file and sit under its program node. See [TypeScript syntax layers](ts.md#syntax-layers) for `native ts` and examples.
+
+#### Extending a parser
+
+Your config can change a parser it imports, without forking it:
+
+```dx
+import .ts
+
+extend parser ts {
+  files "*.wts"
+  production class_modifier |= /state|derived/ same_line peek(accessor_next)
+  production class_initializer |= "=>"
+}
+```
+
+- `production name |= ...` adds an alternative, tried after the production's own
+- `override production name = ...` replaces a production
+- `files "glob" ...` limits the block's `|=` and `override` to matching files (config-relative globs, as `language` blocks take); without it they hold in every file of the language
+- anything else a `parser` holds (`token`, `node`, `production`, `flag`, ...) adds to it; a new name that already exists is an error that points at `|=` and `override`
+
+The TypeScript grammar keeps small productions as extension points: `class_modifier` (words a class member may start with) and `class_initializer` (tokens standing for a member's `=`).
 
 ## Performance and caching
 
@@ -1216,9 +1279,9 @@ A `transform` has a rule's body, and its `fix` is what a file compiles to, for T
 
 ```dx
 lang js "*.js" "*.mjs" "*.cjs" "*.jsx" "*.ts" "*.tsx" "*.mts" "*.cts" "*.wts"
-language .js {
+extend parser ts {
   files "*.wts"
-  set memberModifiers ["state"]
+  production class_modifier |= /state/ same_line peek(accessor_next)
 }
 
 in ts_class_property let state_word { value modifier.nodes; find (m) m == "state" }
@@ -1231,7 +1294,7 @@ in ts_class_property transform state-field {
 }
 ```
 
-`memberModifiers` adds words a class member may start with, and `memberInitializers` tokens that may stand for a member's `=` (`set memberInitializers ["=>"]` reads `derived total => a + b;`, its `init` the expression as usual; a transform replaces the token before `init`). Any file of the language the native front end reads is parsed by them, so `.wts` above is TypeScript with one more modifier, and rules lint it directly.
+New syntax is an [extension of the parser](#extending-a-parser): `class_modifier` takes words a class member may start with, and `class_initializer` tokens that may stand for a member's `=` (`production class_initializer |= "=>"` reads `derived total => a + b;`, its `init` the expression as usual; a transform replaces the token before `init`). `files "*.wts"` keeps it to those files, so `.wts` above is TypeScript with one more modifier, and rules lint it directly.
 
 | | `rule ... fix` | `transform` |
 | --- | --- | --- |

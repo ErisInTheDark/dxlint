@@ -150,8 +150,11 @@ impl Parser<'_> {
                 let name = self.ident("a flag name")?.text;
                 self.expect(Tk::Comma, "`,` before the enabled branch")?;
                 let yes = Box::new(self.syntax_expression(depth)?);
-                self.expect(Tk::Comma, "`,` before the disabled branch")?;
-                let no = Box::new(self.syntax_expression(depth)?);
+                // Without a disabled branch, it fails while the flag is off.
+                let no = if self.syntax_peek(depth).is_some_and(|token| token.kind == Tk::Comma) {
+                    self.bump();
+                    Box::new(self.syntax_expression(depth)?)
+                } else { Box::new(Expr::Choice(Vec::new())) };
                 Expr::Flag { name, yes, no }
             }
             "same_text" => {

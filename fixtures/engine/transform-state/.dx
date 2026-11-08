@@ -1,10 +1,10 @@
 import .ts
 
 lang js "*.js" "*.mjs" "*.cjs" "*.jsx" "*.ts" "*.tsx" "*.mts" "*.cts" "*.wts"
-language .js {
+extend parser ts {
   files "*.wts"
-  set memberModifiers ["state", "derived"]
-  set memberInitializers ["=>"]
+  production class_modifier |= /state|derived/ same_line peek(accessor_next)
+  production class_initializer |= "=>"
 }
 
 # `state` and `derived` class members to kitsui Fields (kitsui2 .bench/derived/EMIT.md).

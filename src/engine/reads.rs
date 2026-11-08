@@ -1041,9 +1041,8 @@ pub fn list(dir: &Path) -> Vec<String> {
 
 // ---- discovery ---------------------------------------------------------------------
 
-/// A front end's search for the files below a directory that matter to
-/// every file there (TypeScript's global declaration files). Registered by
-/// name ([`super::frontend::Frontend::discoveries`]), so a recorded
+/// A search for the files below a directory that matter to every file
+/// there (a program's inputs). Registered by name, so a recorded
 /// [`Dep::Discovered`] can be checked again later.
 pub struct Discovery {
     pub name: &'static str,
@@ -1053,7 +1052,7 @@ pub struct Discovery {
 }
 
 fn discovery(name: &str) -> Option<&'static Discovery> {
-    std::iter::once(&PROGRAM_FILES).chain(super::frontend::all().iter().flat_map(|front| front.discoveries().iter().copied())).find(|d| d.name == name)
+    std::iter::once(&PROGRAM_FILES).find(|d| d.name == name)
 }
 
 static PROGRAM_FILES: Discovery = Discovery { name: "engine:program-inputs", wanted: |_| true, matches: |_, _| true };

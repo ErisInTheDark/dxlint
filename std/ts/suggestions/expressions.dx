@@ -1,3 +1,4 @@
+import .ts/javascript
 # Expression preferences: sequences, comparisons, concatenation, ternaries and coercions.
 
 define {

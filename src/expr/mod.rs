@@ -11,7 +11,9 @@ pub mod pipeline;
 pub mod queries;
 pub(crate) mod fold;
 pub mod indent;
-pub mod js;
+mod lookaround;
+pub mod numeric;
+pub mod text;
 pub(crate) mod re;
 mod spans;
 mod static_eval;
@@ -1859,6 +1861,14 @@ impl<'a> Ctx<'a> {
     /// (option values, descriptions shown by `dxlint rules`).
     pub fn eval_static(e: &CExpr, options: &[Value<'static>]) -> Result<Value<'static>, String> {
         static_eval::StaticEval::new(options, &[]).eval(e)
+    }
+
+    /// Whether the config's `fn` `check` accepts `value` (a schema's
+    /// `check`), evaluated without a node; `None` when it cannot tell.
+    pub fn accepts(grammar: &Grammar, check: &str, value: &Value<'static>) -> Option<bool> {
+        let index = u32::try_from(grammar.function(check)?).ok()?;
+        let call = CExpr::UserCall(index, vec![CExpr::Const(value.clone())]);
+        static_eval::StaticEval::new(&[], &grammar.functions).eval(&call).ok().map(|answer| answer.truthy())
     }
 
     /// Text of a template without a node: holes that need one stay as

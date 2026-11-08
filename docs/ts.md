@@ -17,9 +17,10 @@ See [everyday use](basic.md) to run it, or the [advanced guide](advanced.md) to 
 
 ## Overview
 
-`import .ts` (or `native ts` with your own JS language) parses
-`.ts`/`.tsx`/`.js`/`.mjs`/`.cjs` files with dxlint's own TypeScript parser and
-turns its syntax tree into `ts_*` layers: `ts_if` with fields `test`,
+`import .ts` parses `.ts`/`.tsx`/`.js`/`.mjs`/`.cjs` files with the
+TypeScript grammar in `std/ts/grammar.dx`, a [declared parser](advanced.md#parsers)
+your config can [extend](advanced.md#extending-a-parser), and turns its syntax
+tree into `ts_*` layers: `ts_if` with fields `test`,
 `consequent`, `alternate`; `ts_call` with `callee`, `type_argument`,
 `argument`; `ts_binary`/`ts_logical` with `left`, `operator`, `right`, and so
 on (`dxlint tree file.ts` shows any file). Rules on them work like any rule:
@@ -39,7 +40,7 @@ layers.
 
 **One tree.** A file the parser reads gets one tree: the parser's nodes, and
 the pattern layers inside them, by the rules pattern trees follow: a pattern
-layer inside a native layer fills the gaps between that node's other
+layer inside a parser's layer fills the gaps between that node's other
 children and sits under it, a named layer's matcher searches its whole text; the language's own
 pattern layers (`in .js match ...`) are matched across the file and sit
 under the program. Rules see no difference:
@@ -57,7 +58,7 @@ too, under the node that owns them (field `token`): `ts_comma`,
 `opener` and `closer`), `ts_keyword` and `ts_punctuator`; group `ts_token`
 has them all. `opener.x` and `closer.x` read a node's own first opening and
 last closing bracket; `opener.ts_open_brace.x` only one of that layer (a
-class's first opener is the `<` of `class A<T>`). Every native node knows `space_before` and
+class's first opener is the `<` of `class A<T>`). Every parser node knows `space_before` and
 `space_after` (the gap to the neighbouring token) and the layers of
 `previous_token` and `next_token`; `fix space_after as " "` rewrites just
 that whitespace. Gap `blank_lines` counts physical blank lines; `blank_gaps` counts blank lines between tokens/comments, excluding comment interiors. Spacing rules are one decision per token:
@@ -211,7 +212,7 @@ language .js {
 
 ## Facts
 
-Native layers add builtins (null elsewhere): properties of the
+`ts_*` layers add builtins (null elsewhere): properties of the
 code any rule may ask about. What a rule makes of them (its options, what
 is wrong, messages) is written in the rule. A fact taking arguments is called (`type_structure(["then"])`); on another node, call it there: `source.node.type_structure(names)` asks about `source`, with `names` read where the call is written. A name that is also a field label reads the field (null on kinds without it); its fact is read only as a call (`type()`).
 
@@ -314,7 +315,9 @@ separate bundles.
 
 | language | contents |
 |---|---|
-| `.ts` | `native ts` for every JS and TS file: `ts_*` layers, comments (`ts_comment`) and lines (`ts_line`), the groups `ts_node`, `ts_code`, `ts_function_like`, `ts_loop`, `ts_statement`, and the eslint, @stylistic and typescript-eslint ports |
+| `.ts` | the `ts` parser (`.ts/grammar`) for every JS and TS file: `ts_*` layers, comments (`ts_comment`) and lines (`ts_line`), the groups `ts_node`, `ts_code`, `ts_function_like`, `ts_loop`, `ts_statement`, and the eslint, @stylistic and typescript-eslint ports |
+| `.ts/grammar` | the TypeScript/JavaScript grammar (`parser ts in js`), imported by `.ts`; extension points `class_modifier` and `class_initializer` |
+| `.ts/javascript` | JavaScript's value rules as `fn`s (`js_number`, `js_string`, `js_compare`, `js_re_test`, ...) and the `js_regex` schema, imported by the topic files that use them; see [functions](advanced.md#expressions) |
 | `.ts/import-attributes` | shared pattern-owned import/export attributes for key spacing and trailing commas; loaded by the rule modules that need it |
 | `.ts/conditions` | type-aware condition policy, imported by `.ts`; optional-chain suggestions remain diagnostic-only |
 | `.ts/arithmetic` | type-aware addition policy and options, imported by `.ts/typed` |

@@ -1,6 +1,7 @@
 //! Per-file state: pure contextual memo entries, lazy tokens, immutable receipts.
 
 mod execute;
+mod descend;
 mod tokens;
 mod memo;
 mod materialize;
@@ -16,7 +17,7 @@ use failure::{error, merge_error, Failure};
 use crate::fx_hash::FxHashMap;
 use arena::{Chain, List};
 
-use super::compile::{Action, Op, Probe, Program, Terminal};
+use super::compile::{Action, Op, Probe, Program, Terminal, NO_WORD};
 use super::{CompiledParser, Context, ParseError, Parsed, Registration, TokenSpan, TriviaSpan};
 
 type Values = List<u32>;
@@ -29,7 +30,11 @@ struct Input {
     pos: u32,
     context: Context,
     power: u16,
+    /// Fields bound so far that `same_text` may read.
     scope: Fields,
+    /// Private captures (`scope` headers) that `reuse` reads; unlike fields
+    /// they stay visible inside nodes.
+    captures: Fields,
 }
 
 impl Input {
@@ -67,11 +72,29 @@ enum Receipt {
     Join(u32, u32),
 }
 
-#[derive(Clone)]
+/// What lexing at a position read: trivia from that position up to `start`,
+/// then the token `start..end` of `kind` (none at a lexing failure or the
+/// end of the text).
+#[derive(Clone, Copy)]
 struct Lexed {
     start: u32,
-    token: Option<TokenSpan>,
-    trivia: Option<TriviaSpan>,
+    end: u32,
+    kind: u16,
+    /// Whether the trivia before the token holds a line break.
+    line_break: bool,
+    /// The token text's [`Program::words`] id, or [`NO_WORD`].
+    word: u32,
+}
+
+const NO_TOKEN: u16 = u16::MAX;
+
+impl Lexed {
+    fn kind(self) -> Option<u16> { (self.kind != NO_TOKEN).then_some(self.kind) }
+
+    /// The trivia read from `pos`, the position this was lexed at.
+    fn trivia(self, pos: u32) -> Option<TriviaSpan> {
+        (self.start > pos).then_some(TriviaSpan { start: pos, end: self.start, line_break: self.line_break })
+    }
 }
 
 pub(super) struct Run<'a> {
@@ -99,6 +122,8 @@ struct Scratch {
     farthest: failure::Farthest,
     materialize: materialize::Storage,
     counts: Counts,
+    /// The recursive executor gave up on nesting deeper than it recurses.
+    too_deep: bool,
 }
 
 /// Work counters a parse reports to phase profiling once it ends.
@@ -169,6 +194,7 @@ impl Scratch {
         self.alternatives.clear();
         self.farthest.clear();
         self.materialize.clear();
+        self.too_deep = false;
     }
 }
 
@@ -219,7 +245,7 @@ impl<'a> Run<'a> {
         if tail.start as usize != self.text.len() {
             return Err(self.fail(tail.start, "end of file"));
         }
-        if let Some(trivia) = tail.trivia {
+        if let Some(trivia) = tail.trivia(matched.end) {
             let receipt = self.receipt(Receipt::Trivia(trivia));
             matched.receipt = self.join([matched.receipt, Some(receipt)]);
         }
@@ -293,7 +319,7 @@ impl<'a> Run<'a> {
         let caches = &mut self.caches.regex;
         let mut start = pos as usize;
         if *skip_trivia {
-            loop {
+            while self.text.as_bytes().get(start).is_some_and(|byte| self.program.trivia_first.contains(*byte)) {
                 let combined = self.program.trivia_lexer.as_ref().zip(caches.trivia_scan.as_mut())
                     .map(|(lexer, cache)| lexer.anchored(cache, self.text.as_bytes(), start, |pattern|
                         self.program.trivia[pattern].anchored(&mut caches.trivia[pattern], self.text.as_bytes(), start)));
@@ -308,10 +334,11 @@ impl<'a> Run<'a> {
                 }
             }
         }
-        let trivia = (start != pos as usize).then(|| TriviaSpan {
-            start: pos, end: start as u32,
-            line_break: self.program.line_break.find(&mut caches.line, &self.text.as_bytes()[pos as usize..start], 0).is_some(),
-        });
+        let gap = &self.text.as_bytes()[pos as usize..start];
+        let line_break = !gap.is_empty() && match &self.program.line_break_literals {
+            Some(literals) => literals.iter().any(|literal| memchr::memmem::find(gap, literal).is_some()),
+            None => self.program.line_break.find(&mut caches.line, gap, 0).is_some(),
+        };
         let combined = self.program.lexers[goal as usize].as_ref().zip(caches.lexers[goal as usize].as_mut())
             .map(|(lexer, cache)| lexer.anchored(cache, self.text.as_bytes(), start, |pattern| {
                 let id = allowed[pattern] as usize;
@@ -331,47 +358,54 @@ impl<'a> Run<'a> {
                 token
             }
         };
-        let lexed = Lexed { start: start as u32, token, trivia };
-        lexed
+        let Some(token) = token else {
+            return Lexed { start: start as u32, end: start as u32, kind: NO_TOKEN, line_break, word: NO_WORD };
+        };
+        let word = if self.program.worded[token.token as usize] {
+            self.program.words.get(&self.text.as_bytes()[token.start as usize..token.end as usize]).copied().unwrap_or(NO_WORD)
+        } else { NO_WORD };
+        Lexed { start: token.start, end: token.end, kind: token.token, line_break, word }
     }
 
     fn terminal(&mut self, terminal: &Terminal, pos: u32, context: Context, values: bool) -> Answer {
         self.scratch.counts.terminal_reads += 1;
         let lexed = self.lex(context.goal, pos);
-        let Some(token) = lexed.token.filter(|token| terminal.tokens.contains(&token.token)
-            && terminal.text.as_deref().is_none_or(|text| text == &self.text[token.start as usize..token.end as usize]))
-        else { return Err(self.fail(lexed.start, &terminal.expected)) };
-        let values = if values {
-            let value = self.draft(terminal.emit, token.start, token.end, Fields::default());
-            self.scratch.values.single(value)
-        } else { Values::default() };
-        let receipt = self.receipt(Receipt::Token(token.clone(), lexed.trivia));
-        Ok(Matched { start: Some(token.start), end: token.end, values, fields: Fields::default(), receipt: Some(receipt), cut: false })
+        if lexed.kind == NO_TOKEN || terminal.word.is_some_and(|word| word != lexed.word) || !terminal.tokens.contains(&lexed.kind) {
+            return Err(self.fail(lexed.start, &terminal.expected));
+        }
+        Ok(self.consume(lexed, pos, terminal.emit, values))
     }
 
     fn token_pattern(&mut self, predicate: usize, emit: Option<u16>, pos: u32, context: Context, values: bool) -> Answer {
         self.scratch.counts.terminal_reads += 1;
         let lexed = self.lex(context.goal, pos);
-        let Some(token) = lexed.token else { return Err(self.fail(lexed.start, "matching token pattern")) };
-        if !tokens::predicate(self, predicate, token.start, token.end) {
-            return Err(self.fail(token.start, "matching token pattern"));
+        if lexed.kind == NO_TOKEN { return Err(self.fail(lexed.start, "matching token pattern")) }
+        if !tokens::predicate(self, predicate, lexed.start, lexed.end, lexed.word) {
+            return Err(self.fail(lexed.start, "matching token pattern"));
         }
+        Ok(self.consume(lexed, pos, emit, values))
+    }
+
+    /// The match of the token `lexed` read at `pos`.
+    fn consume(&mut self, lexed: Lexed, pos: u32, emit: Option<u16>, values: bool) -> Matched {
         let values = if values {
-            let value = self.draft(emit, token.start, token.end, Fields::default());
+            let value = self.draft(emit, lexed.start, lexed.end, Fields::default());
             self.scratch.values.single(value)
         } else { Values::default() };
-        let receipt = self.receipt(Receipt::Token(token.clone(), lexed.trivia));
-        Ok(Matched { start: Some(token.start), end: token.end, values, fields: Fields::default(), receipt: Some(receipt), cut: false })
+        let token = TokenSpan { token: lexed.kind, start: lexed.start, end: lexed.end };
+        let receipt = self.receipt(Receipt::Token(token, lexed.trivia(pos)));
+        Matched { start: Some(lexed.start), end: lexed.end, values, fields: Fields::default(), receipt: Some(receipt), cut: false }
     }
 
     fn memoized(&mut self, expression: usize, pos: u32, context: Context, power: u16) -> Answer {
-        execute::evaluate(self, Input { expression, pos, context, power, scope: Fields::default() })
-    }
-
-    fn private_scope(&mut self, scope: Fields) -> Fields {
-        if self.scratch.fields.reversed(scope).all(|(field, _)| field as usize >= self.program.public_fields) { return scope; }
-        let public_fields = self.program.public_fields;
-        self.scratch.fields.filter(scope, |(field, _)| field as usize >= public_fields)
+        let input = Input { expression, pos, context, power, scope: Fields::default(), captures: Fields::default() };
+        if !self.diagnose {
+            if let Some(answer) = descend::evaluate(self, input) { return answer; }
+            // Too deep to recurse: memo entries it left open would read as recursion.
+            self.scratch.memo.clear();
+            self.scratch.too_deep = false;
+        }
+        execute::evaluate(self, input)
     }
 
     fn apply(&mut self, matched: &mut Matched, action: &Action, pos: u32, context: Context) {
@@ -403,34 +437,28 @@ impl<'a> Run<'a> {
     fn probe_matches(&mut self, probe: Probe, pos: u32, context: Context) -> bool {
         self.scratch.counts.probe_reads += 1;
         let head = self.lex(context.goal, pos);
-        self.probe_matches_at(probe, pos, context, &head)
+        self.probe_matches_at(probe, pos, context, head)
     }
 
     /// Whether `probe` matches at `pos`, where `head` is the token there in
     /// the current goal; probes in another goal lex their own.
-    fn probe_matches_at(&mut self, probe: Probe, pos: u32, context: Context, head: &Lexed) -> bool {
-        let other;
+    fn probe_matches_at(&mut self, probe: Probe, pos: u32, context: Context, head: Lexed) -> bool {
         let lexed = match probe.goal {
             Some(goal) if goal != context.goal => {
                 self.scratch.counts.other_goal_reads += 1;
-                other = self.lex(goal, pos);
-                &other
+                self.lex(goal, pos)
             }
             _ => head,
         };
-        let Some(token) = &lexed.token else { return false };
-        let token = token.clone();
-        self.token_matches(probe.expression, &token)
+        self.token_matches(probe.expression, lexed)
     }
 
-    /// Whether `token` is what the token or token-pattern `expression` reads.
-    fn token_matches(&mut self, expression: usize, token: &TokenSpan) -> bool {
+    /// Whether the token `lexed` is what the token or token-pattern `expression` reads.
+    fn token_matches(&mut self, expression: usize, lexed: Lexed) -> bool {
+        if lexed.kind == NO_TOKEN { return false; }
         match &self.program.expressions[expression] {
-            Op::Token(terminal) => terminal.tokens.contains(&token.token)
-                && terminal.text.as_deref().is_none_or(|text| text == &self.text[token.start as usize..token.end as usize]),
-            Op::TokenPattern { predicate, .. } => {
-                tokens::predicate(self, *predicate, token.start, token.end)
-            }
+            Op::Token(terminal) => terminal.word.is_none_or(|own| own == lexed.word) && terminal.tokens.contains(&lexed.kind),
+            Op::TokenPattern { predicate, .. } => tokens::predicate(self, *predicate, lexed.start, lexed.end, lexed.word),
             _ => unreachable!(),
         }
     }
@@ -439,27 +467,31 @@ impl<'a> Run<'a> {
         if self.program.starts[expression].is_none() { return true; }
         self.scratch.counts.start_reads += 1;
         let head = self.lex(context.goal, pos);
-        self.starts_at(expression, pos, context, &head)
+        self.starts_at(expression, pos, context, head)
     }
 
     /// [`Self::possible_start`] with the current goal's token at `pos` already read.
-    fn starts_at(&mut self, expression: usize, pos: u32, context: Context, head: &Lexed) -> bool {
+    fn starts_at(&mut self, expression: usize, pos: u32, context: Context, head: Lexed) -> bool {
         let program = self.program;
         let Some(start) = &program.starts[expression] else { return true; };
-        if let Some(token) = &head.token {
-            if start.current.has(token.token) { return true; }
-            if start.current.residual.iter().any(|&expression| self.token_matches(expression, token)) { return true; }
+        if head.kind != NO_TOKEN {
+            if start.current.has(head.kind, head.word) { return true; }
+            if start.current.residual.iter().any(|&expression| self.token_matches(expression, head)) { return true; }
         }
         for (goal, starts) in &start.goals {
-            let other;
+            // Goals skipping trivia alike begin their token where the head does.
+            if program.goals[*goal as usize].1 == program.goals[context.goal as usize].1
+                && !self.text.as_bytes().get(head.start as usize).is_some_and(|byte| starts.bytes.contains(*byte))
+            {
+                continue;
+            }
             let lexed = if *goal == context.goal { head } else {
                 self.scratch.counts.other_goal_reads += 1;
-                other = self.lex(*goal, pos);
-                &other
+                self.lex(*goal, pos)
             };
-            let Some(token) = &lexed.token else { continue };
-            if starts.has(token.token) { return true; }
-            if starts.residual.iter().any(|&expression| self.token_matches(expression, token)) { return true; }
+            if lexed.kind == NO_TOKEN { continue }
+            if starts.has(lexed.kind, lexed.word) { return true; }
+            if starts.residual.iter().any(|&expression| self.token_matches(expression, lexed)) { return true; }
         }
         false
     }

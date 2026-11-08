@@ -1,6 +1,7 @@
 # Every type-layer item form loads; the
 # engine answers them later. No library names beside these.
 lang js "*.ts"
+import .ts/grammar
 native ts
 
 in ts_program { scope block }

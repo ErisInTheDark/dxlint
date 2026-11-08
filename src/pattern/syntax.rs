@@ -21,6 +21,9 @@ pub struct Token {
     pub pattern: Pat,
     /// Public token kind, when token nodes are requested.
     pub visible_kind: Option<String>,
+    /// `lines`: content laid out by its own lines (JSX text), so a line
+    /// starting inside it is no line inside one token.
+    pub lines: bool,
 }
 
 #[derive(Clone, Debug)]

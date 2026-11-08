@@ -1,3 +1,4 @@
+import .ts/javascript
 import .ts/names
 import .ts/import-attributes
 

@@ -1,3 +1,4 @@
+import .ts/javascript
 # Literal-side comparison policy and source-preserving operand swaps.
 import .ts/expression-fixes
 

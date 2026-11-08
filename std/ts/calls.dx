@@ -1,3 +1,4 @@
+import .ts/javascript
 # .ts/calls: signatures and invocation syntax.
 import .ts/effects
 

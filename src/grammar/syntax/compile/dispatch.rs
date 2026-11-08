@@ -4,7 +4,7 @@ use super::{Op, Program};
 #[derive(Default)]
 struct Bucket {
     any: Vec<usize>,
-    text: FxHashMap<String, Vec<usize>>,
+    words: FxHashMap<u32, Vec<usize>>,
 }
 
 /// An arm in a candidate list. `dispatched`: its FIRST set put it in this
@@ -20,7 +20,7 @@ pub(crate) struct Candidate {
 /// a dispatch that failed one arm resumes in the same list without reading
 /// the head again.
 pub(crate) struct Dispatch {
-    buckets: Vec<(u32, FxHashMap<String, u32>)>,
+    buckets: Vec<(u32, FxHashMap<u32, u32>)>,
     fallback: u32,
     lists: Vec<Box<[Candidate]>>,
 }
@@ -30,9 +30,11 @@ impl Dispatch {
         !self.lists[self.fallback as usize].is_empty() || self.lists.iter().any(|list| list.len() > 1)
     }
 
-    pub fn candidates(&self, token: Option<u16>, text: &str) -> u32 {
-        let Some((any, texts)) = token.and_then(|token| self.buckets.get(token as usize)) else { return self.fallback };
-        texts.get(text).copied().unwrap_or(*any)
+    /// The candidate list for a head token of this kind and word.
+    pub fn candidates(&self, token: Option<u16>, word: u32) -> u32 {
+        let Some((any, words)) = token.and_then(|token| self.buckets.get(token as usize)) else { return self.fallback };
+        if words.is_empty() { return *any; }
+        words.get(&word).copied().unwrap_or(*any)
     }
 
     pub fn list(&self, id: u32) -> &[Candidate] { &self.lists[id as usize] }
@@ -43,20 +45,32 @@ pub(super) fn compile(program: &Program, items: &[usize]) -> Dispatch {
     let mut fallback = Vec::new();
     for (index, expression) in items.iter().enumerate() {
         let Some(first) = &program.first[*expression] else { fallback.push(index); continue; };
-        if first.nullable || !first.skip_safe || first.probes.iter().any(|probe| probe.goal.is_some()
-            || !matches!(program.expressions[probe.expression], Op::Token(_)))
-        {
+        let literal = |expression: usize| match &program.expressions[expression] {
+            Op::Token(_) => true,
+            Op::TokenPattern { predicate, .. } => program.predicate_words[*predicate].is_some(),
+            _ => false,
+        };
+        if first.nullable || !first.skip_safe || first.probes.iter().any(|probe| probe.goal.is_some() || !literal(probe.expression)) {
             fallback.push(index);
             continue;
         }
         for probe in &first.probes {
-            let Op::Token(terminal) = &program.expressions[probe.expression] else { unreachable!() };
-            for token in &terminal.tokens {
-                let bucket = &mut buckets[*token as usize];
-                match &terminal.text {
-                    Some(text) => bucket.text.entry(text.clone()).or_default().push(index),
-                    None => bucket.any.push(index),
+            match &program.expressions[probe.expression] {
+                Op::Token(terminal) => for token in &terminal.tokens {
+                    let bucket = &mut buckets[*token as usize];
+                    match terminal.word {
+                        Some(word) => bucket.words.entry(word).or_default().push(index),
+                        None => bucket.any.push(index),
+                    }
+                },
+                Op::TokenPattern { predicate, .. } => {
+                    let words = program.predicate_words[*predicate].as_deref().unwrap_or_default();
+                    for (token, bucket) in buckets.iter_mut().enumerate() {
+                        if !program.worded[token] { continue; }
+                        for word in words { bucket.words.entry(*word).or_default().push(index); }
+                    }
                 }
+                _ => unreachable!(),
             }
         }
     }
@@ -67,13 +81,13 @@ pub(super) fn compile(program: &Program, items: &[usize]) -> Dispatch {
         bucket.any.extend(&fallback);
         bucket.any.sort_unstable();
         bucket.any.dedup();
-        let texts = bucket.text.into_iter().map(|(text, mut candidates)| {
+        let words = bucket.words.into_iter().map(|(word, mut candidates)| {
             candidates.extend(&bucket.any);
             candidates.sort_unstable();
             candidates.dedup();
-            (text, add(candidates))
+            (word, add(candidates))
         }).collect();
-        (add(bucket.any), texts)
+        (add(bucket.any), words)
     }).collect();
     Dispatch { buckets, fallback: 0, lists }
 }

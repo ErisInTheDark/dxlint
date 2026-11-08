@@ -1,23 +1,12 @@
-//! Facts native front ends answer about a node (`uses`, `type`, ...): one
-//! registry entry each, read like built-in variables. On layers without a
-//! native front end they are null.
-//!
-//! Each front end declares its own ([`Frontend::facts`]); the registry
-//! numbers them all, and a read asks the file's [`Native`] by the front
-//! end's own number.
+//! Facts a front end answers about a node, read like built-in variables.
+//! No front end declares any since every language moved to `.dx`; the
+//! registry and its readers go next.
 
 use std::sync::LazyLock;
 
 use crate::engine::frontend::Native;
 
 use super::Value;
-
-/// What a front end declares about one of its facts.
-pub struct FactInfo {
-    pub name: &'static str,
-    pub doc: &'static str,
-    pub shape: Shape,
-}
 
 #[derive(Clone, Copy)]
 pub enum Shape {
@@ -26,33 +15,21 @@ pub enum Shape {
     List(&'static Shape),
 }
 
-/// A registered fact: its declaration, and who answers it.
 pub struct Fact {
     pub name: &'static str,
     pub doc: &'static str,
     pub shape: Shape,
-    front: &'static str,
-    local: usize,
 }
 
-/// Every fact of every front end, numbered in [`crate::FRONTENDS`] order.
-pub static FACTS: LazyLock<Vec<Fact>> = LazyLock::new(|| {
-    crate::engine::frontend::all()
-        .iter()
-        .flat_map(|&front| front.facts().into_iter().enumerate()
-            .map(move |(local, f)| Fact { name: f.name, doc: f.doc, shape: f.shape, front: front.name(), local }))
-        .collect()
-});
+pub static FACTS: LazyLock<Vec<Fact>> = LazyLock::new(Vec::new);
 
 /// A fact's index in [`FACTS`].
 pub fn fact(name: &str) -> Option<usize> {
     FACTS.iter().position(|f| f.name == name)
 }
 
-/// Fact `fact` of `node`; null when another front end answers it.
-pub fn read(native: &dyn Native, fact: usize, node: u32) -> Value<'static> {
-    let fact = &FACTS[fact];
-    if fact.front == native.frontend() { native.fact(fact.local, node) } else { Value::Null }
+pub fn read(_native: &dyn Native, _fact: usize, _node: u32) -> Value<'static> {
+    Value::Null
 }
 
 thread_local! {

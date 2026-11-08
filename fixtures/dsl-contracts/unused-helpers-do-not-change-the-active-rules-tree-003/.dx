@@ -1,4 +1,5 @@
 lang js "*.ts"
+import .ts/grammar
 native ts
 group opener ts_open_paren, ts_open_bracket, ts_open_brace, ts_open_angle
 fn unused(from, to) = overlapping(ts_open_paren, from, to)

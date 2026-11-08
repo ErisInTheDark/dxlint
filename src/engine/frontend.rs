@@ -1,25 +1,17 @@
-//! Native front ends: parsers for syntax a pattern grammar cannot own
-//! (context-sensitive syntax, scopes, types), and the facts they answer.
-//! The engine knows them only through [`Frontend`]: their node kinds and
-//! fields, which files they read, parsing, and one fact object per parsed
-//! file. `native <name>` in a config enables one.
+//! Front ends: declared parsers (`parser <name> in <lang>`) owning their
+//! language's root, for syntax a pattern grammar cannot own. `native <name>`
+//! in a config enables one. The engine knows them only through [`Frontend`]:
+//! their node kinds and fields, parsing, and one object per parsed file.
 
 use std::any::Any;
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::expr::facts::FactInfo;
 use crate::expr::Value;
 use crate::grammar::{NativeFront, Node, Tree};
-use super::reads::Discovery;
 
-/// What one parsed file answers about its nodes. Facts are numbered as its
-/// front end declares them ([`Frontend::facts`]); [`crate::expr::facts`]
-/// reads them.
+/// What one parsed file answers about its tokens and names.
 pub trait Native {
-    /// Its front end's name.
-    fn frontend(&self) -> &'static str;
-    fn fact(&self, fact: usize, node: u32) -> Value<'static>;
     /// Byte `at` lies strictly inside one token or comment (a line of a
     /// multi-line string or block comment starts there).
     fn inside_token(&self, at: usize) -> bool;
@@ -123,14 +115,12 @@ pub struct FileInput<'t, 'o> {
     pub state: Option<Arc<dyn Any + Send + Sync>>,
 }
 
-pub trait Frontend: Sync {
-    /// What `native <name>` enables (`ts`).
-    fn name(&self) -> &'static str;
+pub trait Frontend: Send + Sync {
 
     /// Node kind names, by kind number: the layers it defines.
-    fn kinds(&self) -> &'static [&'static str];
+    fn kinds(&self) -> &[String];
     /// Field names, by field number.
-    fn fields(&self) -> &'static [&'static str];
+    fn fields(&self) -> &[String];
     /// The fields a node kind has.
     fn kind_fields(&self, kind: u16) -> Vec<u16>;
     /// The field holding a node's own punctuation and keywords.
@@ -143,34 +133,11 @@ pub trait Frontend: Sync {
     fn root_kind(&self) -> u16;
     fn field_shape(&self, kind: u16, field: u16) -> FieldShape;
 
-    /// Whether this front end reads `path`.
-    fn accepts(&self, path: &Path) -> bool;
-    /// A file name it reads: its language's files are all its to read.
-    fn sample_file(&self) -> &'static str;
-    /// Parses a file under its language's options, or says where (byte
-    /// offset) and why it could not.
+    /// Parses a file (`path` relative to the config) under its language's
+    /// options, or says where (byte offset) and why it could not.
     fn parse(&self, text: &str, path: &Path, options: &[(&str, &Value<'static>)]) -> Result<Parsed, (u32, String)>;
     /// Adds token nodes of the `wanted` kinds (by kind number).
     fn attach_tokens(&self, text: &str, parsed: &mut Parsed, wanted: &[bool]);
-    /// The fact object of one parsed file.
+    /// The object of one parsed file.
     fn file<'t>(&'t self, input: FileInput<'t, '_>) -> Box<dyn Native + 't>;
-    /// The facts its files answer, numbered as [`Native::fact`] reads them.
-    fn facts(&self) -> Vec<FactInfo> {
-        Vec::new()
-    }
-
-    /// Its directory searches ([`super::reads::discover`]), so recorded
-    /// results can be checked again.
-    fn discoveries(&self) -> &'static [&'static Discovery] {
-        &[]
-    }
-}
-
-/// Every front end this build has.
-pub fn all() -> &'static [&'static dyn Frontend] {
-    crate::FRONTENDS
-}
-
-pub fn named(name: &str) -> Option<&'static dyn Frontend> {
-    all().iter().copied().find(|front| front.name() == name)
 }

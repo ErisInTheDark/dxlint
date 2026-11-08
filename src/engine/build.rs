@@ -156,6 +156,13 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
     phase("prune");
     let schemas = schemas(&config, &mut errors);
     let grammar = Grammar::build(&config, &mut errors);
+    for schema in &config.schemas {
+        if let Schema::Checked(_, check) = &schema.schema {
+            if grammar.function(&check.text).is_none() {
+                errors.push(ConfigError::new(check.span, format!("unknown `fn` `{}` checking schema `{}`", check.text, schema.name.text)));
+            }
+        }
+    }
     phase("grammar");
     let uses: Uses = RefCell::default();
     let attr_names = AttrNames::new(config.attrs.iter().map(|def| def.name.text.as_str()));
@@ -526,7 +533,7 @@ pub(super) fn option_value(
         }
     };
     match evaluated {
-        Ok(v) => match schema.check(&v, schemas) {
+        Ok(v) => match schema.check_with(&v, schemas, &|check, value| Ctx::accepts(grammar, check, value)) {
             Ok(v) => Some(v),
             Err(misfit) => {
                 errors.push(
@@ -1470,7 +1477,7 @@ mod demand_tests {
     use std::path::Path;
 
     fn native(rules: &str) -> Linter {
-        let source = format!("lang js \"*.ts\"\nnative ts\ngroup opener ts_open_paren, ts_open_bracket, ts_open_brace, ts_open_angle\n{rules}");
+        let source = format!("lang js \"*.ts\"\nimport .ts/grammar\nnative ts\ngroup opener ts_open_paren, ts_open_bracket, ts_open_brace, ts_open_angle\n{rules}");
         let built = build(crate::config::load_text("test.dx", &source, &Disk), PathBuf::from("/root"));
         assert!(built.errors.is_empty(), "{:#?}", built.errors);
         built.linter.expect("valid config")
@@ -1501,7 +1508,7 @@ mod demand_tests {
             ("ts_program", "", "item", "[1]", false),
             ("ts_program", "", "name", "[1]", false),
         ] {
-            let source = format!("lang js \"*.ts\"\nnative ts\n{prefix}in {target} rule probe {{\neach {item} in {list}\nwarn \"{{{item}}}\"\n}}");
+            let source = format!("lang js \"*.ts\"\nimport .ts/grammar\nnative ts\n{prefix}in {target} rule probe {{\neach {item} in {list}\nwarn \"{{{item}}}\"\n}}");
             let built = build(crate::config::load_text("each.dx", &source, &Disk), PathBuf::from("/root"));
             let item_start = source.find("each ").unwrap() + 5;
             let collision = built.errors.len() == 1 && built.errors[0].span.is_some_and(|span|
@@ -1511,7 +1518,7 @@ mod demand_tests {
             }
         }
         for setup in ["let item 1", "option item number = 1 \"item\""] {
-            let source = format!("lang js \"*.ts\"\nnative ts\nin ts_program rule probe {{\n{setup}\neach item in [1]\nwarn \"{{item}}\"\n}}");
+            let source = format!("lang js \"*.ts\"\nimport .ts/grammar\nnative ts\nin ts_program rule probe {{\n{setup}\neach item in [1]\nwarn \"{{item}}\"\n}}");
             let built = build(crate::config::load_text("each.dx", &source, &Disk), PathBuf::from("/root"));
             let item_start = source.find("each ").unwrap() + 5;
             if built.errors.len() != 1 || !built.errors[0].span.is_some_and(|span|
@@ -1631,14 +1638,14 @@ mod demand_tests {
             ("rule probe set sometimes", "must be enum(always, never, always-multiline)"),
             ("rule probe set always set never", "already sets its default option"),
         ] {
-            let built = build(crate::config::load_text("test.dx", &format!("lang js \"*.ts\"\nnative ts\n{rule}{config}\n"), &Disk), PathBuf::from("/root"));
+            let built = build(crate::config::load_text("test.dx", &format!("lang js \"*.ts\"\nimport .ts/grammar\nnative ts\n{rule}{config}\n"), &Disk), PathBuf::from("/root"));
             assert!(built.errors.iter().any(|e| e.message.contains(problem)), "{config}: {:#?}", built.errors);
         }
         let without = "define {\nin ts_call rule plain warn \"x\" { option mode enum(a, b) = a }\n}\nrule plain set b\n";
-        let built = build(crate::config::load_text("test.dx", &format!("lang js \"*.ts\"\nnative ts\n{without}"), &Disk), PathBuf::from("/root"));
+        let built = build(crate::config::load_text("test.dx", &format!("lang js \"*.ts\"\nimport .ts/grammar\nnative ts\n{without}"), &Disk), PathBuf::from("/root"));
         assert!(built.errors.iter().any(|e| e.message.contains("has no default option")), "{:#?}", built.errors);
         let severity_word = "define {\nin ts_call rule bad warn \"x\" { default option mode enum(off, on) = on }\n}\n";
-        let built = build(crate::config::load_text("test.dx", &format!("lang js \"*.ts\"\nnative ts\n{severity_word}"), &Disk), PathBuf::from("/root"));
+        let built = build(crate::config::load_text("test.dx", &format!("lang js \"*.ts\"\nimport .ts/grammar\nnative ts\n{severity_word}"), &Disk), PathBuf::from("/root"));
         assert!(built.errors.iter().any(|e| e.message.contains("cannot take `off`")), "{:#?}", built.errors);
     }
 
@@ -1654,7 +1661,7 @@ mod demand_tests {
 
     #[test]
     fn overrides_reject_missing_attribute_definitions() {
-        let source = "lang js \"*.ts\"\nnative ts\nin ts_call let demo 1\noverride in ts_binary let missing 2\n";
+        let source = "lang js \"*.ts\"\nimport .ts/grammar\nnative ts\nin ts_call let demo 1\noverride in ts_binary let missing 2\n";
         let built = build(crate::config::load_text("test.dx", source, &Disk), PathBuf::from("/root"));
         assert!(built.errors.iter().any(|e| e.message.contains("no attribute `missing`")), "{:#?}", built.errors);
     }

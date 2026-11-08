@@ -22,10 +22,14 @@ pub(super) struct Tape {
     words: usize,
     /// Predicate answers about other spans (alternate goals, partial spans).
     predicates: FxHashMap<(usize, u32, u32), bool>,
+    /// The latest read: a choice, its arm and the arm's first token all
+    /// read the same position in the same goal.
+    last: Option<(u32, u16, Lexed)>,
 }
 
 impl Tape {
     pub(super) fn clear(&mut self) {
+        self.last = None;
         self.records.clear();
         self.positions.clear();
         self.alternates.clear();
@@ -37,8 +41,8 @@ impl Tape {
     /// The record whose token is exactly `start..end`.
     fn record_of(&self, start: u32, end: u32) -> Option<usize> {
         let id = *self.starts.get(start as usize)? as usize;
-        let token = self.records.get(id)?.lexed.token.as_ref()?;
-        (token.start == start && token.end == end).then_some(id)
+        let lexed = self.records.get(id)?.lexed;
+        (lexed.kind().is_some() && lexed.start == start && lexed.end == end).then_some(id)
     }
 
     pub(super) fn len(&self) -> usize { self.records.len() }
@@ -52,33 +56,43 @@ pub(super) fn prepare(run: &mut Run<'_>, goal: u16) {
     loop {
         run.scratch.counts.prepare_reads += 1;
         let lexed = read(run, goal, pos);
-        let Some(token) = lexed.token else { break; };
-        if token.end <= pos { break; }
-        pos = token.end;
+        if lexed.kind().is_none() || lexed.end <= pos { break; }
+        pos = lexed.end;
     }
 }
 
+#[inline]
 pub(super) fn read(run: &mut Run<'_>, goal: u16, pos: u32) -> Lexed {
     run.scratch.counts.lex_reads += 1;
+    if let Some((last_pos, last_goal, lexed)) = run.scratch.tokens.last {
+        if last_pos == pos && last_goal == goal { return lexed; }
+    }
+    let lexed = lookup(run, goal, pos);
+    run.scratch.tokens.last = Some((pos, goal, lexed));
+    lexed
+}
+
+#[inline(never)]
+fn lookup(run: &mut Run<'_>, goal: u16, pos: u32) -> Lexed {
     let tape = &run.scratch.tokens;
     let id = tape.positions[pos as usize] as usize;
     let recorded = tape.records.get(id).filter(|record| record.pos == pos);
     if let Some(record) = recorded {
-        if record.goal == goal || compatible(run, record, goal) { return record.lexed.clone(); }
-        if let Some(lexed) = run.scratch.tokens.alternates.get(&(pos, goal)) { return lexed.clone(); }
+        if record.goal == goal || compatible(run, record, goal) { return record.lexed; }
+        if let Some(lexed) = run.scratch.tokens.alternates.get(&(pos, goal)) { return *lexed; }
     }
     run.scratch.counts.scans += 1;
     let lexed = run.scan(goal, pos);
     let tape = &mut run.scratch.tokens;
     if recorded_at(tape, pos) {
-        tape.alternates.insert((pos, goal), lexed.clone());
+        tape.alternates.insert((pos, goal), lexed);
     } else {
         let id = tape.records.len() as u32;
         tape.positions[pos as usize] = id;
-        if let Some(start) = lexed.token.as_ref().map(|token| token.start as usize) {
-            if tape.starts.get(start) == Some(&u32::MAX) { tape.starts[start] = id; }
+        if lexed.kind().is_some() && tape.starts.get(lexed.start as usize) == Some(&u32::MAX) {
+            tape.starts[lexed.start as usize] = id;
         }
-        tape.records.push(Record { pos, goal, lexed: lexed.clone() });
+        tape.records.push(Record { pos, goal, lexed });
     }
     lexed
 }
@@ -96,15 +110,17 @@ fn compatible(run: &Run<'_>, record: &Record, goal: u16) -> bool {
         if *new_trivia && run.text.as_bytes().get(record.pos as usize)
             .is_some_and(|byte| program.trivia_first.contains(*byte)) { return false; }
     }
-    let Some(token) = &record.lexed.token else {
+    let Some(kind) = record.lexed.kind() else {
         return record.lexed.start as usize == run.text.len();
     };
-    if !program.goal_tokens[goal as usize][token.token as usize] { return false; }
-    let byte = run.text.as_bytes()[token.start as usize];
+    if !program.goal_tokens[goal as usize][kind as usize] { return false; }
+    let byte = run.text.as_bytes()[record.lexed.start as usize];
     !program.goal_changes[record.goal as usize][goal as usize].contains(byte)
 }
 
-pub(super) fn predicate(run: &mut Run<'_>, predicate: usize, start: u32, end: u32) -> bool {
+/// Whether the token `start..end`, whose word is `word`, matches `predicate`.
+pub(super) fn predicate(run: &mut Run<'_>, predicate: usize, start: u32, end: u32, word: u32) -> bool {
+    if let Some(words) = &run.program.predicate_words[predicate] { return words.binary_search(&word).is_ok(); }
     let tape = &run.scratch.tokens;
     let record = tape.record_of(start, end);
     // Two bits per predicate: 32 predicates per word.

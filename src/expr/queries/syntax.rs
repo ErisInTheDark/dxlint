@@ -185,6 +185,7 @@ mod tests {
     #[test]
     fn mapped_value_trees_drive_real_vm_fixes_at_the_written_escape() {
         let rules = format!(r#"
+            import .ts/javascript
             {PARSER}
             in .t match literal /'[^']*'/
             in literal rule mapped {{

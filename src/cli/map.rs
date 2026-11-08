@@ -122,7 +122,7 @@ mod tests {
         let config = concat!(
             "import .ts\n",
             "lang js \"*.ts\" \"*.wts\"\n",
-            "language .js {\n  files \"*.wts\"\n  set memberModifiers [\"state\"]\n}\n",
+            "extend parser ts {\n  files \"*.wts\"\n  production class_modifier |= /state/ same_line peek(accessor_next)\n}\n",
             "in ts_class_property let state_word { value modifier.nodes; find (m) m == \"state\" }\n",
             "in ts_class_property transform state-field {\n",
             "  when state_word != null\n",

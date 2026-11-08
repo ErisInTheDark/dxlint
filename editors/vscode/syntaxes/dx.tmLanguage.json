@@ -67,7 +67,7 @@
           "captures": { "1": { "name": "keyword.other.dx" }, "2": { "name": "entity.name.type.dx" } }
         },
         {
-          "match": "^\\s*(skip|keys|trait|exclusive|top|product|apparent|module_resolution|parser)\\b",
+          "match": "^\\s*(skip|keys|trait|exclusive|top|product|apparent|module_resolution|parser|extend)\\b",
           "captures": { "1": { "name": "keyword.other.declaration.dx" } }
         }
       ]
@@ -87,7 +87,7 @@
         { "match": "\\b(until|or|is|not)\\b", "name": "keyword.operator.word.dx" },
         { "match": "\\b(if|then|else)\\b", "name": "keyword.control.dx" },
         { "match": "\\b(enum)(?=\\()", "name": "support.type.dx" },
-        { "match": "\\b(string|number|int|boolean|any|regex|js_regex)\\b(?=\\s*(?:[|=\\[(;,}\"]|$))", "name": "support.type.primitive.dx" },
+        { "match": "\\b(string|number|int|boolean|any|regex)\\b(?=\\s*(?:[|=\\[(;,}\"]|$))", "name": "support.type.primitive.dx" },
         { "match": "\\b([A-Za-z_]\\w*)\\s*(=>)", "captures": { "1": { "name": "variable.parameter.dx" }, "2": { "name": "storage.type.function.arrow.dx" } } },
         { "match": "\\b([A-Za-z_]\\w*)(\\??:)(?=\\s)", "captures": { "1": { "name": "variable.other.property.key.dx" }, "2": { "name": "punctuation.separator.key-value.dx" } } },
         { "match": "\\b(node|children|previous|next)\\b", "name": "variable.language.dx" },

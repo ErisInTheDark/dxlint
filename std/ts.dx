@@ -1,7 +1,7 @@
-# .ts: JavaScript and TypeScript. dxlint's native parser owns the syntax:
-# every node kind is a `ts_*` layer with ESTree-style fields (`ts_if.test`,
-# `ts_call.callee`, `ts_binary.operator`); `dxlint tree file.ts` shows them.
-# Textual parts (comments, lines) are pattern layers in the same tree.
+# .ts: JavaScript and TypeScript. The `ts` parser (`.ts/grammar`) owns the
+# syntax: every node kind is a `ts_*` layer with ESTree-style fields
+# (`ts_if.test`, `ts_call.callee`, `ts_binary.operator`); `dxlint tree file.ts`
+# shows them. Textual parts (comments, lines) are pattern layers in the same tree.
 #
 # Brings every JS/TS rule definition, all off: turn on what you want with
 # `rule name` lines, or a ruleset (`import rules:recommended`).
@@ -15,10 +15,14 @@ language .js {
   option sourceType "script" | "module" | "commonjs" | null = null "Root source environment; null infers it from syntax and filename."
   option impliedStrict boolean | null = null "Strict code without an explicit directive."
   option globalReturn boolean | null = null "Wrap script declarations in a function scope, without CommonJS globals."
-  option memberModifiers string[] = [] "More words a class member may start with, for syntax a transform maps away."
-  option memberInitializers string[] = [] "More tokens that may introduce a class member's initializer, as `=` does, for syntax a transform maps away."
+  option jsx boolean = false "JSX syntax (on for .tsx and .jsx files)."
+}
+language .js {
+  files "*.tsx" "*.jsx"
+  set jsx true
 }
 
+import .ts/grammar
 native ts
 
 group ts_function_like ts_function, ts_arrow, ts_method

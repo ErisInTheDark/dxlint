@@ -2,12 +2,14 @@
 
 mod compile;
 mod captures;
+mod frontend;
 mod phases;
 mod run;
 mod shapes;
 mod values;
 mod registry;
 
+pub use frontend::DeclaredFrontend;
 pub use phases::{set_phase_profiling, take_phase_totals, PhaseTotal};
 pub use values::ValueSource;
 pub use registry::Parsers;
@@ -82,7 +84,9 @@ impl CompiledParser {
     }
 
     pub fn parse_root(&self, text: &str, context: Context, registration: &Registration) -> Result<Parsed, ParseError> {
-        phases::phase("parse", || run::Run::new(self, text).parse(context, registration))
+        let parsed = phases::phase("parse", || run::Run::new(self, text).parse(context, registration));
+        phases::flush();
+        parsed
     }
 }
 

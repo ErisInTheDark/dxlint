@@ -23,7 +23,7 @@ warn: Promises must be awaited, end with a call to .catch, end with a call to .t
 
 - **it's over 200× faster than eslint+typescript-eslint.** because apples to apples requires eslint *without* its caching enabled, and dxlint's cache is intrinsic. (even without that, it's also twice as fast and significantly less memory hungry)
 - **and it has almost perfect eslint parity.** 99.4% of eslint's and typescript-eslint's test cases give the same result. type-aware rules read your `tsconfig.json` *without running typescript*
-- **everything is overrideable, you own it all.** built-in rules are `.dx` files: override them, tweak them, write your own, or describe a whole new language
+- **everything is overrideable, you own it all.** built-in rules, and even the typescript parser, are `.dx` files: override them, tweak them, extend the grammar with syntax of your own, or describe a whole new language
 - **plus a high quality vscode extension too!** extremely fast, with diagnostics, with a proper `.dx` lsp
 
 ## getting started
@@ -70,14 +70,20 @@ in ts_call.callee rule no-alert-calls error "use the notification service instea
 
 ## performance
 
-one core (`--jobs 1`, both pinned to the same core, wall time, measured in one session), on a project with 2,094 .ts files, its complex custom eslint config ported, type-aware rules included:
+a project with 2,161 .ts files and its complex custom eslint config ported, type-aware rules included. eslint 9.39 with typescript-eslint 8.58, wall time, measured in one session on a 16-core machine:
 
-| | ESLint | dxlint |
+| one core (`--jobs 1`) | ESLint | dxlint |
 | --- | --- | --- |
-| first run | 164 s | 72 s |
-| cached run, nothing changed | 4.4 s | 0.8 s |
-| peak memory (working set) | 2.0 GB | 0.7 GB |
+| first run | 143 s | 58 s |
+| cached run, nothing changed | 2.5 s | 2.0 s |
+| peak memory (working set) | 3.6 GB | 0.60 GB |
 
-and remember: this isn't a fair comparison because [eslint --cache doesn't work with typescript-eslint](https://typescript-eslint.io/troubleshooting/faqs/eslint/?utm_source=chatgpt.com#can-i-use-eslints---cache-with-typescript-eslint)!&nbsp;
+| every core (dxlint's default; ESLint `--concurrency auto`) | ESLint | dxlint |
+| --- | --- | --- |
+| first run | 119 s | 11 s |
+| cached run, nothing changed | 3.0 s | 1.5 s |
+| peak memory (working set) | 18 GB | 1.07 GB |
 
-also note that by default dxlint uses every core, and is significantly better at that than eslint+typescript-eslint due to no reliance on typescript itself
+and remember: the cached rows aren't a fair comparison because [eslint --cache doesn't work with typescript-eslint](https://typescript-eslint.io/troubleshooting/faqs/eslint/?utm_source=chatgpt.com#can-i-use-eslints---cache-with-typescript-eslint)! eslint's cache skips files whose own text didn't change, even when a type they use did, while dxlint's cache tracks what each file read&nbsp;
+
+eslint's threads each build their own typescript program, so more cores mostly buy it memory; dxlint doesn't rely on typescript, so its work splits across cores

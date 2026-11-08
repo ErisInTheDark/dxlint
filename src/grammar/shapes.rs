@@ -28,7 +28,7 @@ impl Shapes {
                 let mut body = Body::default();
                 let front = &grammar.natives[native.front as usize];
                 for field in 0..front.labels.len() as u16 {
-                    let shape = native.frontend.field_shape(native.kind, field);
+                    let shape = front.frontend.field_shape(native.kind, field);
                     let targets = FieldTargets {
                         kinds: shape.kinds.iter().flat_map(|&kind| variants(grammar, front.base + u32::from(kind))).collect(),
                         text: shape.text,
@@ -46,7 +46,7 @@ impl Shapes {
                 body.nodes(NO_LABEL, matcher.children.iter().copied());
             }
             body.nodes(NO_LABEL, matcher.overlays.iter().copied().filter(|&id| grammar.matchers[id as usize].layer.is_none()));
-            if matcher.native.is_some_and(|native| native.kind == native.frontend.root_kind()) {
+            if matcher.native.is_some_and(|native| native.root) {
                 for language in &grammar.langs {
                     body.nodes(NO_LABEL, language.children.iter().copied());
                     body.nodes(NO_LABEL, language.overlays.iter().copied().filter(|&id| grammar.matchers[id as usize].layer.is_none()));
@@ -196,7 +196,9 @@ impl Grammar {
 mod tests {
     use super::*;
     use crate::config::source::Disk;
+    use crate::expr::Value;
     use crate::grammar::Tree;
+    use std::path::Path;
 
     fn grammar(source: &str) -> Grammar {
         let loaded = crate::config::load_text("shapes.dx", source, &Disk);
@@ -282,9 +284,11 @@ in ts_call layer calls match call_text /f/
             "class C<T> { x?: T; m(y: T): T { return y; } }",
             "const f = <T,>(x:T) => <div key={x}>{x}</div>;",
         ] {
-            let mut parsed = crate::native::ts::parse(source, true).unwrap();
-            crate::native::ts::tokens::attach_selected(source, &mut parsed, &crate::native::ts::tokens::ALL_TOKENS);
             let front = &grammar.natives[0];
+            let jsx = Value::Bool(true);
+            let mut parsed = front.frontend.parse(source, Path::new("a.tsx"), &[("jsx", &jsx)]).unwrap();
+            let every = vec![true; front.frontend.kinds().len()];
+            front.frontend.attach_tokens(source, &mut parsed, &every);
             let nodes = front.remap(parsed.nodes);
             validate(&grammar, &Tree::from_native(nodes.clone(), parsed.root));
             validate(&grammar, &Tree::graft(&grammar, grammar.lang("js").unwrap(), source, nodes, parsed.root, None, false, None));

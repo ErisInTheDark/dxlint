@@ -332,6 +332,9 @@ fn configs(output: &mut Output<'_>, paths: &[PathBuf], arg: &ConfigArg) -> Resul
 
 fn lint(output: &mut Output<'_>, args: LintArgs, config: &ConfigArg, sources: Option<&Sources>) -> u8 {
     let started = Instant::now();
+    if std::env::var_os("DXLINT_SYNTAX_PHASES").is_some() {
+        crate::grammar::syntax::set_phase_profiling(true);
+    }
     if sources.is_some() {
         crate::config::build_one_config();
         let mut project = match load_for_lint(output, config) {
@@ -662,6 +665,10 @@ fn lint_project(output: &mut Output<'_>, args: &LintArgs, project: &mut Project,
         }
         if let Some(summary) = crate::alloc::heap::summary() {
             output.err(format_args!("  {summary}"));
+        }
+        // `DXLINT_SYNTAX_PHASES`: declared parsers' phase times and work counts.
+        for total in crate::grammar::syntax::take_phase_totals() {
+            output.err(format_args!("  syntax {total:?}"));
         }
     }
 }

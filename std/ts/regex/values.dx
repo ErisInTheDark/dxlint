@@ -1,3 +1,4 @@
+import .ts/javascript
 import .ts/expression-fixes
 import .ts/constants
 import .ts/suggestions/globals

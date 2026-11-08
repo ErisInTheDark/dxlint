@@ -1,3 +1,4 @@
+import .ts/javascript
 # Regular expression validation rules.
 
 define {

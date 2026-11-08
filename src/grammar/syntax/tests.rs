@@ -3,7 +3,7 @@ use crate::pattern::regex;
 use crate::pattern::syntax::{ContextChange, Definition, Expr, Field, Goal, Node as NodeSchema, Operator, Precedence, Production, TokenMatch};
 
 fn token(name: &str, pattern: &str) -> Token {
-    Token { name: name.into(), pattern: regex::parse(pattern).unwrap(), visible_kind: None }
+    Token { name: name.into(), pattern: regex::parse(pattern).unwrap(), visible_kind: None, lines: false }
 }
 
 #[test]

@@ -1,3 +1,4 @@
+import .ts/javascript
 import .ts/values/enums
 import .ts/values/arguments
 import .ts/values/inspection

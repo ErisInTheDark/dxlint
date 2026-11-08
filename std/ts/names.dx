@@ -1,3 +1,4 @@
+import .ts/javascript
 # .ts/names: JavaScript and TypeScript scopes, declarations and references.
 import .ts/directives
 import .ts/effects

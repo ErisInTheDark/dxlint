@@ -1,3 +1,4 @@
+import .ts/javascript
 import .ts/scoping/usage
 
 define {

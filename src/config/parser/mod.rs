@@ -487,6 +487,7 @@ impl<'a> Parser<'a> {
             (Tk::Ident, "language") => self.language_options(),
             (Tk::Ident, "group") => self.group(),
             (Tk::Ident, "parser") => self.syntax_parser(),
+            (Tk::Ident, "extend") if self.ts.peek_raw(1).is_some_and(|next| next.is_ident("parser")) => self.syntax_extension(),
             (Tk::Ident, "exclusive") => self.exclusive_item(ctx),
             (Tk::Ident, "trait") => self.implication_item(ctx),
             (Tk::Ident, "top" | "dynamic") => self.algebra_item(ctx),
@@ -1471,19 +1472,24 @@ impl<'a> Parser<'a> {
         let Some(name) = self.ident("a native front end name (`ts`)") else { return };
         self.end_of_item();
         // `<name>_node`: every syntax layer of the front end (tokens aside);
-        // `<name>_code`: those whose text is code (literal text aside).
-        let front = crate::engine::frontend::named(&name.text);
-        if let (Some(front), false) = (front, self.config.natives.iter().any(|n| n.text == name.text)) {
-            let group = |suffix: &str, keep: &dyn Fn(u16) -> bool| GroupDef {
-                name: Name { text: format!("{}_{suffix}", front.name()), span: name.span },
-                parents: (0..front.kinds().len() as u16)
-                    .filter(|&k| !front.is_token(k) && keep(k))
-                    .map(|k| Parent::Matcher(Name { text: front.kinds()[k as usize].to_string(), span: name.span }))
+        // `<name>_code`: those whose text is code (literal text aside). The
+        // declared parser of that name is the front end, as the grammar
+        // takes it (`crate::grammar::Grammar::build`).
+        let nodes: Option<Vec<(String, bool)>> = self.config.parsers.iter().rfind(|parser| parser.name.text == name.text)
+            // A node a visible token kind names is a token layer.
+            .map(|parser| parser.definition.nodes.iter()
+                .filter(|node| !parser.definition.tokens.iter().any(|token| token.visible_kind.as_deref() == Some(node.name.as_str())))
+                .map(|node| (node.name.clone(), node.literal_text)).collect());
+        if let (Some(nodes), false) = (nodes, self.config.natives.iter().any(|n| n.text == name.text)) {
+            let group = |suffix: &str, keep: &dyn Fn(bool) -> bool| GroupDef {
+                name: Name { text: format!("{}_{suffix}", name.text), span: name.span },
+                parents: nodes.iter().filter(|(_, literal)| keep(*literal))
+                    .map(|(kind, _)| Parent::Matcher(Name { text: kind.clone(), span: name.span }))
                     .collect(),
                 library: true,
             };
             self.config.groups.push(group("node", &|_| true));
-            self.config.groups.push(group("code", &|k| !front.is_literal_text(k)));
+            self.config.groups.push(group("code", &|literal| !literal));
         }
         self.config.natives.push(name);
     }

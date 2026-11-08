@@ -1,3 +1,4 @@
+import .ts/javascript
 # .ts/effects: evaluation order and separate execution entries.
 
 define {

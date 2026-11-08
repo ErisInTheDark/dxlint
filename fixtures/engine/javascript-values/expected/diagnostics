@@ -1,0 +1,12 @@
+input.ts:1:1-2:1 bigint-literals#0 9007199254740993 | 9007199254740993 | 9007199254740993 | 5 | 15 | 0 | null | null | null | null | null | null | null | null | null | null | null
+input.ts:1:1-2:1 chars#0 a | "�" | null | null
+input.ts:1:1-2:1 compares#0 -1 | -1 | 0 | 0 | 1 | 0 | -1 | -1 | 1 | null | 1 | null | null | null | 1 | 1 | -1 | 1 | null
+input.ts:1:1-2:1 decoded#0 "a🐾b🐾" | "�a�" | "a🐾b" | "abcd" | "'\\\\\\"" | "\\n\\r\\t\\b\\f\\u000b\\u0000" | "abc" | "" | "" | "" | "" | "" | "" | "" | "" | "" | "8 0"
+input.ts:1:1-2:1 flags#0 Duplicate flags ('g') supplied to RegExp constructor | Invalid flags supplied to RegExp constructor 'z' | Regex 'u' and 'v' flags cannot be used together | null | null
+input.ts:1:1-2:1 literal-numbers#0 0 | 0 | 0 | 16 | NaN | null | 16 | 15 | 1000 | 0.5 | 15 | 5
+input.ts:1:1-2:1 literal-parts#0 "a🐾b🐾" | a,\\uD83D\\uDC3E,\\x62,🐾 | 6 | "a${b}c" | a,\\$,{,b,},\\x63 | 6 | null | null | "plain" | p,l,a,i,n | 5
+input.ts:1:1-2:1 numbers#0 0 | 0 | 10 | 16 | 8 | 2 | -0.25 | 0.5 | 2 | Infinity | Infinity | -Infinity | NaN | NaN | NaN | NaN | NaN | NaN | NaN | NaN | NaN
+input.ts:1:1-2:1 operators#0 NaN | 1 | -2 | NaN | Infinity | 4294967295 | 5 | 2 | -4 | 2 | 5 | null / 2147483647 | -1 | -2 | null
+input.ts:1:1-2:1 precision#0 1.00 | 3 | 1.0e-7 | 10 | 1.2e+5 | 0.00012 | -2 | 0.00 | 0 | 1.00e+21 | 5e-324 | 0.10000000000000000555 | 1.0e+2 | Infinity | null | null
+input.ts:1:1-2:1 prints#0 0 | 0 | 1 | -1.5 | 0.30000000000000004 | 1e+21 | 123000000000000000000 | 0.000001 | 1e-7 | 1.5e-7 | NaN | -Infinity | 9007199254740992
+input.ts:1:1-2:1 regex#0 true | true | true | true | true | true | false | true | true | true | true | false | false | true | false | true | false | true | true | false | true | false | false | true | false | false | false | true | false | true | true | true | true | true | true | true | true

@@ -101,7 +101,7 @@ const KEYWORDS: &[(&str, &str)] = &[
     ("import", "`import .ts` (a built-in language, its rules defined but off), `import rules:recommended` (a built-in ruleset), `import some/path` (a file, relative to this one): pasted here, once"),
     ("ignore", "`ignore \"glob\" \"!glob\" ...`: never lint these files (`!` takes some back; the last matching glob decides)"),
     ("severity", "`severity warn` (or `hint`, `info`, `error`): every rule on at this point gets that severity; rules that are off stay off, and lines below can change it again"),
-    ("native", "`native ts`: the TypeScript parser's node kinds as `ts_*` layers"),
+    ("native", "`native ts`: the declared parser `ts` reads its language's files, its node kinds as `ts_*` layers"),
     ("lang", "`lang name \"*.ext\" ...`: a language, whose root layer is `.name`"),
     ("language", "`language .name { option name type = default; set name value; files \"glob\"; ignore \"glob\" }`: declared options and ordered file-scoped source settings"),
     ("indent", "rule clause: `indent in a by n` indents what is inside `a` (n levels, default 1) past `a`'s line; `indent a.field by n` indents those nodes themselves when they start their own line; `from x` measures from x's line; an anchor in the middle of a line sits where the indent lines opened earlier on that line put it: levels opened on one line collapse to one, unless their indent lines are in different `class name`es; the rule's `indented`, `indent_level` and `indent_anchor` read these"),

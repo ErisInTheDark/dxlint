@@ -61,8 +61,29 @@ fn with<R>(pattern: &str, f: impl FnOnce(&Regex, &mut Cache) -> R) -> Result<R, 
 
 pub fn test<'s>(a: &[Value<'s>]) -> Result<Value<'s>, String> {
     let hay = a[0].text();
-    let found = with(&a[1].text(), |re, cache| re.search_half_with(cache, &Input::new(hay.as_bytes()).earliest(true)).is_some())?;
+    let pattern = a[1].text();
+    if super::lookaround::has_lookaround(&pattern) {
+        return Ok(Value::Bool(lookaround(&pattern)?.is_match(&hay)?));
+    }
+    let found = with(&pattern, |re, cache| re.search_half_with(cache, &Input::new(hay.as_bytes()).earliest(true)).is_some())?;
     Ok(Value::Bool(found))
+}
+
+/// Whether `pattern` compiles, lookaround groups included (`re_test` only).
+pub fn valid(pattern: &str) -> bool {
+    if super::lookaround::has_lookaround(pattern) { lookaround(pattern).is_ok() } else { compile(pattern).is_ok() }
+}
+
+fn lookaround(pattern: &str) -> Result<Arc<super::lookaround::Lookaround>, String> {
+    static SHARED: OnceLock<Mutex<HashMap<String, Arc<super::lookaround::Lookaround>>>> = OnceLock::new();
+    let shared = SHARED.get_or_init(Default::default);
+    if let Some(found) = shared.lock().ok().and_then(|cache| cache.get(pattern).cloned()) { return Ok(found); }
+    let compiled = Arc::new(super::lookaround::Lookaround::compile(pattern)?);
+    if let Ok(mut cache) = shared.lock() {
+        if cache.len() >= 256 { cache.clear(); }
+        cache.insert(pattern.to_owned(), compiled.clone());
+    }
+    Ok(compiled)
 }
 
 pub fn find<'s>(a: &[Value<'s>]) -> Result<Value<'s>, String> {
@@ -85,6 +106,32 @@ pub fn count<'s>(a: &[Value<'s>]) -> Result<Value<'s>, String> {
         n
     })?;
     Ok(Value::from(n))
+}
+
+/// Every match as `{text, offset, end_offset, groups}`: byte offsets in the
+/// text, `groups` each numbered group's text (null when it took no part).
+pub fn matches<'s>(a: &[Value<'s>]) -> Result<Value<'s>, String> {
+    let text = a[0].text();
+    let found = with(&a[1].text(), |re, cache| {
+        let mut found = Vec::new();
+        let matches = Searcher::new(Input::new(text.as_bytes())).into_captures_iter(re.create_captures(), |input, caps| {
+            re.search_captures_with(cache, input, caps);
+            Ok(())
+        });
+        for caps in matches.infallible() {
+            let Some(m) = caps.get_match() else { continue };
+            let groups = (1..caps.group_len()).map(|group| caps.get_group(group)
+                .map_or(Value::Null, |span| Value::from(text[span.range()].to_string()))).collect();
+            found.push(Value::record(vec![
+                ("text".into(), Value::from(text[m.range()].to_string())),
+                ("offset".into(), Value::from(m.start())),
+                ("end_offset".into(), Value::from(m.end())),
+                ("groups".into(), Value::list(groups)),
+            ]));
+        }
+        found
+    })?;
+    Ok(Value::list(found))
 }
 
 /// Replaces every match; `$1`, `${name}` and `$$` work in the replacement.
@@ -125,6 +172,17 @@ mod tests {
         assert_eq!(call(replace, &["x\n}", r"([^,\s])(\s*\n\s*\})$", "$1,$2"]), Value::from("x,\n}"));
         assert_eq!(call(replace, &["aaa", "a*", "-"]), Value::from("-"));
         assert_eq!(call(replace, &["abc", "", "-"]), Value::from("-a-b-c-"));
+    }
+
+    #[test]
+    fn matches_list_every_match_with_groups_and_byte_offsets() {
+        let found = call(matches, &["é1 x22", r"(\d)(\d)?"]);
+        let Value::List(found) = found else { panic!("a list") };
+        assert_eq!(found.len(), 2);
+        assert_eq!(found[0].key("offset"), Value::from(2usize));
+        assert_eq!(found[0].key("groups"), Value::list(vec![Value::from("1"), Value::Null]));
+        assert_eq!(found[1].key("text"), Value::from("22"));
+        assert_eq!(found[1].key("end_offset"), Value::from(7usize));
     }
 
     #[test]

@@ -19,8 +19,6 @@ pub enum Schema {
     Null,
     /// A string that compiles as a regex.
     Regex,
-    /// A JavaScript regex string, validated in Unicode mode.
-    JsRegex,
     /// Exactly this value.
     Lit(Value<'static>),
     /// `enum(always, never)`: one of these words, written bare (`set mode
@@ -33,7 +31,12 @@ pub enum Schema {
     Union(Vec<Schema>),
     /// A named `schema`.
     Named(Name),
+    /// `T check f`: a value of `T` the config's `fn f` accepts.
+    Checked(Box<Schema>, Name),
 }
+
+/// Answers whether a `check` fn (by name) accepts a value.
+pub type Checker<'a> = &'a dyn Fn(&str, &Value<'static>) -> Option<bool>;
 
 #[derive(Clone, Debug)]
 pub struct SchemaField {
@@ -91,10 +94,16 @@ impl fmt::Display for Misfit {
 impl Schema {
     /// `value` checked against the schema, with record defaults filled in.
     pub fn check(&self, value: &Value<'static>, named: &Schemas) -> Result<Value<'static>, Misfit> {
-        self.fit(value, named, &mut String::new(), None, 0)
+        self.check_with(value, named, &|_, _| None)
     }
 
-    fn fit(&self, value: &Value<'static>, named: &Schemas, path: &mut String, doc: Option<&str>, depth: usize) -> Result<Value<'static>, Misfit> {
+    /// [`Self::check`], where `checker` answers a `check` fn about a value
+    /// (`None`: it cannot tell here, so the value passes).
+    pub fn check_with(&self, value: &Value<'static>, named: &Schemas, checker: Checker<'_>) -> Result<Value<'static>, Misfit> {
+        self.fit(value, named, &mut String::new(), None, 0, checker)
+    }
+
+    fn fit(&self, value: &Value<'static>, named: &Schemas, path: &mut String, doc: Option<&str>, depth: usize, checker: Checker<'_>) -> Result<Value<'static>, Misfit> {
         let misfit = |path: &str, problem: String| Misfit { path: path.trim_start_matches('.').to_string(), problem, doc: doc.map(str::to_string) };
         let expected = |path: &str| misfit(path, format!("must be {self}, got {}", shown(value)));
         match (self, value) {
@@ -105,14 +114,10 @@ impl Schema {
                 Ok(_) => Ok(value.clone()),
                 Err(e) => Err(misfit(path, format!("is not a valid regex: {e}"))),
             },
-            (Schema::JsRegex, Value::Str(s)) => match crate::js_regex::Regex::compile(s, "u") {
-                Ok(_) => Ok(value.clone()),
-                Err(e) => Err(misfit(path, format!("is not a valid regex: {e}"))),
-            },
             (Schema::Lit(lit), v) if lit == v => Ok(v.clone()),
             (Schema::Enum(words), Value::Str(s)) if words.iter().any(|w| **w == **s) => Ok(value.clone()),
             (Schema::Range(inner, min, max), v) => {
-                let v = inner.fit(v, named, path, doc, depth)?;
+                let v = inner.fit(v, named, path, doc, depth, checker)?;
                 let size = match &v {
                     Value::Num(n) => *n,
                     Value::Str(s) => s.chars().count() as f64,
@@ -129,7 +134,7 @@ impl Schema {
                 for (i, v) in items.iter().enumerate() {
                     let len = path.len();
                     path.push_str(&format!("[{i}]"));
-                    out.push(item.fit(v, named, path, doc, depth)?);
+                    out.push(item.fit(v, named, path, doc, depth, checker)?);
                     path.truncate(len);
                 }
                 Ok(Value::list(out))
@@ -148,7 +153,7 @@ impl Schema {
                     path.push_str(&f.name);
                     let doc = f.doc.as_deref().or(doc);
                     match (entries.iter().find(|(k, _)| **k == *f.name), &f.default) {
-                        (Some((_, v)), _) => out.push((f.name.clone().into(), f.schema.fit(v, named, path, doc, depth)?)),
+                        (Some((_, v)), _) => out.push((f.name.clone().into(), f.schema.fit(v, named, path, doc, depth, checker)?)),
                         (None, FieldDefault::Required) => {
                             return Err(Misfit { path: path.trim_start_matches('.').to_string(), problem: "is required".into(), doc: doc.map(str::to_string) })
                         }
@@ -162,7 +167,7 @@ impl Schema {
                         let len = path.len();
                         path.push('.');
                         path.push_str(k);
-                        out.push((k.clone(), rest.fit(v, named, path, doc, depth)?));
+                        out.push((k.clone(), rest.fit(v, named, path, doc, depth, checker)?));
                         path.truncate(len);
                     }
                 }
@@ -174,7 +179,7 @@ impl Schema {
                 let mut closest = None;
                 for o in options {
                     let len = path.len();
-                    let result = o.fit(v, named, path, doc, depth);
+                    let result = o.fit(v, named, path, doc, depth, checker);
                     path.truncate(len);
                     match result {
                         Ok(v) => return Ok(v),
@@ -184,11 +189,18 @@ impl Schema {
                 }
                 Err(closest.filter(|m: &Misfit| m.path.len() > path.trim_start_matches('.').len()).unwrap_or_else(|| expected(path)))
             }
+            (Schema::Checked(inner, check), v) => {
+                let v = inner.fit(v, named, path, doc, depth, checker)?;
+                match checker(&check.text, &v) {
+                    Some(false) => Err(misfit(path, format!("fails `{}`", check.text))),
+                    _ => Ok(v),
+                }
+            }
             (Schema::Named(name), v) => match named.get(&name.text) {
                 // Checked when the schema is defined.
                 None => Ok(v.clone()),
                 Some(_) if depth > 64 => Err(misfit(path, format!("schema `{}` refers to itself without end", name.text))),
-                Some(def) => def.schema.fit(v, named, path, def.doc.as_deref().or(doc), depth + 1),
+                Some(def) => def.schema.fit(v, named, path, def.doc.as_deref().or(doc), depth + 1, checker),
             },
             _ => Err(expected(path)),
         }
@@ -200,7 +212,7 @@ impl Schema {
         match self {
             Schema::List(_) => matches!(v, Value::List(_)),
             Schema::Record(..) => matches!(v, Value::Record(_)),
-            Schema::Range(inner, ..) => inner.kind_matches(v, named),
+            Schema::Range(inner, ..) | Schema::Checked(inner, _) => inner.kind_matches(v, named),
             Schema::Named(n) => named.get(&n.text).is_some_and(|d| d.schema.kind_matches(v, named)),
             _ => false,
         }
@@ -210,7 +222,7 @@ impl Schema {
     pub fn names(&self, out: &mut Vec<Name>) {
         match self {
             Schema::Named(n) => out.push(n.clone()),
-            Schema::Range(inner, ..) | Schema::List(inner) => inner.names(out),
+            Schema::Range(inner, ..) | Schema::List(inner) | Schema::Checked(inner, _) => inner.names(out),
             Schema::Record(fields, rest) => {
                 for f in fields {
                     f.schema.names(out);
@@ -238,6 +250,7 @@ impl Schema {
     fn enum_matches<'s>(&'s self, lookup: &dyn Fn(&str) -> Option<&'s Schema>, member: &dyn Fn(&str) -> bool) -> bool {
         match self {
             Schema::Enum(words) => words.iter().any(|w| member(w)),
+            Schema::Checked(inner, _) => inner.enum_matches(lookup, member),
             Schema::Union(options) => options.iter().any(|o| o.enum_matches(lookup, member)),
             Schema::Named(n) => lookup(&n.text).is_some_and(|s| s.enum_matches(lookup, member)),
             _ => false,
@@ -250,6 +263,7 @@ impl Schema {
             Schema::Lit(v) => vec![v.clone()],
             Schema::Enum(words) => words.iter().map(|w| Value::from(w.clone())).collect(),
             Schema::Bool => vec![Value::Bool(true), Value::Bool(false)],
+            Schema::Checked(inner, _) => inner.choices(named),
             Schema::Union(options) => options.iter().flat_map(|o| o.choices(named)).collect(),
             Schema::Named(n) => named.get(&n.text).map(|d| d.schema.choices(named)).unwrap_or_default(),
             _ => Vec::new(),
@@ -292,7 +306,6 @@ impl fmt::Display for Schema {
             Schema::Bool => f.write_str("boolean"),
             Schema::Null => f.write_str("null"),
             Schema::Regex => f.write_str("regex"),
-            Schema::JsRegex => f.write_str("js_regex"),
             Schema::Lit(v) => f.write_str(&v.literal()),
             Schema::Enum(words) => write!(f, "enum({})", words.join(", ")),
             Schema::Range(inner, min, max) => {
@@ -303,6 +316,7 @@ impl fmt::Display for Schema {
                 }
             }
             Schema::List(item) => write!(f, "{}[]", Element(item)),
+            Schema::Checked(inner, check) => write!(f, "{inner} check {}", check.text),
             Schema::Record(fields, rest) => {
                 let mut parts: Vec<String> = fields
                     .iter()
@@ -400,7 +414,7 @@ mod tests {
     #[test]
     fn union_alternatives_preserve_nested_misfits() {
         let named = Schemas::new();
-        let pattern = Schema::Record(vec![field("pattern", Schema::JsRegex, FieldDefault::Required, Some("a module pattern"))], None);
+        let pattern = Schema::Record(vec![field("pattern", Schema::Regex, FieldDefault::Required, Some("a module pattern"))], None);
         let record = rec(&[("pattern", Value::from("("))]);
         for (schema, value) in [
             (pattern.clone(), record.clone()),
@@ -430,25 +444,4 @@ mod tests {
         assert_eq!(branch.check(&value, &named), expected.check(&value, &named));
     }
 
-    #[test]
-    fn javascript_regex_schemas_validate_unicode_patterns_without_changing_rust_regexes() {
-        let loaded = crate::config::load_text("pattern.dx", "schema pattern js_regex", &crate::config::source::Disk);
-        assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
-        let schema = &loaded.config.schemas[0].schema;
-        let named = Schemas::new();
-        for (pattern, valid) in [
-            ("^(?!foo)(?!bar).+$", true),
-            ("foo/(?!bar)", true),
-            ("@app/(?!(api/enums$)).*", true),
-            ("(", false),
-            ("(?i)word", false),
-            (r"\q", false),
-            ("(?=a)?", false),
-        ] {
-            assert_eq!(schema.check(&Value::from(pattern), &named).is_ok(), valid, "{pattern}");
-        }
-        assert!(schema.check(&Value::Bool(true), &named).is_err());
-        assert!(Schema::Regex.check(&Value::from("(?i)word"), &named).is_ok());
-        assert!(Schema::Regex.check(&Value::from("^(?!foo).+$"), &named).is_err());
-    }
 }

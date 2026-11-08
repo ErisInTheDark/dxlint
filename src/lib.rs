@@ -20,17 +20,12 @@ pub mod levers;
 pub mod line_index;
 pub mod lsp;
 pub mod parts;
-pub mod native;
 pub mod path_globs;
 pub mod pattern;
 pub mod sampler;
 #[cfg(feature = "work")]
 pub mod work;
-pub(crate) mod js_regex;
 pub(crate) mod vm;
-
-/// The native front ends this build has (`native ts`).
-pub(crate) static FRONTENDS: &[&dyn engine::frontend::Frontend] = &[&native::ts::frontend::TS];
 
 /// A crash ends the process with its exit code instead of a modal error
 /// dialog: dxlint runs unattended (CI, editors, batch runs, test runs), where

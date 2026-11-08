@@ -1,3 +1,4 @@
+import .ts/javascript
 define {
 fn switch_part_identity(part) =
   when {

@@ -354,6 +354,10 @@ fn prune_config(config: &mut Config, runtime: bool) {
             value_names(value, &mut needed);
         }
     }
+    // Option values are checked while the config builds.
+    for schema in &config.schemas {
+        if let crate::config::schema::Schema::Checked(_, check) = &schema.schema { needed.insert(check.text.clone()); }
+    }
     if runtime {
         for c in &config.configs {
             for (_, value) in &c.options {

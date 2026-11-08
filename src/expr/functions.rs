@@ -40,48 +40,6 @@ fn count(v: &Value) -> Result<usize, String> {
     Ok(n as usize)
 }
 
-fn javascript_number_text(text: &str) -> f64 {
-    // JavaScript StringNumericLiteral whitespace differs from Rust's trim.
-    let text = text.trim_matches(|c| matches!(c,
-        '\t' | '\u{000b}' | '\u{000c}' | ' ' | '\u{00a0}' | '\u{feff}' | '\n' | '\r'
-        | '\u{2028}' | '\u{2029}' | '\u{1680}' | '\u{2000}'..='\u{200a}' | '\u{202f}' | '\u{205f}' | '\u{3000}'));
-    match text {
-        "" => return 0.0,
-        "Infinity" | "+Infinity" => return f64::INFINITY,
-        "-Infinity" => return f64::NEG_INFINITY,
-        _ => {}
-    }
-    let radix = match text.get(..2) {
-        Some("0x" | "0X") => Some(16),
-        Some("0o" | "0O") => Some(8),
-        Some("0b" | "0B") => Some(2),
-        _ => None,
-    };
-    if let Some(radix) = radix {
-        let digits = &text[2..];
-        if digits.is_empty() || !digits.bytes().all(|digit| char::from(digit).is_digit(radix)) {
-            return f64::NAN;
-        }
-        return BigIntDecimal::parse(text, false).map_or(f64::NAN, |value| value.to_number());
-    }
-    if !text.bytes().all(|c| c.is_ascii_digit() || matches!(c, b'+' | b'-' | b'.' | b'e' | b'E')) {
-        return f64::NAN;
-    }
-    text.parse().unwrap_or(f64::NAN)
-}
-
-fn javascript_literal_number(kind: &str, text: &str) -> Option<f64> {
-    match kind {
-        "string" => Some(javascript_number_text(text)),
-        "boolean" => match text { "true" => Some(1.0), "false" => Some(0.0), _ => None },
-        "null" => Some(0.0),
-        "undefined" | "regex" => Some(f64::NAN),
-        "number" => super::js::number(text),
-        "bigint" => BigIntDecimal::parse(text, true).map(|value| value.to_number()),
-        _ => None,
-    }
-}
-
 macro_rules! text_fn {
     ($name:literal, $doc:literal, $f:expr) => {
         Function { name: $name, signature: concat!($name, "(text)"), doc: $doc, min: 1, max: 1, call: |a| {
@@ -184,7 +142,7 @@ fn grapheme_count(text: &str) -> usize {
         let regional = (0x1F1E6..=0x1F1FF).contains(&v);
         let extends = c == '\u{200D}'
             || joined
-            || super::js::is_mark(c)
+            || super::text::is_mark(c)
             || (0xFE00..=0xFE0F).contains(&v)
             || (0x1F3FB..=0x1F3FF).contains(&v)
             || (0xE0020..=0xE007F).contains(&v)
@@ -207,25 +165,17 @@ fn fold_num<'s>(a: &[Value<'s>], pick: fn(f64, f64) -> f64) -> Result<Value<'s>,
 
 pub static FUNCTIONS: &[Function] = &[
     Function {
-        name: "js_re_test",
-        signature: "js_re_test(text, pattern, flags?)",
-        doc: "stateless JavaScript regex match; unsupported features and work exhaustion fail the rule",
-        min: 2,
-        max: 3,
-        call: |a| crate::js_regex::test(&text(&a[0]), &text(&a[1]), &a.get(2).map(text).unwrap_or_default()).map(Value::Bool),
-    },
-    Function {
         name: "re_valid",
         signature: "re_valid(pattern)",
-        doc: "can the engine compile this regex pattern?",
+        doc: "can the engine compile this regex pattern (lookaround groups included, as `re_test` takes them)?",
         min: 1,
         max: 1,
-        call: |a| Ok(Value::Bool(super::re::compile(&text(&a[0])).is_ok())),
+        call: |a| Ok(Value::Bool(super::re::valid(&text(&a[0])))),
     },
     Function {
         name: "re_test",
         signature: "re_test(text, pattern)",
-        doc: "does the regex match anywhere in the text?",
+        doc: "does the regex match anywhere in the text? Takes flat lookaround groups too (`(?=`, `(?!`, `(?<=`, `(?<!`; a leading `(?i)` holds inside them), with bounded work",
         min: 2,
         max: 2,
         call: super::re::test,
@@ -284,17 +234,173 @@ pub static FUNCTIONS: &[Function] = &[
         max: 4,
         call: |a| {
             let flag = |i: usize| a.get(i).is_some_and(Value::truthy);
-            let order = super::js::compare_names(&a[0].text(), &a[1].text(), flag(3), flag(2));
+            let order = super::text::compare_names(&a[0].text(), &a[1].text(), flag(3), flag(2));
             Ok(Value::Num(order as i8 as f64))
         },
     },
     Function {
-        name: "js_string",
-        signature: "js_string(text)",
-        doc: "Decode a quoted JavaScript string literal, including escapes and line continuations; null for invalid syntax. Lone surrogates become U+FFFD",
+        name: "re_matches",
+        signature: "re_matches(text, pattern)",
+        doc: "every regex match as `{text, offset, end_offset, groups}`: byte offsets, `groups` each numbered group's text (null when unused)",
+        min: 2,
+        max: 2,
+        call: super::re::matches,
+    },
+    Function {
+        name: "code_of",
+        signature: "code_of(text)",
+        doc: "the Unicode code point of the text's first character; null for empty text",
         min: 1,
         max: 1,
-        call: |a| Ok(super::js::strings::decode(&a[0].text()).map_or(Value::Null, Value::from)),
+        call: |a| Ok(a[0].text().chars().next().map_or(Value::Null, |c| Value::from(c as u32 as usize))),
+    },
+    Function {
+        name: "text_from_units",
+        signature: "text_from_units(points)",
+        doc: "Text from `{value, offset, end_offset}` code points (UTF-16 surrogates pair up; a lone one becomes U+FFFD) as `{text, units, spans}`: each UTF-16 unit and each Unicode scalar with the span it was written at; null past U+10FFFF",
+        min: 1,
+        max: 1,
+        call: |a| {
+            let Value::List(points) = &a[0] else { return Ok(Value::Null) };
+            let mut written = Vec::with_capacity(points.len());
+            for point in points.iter() {
+                let (value, start, end) = (point.key("value").num()?, point.key("offset").num()?, point.key("end_offset").num()?);
+                if value < 0.0 || value.fract() != 0.0 { return Ok(Value::Null) }
+                written.push((value as u32, start as usize..end as usize));
+            }
+            let Some((units, text, spans)) = super::text::from_code_points(written) else { return Ok(Value::Null) };
+            let span = |source: std::ops::Range<usize>| Value::record(vec![
+                ("offset".into(), Value::Num(source.start as f64)),
+                ("end_offset".into(), Value::Num(source.end as f64)),
+            ]);
+            Ok(Value::record(vec![
+                ("text".into(), Value::from(text)),
+                ("spans".into(), Value::list(spans.into_iter().map(span).collect())),
+                ("units".into(), Value::list(units.into_iter().map(|unit| Value::record(vec![
+                    ("value".into(), Value::Num(f64::from(unit.value))),
+                    ("offset".into(), Value::Num(unit.source.start as f64)),
+                    ("end_offset".into(), Value::Num(unit.source.end as f64)),
+                ])).collect())),
+            ]))
+        },
+    },
+    Function {
+        name: "utf16_at",
+        signature: "utf16_at(text, index)",
+        doc: "the UTF-16 unit at `index` as text (a lone surrogate becomes U+FFFD); null when out of range or `index` is not a whole number",
+        min: 2,
+        max: 2,
+        call: |a| {
+            let Value::Num(index) = a[1] else { return Ok(Value::Null) };
+            if index < 0.0 || index.fract() != 0.0 { return Ok(Value::Null) }
+            Ok(a[0].text().encode_utf16().nth(index as usize).map_or(Value::Null, |unit| Value::from(String::from_utf16_lossy(&[unit]))))
+        },
+    },
+    Function {
+        name: "parse_number",
+        signature: "parse_number(text, radix?)",
+        doc: "a number written in `radix` (default 10): decimal notation (sign, digits, fraction, exponent) or whole digits 2..36 exactly, rounded to the nearest double; null otherwise",
+        min: 1,
+        max: 2,
+        call: |a| {
+            let radix = match a.get(1) { Some(radix) => radix.num()?, None => 10.0 };
+            if radix.fract() != 0.0 || !(2.0..=36.0).contains(&radix) { return Ok(Value::Null) }
+            Ok(super::numeric::parse_number(&a[0].text(), radix as u32).map_or(Value::Null, Value::Num))
+        },
+    },
+    Function {
+        name: "big_integer",
+        signature: "big_integer(digits, radix?)",
+        doc: "whole `digits` in `radix` (default 10, 2..36) as exact decimal text; null for other characters",
+        min: 1,
+        max: 2,
+        call: |a| {
+            let radix = match a.get(1) { Some(radix) => radix.num()?, None => 10.0 };
+            if radix.fract() != 0.0 || !(2.0..=36.0).contains(&radix) { return Ok(Value::Null) }
+            Ok(super::numeric::big_integer(&a[0].text(), radix as u32).map_or(Value::Null, Value::from))
+        },
+    },
+    Function {
+        name: "compare_integers",
+        signature: "compare_integers(a, b)",
+        doc: "-1, 0 or 1 ordering two whole numbers written in decimal (an optional `-`), exactly; null for other text",
+        min: 2,
+        max: 2,
+        call: |a| Ok(super::numeric::compare_integers(&a[0].text(), &a[1].text()).map_or(Value::Null, |o| Value::Num(o as i8 as f64))),
+    },
+    Function {
+        name: "number_digits",
+        signature: "number_digits(value, precision?)",
+        doc: "a positive finite number's significant decimal digits and the exponent of the first, `{digits, exponent}` (`value` = d.ddd × 10^exponent): the shortest that reads back as `value`, or `precision` digits (1..100) rounding exact ties up; null otherwise",
+        min: 1,
+        max: 2,
+        call: |a| {
+            let Value::Num(value) = a[0] else { return Ok(Value::Null) };
+            let precision = match a.get(1) {
+                Some(Value::Num(digits)) if digits.fract() == 0.0 && *digits >= 1.0 => Some(*digits as usize),
+                Some(_) => return Ok(Value::Null),
+                None => None,
+            };
+            Ok(match super::numeric::digits(value, precision) {
+                Some((digits, exponent)) => Value::record(vec![("digits".into(), Value::from(digits)), ("exponent".into(), Value::Num(f64::from(exponent)))]),
+                None => Value::Null,
+            })
+        },
+    },
+    Function {
+        name: "int32",
+        signature: "int32(value)",
+        doc: "a number truncated and wrapped into a signed 32-bit integer (0 for NaN and infinities)",
+        min: 1,
+        max: 1,
+        call: |a| Ok(Value::Num(f64::from(super::numeric::int32(a[0].num()?)))),
+    },
+    Function {
+        name: "uint32",
+        signature: "uint32(value)",
+        doc: "a number truncated and wrapped into an unsigned 32-bit integer (0 for NaN and infinities)",
+        min: 1,
+        max: 1,
+        call: |a| Ok(Value::Num(f64::from(super::numeric::int32(a[0].num()?) as u32))),
+    },
+    Function {
+        name: "bits",
+        signature: "bits(operator, a, b?)",
+        doc: "32-bit integer bit operations on `int32` values: `and`, `or`, `xor`, `not` (one operand), `shift_left`, `shift_right` (sign-filling) and `shift_right_unsigned` (on the unsigned value) by 0..31; null otherwise",
+        min: 2,
+        max: 3,
+        call: |a| {
+            let x = super::numeric::int32(a[1].num()?);
+            let y = match a.get(2) { Some(value) => Some(super::numeric::int32(value.num()?)), None => None };
+            let shift = y.filter(|y| (0..32).contains(y)).map(|y| y as u32);
+            let result = match (&*a[0].text(), y) {
+                ("not", None) => Some(f64::from(!x)),
+                ("and", Some(y)) => Some(f64::from(x & y)),
+                ("or", Some(y)) => Some(f64::from(x | y)),
+                ("xor", Some(y)) => Some(f64::from(x ^ y)),
+                ("shift_left", Some(_)) => shift.map(|s| f64::from(x.wrapping_shl(s))),
+                ("shift_right", Some(_)) => shift.map(|s| f64::from(x >> s)),
+                ("shift_right_unsigned", Some(_)) => shift.map(|s| f64::from((x as u32) >> s)),
+                _ => None,
+            };
+            Ok(result.map_or(Value::Null, Value::Num))
+        },
+    },
+    Function {
+        name: "float_divide",
+        signature: "float_divide(a, b)",
+        doc: "IEEE 754 division: `b` 0 gives an infinity or NaN (`divide` gives null)",
+        min: 2,
+        max: 2,
+        call: |a| Ok(Value::Num(a[0].num()? / a[1].num()?)),
+    },
+    Function {
+        name: "pow",
+        signature: "pow(base, exponent)",
+        doc: "IEEE 754 power (`pow(1, infinity)` is 1, `pow(NaN, 0)` is 1)",
+        min: 2,
+        max: 2,
+        call: |a| Ok(Value::Num(a[0].num()?.powf(a[1].num()?))),
     },
     Function {
         name: "json_string",
@@ -329,87 +435,6 @@ pub static FUNCTIONS: &[Function] = &[
         },
     },
     Function {
-        name: "js_string_parts",
-        signature: "js_string_parts(text)",
-        doc: "Decode a quoted string or substitution-free template to text, UTF-16 units and Unicode-scalar spans. Offsets are bytes within the literal; null for invalid syntax",
-        min: 1,
-        max: 1,
-        call: |a| {
-            let Some(decoded) = super::js::strings::decode_mapped(&a[0].text()) else { return Ok(Value::Null) };
-            let span = |source: std::ops::Range<usize>| Value::record(vec![
-                ("offset".into(), Value::Num(source.start as f64)),
-                ("end_offset".into(), Value::Num(source.end as f64)),
-            ]);
-            Ok(Value::record(vec![
-                ("text".into(), Value::from(decoded.text)),
-                ("spans".into(), Value::list(decoded.spans.into_iter().map(span).collect())),
-                ("units".into(), Value::list(decoded.units.into_iter().map(|unit| Value::record(vec![
-                    ("value".into(), Value::Num(f64::from(unit.value))),
-                    ("offset".into(), Value::Num(unit.source.start as f64)),
-                    ("end_offset".into(), Value::Num(unit.source.end as f64)),
-                ])).collect())),
-            ]))
-        },
-    },
-    Function {
-        name: "js_bigint",
-        signature: "js_bigint(text)",
-        doc: "A JavaScript bigint literal as exact decimal text, including radix prefixes and separators; null for invalid syntax",
-        min: 1,
-        max: 1,
-        call: |a| Ok(super::js::bigint_literal(&a[0].text()).map_or(Value::Null, Value::from)),
-    },
-    Function {
-        name: "js_number",
-        signature: "js_number(value)",
-        doc: "JavaScript Number conversion of primitive values or literal_value records; NaN for non-numeric strings, null for unsupported values (including symbols)",
-        min: 1,
-        max: 1,
-        call: |a| {
-            let number = match &a[0] {
-                Value::Num(n) => Some(*n),
-                Value::Bool(b) => Some(f64::from(u8::from(*b))),
-                Value::Null => Some(0.0),
-                Value::Str(_) | Value::Node(..) => Some(javascript_number_text(&a[0].text())),
-                Value::Record(_) => javascript_literal_number(&a[0].key("type").text(), &a[0].key("value").text()),
-                _ => None,
-            };
-            Ok(number.map_or(Value::Null, Value::Num))
-        },
-    },
-    Function {
-        name: "js_to_string",
-        signature: "js_to_string(value)",
-        doc: "JavaScript `String(value)` of a primitive or `literal_value` record (numbers as JavaScript prints them, bigints without `n`); null for other values",
-        min: 1,
-        max: 1,
-        call: |a| Ok(match &a[0] {
-            Value::Num(n) => Value::from(super::js::number_to_string(*n)),
-            Value::Bool(b) => Value::from(b.to_string()),
-            Value::Null => Value::from("null"),
-            Value::Str(_) | Value::Node(..) => a[0].clone(),
-            Value::Record(_) => match &*a[0].key("type").text() {
-                "number" => javascript_literal_number("number", &a[0].key("value").text()).map_or(Value::Null, |n| Value::from(super::js::number_to_string(n))),
-                "string" | "bigint" | "boolean" => Value::from(a[0].key("value").text().into_owned()),
-                "null" => Value::from("null"),
-                _ => Value::Null,
-            },
-            _ => Value::Null,
-        }),
-    },
-    Function {
-        name: "js_number_to_precision",
-        signature: "js_number_to_precision(value, digits)",
-        doc: "JavaScript `value.toPrecision(digits)` for a number and whole `digits` 1..100; null otherwise",
-        min: 2,
-        max: 2,
-        call: |a| Ok(match (&a[0], &a[1]) {
-            (Value::Num(value), Value::Num(digits)) if digits.fract() == 0.0 && *digits >= 1.0 =>
-                super::js::number_format::to_precision(*value, *digits as usize).map_or(Value::Null, Value::from),
-            _ => Value::Null,
-        }),
-    },
-    Function {
         name: "integer_radix",
         signature: "integer_radix(value, radix)",
         doc: "A whole finite number written in `radix` 2..36 (lowercase digits, exact for every double); null for fractions, infinities and other radixes",
@@ -417,82 +442,9 @@ pub static FUNCTIONS: &[Function] = &[
         max: 2,
         call: |a| Ok(match (&a[0], &a[1]) {
             (Value::Num(value), Value::Num(radix)) if radix.fract() == 0.0 && *radix >= 0.0 && *radix <= 36.0 =>
-                super::js::number_format::integer_radix(*value, *radix as u32).map_or(Value::Null, Value::from),
+                super::numeric::integer_radix(*value, *radix as u32).map_or(Value::Null, Value::from),
             _ => Value::Null,
         }),
-    },
-    Function {
-        name: "js_number_binary",
-        signature: "js_number_binary(operator, left, right)",
-        doc: "A JavaScript numeric binary operator (`+ - * / % ** & | ^ << >> >>>`) on two numbers, with JavaScript's results (NaN, Infinity, ToInt32 for bitwise); null for other operators or non-number operands",
-        min: 3,
-        max: 3,
-        call: |a| Ok(match (&a[1], &a[2]) {
-            (Value::Num(x), Value::Num(y)) => super::js::number_binary(&a[0].text(), *x, *y).map_or(Value::Null, Value::Num),
-            _ => Value::Null,
-        }),
-    },
-    Function {
-        name: "js_number_unary",
-        signature: "js_number_unary(operator, value)",
-        doc: "A JavaScript numeric unary operator (`- + ~`) on a number; null for other operators or a non-number operand",
-        min: 2,
-        max: 2,
-        call: |a| Ok(match &a[1] {
-            Value::Num(x) => super::js::number_unary(&a[0].text(), *x).map_or(Value::Null, Value::Num),
-            _ => Value::Null,
-        }),
-    },
-    Function {
-        name: "js_char_at",
-        signature: "js_char_at(text, index)",
-        doc: "JavaScript `text[index]`: the UTF-16 unit at `index` as text (a lone surrogate becomes U+FFFD, as js_string decodes them); null when out of range or `index` is not a whole number",
-        min: 2,
-        max: 2,
-        call: |a| {
-            let Value::Num(index) = a[1] else { return Ok(Value::Null) };
-            if index < 0.0 || index.fract() != 0.0 { return Ok(Value::Null) }
-            Ok(a[0].text().encode_utf16().nth(index as usize).map_or(Value::Null, |unit| Value::from(String::from_utf16_lossy(&[unit]))))
-        },
-    },
-    Function {
-        name: "js_compare",
-        signature: "js_compare(a, b)",
-        doc: "-1, 0 or 1 as JavaScript's `<` orders two literal values (`literal_value` records or plain values): strings by UTF-16 unit, bigints exactly, otherwise as numbers; null when unordered",
-        min: 2,
-        max: 2,
-        call: |a| {
-            let typed = |v: &Value| -> (String, String) {
-                match v {
-                    Value::Record(_) => (v.key("type").text().into_owned(), v.key("value").text().into_owned()),
-                    Value::Num(_) => ("number".into(), v.text().into_owned()),
-                    Value::Bool(_) => ("boolean".into(), v.text().into_owned()),
-                    Value::Null => ("null".into(), "null".into()),
-                    _ => ("string".into(), v.text().into_owned()),
-                }
-            };
-            let ((ta, va), (tb, vb)) = (typed(&a[0]), typed(&a[1]));
-            if ta == "string" && tb == "string" {
-                return Ok(Value::Num(va.encode_utf16().cmp(vb.encode_utf16()) as i8 as f64));
-            }
-            let number = |t: &str, v: &str| javascript_literal_number(t, v).unwrap_or(f64::NAN);
-            if ta == "bigint" || tb == "bigint" {
-                let order = if ta == "bigint" {
-                    BigIntDecimal::parse(&va, true).and_then(|x| match tb.as_str() {
-                        "bigint" | "string" => BigIntDecimal::parse(&vb, tb == "bigint").map(|y| x.compare(&y)),
-                        _ => x.compare_number(number(&tb, &vb)),
-                    })
-                } else {
-                    BigIntDecimal::parse(&vb, true).and_then(|y| match ta.as_str() {
-                        "string" => BigIntDecimal::parse(&va, false).map(|x| x.compare(&y)),
-                        _ => y.compare_number(number(&ta, &va)).map(std::cmp::Ordering::reverse),
-                    })
-                };
-                return Ok(order.map_or(Value::Null, |o| Value::Num(o as i8 as f64)));
-            }
-            let (x, y) = (number(&ta, &va), number(&tb, &vb));
-            Ok(x.partial_cmp(&y).map_or(Value::Null, |o| Value::Num(o as i8 as f64)))
-        },
     },
     Function {
         name: "byte_len",
@@ -932,20 +884,6 @@ pub static FUNCTIONS: &[Function] = &[
         call: |a| Ok(Value::Bool(a[0].item_slice().iter().any(Value::truthy))),
     },
     Function {
-        name: "regex_flags_error",
-        signature: "regex_flags_error(flags, allowed)",
-        doc: "what `RegExp`'s constructor says about `flags` (`u` with `v`, duplicates, unknown ones; extra `allowed` flags pass), as eslint's no-invalid-regexp words it; null when fine",
-        min: 1,
-        max: 2,
-        call: |a| {
-            let allowed: String = a.get(1).map(|v| v.items().iter().map(|x| x.text().into_owned()).collect()).unwrap_or_default();
-            Ok(match super::js::regex_flags_error(&a[0].text(), &allowed) {
-                Some(m) => Value::from(m),
-                None => Value::Null,
-            })
-        },
-    },
-    Function {
         name: "graphemes",
         signature: "graphemes(text)",
         doc: "how many characters a reader sees in `text`: joined emoji (`👨‍👩‍👧‍👦`), flags, modifiers and combining marks count once",
@@ -1005,61 +943,6 @@ pub static FUNCTIONS: &[Function] = &[
         call: |a| Ok(Value::Num(a[0].num()?.round())),
     },
 ];
-
-struct BigIntDecimal {
-    negative: bool,
-    digits: String,
-}
-
-impl BigIntDecimal {
-    fn to_number(&self) -> f64 {
-        let number = self.digits.parse().unwrap_or(f64::INFINITY);
-        if self.negative { -number } else { number }
-    }
-
-    fn parse(text: &str, literal: bool) -> Option<Self> {
-        let text = text.trim();
-        if text.is_empty() {
-            return (!literal).then(|| Self { negative: false, digits: "0".into() });
-        }
-        let body = text.strip_prefix(['-', '+']).unwrap_or(text);
-        if !literal && (body.contains(['_', 'n']) || (body != text && !body.bytes().all(|b| b.is_ascii_digit()))) {
-            return None;
-        }
-        if body.trim_end_matches('n').is_empty() {
-            return None;
-        }
-        if matches!(body.to_ascii_lowercase().as_str(), "0x" | "0o" | "0b") {
-            return None;
-        }
-        let digits = super::js::bigint_decimal(body)?;
-        Some(Self { negative: text.starts_with('-') && digits != "0", digits })
-    }
-
-    fn compare(&self, other: &Self) -> std::cmp::Ordering {
-        let magnitude = self.digits.len().cmp(&other.digits.len()).then_with(|| self.digits.cmp(&other.digits));
-        match (self.negative, other.negative) {
-            (true, false) => std::cmp::Ordering::Less,
-            (false, true) => std::cmp::Ordering::Greater,
-            (true, true) => magnitude.reverse(),
-            (false, false) => magnitude,
-        }
-    }
-
-    fn compare_number(&self, number: f64) -> Option<std::cmp::Ordering> {
-        if number.is_nan() {
-            return None;
-        }
-        if number.is_infinite() {
-            return Some(if number.is_sign_positive() { std::cmp::Ordering::Less } else { std::cmp::Ordering::Greater });
-        }
-        // Fixed decimal formatting of an integral f64 retains its exact integer,
-        // unlike conversion of an arbitrary bigint into a floating-point value.
-        let integer = Self::parse(&format!("{:.0}", number.trunc()), false)?;
-        let order = self.compare(&integer);
-        Some(if order.is_eq() { 0.0_f64.partial_cmp(&number.fract())? } else { order })
-    }
-}
 
 /// 64-bit FNV-1a: its published offset basis and prime.
 fn fnv_1a(bytes: &[u8]) -> u64 {
@@ -1124,71 +1007,6 @@ mod tests {
             assert_eq!(call("lines", &[text("a\n")]), Value::list(vec!["a".into()]));
             assert_eq!(call("lines", &[text("")]), Value::list(vec![]));
         }
-    }
-
-    #[test]
-    fn js_numeric_strings_follow_runtime_conversion_not_literal_syntax() {
-        for (input, expected) in [
-            ("", 0.0), (" \t\n", 0.0), ("010", 10.0), ("0x10", 16.0),
-            ("0o10", 8.0), ("0b10", 2.0), ("-.25", -0.25), ("5e-1", 0.5),
-            ("\u{feff}2\u{feff}", 2.0), ("Infinity", f64::INFINITY),
-            ("+Infinity", f64::INFINITY), ("-Infinity", f64::NEG_INFINITY),
-        ] {
-            let actual = call("js_number", &[Value::from(input)]).num().unwrap();
-            assert_eq!(actual, expected, "{input:?}");
-        }
-        for input in ["1_0", "1n", "inf", "infinity", "+0x0", "-0x0", "\u{0085}2", "0x2\u{0085}", "not a number"] {
-            assert!(call("js_number", &[Value::from(input)]).num().unwrap().is_nan(), "{input:?}");
-        }
-        for (kind, value, expected) in [("boolean", "false", 0.0), ("null", "null", 0.0), ("bigint", "0n", 0.0), ("string", "0x10", 16.0)] {
-            let literal = Value::record(vec![("type".into(), Value::from(kind)), ("value".into(), Value::from(value))]);
-            assert_eq!(call("js_number", &[literal]).num().unwrap(), expected);
-        }
-        let undefined = Value::record(vec![("type".into(), Value::from("undefined")), ("value".into(), Value::from("undefined"))]);
-        assert!(call("js_number", &[undefined]).num().unwrap().is_nan());
-        let symbol = Value::record(vec![("type".into(), Value::from("symbol")), ("value".into(), Value::from("key"))]);
-        assert_eq!(call("js_number", &[symbol]), Value::Null);
-    }
-
-    #[test]
-    fn js_numeric_comparison_shares_string_coercion_and_preserves_text_order() {
-        for input in ["1_0", "1n", "inf", "\u{0085}2"] {
-            assert_eq!(call("js_compare", &[Value::from(input), Value::Num(0.0)]), Value::Null, "{input:?}");
-            let literal = Value::record(vec![("type".into(), Value::from("string")), ("value".into(), Value::from(input))]);
-            assert_eq!(call("js_compare", &[literal, Value::Num(0.0)]), Value::Null, "{input:?}");
-        }
-        assert_eq!(call("js_compare", &[Value::from("010"), Value::Num(9.0)]), Value::Num(1.0));
-        assert_eq!(call("js_compare", &[Value::from("\u{feff}2"), Value::Num(1.0)]), Value::Num(1.0));
-        assert_eq!(call("js_compare", &[Value::from("10"), Value::from("2")]), Value::Num(-1.0));
-    }
-
-    #[test]
-    fn js_compare_keeps_bigint_order_exact_across_numeric_domains() {
-        let literal = |kind: &str, value: &str| Value::record(vec![
-            ("type".into(), Value::from(kind.to_owned())),
-            ("value".into(), Value::from(value.to_owned())),
-        ]);
-        for (left, right, expected) in [
-            ("9007199254740992n", "9007199254740993n", -1.0),
-            ("-9007199254740993n", "-9007199254740992n", -1.0),
-            ("0x20000000000001n", "9007199254740993n", 0.0),
-            ("-0n", "0n", 0.0),
-        ] {
-            let a = literal("bigint", left);
-            let b = literal("bigint", right);
-            assert_eq!(call("js_compare", &[a.clone(), b.clone()]), Value::Num(expected));
-            assert_eq!(call("js_compare", &[b, a]), Value::Num(-expected));
-        }
-        for (kind, value, expected) in [
-            ("number", "9007199254740992", 1.0),
-            ("string", "9007199254740993", 0.0),
-            ("number", "Infinity", -1.0),
-        ] {
-            assert_eq!(call("js_compare", &[literal("bigint", "9007199254740993n"), literal(kind, value)]), Value::Num(expected));
-        }
-        assert_eq!(call("js_compare", &[literal("bigint", "1n"), literal("number", "1.5")]), Value::Num(-1.0));
-        assert_eq!(call("js_compare", &[literal("bigint", "-1n"), literal("number", "-1.5")]), Value::Num(1.0));
-        assert_eq!(call("js_compare", &[literal("bigint", "1n"), literal("string", "1.5")]), Value::Null);
     }
 
     #[test]

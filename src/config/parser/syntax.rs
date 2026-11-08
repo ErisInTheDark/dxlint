@@ -5,10 +5,10 @@ mod precedence;
 mod resolve;
 
 use super::Parser;
-use crate::config::ast::ParserDecl;
+use crate::config::ast::{Name, Parent, ParserDecl};
 use crate::config::error::ConfigError;
 use crate::config::lexer::{decode_escapes, Tk, Token};
-use crate::pattern::syntax::{Definition, Field, Goal, Node, Production};
+use crate::pattern::syntax::{Definition, Expr, Field, Goal, Node, Production};
 use crate::pattern::{regex, Pat};
 
 impl Parser<'_> {
@@ -21,13 +21,80 @@ impl Parser<'_> {
         }
         let Some(language) = self.ident("a language name") else { return; };
         if self.expect(Tk::LBrace, "`{` after the parser language").is_none() { return; }
-        let mut definition = Definition {
-            name: name.text.clone(), trivia: Vec::new(), line_break: Pat::Empty,
-            tokens: Vec::new(), goals: Vec::new(), flags: Vec::new(), nodes: Vec::new(),
-            productions: Vec::new(), root: String::new(),
+        let mut declaration = ParserDecl {
+            name: name.clone(), language,
+            definition: Definition {
+                name: name.text.clone(), trivia: Vec::new(), line_break: Pat::Empty,
+                tokens: Vec::new(), goals: Vec::new(), flags: Vec::new(), nodes: Vec::new(),
+                productions: Vec::new(), root: String::new(),
+            },
+            option_flags: Vec::new(), name_escapes: Vec::new(), file_flags: Vec::new(),
         };
-        let mut option_flags = Vec::new();
         let before = self.errors.len();
+        self.syntax_items(&mut declaration, false);
+        let definition = &declaration.definition;
+        if definition.root.is_empty() {
+            self.errors.push(ConfigError::new(name.span, "a parser needs a root production"));
+        }
+        if matches!(definition.line_break, Pat::Empty) {
+            self.errors.push(ConfigError::new(name.span, "a parser needs a line_break pattern"));
+        }
+        if self.errors.len() == before {
+            if let Err(message) = resolve::resolve(&mut declaration.definition) {
+                self.errors.push(ConfigError::new(name.span, message));
+            } else {
+                self.config.parsers.push(declaration);
+            }
+        }
+    }
+
+    /// `extend parser name { ... }`: more items for a parser declared above,
+    /// where `override production x = ...` replaces a production and
+    /// `production x |= ...` adds an alternative after its own.
+    pub(super) fn syntax_extension(&mut self) {
+        self.bump();
+        if !self.word("parser") {
+            self.error_here("expected `parser` after `extend`: `extend parser name { ... }`");
+            return;
+        }
+        let Some(name) = self.ident("a parser name") else { return; };
+        if self.expect(Tk::LBrace, "`{` after the parser name").is_none() { return; }
+        let Some(index) = self.config.parsers.iter().position(|parser| parser.name.text == name.text) else {
+            self.errors.push(ConfigError::new(name.span, format!("no parser `{}` above to extend", name.text)));
+            self.recover();
+            return;
+        };
+        let mut declaration = self.config.parsers[index].clone();
+        let known = declaration.definition.nodes.len();
+        let before = self.errors.len();
+        self.syntax_items(&mut declaration, true);
+        if self.errors.len() != before { return; }
+        if let Err(message) = resolve::resolve(&mut declaration.definition) {
+            self.errors.push(ConfigError::new(name.span, message));
+            return;
+        }
+        // New node kinds join the front end's `<name>_node`/`<name>_code` groups.
+        let definition = &declaration.definition;
+        for node in &definition.nodes[known..] {
+            if definition.tokens.iter().any(|token| token.visible_kind.as_deref() == Some(node.name.as_str())) { continue }
+            for suffix in ["node", "code"].into_iter().filter(|suffix| *suffix == "node" || !node.literal_text) {
+                let group_name = format!("{}_{suffix}", name.text);
+                if let Some(group) = self.config.groups.iter_mut().find(|group| group.name.text == group_name) {
+                    group.parents.push(Parent::Matcher(Name { text: node.name.clone(), span: name.span }));
+                }
+            }
+        }
+        self.config.parsers[index] = declaration;
+    }
+
+    fn syntax_items(&mut self, declaration: &mut ParserDecl, extending: bool) {
+        let name = declaration.name.clone();
+        let definition = &mut declaration.definition;
+        let option_flags = &mut declaration.option_flags;
+        let name_escapes = &mut declaration.name_escapes;
+        // An extension's `|=` and `override` edits, applied once its `files` are known.
+        let mut edits: Vec<(Name, bool, Expr)> = Vec::new();
+        let mut files = Vec::new();
         loop {
             let Some(token) = self.peek() else {
                 self.errors.push(ConfigError::new(name.span, "unclosed parser declaration"));
@@ -39,15 +106,34 @@ impl Parser<'_> {
             }
             let item_errors = self.errors.len();
             match (token.kind, &*token.text) {
+                (Tk::Ident, "override") if extending => {
+                    self.bump();
+                    if !self.word("production") {
+                        self.error_here("expected `production` after `override` in a parser");
+                    } else if let Some(production) = self.ident("a production name") {
+                        let body = self.expect(Tk::Eq, "`=` before a production body").and_then(|_| self.syntax_expression(0));
+                        match (definition.productions.iter().any(|own| own.name == production.text), body) {
+                            (true, Some(body)) => edits.push((production, false, body)),
+                            (false, _) => self.errors.push(ConfigError::new(production.span, format!("no production `{}` to override", production.text))),
+                            (_, None) => {}
+                        }
+                    }
+                }
+                (Tk::Ident, "files") if extending => {
+                    self.bump();
+                    files.extend(self.globs("a path glob"));
+                }
                 (Tk::Ident, "token") => {
                     self.bump();
                     if let Some(token_name) = self.ident("a token name") {
                         if let Some(pattern) = self.syntax_pattern() {
+                            let lines = self.syntax_peek(0).is_some_and(|token| token.is_ident("lines"));
+                            if lines { self.ts.next_raw(); }
                             let visible_kind = if self.syntax_peek(0).is_some_and(|token| token.is_ident("as")) {
                                 self.ts.next_raw();
                                 self.ident("a public token kind").map(|name| name.text)
                             } else { None };
-                            definition.tokens.push(crate::pattern::syntax::Token { name: token_name.text, pattern, visible_kind });
+                            definition.tokens.push(crate::pattern::syntax::Token { name: token_name.text, pattern, visible_kind, lines });
                         }
                     }
                 }
@@ -58,6 +144,18 @@ impl Parser<'_> {
                 (Tk::Ident, "line_break") => {
                     self.bump();
                     if let Some(pattern) = self.syntax_pattern() { definition.line_break = pattern; }
+                }
+                (Tk::Ident, "name_escape") => {
+                    self.bump();
+                    match self.bump() {
+                        Some(regex) if regex.kind == Tk::Regex => match crate::expr::re::compile(&regex.text) {
+                            Ok(compiled) if compiled.group_info().group_len(regex_automata::PatternID::ZERO) > 1 => name_escapes.push(regex.text.to_string()),
+                            Ok(_) => self.errors.push(ConfigError::new(regex.span, "a name escape needs a group capturing the hex code point")),
+                            Err(message) => self.errors.push(ConfigError::new(regex.span, message)),
+                        },
+                        Some(other) => self.errors.push(ConfigError::new(other.span, "expected a regex: `name_escape /\\\\u([0-9a-fA-F]{4})/`")),
+                        None => {}
+                    }
                 }
                 (Tk::Ident, "flag") => {
                     self.bump();
@@ -81,44 +179,74 @@ impl Parser<'_> {
                         if Self::syntax_constructor_name(&production.text) {
                             self.errors.push(ConfigError::new(production.span, "grammar constructor names are reserved"));
                         }
-                        let body = if self.word("precedence") {
+                        let own = definition.productions.iter().position(|own| own.name == production.text);
+                        let alternative = extending && self.syntax_peek(1).is_some_and(|token| token.kind == Tk::Pipe);
+                        let body = if alternative {
+                            self.ts.next_raw();
+                            self.expect(Tk::Eq, "`=` after `|`: `production x |= ...`").and_then(|_| self.syntax_expression(0))
+                        } else if self.word("precedence") {
                             self.syntax_precedence()
                         } else {
                             self.expect(Tk::Eq, "`=` before a production body")
                                 .and_then(|_| self.syntax_expression(0))
                         };
-                        if let Some(body) = body {
-                            if token.is_ident("root") {
-                                if !definition.root.is_empty() {
-                                    self.errors.push(ConfigError::new(production.span, "a parser has one root"));
+                        match (body, own) {
+                            (Some(body), Some(_)) if alternative => edits.push((production, true, body)),
+                            (Some(_), None) if alternative => self.errors.push(ConfigError::new(production.span,
+                                format!("no production `{}` to add an alternative to", production.text))),
+                            (Some(_), Some(_)) if extending => self.errors.push(ConfigError::new(production.span,
+                                format!("production `{}` exists: `override production` replaces it, `|=` adds an alternative", production.text))),
+                            (Some(body), _) => {
+                                if token.is_ident("root") {
+                                    if !definition.root.is_empty() {
+                                        self.errors.push(ConfigError::new(production.span, "a parser has one root"));
+                                    }
+                                    definition.root = production.text.clone();
                                 }
-                                definition.root = production.text.clone();
+                                definition.productions.push(Production { name: production.text, body });
                             }
-                            definition.productions.push(Production { name: production.text, body });
+                            (None, _) => {}
                         }
                     }
                 }
                 (Tk::Ident, _) if self.ts.expand(&mut self.errors) => continue,
                 _ => {
-                    self.errors.push(ConfigError::new(token.span, "parser items are token, trivia, line_break, flag, goal, node, production and root"));
+                    self.errors.push(ConfigError::new(token.span, "parser items are token, trivia, line_break, name_escape, flag, goal, node, production and root"));
                     self.bump();
                 }
             }
             if self.errors.len() > item_errors { self.recover(); }
             else { self.end_of_item(); }
         }
-        if definition.root.is_empty() {
-            self.errors.push(ConfigError::new(name.span, "a parser needs a root production"));
-        }
-        if matches!(definition.line_break, Pat::Empty) {
-            self.errors.push(ConfigError::new(name.span, "a parser needs a line_break pattern"));
-        }
-        if self.errors.len() == before {
-            if let Err(message) = resolve::resolve(&mut definition) {
-                self.errors.push(ConfigError::new(name.span, message));
+        // `files`: the edits hold only in matching files, through a flag
+        // the front end sets by path; names with `:` are no user flag.
+        let flag = (!files.is_empty()).then(|| {
+            let flag = format!("files:{}", declaration.file_flags.len());
+            definition.flags.push(flag.clone());
+            declaration.file_flags.push((flag.clone(), files.into_iter().map(|(glob, _)| glob).collect()));
+            flag
+        });
+        let scoped = |yes: Expr, no: Expr| match &flag {
+            Some(flag) => Expr::Flag { name: flag.clone(), yes: Box::new(yes), no: Box::new(no) },
+            None => yes,
+        };
+        for (production, alternative, body) in edits {
+            let Some(own) = definition.productions.iter_mut().find(|own| own.name == production.text) else { continue };
+            // A node's production holds its own emit: edits go inside it.
+            let unwrap = |body: Expr| match body {
+                Expr::Emit { kind, inner } if kind == production.text => *inner,
+                body => body,
+            };
+            let target = match &mut own.body {
+                Expr::Emit { kind, inner } if *kind == production.text => &mut **inner,
+                body => body,
+            };
+            let old = std::mem::replace(target, Expr::Seq(Vec::new()));
+            *target = if alternative {
+                Expr::Choice(vec![old, scoped(body, Expr::Choice(Vec::new()))])
             } else {
-                self.config.parsers.push(ParserDecl { name, language, definition, option_flags });
-            }
+                scoped(unwrap(body), old)
+            };
         }
     }
 
@@ -238,6 +366,57 @@ mod tests {
             &"a b"[child.start as usize..child.end as usize]
         }).collect();
         assert_eq!(values, vec!["a", "b"]);
+    }
+
+    /// `extend parser`: `|=` adds an alternative after a production's own,
+    /// `override production` replaces one; a node's production keeps
+    /// building its node.
+    #[test]
+    fn extensions_change_what_a_declared_parser_reads() {
+        let base = r#"
+            parser toy in js {
+                token word /[a-z]+/
+                token plus /\+/
+                token star /\*/
+                trivia /\s+/
+                line_break /[\r\n]/
+                goal code { word plus star }
+                node root { value: item* }
+                node item { name: text }
+                production item = name:"a"
+                production joiner = "+"
+                root entry = emit(root, value:item (joiner value:item)* end)
+            }
+        "#;
+        // `in_files`: whether the file matches the extension's `files` globs.
+        let parse_in = |extension: &str, text: &str, in_files: bool| {
+            let loaded = crate::config::load_text("grammar", &format!("{base}{extension}"), &Disk);
+            assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+            let declaration = &loaded.config.parsers[0];
+            let parser = CompiledParser::compile(&declaration.definition).unwrap();
+            let mut context = Context::default();
+            for (flag, _) in declaration.file_flags.iter().filter(|_| in_files) {
+                context.flags |= 1 << parser.flags().iter().position(|known| known == flag).unwrap();
+            }
+            parser.parse_root(text, context, &Registration {
+                matchers: vec![10, 11], labels: vec![vec![1], vec![2]], text_matcher: crate::grammar::TEXT,
+            }).map(|parsed| parsed.nodes[parsed.root as usize].children.len())
+        };
+        let parse = |extension: &str, text: &str| parse_in(extension, text, false);
+        assert!(parse("", "a + b").is_err());
+        assert_eq!(parse("extend parser toy {\n production item |= name:\"b\"\n}", "a + b"), Ok(2));
+        assert!(parse("extend parser toy {\n override production joiner = \"*\"\n}", "a + a").is_err());
+        assert_eq!(parse("extend parser toy {\n override production joiner = \"*\"\n}", "a * a"), Ok(2));
+        // `files`: the edits hold only where the globs match.
+        let scoped = "extend parser toy {\n files \"*.x\"\n production item |= name:\"b\"\n override production joiner = \"*\"\n}";
+        assert_eq!(parse_in(scoped, "a * b", true), Ok(2));
+        assert!(parse_in(scoped, "a * b", false).is_err());
+        assert_eq!(parse_in(scoped, "a + a", false), Ok(2));
+        assert!(parse_in(scoped, "a + a", true).is_err());
+        for wrong in ["extend parser none {\n}", "extend parser toy {\n production item = \"b\"\n}",
+            "extend parser toy {\n production missing |= \"b\"\n}", "extend parser toy {\n override production missing = \"b\"\n}"] {
+            assert!(!crate::config::load_text("grammar", &format!("{base}{wrong}"), &Disk).errors.is_empty(), "{wrong}");
+        }
     }
 
     #[test]

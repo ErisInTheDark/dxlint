@@ -948,7 +948,7 @@ impl Linter {
         let mut targets = vec![false; self.grammar.matchers.len()];
         let (mut wants_layers, mut wants_native) = (false, false);
         // The native front end reading this file, if any.
-        let accepting = self.grammar.native_for(path, lang);
+        let accepting = self.grammar.native_for(lang);
         // Token kinds the active rules use (a node per token costs): the
         // ones they target, and brackets for `opener.x`. All of them when a
         // read would see the difference (`children.x`, `previous.x` on a token).
@@ -1002,7 +1002,7 @@ impl Linter {
         wants_layers |= lang_layers;
         if token_kinds.iter().any(|&k| k) && all_tokens || token_fields {
             if let Some(front) = accepting {
-                let frontend = self.grammar.natives[front].frontend;
+                let frontend = &self.grammar.natives[front].frontend;
                 for (kind, wanted) in token_kinds.iter_mut().enumerate() {
                     *wanted |= frontend.is_token(kind as u16);
                 }
@@ -1114,7 +1114,7 @@ impl Linter {
                 // Only native-free rules can use root-only pattern layers.
                 Err((at, msg)) if wants_native => {
                     fallback_active = Some(self.rules.iter().zip(&active).map(|(rule, active)| *active && !rule.requires_native).collect::<Vec<_>>());
-                    out.push(engine_warning(at as usize, format!("could not parse this file as TypeScript: {msg}; native-dependent checks are incomplete")));
+                    out.push(engine_warning(at as usize, format!("could not parse this file: {msg}; checks that need its syntax tree are incomplete")));
                 }
                 Err(_) => {}
             }

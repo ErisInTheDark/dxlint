@@ -5,31 +5,36 @@
 @macro ts_parser_signature (type_parameter:type_parameters)? parameter:parameters (":" return_type:return_type)?
 @macro ts_parser_tuple_member (name:type_identifier optional:"?"? ":" type:type_expression | type:type_expression optional:"?"?)
 @macro ts_parser_method_header (kind:/get|set/ peek(accessor_next))? key:property_key optional:"?"? (type_parameter:goal(types, type_parameters))? parameter:parameters (":" return_type:goal(types, return_type))?
-@macro ts_parser_class_header modifier:/declare|abstract/* "class" name:(not(/extends|implements/) type_identifier)? (type_parameter:goal(types, type_parameters))? ("extends" extends:lhs_expression (type_argument:goal(types, type_arguments))?)? ("implements" implements:goal(types, type_expression) ("," implements:goal(types, type_expression))*)?
-@macro ts_parser_class_modifiers (modifier:(text("static") peek(accessor_next) | /public|private|protected|readonly|abstract|override|declare|accessor|async/ same_line peek(accessor_next)))*
+@macro ts_parser_class_header modifier:/declare|abstract/* "class" name:(not(/extends|implements/) type_identifier)? (type_parameter:goal(types, type_parameters))? ("extends" extends:set(heritage, lhs_expression) (type_argument:goal(types, type_arguments))?)? ("implements" implements:goal(types, type_expression) ("," implements:goal(types, type_expression))*)?
+@macro ts_parser_class_modifiers (modifier:class_modifier)*
 @macro ts_parser_import_kind (kind:"type" peek("{" | "*" | not("from") type_identifier))?
 @macro ts_parser_specifier_kind (kind:"type" peek(not("as") (type_identifier | ts_string)))?
 @macro ts_parser_semi terminator(";", before("}"), newline, eof)
 @macro ts_parser_instantiation_end not(/<|>|\+|-/) (not(same_line) | peek(/instanceof|in|as|satisfies|\?\?|\|\||&&|\||\^|&|==|!=|===|!==|<=|>=|<<|>>|>>>|\*|\/|%|\*\*/) | not(peek(type_identifier | ts_number | ts_bigint | ts_string | ts_template | /\(|\[|\{|!|~|\+\+|--|\/|\/=|@|\.\.\.|#/)))
 @macro ts_parser_arrow_tail same_line operator:"=>" cut body:clear(generator, (clear(no_in, ts_block) | assignment))
-parser ts_syntax in js {
+parser ts in js {
   trivia /\A\u{feff}?#![^\n]*/
   trivia /[ \t\r\n\x0b\x0c\u{00a0}\u{1680}\u{2000}-\u{200a}\u{2028}\u{2029}\u{202f}\u{205f}\u{3000}\u{feff}]+/
   trivia /\/\/[^\r\n\u{2028}\u{2029}]*/
   trivia /\/\*(?:[^*]|\*+[^*/])*\*+\//
   line_break /[\r\n\u{2028}\u{2029}]/
+  # `a` and `\u{61}` in a name are `a`.
+  name_escape /\\u\{([0-9a-fA-F]+)\}|\\u([0-9a-fA-F]{4})/
 
   flag jsx option
   flag generator
   flag async
   flag no_in
   flag no_cond
+  flag heritage
 
   token keyword /(?:break|case|catch|class|const|continue|debugger|default|delete|do|else|enum|export|extends|false|finally|for|function|if|import|in|instanceof|new|null|return|super|switch|this|throw|true|try|typeof|var|void|while|with|yield|let|static|implements|interface|package|private|protected|public|await|async|abstract|declare|type|namespace|module|as|satisfies|keyof|infer|readonly|is|asserts|of|using)/ as ts_keyword
-  token word /(?:[A-Za-z_$]|[^\x00-\x7f\u{00a0}\u{1680}\u{2000}-\u{200a}\u{2028}\u{2029}\u{202f}\u{205f}\u{3000}\u{feff}]|\\u(?:[0-9a-fA-F]{4}|\{[0-9a-fA-F]+\}))(?:[A-Za-z0-9_$]|[^\x00-\x7f\u{00a0}\u{1680}\u{2000}-\u{200a}\u{2028}\u{2029}\u{202f}\u{205f}\u{3000}\u{feff}]|\\u(?:[0-9a-fA-F]{4}|\{[0-9a-fA-F]+\}))*/
-  token private_name /#(?:[A-Za-z_$]|[^\x00-\x7f])(?:[A-Za-z0-9_$]|[^\x00-\x7f])*/
+  token word /(?:[A-Za-z_$]|[^\x00-\x7f\u{00a0}\u{1680}\u{2000}-\u{200a}\u{2028}\u{2029}\u{202f}\u{205f}\u{3000}\u{feff}]|\\u(?:[0-9a-fA-F]{4}|\{[0-9a-fA-F]+\}))(?:[A-Za-z0-9_$]|[^\x00-\x7f\u{00a0}\u{1680}\u{2000}-\u{200a}\u{2028}\u{2029}\u{202f}\u{205f}\u{3000}\u{feff}]|\\u(?:[0-9a-fA-F]{4}|\{[0-9a-fA-F]+\}))*/ as ts_keyword
+  token private_name /#(?:[A-Za-z_$]|[^\x00-\x7f]|\\u(?:[0-9a-fA-F]{4}|\{[0-9a-fA-F]+\}))(?:[A-Za-z0-9_$]|[^\x00-\x7f]|\\u(?:[0-9a-fA-F]{4}|\{[0-9a-fA-F]+\}))*/
   token bigint /(?:0[xX][0-9a-fA-F_]+|0[bB][01_]+|0[oO][0-7_]+|[0-9][0-9_]*)n/
-  token number /(?:0[xX][0-9a-fA-F_]+|0[bB][01_]+|0[oO][0-7_]+|(?:[0-9][0-9_]*(?:\.[0-9_]*)?|\.[0-9][0-9_]*)(?:[eE][+-]?[0-9][0-9_]*)?)/
+  # A legacy octal (`0123`) takes no fraction or exponent: `0123.a` reads a
+  # member. Alternatives are tried in order.
+  token number /(?:0[xX][0-9a-fA-F_]+|0[bB][01_]+|0[oO][0-7_]+|(?:(?:0[0-7]*[89][0-9_]*|[1-9][0-9_]*)(?:\.[0-9_]*)?|\.[0-9][0-9_]*)(?:[eE][+-]?[0-9][0-9_]*)?|0[0-7]+|0(?:\.[0-9_]*)?(?:[eE][+-]?[0-9][0-9_]*)?)/
   token string /(?:"(?:\\\r\n|\\[\s\S]|[^"\\\n])*"|'(?:\\\r\n|\\[\s\S]|[^'\\\n])*')/
   token regexp /\/(?:\\[\s\S]|\[(?:\\[\s\S]|[^\]\\\n])*\]|[^\/\\\[\n])+\/(?:[A-Za-z0-9_$\\]|[^\x00-\x7f])*/
   token template /`(?:\\[\s\S]|[^\\`$]|\$+(?:\\[\s\S]|[^\\`{$]))*\$*`/
@@ -37,7 +42,7 @@ parser ts_syntax in js {
   token template_middle /\}(?:\\[\s\S]|[^\\`$]|\$+(?:\\[\s\S]|[^\\`{$]))*\$*\$\{/
   token template_tail /\}(?:\\[\s\S]|[^\\`$]|\$+(?:\\[\s\S]|[^\\`{$]))*\$*`/
   token jsx_name /(?:[A-Za-z_$]|[^\x00-\x7f\u{00a0}\u{1680}\u{2000}-\u{200a}\u{2028}\u{2029}\u{202f}\u{205f}\u{3000}\u{feff}])(?:[A-Za-z0-9_$-]|[^\x00-\x7f\u{00a0}\u{1680}\u{2000}-\u{200a}\u{2028}\u{2029}\u{202f}\u{205f}\u{3000}\u{feff}])*/
-  token jsx_text /[^<{]+/
+  token jsx_text /[^<{]+/ lines
   token jsx_string /(?:"[^"]*"|'[^']*')/
   token jsx_value_comment /[ \t\r\n\x0b\x0c\u{00a0}\u{1680}\u{2000}-\u{200a}\u{2028}\u{2029}\u{202f}\u{205f}\u{3000}\u{feff}]*(?:\/\/|\/\*)/
 
@@ -195,7 +200,7 @@ parser ts_syntax in js {
   node ts_property_signature { modifier?: text, key: property_key, optional?: text, type?: type_expression }
   node ts_method_signature { modifier?: text, kind?: text, key: property_key, optional?: text, type_parameter?: ts_type_parameter*, parameter?: ts_parameter*, return_type?: return_type }
   node ts_call_signature { kind?: text, type_parameter?: ts_type_parameter*, parameter?: ts_parameter*, return_type?: return_type }
-  node ts_index_signature { decorator?: ts_decorator*, modifier?: text*, parameter: ts_parameter, type?: type_expression }
+  node ts_index_signature { decorator?: ts_decorator*, modifier?: text*, parameter: ts_parameter+, type?: type_expression }
   node ts_tuple_type { element?: ts_tuple_member | ts_rest* }
   node ts_tuple_member { name?: type_identifier, optional?: text, type: type_expression }
   node ts_type_query { name: entity_query | ts_import_type, type_argument?: type_expression* }
@@ -340,9 +345,10 @@ parser ts_syntax in js {
     suffix 1 (same_line "!") => ts_non_null(expression)
     suffix 1 quasi:ts_template => ts_tagged_template(tag)
     suffix 1 try(type_argument:goal(types, type_arguments) quasi:ts_template) => ts_tagged_template(tag)
-    suffix 1 try(type_argument:goal(types, type_arguments) @ts_parser_instantiation_end) => ts_instantiation(expression)
+    # A class heritage's `<...>` are its type arguments, never an instantiation.
+    suffix 1 try(type_argument:goal(types, type_arguments) if(heritage, not(()), (@ts_parser_instantiation_end))) => ts_instantiation(expression)
   }
-  production arguments = "(" (argument:(ts_spread | clear(no_in, assignment)) ("," argument:(ts_spread | clear(no_in, assignment)))* ","?)? ")"
+  production arguments = "(" clear(heritage, (argument:(ts_spread | clear(no_in, assignment)) ("," argument:(ts_spread | clear(no_in, assignment)))* ","?)?) ")"
   production new_callee precedence goal(primary, primary_expression) {
     suffix 1 ("." property:property_name) => ts_member(object)
     suffix 1 ("[" index:clear(no_in, expression) "]") => ts_index(object)
@@ -431,7 +437,7 @@ parser ts_syntax in js {
   production type_members = "{" (type_member (";" | "," | terminator(";", before("}"), newline)))* "}"
   production type_member = try(ts_call_signature) | try(ts_index_signature) | try(ts_method_signature) | ts_property_signature
   production ts_call_signature = kind:"new"? @ts_parser_signature
-  production ts_index_signature = (modifier:"readonly" same_line peek("["))? "[" parameter:emit(ts_parameter, name:type_identifier optional:"?"? ":" type:type_expression) "]" (":" type:type_expression)?
+  production ts_index_signature = (modifier:"readonly" same_line peek("["))? "[" parameter:emit(ts_parameter, name:type_identifier optional:"?"? ":" type:type_expression) ("," parameter:emit(ts_parameter, name:type_identifier optional:"?"? ":" type:type_expression))* "]" (":" type:type_expression)?
   production ts_method_signature = (modifier:"readonly" same_line peek(property_key))? (kind:/get|set/ same_line peek(property_key))? key:property_key optional:"?"? (type_parameter:type_parameters)? parameter:parameters (":" return_type:return_type)?
   production ts_property_signature = (modifier:"readonly" same_line peek(property_key))? (discard(/get|set/) same_line peek(property_key))? key:property_key optional:"?"? (":" type:type_expression)?
 
@@ -445,7 +451,7 @@ parser ts_syntax in js {
   ))
   production class_member = try(ts_static_block) | try(class_index_signature) | try(class_method) | ts_class_property
   production ts_static_block = discard(ts_decorator*) "static" body:clear(no_in, ts_block)
-  production class_index_signature = emit(ts_index_signature, decorator:ts_decorator* @ts_parser_class_modifiers "[" parameter:emit(ts_parameter, name:type_identifier optional:"?"? ":" type:goal(types, type_expression)) "]" (":" type:goal(types, type_expression))?) discard(@ts_parser_semi)
+  production class_index_signature = emit(ts_index_signature, decorator:ts_decorator* @ts_parser_class_modifiers "[" parameter:emit(ts_parameter, name:type_identifier optional:"?"? ":" type:goal(types, type_expression)) ("," parameter:emit(ts_parameter, name:type_identifier optional:"?"? ":" type:goal(types, type_expression)))* "]" (":" type:goal(types, type_expression))?) discard(@ts_parser_semi)
   production class_method = emit(ts_method, decorator:ts_decorator* @ts_parser_class_modifiers (
     modifier:"*" @ts_parser_method_header (body:clear(no_in, set(generator, ts_block)) | @ts_parser_semi) |
     @ts_parser_method_header (body:clear(no_in, clear(generator, ts_block)) | @ts_parser_semi)
@@ -454,7 +460,11 @@ parser ts_syntax in js {
     modifier:"*" @ts_parser_method_header (body:clear(no_in, set(generator, ts_block)) | @ts_parser_semi) |
     @ts_parser_method_header (body:clear(no_in, clear(generator, ts_block)) | @ts_parser_semi)
   ))
-  production ts_class_property = decorator:ts_decorator* @ts_parser_class_modifiers modifier:"*"? (kind:/get|set/ peek(accessor_next))? key:property_key optional:"?"? "!"? (":" type:goal(types, type_expression))? ("=" init:clear(no_in, assignment))? @ts_parser_semi
+  # Extension points: `extend parser ts { production class_modifier |= ... }`
+  # adds member modifiers, `class_initializer` tokens standing for `=`.
+  production class_modifier = text("static") peek(accessor_next) | /public|private|protected|readonly|abstract|override|declare|accessor|async/ same_line peek(accessor_next)
+  production class_initializer = "="
+  production ts_class_property = decorator:ts_decorator* @ts_parser_class_modifiers modifier:"*"? (kind:/get|set/ peek(accessor_next))? key:property_key optional:"?"? "!"? (":" type:goal(types, type_expression))? (discard(class_initializer) init:clear(no_in, assignment))? @ts_parser_semi
   production ts_interface = modifier:"declare"* "interface" same_line name:type_identifier (type_parameter:goal(types, type_parameters))? ("extends" extends:goal(types, type_expression) ("," extends:goal(types, type_expression))*)? member:goal(types, type_members)
   production ts_type_alias = modifier:"declare"* "type" same_line name:type_identifier (type_parameter:goal(types, type_parameters))? "=" type:goal(types, type_expression) @ts_parser_semi
   production ts_enum = modifier:"declare"* modifier:"const"? "enum" name:type_identifier "{" (member:ts_enum_member ("," member:ts_enum_member)* ","?)? "}"

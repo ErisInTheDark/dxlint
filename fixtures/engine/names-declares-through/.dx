@@ -1,5 +1,6 @@
 # The native layers only: no library names beside these.
 lang js "*.ts"
+import .ts/grammar
 native ts
 
 in ts_program { scope block }

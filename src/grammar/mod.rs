@@ -61,6 +61,9 @@ pub struct Matcher {
     pub layer: Option<u16>,
     /// A node kind of a native front end (`native ts`), not a pattern.
     pub native: Option<NativeKind>,
+    /// A native kind's field names: its own, then `token` (its own
+    /// punctuation and keywords, `ts_member.token`: the `.`) unless it is one.
+    native_labels: Vec<String>,
     /// Languages this matcher is restricted to; `None` means every language.
     gate: Option<Vec<usize>>,
     children: Vec<u32>,
@@ -71,19 +74,22 @@ pub struct Matcher {
 pub struct NativeKind {
     /// Index into [`Grammar::natives`].
     pub front: u8,
-    pub frontend: &'static dyn crate::engine::frontend::Frontend,
     pub kind: u16,
+    /// A token node (punctuation, keywords), built only when rules need it.
+    pub token: bool,
+    /// The kind of a whole file's root node.
+    pub root: bool,
 }
 
 impl NativeKind {
     pub fn is_token(self) -> bool {
-        self.frontend.is_token(self.kind)
+        self.token
     }
 }
 
 impl std::fmt::Debug for NativeKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}#{}", self.frontend.name(), self.kind)
+        write!(f, "native{}#{}", self.front, self.kind)
     }
 }
 
@@ -95,14 +101,16 @@ impl PartialEq for NativeKind {
 
 impl Eq for NativeKind {}
 
-/// A native front end enabled by `native <name>`.
+/// A declared parser enabled as its language's front end by `native <name>`.
 pub struct NativeFront {
-    pub name: &'static str,
-    pub frontend: &'static dyn crate::engine::frontend::Frontend,
+    pub name: String,
+    pub frontend: std::sync::Arc<dyn crate::engine::frontend::Frontend>,
     /// Matcher id of its first node kind; kinds are contiguous.
     pub base: u32,
     /// Label id of each of its fields.
     pub labels: Vec<u16>,
+    /// The language it is declared for, whose files are all its to read.
+    pub lang: usize,
 }
 
 impl NativeFront {
@@ -130,15 +138,7 @@ impl Matcher {
     /// The field names nodes of this matcher can have.
     pub fn labels(&self) -> Vec<String> {
         match self.native {
-            // Every non-token node also holds its own punctuation and
-            // keywords as `token` (`ts_member.token`: the `.`).
-            Some(n) => {
-                let front = n.frontend;
-                let names = front.fields();
-                let own = front.kind_fields(n.kind).into_iter().map(|f| names[f as usize].to_string());
-                let token = names[front.token_field() as usize];
-                own.chain((!front.is_token(n.kind)).then(|| token.to_string())).collect()
-            }
+            Some(_) => self.native_labels.clone(),
             None => self.pat.labels(),
         }
     }
@@ -291,10 +291,9 @@ impl Grammar {
         self.langs.iter().position(|l| l.name == name)
     }
 
-    /// The native front end reading `path`, a file of language `lang`: the
-    /// files it names itself, and every file of a language holding its own.
-    pub fn native_for(&self, path: &Path, lang: usize) -> Option<usize> {
-        self.natives.iter().position(|front| front.frontend.accepts(path) || self.lang_for(Path::new(front.frontend.sample_file())) == Some(lang))
+    /// The front end reading files of language `lang`.
+    pub fn native_for(&self, lang: usize) -> Option<usize> {
+        self.natives.iter().position(|front| front.lang == lang)
     }
 
     pub fn lang_for(&self, rel_path: &Path) -> Option<usize> {
@@ -397,12 +396,13 @@ impl Grammar {
                 like: None,
                 layer: None,
                 native: None,
+                native_labels: Vec::new(),
                 gate: Some(Vec::new()),
                 children: Vec::new(),
                 overlays: Vec::new(),
             });
         }
-        let natives = add_natives(config, &mut matchers, &mut by_name, &mut labels, errors);
+        let natives = add_natives(config, &langs, &mut matchers, &mut by_name, &mut labels, errors);
 
         // Pass 3: parents (definitions and `in x match y` attachments), with
         // groups resolved to their final members.
@@ -569,29 +569,47 @@ impl Grammar {
 /// Registers the node kinds of every `native <name>` front end as matchers.
 fn add_natives(
     config: &Config,
+    langs: &[Lang],
     matchers: &mut Vec<Matcher>,
     by_name: &mut HashMap<String, u32>,
     labels: &mut Labels,
     errors: &mut Vec<ConfigError>,
 ) -> Vec<NativeFront> {
-    use crate::engine::frontend;
     let mut fronts: Vec<NativeFront> = Vec::new();
     for name in &config.natives {
-        let Some(front) = frontend::named(&name.text) else {
-            let available: Vec<&str> = frontend::all().iter().map(|f| f.name()).collect();
-            errors.push(ConfigError::new(name.span, format!("unknown native front end `{}`", name.text)).note(format!("available: {}", available.join(", "))));
-            continue;
-        };
-        if fronts.iter().any(|f| f.name == front.name()) {
+        if fronts.iter().any(|f| f.name == name.text) {
             continue;
         }
+        // The declared parser of that name owns its language's root.
+        let Some(parser) = config.parsers.iter().rfind(|parser| parser.name.text == name.text) else {
+            errors.push(ConfigError::new(name.span, format!("no parser `{}` above", name.text))
+                .note("`native <name>` makes a `parser <name> in <lang>` its language's front end (`import .ts` declares `ts`)"));
+            continue;
+        };
+        let Some(lang) = langs.iter().position(|lang| lang.name == parser.language.text) else {
+            errors.push(ConfigError::new(name.span, format!("`native {}`: no language `{}`", name.text, parser.language.text)));
+            continue;
+        };
+        let front: std::sync::Arc<dyn crate::engine::frontend::Frontend> = match syntax::DeclaredFrontend::build(parser) {
+            Ok(front) => std::sync::Arc::new(front),
+            Err(error) => {
+                errors.push(ConfigError::new(name.span, format!("`native {}`: {error}", name.text)));
+                continue;
+            }
+        };
         let base = matchers.len() as u32;
+        let field_names = front.fields();
+        let token_field = &field_names[front.token_field() as usize];
         for (kind, layer) in front.kinds().iter().enumerate() {
-            if by_name.contains_key(*layer) {
-                errors.push(ConfigError::new(name.span, format!("`native {}` defines `{layer}`, which is already a matcher", front.name())));
+            let kind = kind as u16;
+            if by_name.contains_key(layer.as_str()) {
+                errors.push(ConfigError::new(name.span, format!("`native {}` defines `{layer}`, which is already a matcher", name.text)));
             } else {
                 by_name.insert(layer.to_string(), matchers.len() as u32);
             }
+            let token = front.is_token(kind);
+            let native_labels = front.kind_fields(kind).into_iter().map(|field| field_names[field as usize].clone())
+                .chain((!token).then(|| token_field.clone())).collect();
             matchers.push(Matcher {
                 name: layer.to_string(),
                 span: name.span,
@@ -608,14 +626,15 @@ fn add_natives(
                 has_skip: false,
                 like: None,
                 layer: None,
-                native: Some(NativeKind { front: fronts.len() as u8, frontend: front, kind: kind as u16 }),
+                native: Some(NativeKind { front: fronts.len() as u8, kind, token, root: kind == front.root_kind() }),
+                native_labels,
                 gate: None,
                 children: Vec::new(),
                 overlays: Vec::new(),
             });
         }
-        let labels = front.fields().iter().map(|f| labels.intern(f)).collect();
-        fronts.push(NativeFront { name: front.name(), frontend: front, base, labels });
+        let labels = field_names.iter().map(|f| labels.intern(f)).collect();
+        fronts.push(NativeFront { name: name.text.clone(), frontend: front, base, labels, lang });
     }
     fronts
 }

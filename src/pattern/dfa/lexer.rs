@@ -4,10 +4,13 @@ use regex_automata::util::primitives::StateID;
 use regex_automata::{Anchored, Input, MatchKind};
 
 use super::{to_hir, Pat};
+use crate::pattern::prefilter::{first_set, ByteSet};
 
 pub struct Lexer {
     dfa: dense::DFA<Vec<u32>>,
     longest: Vec<bool>,
+    /// The anchored start state when it does not depend on the text before.
+    start: Option<StateID>,
 }
 
 #[cfg(test)]
@@ -15,6 +18,35 @@ mod tests {
     use super::Lexer;
     use crate::pattern::dfa::Dfa;
     use crate::pattern::regex::parse;
+
+    /// Patterns trusted to match longest (no verifying rerun) must agree with
+    /// their leftmost-first DFA; the rest must not be trusted.
+    #[test]
+    fn deterministic_patterns_match_longest() {
+        let cases = [("(?:a|!b)(?:a|b|!a)*", true), ("b(?:a|!(?:aa|b))*", true), ("(?:a|!)(?:!a|a)*b?", true),
+            ("a(?:ab|a)*", false), ("(?:a|ab)b*", false)];
+        let mut texts = vec![String::new()];
+        for _ in 0..5 {
+            let previous = texts.clone();
+            for text in previous {
+                for next in ["a", "b", "!"] { texts.push(format!("{text}{next}")); }
+            }
+        }
+        for (source, trusted) in cases {
+            let pattern = parse(source).unwrap();
+            assert_eq!(super::longest(&pattern), trusted, "{source}");
+            if !trusted { continue; }
+            let lexer = Lexer::new(&[&pattern]).unwrap();
+            let mut cache = lexer.cache();
+            let dfa = Dfa::new(&pattern, &|_| None).unwrap();
+            let mut dfa_cache = dfa.cache();
+            for text in &texts {
+                let expected = dfa.anchored(&mut dfa_cache, text.as_bytes(), 0).filter(|end| *end > 0).map(|end| (0, end));
+                let actual = lexer.anchored(&mut cache, text.as_bytes(), 0, |_| unreachable!("trusted patterns skip verifying")).unwrap();
+                assert_eq!(actual, expected, "{source} on {text:?}");
+            }
+        }
+    }
 
     #[test]
     fn shared_scan_preserves_pattern_priority_longest_token_and_id_ties() {
@@ -63,20 +95,61 @@ impl Lexer {
             .dfa_size_limit(Some(DFA_BYTES)).determinize_size_limit(Some(BUILD_BYTES)))
             .build_from_nfa(&nfa).ok()?;
         let longest = patterns.iter().map(|pattern| longest(pattern)).collect();
-        Some(Self { dfa, longest })
+        let start = dfa.universal_start_state(Anchored::Yes);
+        Some(Self { dfa, longest, start })
     }
 
     pub fn cache(&self) -> LexerCache {
         LexerCache { ends: vec![0; self.longest.len()], candidates: Vec::new() }
     }
 
+    fn start(&self, hay: &[u8], pos: usize) -> Result<StateID, ()> {
+        match self.start {
+            Some(state) => Ok(state),
+            None => self.dfa.start_state_forward(&Input::new(hay).range(pos..).anchored(Anchored::Yes)).map_err(|_| ()),
+        }
+    }
+
+    /// The winning pattern and its end at `pos`: the longest token, lowest
+    /// pattern id on ties, where `verify` gives the leftmost-first end of a
+    /// pattern whose DFA end may not be its own.
     pub fn anchored(&self, cache: &mut LexerCache, hay: &[u8], pos: usize,
+        mut verify: impl FnMut(usize) -> Option<usize>) -> Result<Option<(usize, usize)>, ()>
+    {
+        // Usually the lowest pattern matching at the farthest match wins
+        // outright: only that last match state matters. A pattern whose DFA
+        // end may not be its own wins there when its own end is that far.
+        let mut state = self.start(hay, pos)?;
+        let mut last = None;
+        let mut ended = false;
+        for (offset, byte) in hay[pos..].iter().enumerate() {
+            state = self.dfa.next_state(state, *byte);
+            if self.dfa.is_special_state(state) {
+                if self.dfa.is_quit_state(state) { return Err(()); }
+                if self.dfa.is_match_state(state) { last = Some((state, pos + offset)); }
+                if self.dfa.is_dead_state(state) { ended = true; break; }
+            }
+        }
+        if !ended {
+            state = self.dfa.next_eoi_state(state);
+            if self.dfa.is_quit_state(state) { return Err(()); }
+            if self.dfa.is_match_state(state) { last = Some((state, hay.len())); }
+        }
+        let Some((state, end)) = last else { return Ok(None) };
+        let pattern = (0..self.dfa.match_len(state)).map(|index| self.dfa.match_pattern(state, index).as_usize()).min();
+        match pattern {
+            Some(pattern) if end > pos && (self.longest[pattern] || verify(pattern) == Some(end)) => Ok(Some((pattern, end))),
+            _ => self.anchored_all(cache, hay, pos, verify),
+        }
+    }
+
+    /// [`Self::anchored`] weighing every pattern's own end.
+    fn anchored_all(&self, cache: &mut LexerCache, hay: &[u8], pos: usize,
         mut verify: impl FnMut(usize) -> Option<usize>) -> Result<Option<(usize, usize)>, ()>
     {
         cache.ends.fill(0);
         cache.candidates.clear();
-        let input = Input::new(hay).range(pos..).anchored(Anchored::Yes);
-        let mut state = self.dfa.start_state_forward(&input).map_err(|_| ())?;
+        let mut state = self.start(hay, pos)?;
         for (offset, byte) in hay[pos..].iter().enumerate() {
             state = self.dfa.next_state(state, *byte);
             if self.dfa.is_quit_state(state) { return Err(()); }
@@ -125,8 +198,50 @@ fn fixed(pattern: &Pat) -> bool {
     }
 }
 
+/// Whether every match of `pattern` follows one path the next byte decides
+/// (alternatives start with different bytes, a greedy repetition's body with
+/// bytes nothing after it can start with), so its leftmost-first match is its
+/// longest. `follow`: the bytes that can come right after it.
+fn deterministic(pattern: &Pat, follow: &ByteSet) -> bool {
+    let first = |pattern: &Pat| {
+        let mut set = ByteSet::default();
+        let nullable = first_set(pattern, &|_| ByteSet::full(), &mut set);
+        (set, nullable)
+    };
+    let disjoint = |a: &ByteSet, b: &ByteSet| (0..=255u8).all(|byte| !(a.contains(byte) && b.contains(byte)));
+    match pattern {
+        Pat::Empty | Pat::Lit { .. } | Pat::Class(_) | Pat::Any { .. } => true,
+        Pat::Capture { inner, .. } => deterministic(inner, follow),
+        Pat::Seq(items) => {
+            let mut after = follow.clone();
+            for item in items.iter().rev() {
+                if !deterministic(item, &after) { return false; }
+                let (start, nullable) = first(item);
+                if nullable { after.union(&start); } else { after = start; }
+            }
+            true
+        }
+        Pat::Alt(items) => {
+            let mut seen = ByteSet::default();
+            items.iter().all(|item| {
+                let (start, nullable) = first(item);
+                let ok = !nullable && disjoint(&seen, &start) && deterministic(item, follow);
+                seen.union(&start);
+                ok
+            })
+        }
+        Pat::Repeat { inner, greedy: true, .. } => {
+            let (start, nullable) = first(inner);
+            let mut after = follow.clone();
+            after.union(&start);
+            !nullable && disjoint(&start, follow) && deterministic(inner, &after)
+        }
+        _ => false,
+    }
+}
+
 fn longest(pattern: &Pat) -> bool {
-    if fixed(pattern) { return true; }
+    if fixed(pattern) || deterministic(pattern, &ByteSet::default()) { return true; }
     match pattern {
         Pat::Seq(items) => items.iter().filter(|item| !fixed(item)).count() == 1 && items.iter().all(longest),
         Pat::Capture { inner, .. } => longest(inner),

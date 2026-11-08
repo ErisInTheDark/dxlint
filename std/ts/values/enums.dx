@@ -1,3 +1,4 @@
+import .ts/javascript
 define {
 
 fn ts_value_has_enum(n) = any(value_constituents(n) ?? [], arm => any(arm, part => contains(part.traits, "enum")))

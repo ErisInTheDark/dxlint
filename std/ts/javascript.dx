@@ -1,0 +1,496 @@
+# JavaScript values: how JavaScript reads, prints, compares and combines
+# literals, over the engine's language-neutral text and number functions.
+# `literal_value` records are `{type, value}`: `string`, `number`, `bigint`,
+# `boolean`, `null`, `undefined`, `regex`.
+
+define {
+
+# ECMAScript white space and line terminators (StringNumericLiteral trimming).
+fn js_trim(text) = trim("{text}", "\t\u{b}\u{c} \u{a0}\u{feff}\n\r\u{2028}\u{2029}\u{1680}\u{2000}\u{2001}\u{2002}\u{2003}\u{2004}\u{2005}\u{2006}\u{2007}\u{2008}\u{2009}\u{200a}\u{202f}\u{205f}\u{3000}")
+fn js_nan_unless(n) = if type_of(n) == "num" then n else num("NaN")
+
+# A numeric literal's value: decimal, `0x`/`0o`/`0b`, legacy octal, `_` separators.
+fn js_numeric_literal(text) = {
+  value t: replace("{text}", "_", "")
+  value prefix: slice(t, 0, 2)
+  value when {
+    prefix == "0x" || prefix == "0X" then parse_number(slice(t, 2), 16)
+    prefix == "0o" || prefix == "0O" then parse_number(slice(t, 2), 8)
+    prefix == "0b" || prefix == "0B" then parse_number(slice(t, 2), 2)
+    re_test(t, /^0[0-7]+$/) then parse_number(slice(t, 1), 8)
+    # A computed number's own text.
+    t == "NaN" || t == "Infinity" || t == "-Infinity" then num(t)
+    else then parse_number(t)
+  }
+}
+
+# `Number(text)`: runtime conversion, not literal syntax.
+fn js_number_text(raw) = {
+  value text: js_trim(raw)
+  value prefix: slice(text, 0, 2)
+  value when {
+    text == "" then 0
+    text == "Infinity" || text == "+Infinity" then num("Infinity")
+    text == "-Infinity" then -num("Infinity")
+    prefix == "0x" || prefix == "0X" then js_nan_unless(parse_number(slice(text, 2), 16))
+    prefix == "0o" || prefix == "0O" then js_nan_unless(parse_number(slice(text, 2), 8))
+    prefix == "0b" || prefix == "0B" then js_nan_unless(parse_number(slice(text, 2), 2))
+    else then js_nan_unless(parse_number(text))
+  }
+}
+
+# A bigint's digits (`n`, `_` and a radix prefix allowed) in decimal.
+fn js_bigint_digits(text) = {
+  value digits: replace(trim_end(text, "n"), "_", "")
+  value prefix: slice(digits, 0, 2)
+  value when {
+    prefix == "0x" || prefix == "0X" then big_integer(slice(digits, 2), 16)
+    prefix == "0o" || prefix == "0O" then big_integer(slice(digits, 2), 8)
+    prefix == "0b" || prefix == "0B" then big_integer(slice(digits, 2), 2)
+    else then big_integer(digits)
+  }
+}
+
+# A bigint value (`literal`: a bigint's own text; else a string converted
+# to one) as signed decimal text; null when it is none.
+fn js_bigint_value(text, literal) = {
+  value t: trim("{text}")
+  value signed: starts_with(t, "-") || starts_with(t, "+")
+  value body: if signed then slice(t, 1) else t
+  value when {
+    t == "" then if literal then null else "0"
+    !literal && (contains(body, "_") || contains(body, "n") || signed && !re_test(body, /^[0-9]+$/)) then null
+    trim_end(body, "n") == "" || re_test(body, /^0[xXoObB]$/) then null
+    else then {
+      value digits: js_bigint_digits(body)
+      value when {
+        digits == null then null
+        digits == "0" || !starts_with(t, "-") then digits
+        else then "-{digits}"
+      }
+    }
+  }
+}
+
+# A bigint literal (`0x10n`) as exact decimal text; null for broken syntax.
+fn js_bigint(text) = {
+  value t: "{text}"
+  value payload: if ends_with(t, "n") then slice(t, 0, -1) else ""
+  value prefix: slice(payload, 0, 2)
+  value radix: when {
+    prefix == "0x" || prefix == "0X" then 16
+    prefix == "0o" || prefix == "0O" then 8
+    prefix == "0b" || prefix == "0B" then 2
+    else then 10
+  }
+  value digits: if radix == 10 then payload else slice(payload, 2)
+  value valid: when {
+    radix == 16 then re_test(digits, /^[0-9a-fA-F]+(?:_[0-9a-fA-F]+)*$/)
+    radix == 8 then re_test(digits, /^[0-7]+(?:_[0-7]+)*$/)
+    radix == 2 then re_test(digits, /^[01]+(?:_[01]+)*$/)
+    else then re_test(digits, /^(?:0|[1-9][0-9]*(?:_[0-9]+)*)$/)
+  }
+  value if valid then big_integer(replace(digits, "_", ""), radix) else null
+}
+
+fn js_literal_number(kind, raw) = when {
+  kind == "string" then js_number_text(raw)
+  kind == "boolean" then when {
+    "{raw}" == "true" then 1
+    "{raw}" == "false" then 0
+    else then null
+  }
+  kind == "null" then 0
+  kind == "undefined" || kind == "regex" then num("NaN")
+  kind == "number" then if type_of(raw) == "num" then raw else js_numeric_literal(raw)
+  kind == "bigint" then {
+    value digits: js_bigint_value(raw, true)
+    value if digits == null then null else parse_number(digits)
+  }
+  else then null
+}
+
+# `Number(value)` of a plain value or `literal_value` record; NaN for
+# non-numeric text, null for what has no number (symbols).
+fn js_number(v) = when {
+  type_of(v) == "num" then v
+  type_of(v) == "bool" then if v then 1 else 0
+  type_of(v) == "null" then 0
+  type_of(v) == "str" || type_of(v) == "node" then js_number_text(v)
+  type_of(v) == "record" then js_literal_number("{v.type}", v.value)
+  else then null
+}
+
+# `String(n)` for a number (ECMAScript Number::toString).
+fn js_number_to_string(n) = when {
+  n != n then "NaN"
+  n == 0 then "0"
+  n == num("Infinity") then "Infinity"
+  n == -num("Infinity") then "-Infinity"
+  else then {
+    value sign: if n < 0 then "-" else ""
+    value parts: number_digits(abs(n))
+    value digits: parts.digits
+    value k: len(digits)
+    value e: parts.exponent + 1
+    value body: when {
+      k <= e && e <= 21 then {
+        value zeros: repeat("0", e - k)
+        value "{digits}{zeros}"
+      }
+      0 < e && e <= 21 then {
+        value whole: slice(digits, 0, e)
+        value fraction: slice(digits, e)
+        value "{whole}.{fraction}"
+      }
+      e > -6 && e <= 0 then {
+        value zeros: repeat("0", -e)
+        value "0.{zeros}{digits}"
+      }
+      else then {
+        value x: e - 1
+        value exponent: if x >= 0 then "+{x}" else "{x}"
+        value head: slice(digits, 0, 1)
+        value tail: slice(digits, 1)
+        value if k == 1 then "{head}e{exponent}" else "{head}.{tail}e{exponent}"
+      }
+    }
+    value "{sign}{body}"
+  }
+}
+
+# `String(value)` of a plain value or `literal_value` record (bigints
+# without `n`); null for other values.
+fn js_to_string(v) = when {
+  type_of(v) == "num" then js_number_to_string(v)
+  type_of(v) == "bool" then if v then "true" else "false"
+  type_of(v) == "null" then "null"
+  type_of(v) == "str" || type_of(v) == "node" then v
+  type_of(v) == "record" then when {
+    v.type == "number" then {
+      value n: js_literal_number("number", v.value)
+      value if type_of(n) == "num" then js_number_to_string(n) else null
+    }
+    v.type == "string" || v.type == "bigint" || v.type == "boolean" then "{v.value}"
+    v.type == "null" then "null"
+    else then null
+  }
+  else then null
+}
+
+# `value.toPrecision(digits)` for whole `digits` 1..100; null otherwise.
+fn js_number_to_precision(x, digits) = when {
+  type_of(x) != "num" || type_of(digits) != "num" || digits % 1 != 0 || digits < 1 || digits > 100 then null
+  x != x then "NaN"
+  x == num("Infinity") then "Infinity"
+  x == -num("Infinity") then "-Infinity"
+  else then {
+    value sign: if x < 0 then "-" else ""
+    value parts: if x == 0 then { digits: repeat("0", digits), exponent: 0 } else number_digits(abs(x), digits)
+    value m: parts.digits
+    value e: parts.exponent
+    value head: slice(m, 0, 1)
+    value tail: slice(m, 1)
+    value fraction: if tail == "" then "" else ".{tail}"
+    value mark: if e < 0 then "-" else "+"
+    value size: abs(e)
+    value whole: e + 1
+    value body: when {
+      e < -6 || e >= digits then "{head}{fraction}e{mark}{size}"
+      e >= 0 && whole == digits then m
+      e >= 0 then {
+        value left: slice(m, 0, whole)
+        value right: slice(m, whole)
+        value "{left}.{right}"
+      }
+      else then {
+        value zeros: repeat("0", -e - 1)
+        value "0.{zeros}{m}"
+      }
+    }
+    value "{sign}{body}"
+  }
+}
+
+# A numeric binary operator on two numbers, with JavaScript's results
+# (NaN, Infinity, ToInt32 for bitwise); null for other operators or operands.
+fn js_number_binary(operator, x, y) = if type_of(x) != "num" || type_of(y) != "num" then null else when {
+  operator == "+" then x + y
+  operator == "-" then x - y
+  operator == "*" then x * y
+  operator == "/" then float_divide(x, y)
+  operator == "%" then if y == 0 then num("NaN") else x % y
+  # `Math.pow` differs from IEEE pow: `1 ** Infinity` and `NaN ** x` are NaN.
+  operator == "**" then if y != y || abs(x) == 1 && abs(y) == num("Infinity") then num("NaN") else pow(x, y)
+  operator == "&" then bits("and", x, y)
+  operator == "|" then bits("or", x, y)
+  operator == "^" then bits("xor", x, y)
+  operator == "<<" then bits("shift_left", x, uint32(y) % 32)
+  operator == ">>" then bits("shift_right", x, uint32(y) % 32)
+  operator == ">>>" then bits("shift_right_unsigned", x, uint32(y) % 32)
+  else then null
+}
+
+fn js_number_unary(operator, x) = if type_of(x) != "num" then null else when {
+  operator == "-" then -x
+  operator == "+" then x
+  operator == "~" then bits("not", x)
+  else then null
+}
+
+# `text[index]`: the UTF-16 unit at `index`.
+fn js_char_at(text, index) = utf16_at(text, index)
+
+fn js_typed(v) = when {
+  type_of(v) == "record" then { type: "{v.type}", value: v.value }
+  type_of(v) == "num" then { type: "number", value: v }
+  type_of(v) == "bool" then { type: "boolean", value: v }
+  type_of(v) == "null" then { type: "null", value: "null" }
+  else then { type: "string", value: "{v}" }
+}
+fn js_number_of(literal) = js_nan_unless(js_literal_number(literal.type, literal.value))
+fn js_order(x, y) = when {
+  x != x || y != y then null
+  x < y then -1
+  x > y then 1
+  else then 0
+}
+# A bigint (signed decimal text) against a number, exactly.
+fn js_bigint_order(digits, n) = when {
+  n != n then null
+  n == num("Infinity") then -1
+  n == -num("Infinity") then 1
+  else then {
+    value whole: if n < 0 then ceil(n) else floor(n)
+    value order: compare_integers(digits, integer_radix(whole, 10))
+    value when {
+      order != 0 then order
+      n > whole then -1
+      n < whole then 1
+      else then 0
+    }
+  }
+}
+
+# -1, 0 or 1 as `<` orders two literal values: strings by UTF-16 unit,
+# bigints exactly, otherwise as numbers; null when unordered.
+fn js_compare(a, b) = {
+  value l: js_typed(a)
+  value r: js_typed(b)
+  value when {
+    l.type == "string" && r.type == "string" then compare_text(l.value, r.value)
+    l.type == "bigint" then {
+      value x: js_bigint_value(l.value, true)
+      value when {
+        x == null then null
+        r.type == "bigint" || r.type == "string" then {
+          value y: js_bigint_value(r.value, r.type == "bigint")
+          value if y == null then null else compare_integers(x, y)
+        }
+        else then js_bigint_order(x, js_number_of(r))
+      }
+    }
+    r.type == "bigint" then {
+      value y: js_bigint_value(r.value, true)
+      value when {
+        y == null then null
+        l.type == "string" then {
+          value x: js_bigint_value(l.value, false)
+          value if x == null then null else compare_integers(x, y)
+        }
+        else then {
+          value order: js_bigint_order(y, js_number_of(l))
+          value if order == null then null else 0 - order
+        }
+      }
+    }
+    else then js_order(js_number_of(l), js_number_of(r))
+  }
+}
+
+# The code point one escape character stands for (`\n` is 10).
+fn js_single_escape(c) = when {
+  c == "b" then 8
+  c == "f" then 12
+  c == "n" then 10
+  c == "r" then 13
+  c == "t" then 9
+  c == "v" then 11
+  else then code_of(c)
+}
+
+# One token of a literal body with escapes: its code point record, `skip`
+# for a line continuation, null when the literal is broken.
+fn js_escape_part(token, quote, template) = {
+  value g: token.groups
+  value code: when {
+    get(g, 0) != null then parse_number(get(g, 0), 16)
+    get(g, 1) != null then {
+      value point: parse_number(get(g, 1), 16)
+      value if point > 1114111 then -1 else point
+    }
+    get(g, 2) != null then parse_number(get(g, 2), 16)
+    get(g, 3) != null then parse_number(get(g, 3), 8)
+    get(g, 4) != null then -2
+    get(g, 5) != null then -1
+    get(g, 6) != null then js_single_escape(get(g, 6))
+    # A backslash alone ends the text: its escape is cut off.
+    token.text == quote || token.text == "\\" || !template && (token.text == "\n" || token.text == "\r") then -1
+    else then code_of(token.text)
+  }
+  value when {
+    code == -1 then null
+    code == -2 then { skip: true }
+    else then { offset: token.offset + 1, end_offset: token.end_offset + 1, value: code }
+  }
+}
+
+# A quoted string or substitution-free template as `{text, spans, units}`:
+# the decoded text, each Unicode scalar's and each UTF-16 unit's byte span in
+# the literal (units with their `value`); null for broken syntax. Lone
+# surrogates become U+FFFD in `text`.
+fn js_string_parts(text) = {
+  value t: "{text}"
+  value quote: slice(t, 0, 1)
+  value body: slice(t, 1, -1)
+  value template: quote == "`"
+  value closed: (quote == "'" || quote == "\"" || template) && len(t) >= 2 && ends_with(t, quote)
+  value when {
+    !closed then null
+    template && re_test(body, /(?:^|[^\\])(?:\\\\)*\$\{/) then null
+    !contains(body, "\\") then
+      if contains(body, quote) || !template && re_test(body, /[\r\n]/) then null else {
+        value units: text_units(body, 1)
+        value { text: body, spans: units.spans, units: units.units }
+      }
+    else then {
+      value tokens: re_matches(body, /\\(?:x([0-9a-fA-F]{2})|u\{([0-9a-fA-F]+)\}|u([0-9a-fA-F]{4})|([0-3][0-7]{0,2}|[4-7][0-7]?)|(\r\n|[\r\n\u{2028}\u{2029}])|([xu])|([\s\S]))|[\s\S]/)
+      value parts: map(tokens, token => js_escape_part(token, quote, template))
+      value if any(parts, part => part == null) then null else text_from_units({ value parts; filter (part) part.skip != true })
+    }
+  }
+}
+
+# A quoted string literal's value (escapes and line continuations decoded);
+# null for broken syntax and templates.
+fn js_string(text) = {
+  value t: "{text}"
+  value quote: slice(t, 0, 1)
+  value if quote != "'" && quote != "\"" then null else js_string_parts(t).text
+}
+
+}
+
+schema js_regex string check js_regex_valid "an ECMAScript regex, as `js_re_test` reads it in Unicode mode"
+
+define {
+
+# ECMAScript regexes as the engine's regex (`re_test`): JavaScript's `\d`,
+# `\w`, `\s`, `.` and line anchors over its four line terminators, ASCII word
+# boundaries, flags `i`, `m`, `s` and `u`. Backreferences, control escapes,
+# surrogate escapes, Unicode case-insensitive word boundaries and (without
+# `u`) case-insensitive text JavaScript folds differently have no
+# translation: null.
+fn js_regex_class_set(name) = when {
+  name == "d" then "0-9"
+  name == "w" then "A-Za-z0-9_"
+  else then "\\t\\n\\r\\x0B\\x0C \\u\{a0\}\\u\{1680\}\\u\{2000\}-\\u\{200a\}\\u\{2028\}\\u\{2029\}\\u\{202f\}\\u\{205f\}\\u\{3000\}\\u\{feff\}"
+}
+fn js_regex_hex(hex, u) = {
+  value point: parse_number(hex, 16)
+  value if point == null || point > 1114111 || point >= 55296 && point <= 57343 then null else "\\u\{{hex}\}"
+}
+fn js_regex_escape(c, rest, class, flags) = {
+  value u: contains(flags, "u")
+  value lower: when {
+    c == "d" || c == "D" then "d"
+    c == "w" || c == "W" then "w"
+    c == "s" || c == "S" then "s"
+    else then null
+  }
+  value when {
+    lower != null && class && c == lower then js_regex_class_set(c)
+    lower != null && c == lower then "[{js_regex_class_set(c)}]"
+    lower != null then "[^{js_regex_class_set(lower)}]"
+    c != "" && contains("123456789kc", c) then null
+    (c == "b" || c == "B") && !class then if contains(flags, "i") && u then null else "(?-u:\\{c})"
+    c == "b" then "\\x08"
+    c == "u" && starts_with(rest, "\{") then if u then js_regex_hex(trim_end(trim_start(rest, "\{"), "\}"), u) else null
+    c == "u" then if re_test(rest, /^[0-9a-fA-F]{4}$/) then js_regex_hex(rest, u) else null
+    c == "/" then "/"
+    re_test(c, /^[A-Za-z]$/) && !contains("nrtfvx", c) then if u then null else c
+    else then "\\{c}{rest}"
+  }
+}
+# One token outside a class (`class` false) or inside one, as the engine's
+# regex; null when it has no translation.
+fn js_regex_piece(t, class, flags) = when {
+  starts_with(t, "\\") && len(t) == 1 then null
+  starts_with(t, "\\") then js_regex_escape(slice(t, 1, 2), slice(t, 2), class, flags)
+  class && (t == "[" || t == "&" || t == "~") then "\\{t}"
+  class then t
+  t == "." then if contains(flags, "s") then "(?s:.)" else "[^\\n\\r\\u\{2028\}\\u\{2029\}]"
+  t == "^" then if contains(flags, "m") then "(?<=^|[\\n\\r\\u\{2028\}\\u\{2029\}])" else "\\A"
+  t == "$" then if contains(flags, "m") then "(?=$|[\\n\\r\\u\{2028\}\\u\{2029\}])" else "\\z"
+  t == "\{" || t == "\}" then "\\{t}"
+  starts_with(t, "(?") && !re_test(t, /^\(\?(?:[:=!]|<[=!]|<[A-Za-z_$][A-Za-z0-9_$]*>)$/) then null
+  else then t
+}
+fn js_regex_joined(pieces) = if count({ value pieces; filter (p) type_of(p) == "null" }) > 0 then null else join(pieces, "")
+# A whole class (`[...]`): its contents piece by piece.
+fn js_regex_class(token, flags) = {
+  value body: slice(token, 1, -1)
+  value negated: starts_with(body, "^")
+  value items: re_matches(if negated then slice(body, 1) else body, /\\u\{[0-9a-fA-F]*\}|\\u[0-9a-fA-F]{0,4}|\\[\s\S]?|[\s\S]/)
+  value inner: js_regex_joined({ value items; map (item) js_regex_piece(item.text, true, flags) })
+  value mark: if negated then "^" else ""
+  value if inner == null then null else "[{mark}{inner}]"
+}
+fn js_regex_source(pattern, flags) = {
+  value p: "{pattern}"
+  value f: "{flags}"
+  value valid_flags: re_test(f, /^[imsu]*$/) && count(unique(split(f, ""))) == len(f)
+  value tokens: re_matches(p, /\\u\{[0-9a-fA-F]*\}|\\u[0-9a-fA-F]{0,4}|\\[\s\S]?|\[(?:\\[\s\S]|[^\]\\])*\]|\(\?<[=!]|\(\?<[^>]*>|\(\?[\s\S]?|\{[0-9]+(?:,[0-9]*)?\}|[\s\S]/)
+  value built: js_regex_joined({ value tokens; map (token) if len(token.text) > 1 && starts_with(token.text, "[") then js_regex_class(token.text, f) else js_regex_piece(token.text, false, f) })
+  value prefix: if contains(f, "i") then "(?i)" else ""
+  value if !valid_flags || len(p) > 65536 || built == null || js_regex_legacy_gap(p, f) then null else "{prefix}{built}"
+}
+
+# Whether `pattern` is an ECMAScript regex `js_re_test` can run in Unicode
+# (`u`) mode: what the `js_regex` schema checks.
+fn js_regex_valid(pattern) = {
+  value source: js_regex_source(pattern, "u")
+  value source != null && re_valid(source)
+}
+
+# `i` without `u` folds case by JavaScript's uppercase rules, which part from
+# Unicode folding for characters whose uppercase is several characters or
+# ASCII, the folds of those, and astral ones: no translation there.
+fn js_regex_legacy_gap(text, flags) = contains("{flags}", "i") && !contains("{flags}", "u")
+  && re_test("{text}", /[\u{df}\u{149}\u{17f}\u{1f0}\u{345}\u{390}\u{3b0}\u{587}\u{1e96}-\u{1e9a}\u{1e9e}\u{1f50}-\u{1f56}\u{1f80}-\u{1ffc}\u{2126}\u{212a}\u{212b}\u{fb00}-\u{fb17}\u{10000}-\u{10ffff}]/)
+
+# Whether the ECMAScript regex `pattern` with `flags` matches anywhere in
+# `text`; null when it has no translation (see `js_regex_source`).
+fn js_re_test(text, pattern, flags) = {
+  value source: js_regex_source(pattern, flags)
+  value if source == null || js_regex_legacy_gap(text, flags) then null else re_test("{text}", source)
+}
+
+# What `RegExp`'s constructor says about `flags` (`u` with `v`, duplicates,
+# unknown ones; flags in `allowed` pass), as eslint's no-invalid-regexp
+# words it; null when fine.
+fn regex_flags_error(flags, allowed) = {
+  value given: split("{flags}", "")
+  value extra: { value split(join(allowed, ""), ""); filter (c) !contains("dgimsuvy", c); join "" }
+  value known: "dgimsuvy{extra}"
+  value rest: { value given; filter (c, i) !contains(known, c) || index_of(given, c) < i; join "" }
+  value repeated: { value split(rest, ""); filter (c) contains(known, c); join "" }
+  value when {
+    contains(given, "u") && contains(given, "v") then "Regex 'u' and 'v' flags cannot be used together"
+    repeated != "" then "Duplicate flags ('{repeated}') supplied to RegExp constructor"
+    rest != "" then "Invalid flags supplied to RegExp constructor '{rest}'"
+    else then null
+  }
+}
+
+}

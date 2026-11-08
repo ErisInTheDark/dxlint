@@ -1,3 +1,3 @@
 import .ts
-in ts_line rule ind info "{indent_level}:{indent_anchor}" { indent reset js_re_test('', '[')
+in ts_line rule ind info "{indent_level}:{indent_anchor}" { indent reset re_test('', slice('[' text, 0, 1))
 indent in ts_call }

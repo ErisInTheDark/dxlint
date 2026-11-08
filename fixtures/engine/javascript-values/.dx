@@ -1,0 +1,59 @@
+# `std/ts/javascript`: how JavaScript reads, prints, compares and combines
+# literal values. Each rule prints one function's results, ` | `-separated.
+import .ts
+
+fn literal(kind, value) = { type: kind, value: value }
+fn shown(v) = if type_of(v) == "null" then "null" else js_to_string(v)
+fn listed(items) = join(items, " | ")
+fn spans_of(t, parts) = join(map(parts.spans, s => byte_slice(t, s.offset, s.end_offset)), ",")
+fn parts_of(t) = {
+  value parts: js_string_parts(t)
+  value if parts == null then "null" else listed([json_string(parts.text), spans_of(t, parts), count(parts.units)])
+}
+
+in ts_program let printed listed(map([0, -0, 1, -1.5, 0.1 + 0.2, num("1e21"), num("123e18"), num("1e-6"), num("1e-7"), num("1.5e-7"), num("NaN"), -num("Infinity"), num("9007199254740992")], n => js_to_string(n)))
+in ts_program rule prints info "{printed}"
+
+in ts_program let precisions listed(map([[1, 3], [2.5, 1], [num("1e-7"), 2], [9.99, 2], [123456, 2], [0.000123, 2], [-1.5, 1], [0, 3], [-0, 1], [num("1e21"), 3], [num("5e-324"), 1], [0.1, 20], [99.5, 2], [num("Infinity"), 2], [1, 0], [1, 101]], p => shown(js_number_to_precision(first(p), last(p)))))
+in ts_program rule precision info "{precisions}"
+
+in ts_program let texts listed(map(["", " \t\n", "010", "0x10", "0o10", "0b10", "-.25", "5e-1", "\u{feff}2\u{feff}", "Infinity", "+Infinity", "-Infinity", "1_0", "1n", "inf", "infinity", "+0x0", "-0x0", "\u{85}2", "0x2\u{85}", "not a number"], t => js_to_string(js_number(t))))
+in ts_program rule numbers info "{texts}"
+
+in ts_program let literals listed(map([literal("boolean", "false"), literal("null", "null"), literal("bigint", "0n"), literal("string", "0x10"), literal("undefined", "undefined"), literal("symbol", "key"), literal("number", "0x10"), literal("number", "017"), literal("number", "1_000"), literal("number", ".5"), literal("number", "0o17"), literal("number", "0b101")], l => shown(js_number(l))))
+in ts_program rule literal-numbers info "{literals}"
+
+in ts_program let compared listed(map([[literal("bigint", "9007199254740992n"), literal("bigint", "9007199254740993n")], [literal("bigint", "-9007199254740993n"), literal("bigint", "-9007199254740992n")], [literal("bigint", "0x20000000000001n"), literal("bigint", "9007199254740993n")], [literal("bigint", "-0n"), literal("bigint", "0n")], [literal("bigint", "9007199254740993n"), literal("number", "9007199254740992")], [literal("bigint", "9007199254740993n"), literal("string", "9007199254740993")], [literal("bigint", "9007199254740993n"), literal("number", "Infinity")], [literal("bigint", "1n"), literal("number", "1.5")], [literal("bigint", "-1n"), literal("number", "-1.5")], [literal("bigint", "1n"), literal("string", "1.5")], [literal("number", "1.5"), literal("bigint", "1n")], ["1_0", 0], ["1n", 0], ["inf", 0], ["010", 9], ["\u{feff}2", 1], ["10", "2"], ["b", "a"], [literal("string", "inf"), 0]], p => shown(js_compare(first(p), last(p)))))
+in ts_program rule compares info "{compared}"
+
+in ts_program let bigints listed(map(["9007199254740993n", "9_007_199_254_740_993n", "0x20000000000001n", "0b101n", "0o17n", "0n", "", "n", "1", "-1n", "01n", "0xn", "0x_1n", "1__0n", "1_n", "0_1n", "2.0n"], t => shown(js_bigint(t))))
+in ts_program rule bigint-literals info "{bigints}"
+
+in ts_program let binaries listed(map([["**", 1, num("Infinity")], ["**", num("NaN"), 0], ["%", -5, 3], ["%", 5, 0], ["/", 1, 0], [">>>", -1, 0], ["|", 4294967301, 0], ["<<", 1, 33], [">>", -8, 1], ["&", 6, 3], ["^", 6, 3], ["&&", 1, 1]], o => shown(js_number_binary(first(o), get(o, 1), last(o)))))
+in ts_program let unaries listed([shown(js_number_unary("~", 2147483648)), shown(js_number_unary("~", num("NaN"))), shown(js_number_unary("-", 2)), shown(js_number_unary("!", 2))])
+in ts_program rule operators info "{binaries} / {unaries}"
+
+in ts_program let strings listed(map(["'a\\uD83D\\uDC3E\\\r\n\\x62🐾'", "'\\uD83Da\\uDC3E'", "\"a\\u\{1F43E\}b\"", "'a\\\r\nb\\\nc\\\rd'", "'\\'\\\\\\\"'", "\"\\n\\r\\t\\b\\f\\v\\0\"", "'\\141\\x62\\u0063'", "a", "'a\"", "'a\nb'", "\"\\xq0\"", "\"\\u000g\"", "\"\\u\{110000\}\"", "\"\\u\{\}\"", "'\\'", "`t`", "'\\8\\400'"], t => json_string(js_string(t))))
+in ts_program rule decoded info "{strings}"
+
+in ts_program let parts listed(map(["'a\\uD83D\\uDC3E\\\r\n\\x62🐾'", "`a\\$\{b\}\\\r\n\\x63`", "`a$\{b\}`", "`unterminated", "'plain'"], t => parts_of(t)))
+in ts_program rule literal-parts info "{parts}"
+
+in ts_program let flagged listed([shown(regex_flags_error("gg", "")), shown(regex_flags_error("z", "")), shown(regex_flags_error("uv", "")), shown(regex_flags_error("gz", ["z"])), shown(regex_flags_error("gimsuy", ""))])
+in ts_program rule flags info "{flagged}"
+
+in ts_program let regexes listed(map([
+  ["before\nword\nafter", "^word$", "m"], ["before\rword\rafter", "^word$", "m"], ["before\u{2028}word\u{2028}after", "^word$", "m"],
+  ["before\r\nword\r\nafter", "^word$", "m"], ["\r\n", "^\\n", "m"], ["a\rword", "\\r^word", "m"], ["end\n", "end$", ""],
+  ["\u{c9}", "\u{e9}", "i"], ["\u{3c2}", "\u{3c3}", "i"], ["\u{414}", "\u{434}", "i"], ["\u{212a}", "k", "iu"],
+  ["foo", "^(?!foo)(?!bar).+$", ""], ["barista", "^(?!foo)(?!bar).+$", ""], ["other", "^(?!foo)(?!bar).+$", ""],
+  ["foo/bar", "foo/(?!bar)", ""], ["foo/baz", "foo/(?!bar)", ""], ["@app/api/enums", "@app/(?!(api/enums$)).*", ""],
+  ["@app/api/enums/foo", "@app/(?!(api/enums$)).*", ""], ["ab", "(?:a(?!b)|ab)", ""], ["ac", "a(?=b)b", ""], ["", "(?!)|(?=)", ""],
+  ["\u{e9}", "\\w", ""], ["\u{661}", "\\d", ""], ["\u{feff}", "^\\s$", ""], ["\u{85}", "^\\s$", ""], ["\r", "^.$", ""],
+  ["\u{2028}", "^.$", ""], ["\u{2028}", "^.$", "s"], ["end\r\n", "end$", ""], ["", "(?=a)\{0\}", ""], ["@app/foo", "^@app/", "u"],
+  ["Foo", "foo", "iu"], ["a b", "a\\b", ""], ["a[b", "[\\[]", ""], ["a/b", "a\\/b", "u"], ["x", "\\u0078", "u"], ["x", "\\u\{78\}", "u"]
+], c => shown(js_re_test(first(c), get(c, 1), last(c)))))
+in ts_program rule regex info "{regexes}"
+
+in ts_program let charred listed([shown(js_char_at("a🐾", 0)), json_string(js_char_at("a🐾", 1)), shown(js_char_at("a", 1)), shown(js_char_at("a", 0.5))])
+in ts_program rule chars info "{charred}"

@@ -37,17 +37,15 @@ enum Entry<T: Copy> {
 
 pub(super) struct Chain<T: Copy> {
     entries: Vec<Entry<T>>,
-    pending: Vec<T>,
 }
 
 impl<T: Copy> Default for Chain<T> {
-    fn default() -> Self { Self { entries: Vec::new(), pending: Vec::new() } }
+    fn default() -> Self { Self { entries: Vec::new() } }
 }
 
 impl<T: Copy> Chain<T> {
     pub fn clear(&mut self) {
         self.entries.clear();
-        self.pending.clear();
     }
 
     pub fn len(&self) -> usize { self.entries.len() }
@@ -84,18 +82,6 @@ impl<T: Copy> Chain<T> {
         let join = self.next_id();
         self.entries.push(Entry::Join { left: list.last, right: next.last });
         *list = List { last: join, first: list.first, len: list.len + next.len, marker: PhantomData };
-    }
-
-    pub fn filter(&mut self, list: List<T>, keep: impl Fn(T) -> bool) -> List<T> {
-        let mut pending = std::mem::take(&mut self.pending);
-        pending.clear();
-        pending.extend(self.reversed(list).filter(|&value| keep(value)));
-        let mut filtered = List::default();
-        for index in (0..pending.len()).rev() {
-            self.push(&mut filtered, pending[index]);
-        }
-        self.pending = pending;
-        filtered
     }
 
     /// The values last to first.
@@ -176,7 +162,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn branches_keep_shared_captures_after_append_and_filter() {
+    fn branches_keep_shared_captures_after_append() {
         let mut chain = Chain::default();
         let shared = chain.single(7);
         let mut left = shared;
@@ -185,15 +171,12 @@ mod tests {
         chain.push(&mut next, 13);
         chain.append(&mut left, next);
         chain.push(&mut right, 17);
-        let filtered = chain.filter(left, |value| value != 11);
         assert_eq!(chain.ordered(shared), [7]);
         assert_eq!(chain.ordered(left), [7, 11, 13]);
         assert_eq!(chain.ordered(right), [7, 17]);
         assert_eq!(chain.ordered(next), [11, 13]);
-        assert_eq!(chain.ordered(filtered), [7, 13]);
         assert_eq!(chain.first(left), Some(7));
         assert_eq!(chain.first(next), Some(11));
-        assert_eq!(chain.first(filtered), Some(7));
         assert_eq!(chain.first(List::default()), None);
     }
 

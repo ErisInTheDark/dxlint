@@ -24,12 +24,12 @@ impl Linter {
         let overlays = vec![true; self.grammar.matchers.len()];
         let tree = Tree::parse_with(&self.grammar, lang, text, Some(&overlays), None);
         self.layers_at(&tree, text, offset, &mut out);
-        let accepting = self.grammar.native_for(path, lang);
+        let accepting = self.grammar.native_for(lang);
         if let Some(index) = accepting {
             let front = &self.grammar.natives[index];
             let rel = self.relative(path);
             let options: Vec<_> = self.language_options.values(lang, &rel).collect();
-            if let Ok(parsed) = front.frontend.parse(text, path, &options) {
+            if let Ok(parsed) = front.frontend.parse(text, &rel, &options) {
                 let tree = Tree::from_native(front.remap(parsed.nodes), parsed.root);
                 let chain = self.layers_at(&tree, text, offset, &mut out);
                 if let Some(&node) = chain.first() {

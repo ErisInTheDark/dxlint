@@ -1,5 +1,5 @@
 #[test]
-fn restricted_pattern_options_reject_invalid_javascript_syntax_before_linting() {
+fn restricted_pattern_options_reject_patterns_their_check_fn_refuses() {
     for config in [
         r#"rule es-no-restricted-exports { set restrictedNamedExportsPattern "(?i)foo" }"#,
         r#"rule es-no-restricted-imports { set patterns [{regex: "(?i)foo"}] }"#,
