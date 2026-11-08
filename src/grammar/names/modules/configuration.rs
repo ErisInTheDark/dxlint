@@ -17,9 +17,24 @@ pub struct Configuration {
     pub options: BTreeMap<String, OptionValue>,
     pub fields: BTreeMap<String, OptionValue>,
     pub references: Vec<PathBuf>,
+    /// Extensions this configuration (or the nearest it extends that says)
+    /// adds to the profile's, as its `config.extensions` projection reads.
+    pub added_extensions: Option<Vec<Box<str>>>,
 }
 
 impl Configuration {
+    /// The profile's extensions plus the ones this configuration adds.
+    pub fn extensions<'s>(&self, settings: &'s super::resolution::Settings) -> std::borrow::Cow<'s, [Box<str>]> {
+        match &self.added_extensions {
+            Some(added) if added.iter().any(|extension| !settings.extensions.contains(extension)) => {
+                let mut all = settings.extensions.clone();
+                all.extend(added.iter().filter(|extension| !settings.extensions.contains(extension)).cloned());
+                std::borrow::Cow::Owned(all)
+            }
+            _ => std::borrow::Cow::Borrowed(&settings.extensions),
+        }
+    }
+
     pub fn load<H: Host + ?Sized>(resolver: &Resolver<'_, H>, directory: &Path, question: &QueryContext) -> Result<Self, ()> {
         for ancestor in directory.ancestors() {
             spend(question)?;
@@ -50,6 +65,7 @@ impl Configuration {
                     Some(Some(config)) => {
                         frame.merged.options.extend(config.options.clone());
                         frame.merged.fields.extend(config.fields.clone());
+                        if config.added_extensions.is_some() { frame.merged.added_extensions.clone_from(&config.added_extensions); }
                         frame.parents.pop();
                     }
                     Some(None) => return Err(()),
@@ -67,6 +83,7 @@ impl Configuration {
             frame.merged.fields.extend(frame.fields);
             frame.merged.path = Some(frame.path.clone());
             frame.merged.references = frame.references;
+            if frame.added_extensions.is_some() { frame.merged.added_extensions = frame.added_extensions; }
             memo.insert(frame.path, Some(frame.merged));
         }
         memo.remove(&root).flatten().ok_or(())
@@ -86,6 +103,7 @@ struct Frame {
     own: BTreeMap<String, OptionValue>,
     fields: BTreeMap<String, OptionValue>,
     references: Vec<PathBuf>,
+    added_extensions: Option<Vec<Box<str>>>,
     merged: Configuration,
 }
 
@@ -151,6 +169,10 @@ impl Frame {
                 value.text().map(|text| clean(&directory.join(text))).ok_or(())
             }).collect::<Result<_, _>>()?
         } else { Vec::new() };
-        Ok(Self { path, parents, own, fields, references, merged: Configuration::default() })
+        let projection = &resolver.settings.config.extensions;
+        let says = super::metadata::projection(projection)?.first().is_some_and(|(key, _)| metadata.get(key).is_some());
+        let added_extensions = says.then(|| metadata.project(projection, question)?.into_iter()
+            .map(|value| value.text().map(Into::into).ok_or(())).collect::<Result<_, _>>()).transpose()?;
+        Ok(Self { path, parents, own, fields, references, added_extensions, merged: Configuration::default() })
     }
 }

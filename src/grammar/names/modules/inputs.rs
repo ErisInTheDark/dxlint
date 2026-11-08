@@ -177,7 +177,7 @@ impl Inputs<'_> {
         };
         if include.is_empty() { return Ok(()) }
         let exclude = config.fields.get(&*settings.config.exclude).map(|option| globs_relative(option, &root)).transpose()?.unwrap_or_default();
-        let request = DiscoveryRequest { root, include, exclude, extensions: settings.extensions.clone() };
+        let request = DiscoveryRequest { root, include, exclude, extensions: config.extensions(settings).into_owned() };
         self.sources.extend(self.resolver.host.discover(&request, self.question).known().ok_or(())?);
         Ok(())
     }

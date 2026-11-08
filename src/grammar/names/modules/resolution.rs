@@ -64,6 +64,8 @@ pub struct Config {
     pub exclude: Box<str>,
     pub extends: Box<str>,
     pub references: Box<str>,
+    /// Projection of the extensions a configuration adds to the profile's.
+    pub extensions: Box<str>,
     pub options: Box<str>,
     pub paths: Box<str>,
     pub base: Box<str>,
@@ -154,6 +156,15 @@ impl<H: Host + ?Sized> Resolver<'_, H> {
         self.host.configuration(self.settings, &directory, &mut || Configuration::load(self, &directory, question).map(Arc::new))
     }
 
+    /// The extensions a module file may have: the profile's, plus those the
+    /// program's configuration adds (read only when the profile projects
+    /// any). A configuration that cannot be read adds none: relative imports
+    /// never depended on it.
+    fn extensions(&self, question: &QueryContext) -> std::borrow::Cow<'_, [Box<str>]> {
+        if self.settings.config.extensions.is_empty() { return std::borrow::Cow::Borrowed(&self.settings.extensions) }
+        self.configuration(question).map_or(std::borrow::Cow::Borrowed(&self.settings.extensions), |config| config.extensions(self.settings))
+    }
+
     pub fn context(&self, importer: u32, question: &QueryContext) -> Known<crate::expr::Value<'static>> {
         super::context::context(self, importer, question)
     }
@@ -242,9 +253,10 @@ impl<H: Host + ?Sized> Resolver<'_, H> {
 
     fn candidate_path(&self, dir: &Path, name: &str, question: &QueryContext) -> Result<Option<PathBuf>, ()> {
         let substitution = self.settings.substitutions.iter().find(|(suffix, _)| name.ends_with(&**suffix));
+        let known = if substitution.is_none() { self.extensions(question) } else { std::borrow::Cow::Borrowed(&[][..]) };
         let (base, mut extensions): (&str, Vec<&str>) = match substitution {
             Some((suffix, replacements)) => (&name[..name.len() - suffix.len()], replacements.iter().map(|value| &**value).chain(std::iter::once(&**suffix)).collect()),
-            None => (name, std::iter::once("").chain(self.settings.extensions.iter().map(|value| &**value)).collect()),
+            None => (name, std::iter::once("").chain(known.iter().map(|value| &**value)).collect()),
         };
         extensions.dedup();
         for template in &self.settings.candidates {
@@ -612,6 +624,22 @@ mod tests {
         assert_eq!(resolve(&settings, user.file, "lib:missing"), Known::Yes(None));
         settings.globals.library_prefix = "".into();
         assert_eq!(resolve(&settings, user.file, "lib:es5"), Known::Yes(None));
+    }
+
+    #[test]
+    fn extensions_a_configuration_adds_resolve_through_its_extends() {
+        let mut files = Files::default();
+        let importer = files.add("/app/src/main.ts", "");
+        files.add("/app/tsconfig.base.json", r#"{"contentMappers":[{"package":"m","extensions":[".wts"]}]}"#);
+        files.add("/app/src/tsconfig.json", r#"{"extends":"../tsconfig.base.json"}"#);
+        let mapped = files.add("/app/src/Human.wts", "");
+        let mut settings = settings();
+        settings.config.files = vec!["tsconfig.json".into()];
+        settings.config.extends = "extends".into();
+        let resolve = |settings: &Settings| Resolver { host: &files, settings }.resolve(importer.file, "./Human", &[], &QueryContext::default());
+        assert_eq!(resolve(&settings), Known::Yes(None));
+        settings.config.extensions = "contentMappers[].extensions[]".into();
+        assert_eq!(resolve(&settings), Known::Yes(Some(mapped)));
     }
 
     #[test]

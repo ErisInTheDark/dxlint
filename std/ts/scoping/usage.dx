@@ -252,7 +252,7 @@ fn ts_usage_used(binding, sites, references, typed, variable, value_binding, dec
 }
 in ts_identifier let ts_usage_binding name_binding(node)
 in ts_program let ts_usage_typed
-  any([".ts", ".tsx", ".mts", ".cts"], extension => ends_with(file, extension))
+  !any([".js", ".jsx", ".mjs", ".cjs"], extension => ends_with(file, extension))
 in ts_program let ts_usage_declaration_file ts_usage_typed && contains(last(split(file, "/")), ".d.")
 in ts_node let ts_usage_typed scoping_program.ts_usage_typed
 in ts_node let ts_usage_declaration_file scoping_program.ts_usage_declaration_file

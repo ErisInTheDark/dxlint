@@ -11,6 +11,8 @@ import .ts/comments
       exclude "exclude"
       extends "extends"
       references "references[].path"
+      # Content mappers make TypeScript read other extensions as its own.
+      extensions "contentMappers[].extensions[]"
       options "compilerOptions"
       paths "paths"
       base "baseUrl"

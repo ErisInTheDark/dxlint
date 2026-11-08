@@ -67,6 +67,7 @@ const CONFIG: &[Control] = &[
     Control { name: "exclude", field: Field::Text(|s| &mut s.config.exclude, None) },
     Control { name: "extends", field: Field::Text(|s| &mut s.config.extends, None) },
     Control { name: "references", field: Field::Projection(|s| &mut s.config.references) },
+    Control { name: "extensions", field: Field::Projection(|s| &mut s.config.extensions) },
     Control { name: "options", field: Field::Text(|s| &mut s.config.options, None) },
     Control { name: "paths", field: Field::Text(|s| &mut s.config.paths, None) },
     Control { name: "base", field: Field::Text(|s| &mut s.config.base, None) },
