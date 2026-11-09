@@ -33,8 +33,7 @@ impl IndentPlan {
         };
         for (i, rule) in plan.rules.iter().enumerate() {
             for &(target, field) in &rule.targets {
-                for kind in 0..grammar.matchers.len() as u32 {
-                    if !grammar.is_a(kind, target) { continue; }
+                for &kind in grammar.specialisations(target) {
                     let entries = match field {
                         None => &mut plan.plain[kind as usize],
                         Some(label) => {

@@ -1053,10 +1053,8 @@ impl Names {
 
     /// Applies `f` to `m` and every matcher specialising it (`like`).
     fn add(&mut self, g: &Grammar, m: u32, f: impl Fn(&mut KindNames)) {
-        for (i, kind) in self.kinds.iter_mut().enumerate() {
-            if g.is_a(i as u32, m) {
-                f(kind);
-            }
+        for &i in g.specialisations(m) {
+            if let Some(kind) = self.kinds.get_mut(i as usize) { f(kind) }
         }
     }
 

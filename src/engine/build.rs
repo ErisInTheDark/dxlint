@@ -457,17 +457,17 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
             match target {
                 // Rules on a matcher also see its specialisations.
                 Target::Matcher(m) => {
-                    for (x, list) in by_matcher.iter_mut().enumerate() {
-                        if grammar.is_a(x as u32, m) && !list.contains(&i) {
+                    for &x in grammar.specialisations(m) {
+                        let list = &mut by_matcher[x as usize];
+                        if !list.contains(&i) {
                             list.push(i);
                         }
                     }
                 }
                 Target::Field(m, l) => by_field.entry((m, l)).or_default().push(i),
                 Target::Nodes(m, selection) => {
-                    for x in 0..grammar.matchers.len() {
-                        if !grammar.is_a(x as u32, m) { continue; }
-                        let selections = by_selection.entry(x as u32).or_default();
+                    for &x in grammar.specialisations(m) {
+                        let selections = by_selection.entry(x).or_default();
                         match selections.iter_mut().find(|(s, _)| *s == selection) {
                             Some((_, rules)) if !rules.contains(&i) => rules.push(i),
                             Some(_) => {}
@@ -485,9 +485,7 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
     let reach = grammar.reach();
     phase("reach");
     // Reads of a layer also select its specialisations (`x like y`).
-    let mut unit_layers: Vec<u32> = (0..grammar.matchers.len() as u32)
-        .filter(|&m| unit_reads.layers.iter().any(|&layer| grammar.is_a(m, layer)))
-        .collect();
+    let mut unit_layers: Vec<u32> = unit_reads.layers.iter().flat_map(|&layer| grammar.specialisations(layer).iter().copied()).collect();
     unit_layers.extend(&unit_reads.layers);
     let unit_layers = unique(unit_layers);
     let unit_overlays: Vec<bool> = reach.iter().map(|reachable| unit_layers.iter().any(|&layer| reachable[layer as usize])).collect();
@@ -1122,7 +1120,7 @@ fn is_token_layer(g: &Grammar, m: u32) -> bool {
 fn is_native_layer(g: &Grammar, m: u32) -> bool {
     let native = |m: u32| g.native_kind(m).is_some() || !g.native_hosts[m as usize].is_empty();
     // A base also matches its native-hosted specialisations.
-    native(m) || g.matchers.iter().enumerate().any(|(id, _)| native(id as u32) && g.is_a(id as u32, m))
+    native(m) || g.specialisations(m).iter().any(|&id| native(id))
 }
 
 /// Whether these reads include `children.x`, and `previous.x` / `next.x`.

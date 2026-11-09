@@ -164,12 +164,10 @@ impl AttrMemo<'_> {
 /// The `descendants`/`overlapping`/`containing` selection: `kinds` with their
 /// specialisations, and the field to read.
 pub(crate) fn selection(grammar: &Grammar, kinds: &[u32], field: Option<u16>) -> NodeSel {
-    NodeSel::new(
-        (0..grammar.matchers.len() as u32)
-            .filter(|&matcher| kinds.iter().any(|&kind| grammar.is_a(matcher, kind)))
-            .collect(),
-        field,
-    )
+    let mut matchers: Vec<u32> = kinds.iter().flat_map(|&kind| grammar.specialisations(kind).iter().copied()).collect();
+    matchers.sort_unstable();
+    matchers.dedup();
+    NodeSel::new(matchers, field)
 }
 
 static NO_ATTRS: AttrNames = AttrNames::EMPTY;

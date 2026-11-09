@@ -332,10 +332,8 @@ impl<'e> Needs<'e> {
 
     fn specialisations(&self, base: u32) -> KindSet {
         let mut out = KindSet::empty(self.grammar.matchers.len());
-        for k in 0..self.grammar.matchers.len() as u32 {
-            if self.grammar.is_a(k, base) {
-                out.insert(k);
-            }
+        for &k in self.grammar.specialisations(base) {
+            out.insert(k);
         }
         out
     }

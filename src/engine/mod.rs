@@ -656,10 +656,8 @@ impl Compiled {
         let n = g.matchers.len();
         let specialisations = |base: u32| {
             let mut set = KindSet::empty(n);
-            for k in 0..n as u32 {
-                if g.is_a(k, base) {
-                    set.insert(k);
-                }
+            for &k in g.specialisations(base) {
+                set.insert(k);
             }
             set
         };

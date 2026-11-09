@@ -134,7 +134,7 @@ impl Body {
 }
 
 fn variants(grammar: &Grammar, base: u32) -> impl Iterator<Item = u32> + '_ {
-    (0..grammar.matchers.len() as u32).filter(move |&id| grammar.is_a(id, base))
+    grammar.specialisations(base).iter().copied()
 }
 
 fn pattern(grammar: &Grammar, pat: &Pat, children: &[u32], shapes: &mut Shapes) -> Body {

@@ -222,6 +222,8 @@ pub struct Grammar {
     by_name: HashMap<String, u32>,
     /// Per matcher: itself and its resolved `like` ancestors.
     ancestors: Vec<Vec<u64>>,
+    /// Per matcher: itself and the matchers specialising it, ascending.
+    specialisations: Vec<Vec<u32>>,
     /// Warm DFA caches, reused across files (building one is not cheap).
     cache_pool: Mutex<Vec<DfaCaches>>,
     /// What the config `drop`ped: unknown names that were dropped are
@@ -322,6 +324,12 @@ impl Grammar {
 
     pub fn matcher(&self, name: &str) -> Option<u32> {
         self.by_name.get(name).copied()
+    }
+
+    /// The matchers that are `base` ([`Grammar::is_a`]), ascending; none for
+    /// `ROOT` and `TEXT`.
+    pub fn specialisations(&self, base: u32) -> &[u32] {
+        self.specialisations.get(base as usize).map_or(&[], Vec::as_slice)
     }
 
     /// Is matcher `m` `base` itself, or a specialisation of it?
@@ -605,11 +613,13 @@ impl Grammar {
 
         let views = (0..langs.len()).map(|li| build_view(li, &langs[li], &matchers)).collect();
         let native_hosts = native_hosts(&matchers);
+        let mut specialisations = vec![Vec::new(); matchers.len()];
         let ancestors = matchers.iter().enumerate().map(|(id, _)| {
             let mut bits = vec![0; matchers.len().div_ceil(64)];
             let mut current = Some(id as u32);
             while let Some(m) = current {
                 bits[m as usize / 64] |= 1 << (m % 64);
+                specialisations[m as usize].push(id as u32);
                 current = matchers[m as usize].like;
             }
             bits
@@ -617,6 +627,7 @@ impl Grammar {
         let mut grammar = Grammar {
             shapes: shapes::Shapes::default(),
             ancestors,
+            specialisations,
             native_hosts,
             layers,
             matchers,
