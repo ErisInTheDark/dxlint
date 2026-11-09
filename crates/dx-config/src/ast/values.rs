@@ -1,5 +1,5 @@
 use super::Name;
-use crate::config::source::Span;
+use crate::source::Span;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum KeyDomain { Text, Ordinal, Symbol }
@@ -37,7 +37,7 @@ pub struct ProductShape {
     pub name: Name,
     pub items: Name,
     pub traits: Vec<Name>,
-    pub description: crate::expr::Value<'static>,
+    pub description: dx_ir::value::Value<'static>,
     pub inherits: Option<Unwrap>,
     pub readonly_inherits: Option<Unwrap>,
     pub optional: Option<Unwrap>,

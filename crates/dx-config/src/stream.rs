@@ -35,10 +35,10 @@ pub struct Stream {
     pub calls: Vec<(Rc<str>, Span)>,
     /// Every token consumed, in order: the configuration as the parser saw
     /// it, imports and macros expanded (see [`Stream::fingerprint`]).
-    seen: crate::fx_hash::FxHasher,
+    seen: dx_core::fx_hash::FxHasher,
     /// Every word in those tokens, strings' too (`"{name}"`): what they may
     /// refer to, by [`word_hash`].
-    words: crate::fx_hash::FxHashSet<u64>,
+    words: dx_core::fx_hash::FxHashSet<u64>,
     /// The last token seen ended a line (or there was none): line ends in a
     /// row count once, and leading ones not at all.
     at_line_end: bool,
@@ -49,8 +49,8 @@ pub struct Stream {
 pub struct StreamState {
     macros: HashMap<Rc<str>, Rc<MacroDef>>,
     calls: Vec<(Rc<str>, Span)>,
-    seen: crate::fx_hash::FxHasher,
-    words: crate::fx_hash::FxHashSet<u64>,
+    seen: dx_core::fx_hash::FxHasher,
+    words: dx_core::fx_hash::FxHashSet<u64>,
     at_line_end: bool,
     last_span: Option<Span>,
 }
@@ -58,15 +58,15 @@ pub struct StreamState {
 /// A word's identity in [`Stream`]'s word sets.
 pub fn word_hash(word: &str) -> u64 {
     use std::hash::Hasher;
-    let mut hash = crate::fx_hash::FxHasher::default();
+    let mut hash = dx_core::fx_hash::FxHasher::default();
     hash.write(word.as_bytes());
     hash.finish()
 }
 
 /// Tokens set apart by [`Stream::apart`]: what came before them.
 pub struct Apart {
-    seen: crate::fx_hash::FxHasher,
-    words: crate::fx_hash::FxHashSet<u64>,
+    seen: dx_core::fx_hash::FxHasher,
+    words: dx_core::fx_hash::FxHashSet<u64>,
 }
 
 impl Stream {
@@ -141,7 +141,7 @@ impl Stream {
 
     /// Ends [`Stream::apart`]: the hash and words of the tokens since, which
     /// `absorb` also counts as part of the whole.
-    pub fn rejoin(&mut self, outer: Apart, absorb: bool) -> (u64, crate::fx_hash::FxHashSet<u64>) {
+    pub fn rejoin(&mut self, outer: Apart, absorb: bool) -> (u64, dx_core::fx_hash::FxHashSet<u64>) {
         use std::hash::Hasher;
         let hash = self.fingerprint();
         let words = std::mem::replace(&mut self.words, outer.words);
@@ -157,7 +157,7 @@ impl Stream {
     }
 
     /// The words of everything counted so far.
-    pub fn words(&self) -> &crate::fx_hash::FxHashSet<u64> {
+    pub fn words(&self) -> &dx_core::fx_hash::FxHashSet<u64> {
         &self.words
     }
 

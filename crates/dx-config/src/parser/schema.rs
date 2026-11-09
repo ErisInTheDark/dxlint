@@ -18,7 +18,7 @@ use super::super::error::ConfigError;
 use super::super::lexer::{decode_escapes, Tk};
 use super::super::schema::{FieldDefault, Schema, SchemaDef, SchemaField};
 use super::Parser;
-use crate::expr::Value;
+use dx_ir::value::Value;
 
 const NEW_FORM: &str = "write options as `option name <schema> = <default> \"description\"`, e.g. `option max int(0..) = 2 \"blank lines in a row\"`";
 

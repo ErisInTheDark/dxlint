@@ -6,7 +6,7 @@ use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
-use crate::line_index::LineIndex;
+use dx_tree::line_index::LineIndex;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FileId(pub u32);
@@ -70,7 +70,7 @@ pub struct Disk;
 
 impl SourceProvider for Disk {
     fn read(&self, path: &Path) -> io::Result<String> {
-        match crate::engine::reads::overlaid(&normalize_path(path)) {
+        match dx_core::reads::overlaid(&normalize_path(path)) {
             Some(Some(text)) => Ok(text.to_string()),
             Some(None) => Err(io::Error::new(io::ErrorKind::NotFound, "not in this view")),
             None => std::fs::read_to_string(path),

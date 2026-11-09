@@ -1,6 +1,6 @@
 //! Forward token references resolve inside their declared parser namespace.
 
-use crate::pattern::syntax::{Definition, Expr, TokenMatch};
+use dx_pattern::syntax::{Definition, Expr, TokenMatch};
 
 pub(super) fn resolve(definition: &mut Definition) -> Result<(), String> {
     let tokens: Vec<_> = definition.tokens.iter().map(|token| token.name.clone()).collect();

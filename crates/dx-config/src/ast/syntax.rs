@@ -1,7 +1,7 @@
 //! A declared parser and the language whose root it owns.
 
 use super::Name;
-use crate::pattern::syntax::Definition;
+use dx_pattern::syntax::Definition;
 
 #[derive(Clone, Debug)]
 pub struct ParserDecl {

@@ -22,8 +22,8 @@ use super::lexer::{lex, Tk, Token};
 use super::source::{normalize_path, SourceMap, SourceProvider, Span};
 use super::std_lib;
 use super::stream::{MacroDef, Stream};
-use crate::pattern::class::CharClass;
-use crate::pattern::Pat;
+use dx_pattern::class::CharClass;
+use dx_pattern::Pat;
 
 /// Words with a meaning in items, clauses or patterns; they cannot name
 /// macros or matchers.
@@ -433,7 +433,7 @@ impl<'a> Parser<'a> {
     fn fingerprint_with_helpers(&mut self) -> u64 {
         use std::hash::Hasher;
         let mut reached = self.ts.words().clone();
-        let mut hash = crate::fx_hash::FxHasher::default();
+        let mut hash = dx_core::fx_hash::FxHasher::default();
         hash.write_u64(self.ts.fingerprint());
         let mut helpers = std::mem::take(&mut self.config.helpers);
         loop {
@@ -1475,7 +1475,7 @@ impl<'a> Parser<'a> {
         // `<name>_node`: every syntax layer of the front end (tokens aside);
         // `<name>_code`: those whose text is code (literal text aside). The
         // declared parser of that name is the front end, as the grammar
-        // takes it (`crate::grammar::Grammar::build`).
+        // takes it (`Grammar::build`).
         let nodes: Option<Vec<(String, bool)>> = self.config.parsers.iter().rfind(|parser| parser.name.text == name.text)
             // A node a visible token kind names is a token layer.
             .map(|parser| parser.definition.nodes.iter()
@@ -2297,7 +2297,7 @@ impl<'a> Parser<'a> {
     fn forget_configs(&mut self, rule: &str) {
         self.config.configs.retain(|c| c.patch.name.text != rule);
         for c in &mut self.config.configs {
-            if crate::path_globs::wildcard(&c.patch.name.text, rule) {
+            if dx_core::path_globs::wildcard(&c.patch.name.text, rule) {
                 c.soft = true;
             }
         }
@@ -2333,7 +2333,7 @@ impl<'a> Parser<'a> {
                     .config
                     .rules
                     .iter()
-                    .filter(|r| crate::path_globs::wildcard(&name.text, &r.name.text))
+                    .filter(|r| dx_core::path_globs::wildcard(&name.text, &r.name.text))
                     .map(|r| r.name.text.clone())
                     .collect();
                 if gone.is_empty() {
@@ -2903,7 +2903,7 @@ pub(crate) fn parse_str(src: &str) -> (Config, Vec<ConfigError>, SourceMap) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pattern::Pat;
+    use dx_pattern::Pat;
 
     fn ok(src: &str) -> Config {
         let (config, errors, _) = parse_str(src);
@@ -3106,7 +3106,7 @@ mod tests {
         assert!(join(rule.message.as_ref().unwrap()));
         let Some(ExprKind::If(_, then, other)) = rule.fix.as_ref().map(|f| &f.parts[0].text.kind) else { panic!("{:?}", rule.fix) };
         assert!(join(then) && join(other));
-        assert!(rule.options[0].default == crate::expr::Value::Num(100.0) && rule.options[0].description.is_some());
+        assert!(rule.options[0].default == dx_ir::value::Value::Num(100.0) && rule.options[0].description.is_some());
         // `len(text) + 1` is one side of the join; the join is one side of `==`.
         let ExprKind::Binary(BinOp::Eq, lhs, _) = &rule.when[0].kind else { panic!("{:?}", rule.when[0]) };
         assert!(matches!(&lhs.kind, ExprKind::Binary(BinOp::Join, sum, _) if matches!(sum.kind, ExprKind::Binary(BinOp::Add, ..))));

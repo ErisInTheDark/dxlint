@@ -2,8 +2,8 @@
 
 use super::schema::{Schema, SchemaDef};
 use super::source::Span;
-use crate::expr::Value;
-use crate::pattern::Pat;
+use dx_ir::value::Value;
+use dx_pattern::Pat;
 
 pub mod calls;
 pub mod effects;
@@ -188,8 +188,8 @@ impl Dropped {
 
     /// "`name` was dropped, but this still uses it": reported at the `drop`,
     /// pointing at the use.
-    pub fn still_used(&self, use_span: impl Into<Option<Span>>) -> crate::config::error::ConfigError {
-        crate::config::error::ConfigError::new(self.span, format!("`{}` is dropped here, but it is still used", self.name))
+    pub fn still_used(&self, use_span: impl Into<Option<Span>>) -> crate::error::ConfigError {
+        crate::error::ConfigError::new(self.span, format!("`{}` is dropped here, but it is still used", self.name))
             .related(use_span, "still used here")
             .note("drop or override what uses it too")
     }
@@ -295,7 +295,7 @@ impl NameItem {
     pub const OUTSIDE_OPERAND: u8 = 2;
 
     /// Expression `part` the item evaluates on its nodes
-    /// ([`crate::grammar::names::Operand`]).
+    /// (`grammar::names::Operand`).
     pub fn operand(&self, part: u8) -> Option<&Expr> {
         match self {
             NameItem::Declares { keyed, .. } | NameItem::Resolves { keyed, .. } if part == Self::KEY_OPERAND => keyed.as_ref(),
@@ -654,17 +654,17 @@ pub enum Report {
 pub struct RuleItem {
     /// The rule names or globs it touches.
     pub names: Vec<String>,
-    /// Its tokens' hash and words ([`crate::config::stream::word_hash`]).
+    /// Its tokens' hash and words ([`crate::stream::word_hash`]).
     pub hash: u64,
-    pub words: crate::fx_hash::FxHashSet<u64>,
+    pub words: dx_core::fx_hash::FxHashSet<u64>,
 }
 
 #[derive(Clone, Debug)]
 pub struct RuleHelper {
-    /// [`crate::config::stream::word_hash`] of its name.
+    /// [`crate::stream::word_hash`] of its name.
     pub name: u64,
     pub hash: u64,
-    pub words: crate::fx_hash::FxHashSet<u64>,
+    pub words: dx_core::fx_hash::FxHashSet<u64>,
 }
 
 /// `rule name [severity [message]] [{ set option value; clauses }]`

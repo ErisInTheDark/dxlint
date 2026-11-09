@@ -631,8 +631,8 @@ impl Parser<'_> {
         } else {
             let function = Name { text: name.text.to_string(), span: name.span };
             let mut args = Vec::new();
-            if crate::expr::Each::named(&name.text).is_some() || name.is_ident("walk") {
-                if crate::expr::Each::named(&name.text).is_some_and(|(_, kind)| matches!(kind, crate::expr::Each::Fold | crate::expr::Each::Zip)) {
+            if dx_ir::expr::Each::named(&name.text).is_some() || name.is_ident("walk") {
+                if dx_ir::expr::Each::named(&name.text).is_some_and(|(_, kind)| matches!(kind, dx_ir::expr::Each::Fold | dx_ir::expr::Each::Zip)) {
                     args.push(self.operand()?);
                 }
                 let paired_only = name.is_ident("zip") && self.step_ends();

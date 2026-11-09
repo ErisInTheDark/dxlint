@@ -19,7 +19,7 @@ Rust linter; rules in `.dx` (docs/advanced.md). Binary `dxlint`.
 
 ## Layout
 
-- `src/config`: lexer, token stream (imports + macros splice tokens), parser
+- `crates/dx-config` (`config`): lexer, token stream (imports + macros splice tokens), parser
 - workspace: lower layers are crates under `crates/`, re-exported in `src/lib.rs` under their old module names (`crate::pattern::...` still works); a crate never depends upward
 - `crates/dx-pattern` (`pattern`): `Pat`, regex subset parser, compiler, DFA bridge, prefilters
 - `crates/dx-core`: hashing, path globs, allocator, levers, sampler, work counts, file parts, `reads` (also `engine::reads`)
@@ -35,7 +35,7 @@ Rust linter; rules in `.dx` (docs/advanced.md). Binary `dxlint`.
 - `rules/`: built-in rulesets (`import rules:x`): only `rule name` lines
 - `docs/`: user docs: basic.md, advanced.md (language), ts.md, rules/ (one page per rule; `npm run docs:rules` rebuilds rules/README.md)
 - `package/`: the npm package `@inthedark/dxlint` (launcher + committed binaries, `npm run build:binaries`); `.github/workflows/` publish it and the VS Code extension (`editors/vscode`, `npm run package:vsix`)
-- nothing is compiled in: `src/config/std_lib.rs` reads both from `DXLINT_LIBRARY=<dir>`, else the nearest ancestor of the executable holding `std/` and `rules/` (no rebuild for .dx edits; pinned binaries need `DXLINT_LIBRARY`)
+- nothing is compiled in: `crates/dx-config/src/std_lib.rs` reads both from `DXLINT_LIBRARY=<dir>`, else the nearest ancestor of the executable holding `std/` and `rules/` (no rebuild for .dx edits; pinned binaries need `DXLINT_LIBRARY`)
 
 ## Invariants
 

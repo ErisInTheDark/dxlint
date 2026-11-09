@@ -50,7 +50,7 @@ in rs_code match rs_filesystem /\bstd::fs\b|\bfs::\w+|\.(?:is_file|is_dir|exists
     # read around a lint, not inside one.
     files "src/engine/**" "src/grammar/**" "src/expr/**" "src/vm/**" "crates/**"
     when rs_test_module == null
-    ignore "crates/dx-core/src/reads.rs" "crates/dx-core/src/sampler.rs" "src/engine/cache.rs" "tests.rs" "tests/**"
+    ignore "crates/dx-core/src/reads.rs" "crates/dx-core/src/sampler.rs" "crates/dx-config/**" "src/engine/cache.rs" "tests.rs" "tests/**"
   }
 }
 

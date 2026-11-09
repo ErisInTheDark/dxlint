@@ -1,6 +1,6 @@
 //! The `.dx` front end: lexing, macro expansion, imports and parsing into
 //! a [`Config`](ast::Config). Compiling that into a runnable linter lives in
-//! [`crate::engine`].
+//! the engine.
 
 pub mod ast;
 pub mod error;
@@ -22,7 +22,7 @@ pub fn find(start: &Path) -> Option<PathBuf> {
     let mut dir = Some(source::normalize_path(start));
     while let Some(d) = dir {
         let candidate = d.join(CONFIG_NAME);
-        if crate::engine::reads::is_file(&candidate) {
+        if dx_core::reads::is_file(&candidate) {
             return Some(candidate);
         }
         dir = d.parent().map(Path::to_path_buf);
@@ -67,7 +67,7 @@ pub fn load_file(path: &Path, provider: &dyn SourceProvider) -> Loaded {
 /// the root config (`dxlint eval`'s question).
 pub fn load_tree(
     root: &Path,
-    nested: impl FnOnce(&crate::path_globs::PathGlobs) -> Vec<PathBuf>,
+    nested: impl FnOnce(&dx_core::path_globs::PathGlobs) -> Vec<PathBuf>,
     extra: Option<(&str, &str)>,
     provider: &dyn SourceProvider,
 ) -> (Loaded, Vec<PathBuf>) {
@@ -76,7 +76,7 @@ pub fn load_tree(
     let mut sources = SourceMap::default();
     let mut parser = parser::Parser::new(&mut sources, provider);
     parser.parse_entry(&root);
-    let ignores = crate::path_globs::PathGlobs::new(parser.config.ignores.iter().map(|(g, _)| g.as_str())).unwrap_or_default();
+    let ignores = dx_core::path_globs::PathGlobs::new(parser.config.ignores.iter().map(|(g, _)| g.as_str())).unwrap_or_default();
     let mut nested: Vec<PathBuf> = nested(&ignores).iter().map(|p| source::normalize_path(p))
         .filter(|p| *p != root && p.parent().and_then(|dir| dir.strip_prefix(&root_dir).ok()).is_some_and(|rel| !ignores.matches(rel)))
         .collect();

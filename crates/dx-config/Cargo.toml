@@ -1,0 +1,15 @@
+[package]
+name = "dx-config"
+version = "0.1.0"
+edition = "2021"
+description = "The .dx front end: lexing, macro expansion, imports and parsing into a config"
+license = "MIT"
+
+[dependencies]
+dx-core = { path = "../dx-core" }
+dx-pattern = { path = "../dx-pattern" }
+dx-tree = { path = "../dx-tree" }
+dx-ir = { path = "../dx-ir" }
+memchr = "2.7"
+regex-automata = "0.4"
+serde = { version = "1.0", features = ["derive"] }

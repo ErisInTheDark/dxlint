@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::fmt;
 
 use super::ast::Name;
-use crate::expr::Value;
+use dx_ir::value::Value;
 
 #[derive(Clone, Debug)]
 pub enum Schema {
@@ -110,7 +110,7 @@ impl Schema {
             (Schema::Any, v) | (Schema::Str, v @ Value::Str(_)) | (Schema::Num, v @ Value::Num(_)) | (Schema::Bool, v @ Value::Bool(_)) => Ok(v.clone()),
             (Schema::Null, Value::Null) => Ok(Value::Null),
             (Schema::Int, Value::Num(n)) if n.fract() == 0.0 => Ok(value.clone()),
-            (Schema::Regex, Value::Str(s)) => match crate::expr::re::compile(s) {
+            (Schema::Regex, Value::Str(s)) => match dx_ir::re::compile(s) {
                 Ok(_) => Ok(value.clone()),
                 Err(e) => Err(misfit(path, format!("is not a valid regex: {e}"))),
             },
@@ -346,7 +346,7 @@ impl fmt::Display for Schema {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::source::{FileId, Span};
+    use crate::source::{FileId, Span};
 
     fn rec(entries: &[(&'static str, Value<'static>)]) -> Value<'static> {
         Value::Record(entries.iter().map(|(k, v)| ((*k).into(), v.clone())).collect())

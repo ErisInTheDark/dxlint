@@ -1,7 +1,7 @@
 //! Language-owned option declarations and scoped settings.
 
 use super::{LanguageOptions, Parent, Parser, Tk};
-use crate::config::error::ConfigError;
+use crate::error::ConfigError;
 
 impl Parser<'_> {
     pub(super) fn language_options(&mut self) {
@@ -63,7 +63,7 @@ impl Parser<'_> {
 
 #[cfg(test)]
 mod tests {
-    use crate::config::{load_text, source::Disk};
+    use crate::{load_text, source::Disk};
 
     #[test]
     fn language_options_accept_declarations_and_scoped_settings() {

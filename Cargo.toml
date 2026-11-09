@@ -11,13 +11,14 @@ name = "dxlint"
 path = "src/main.rs"
 
 [workspace]
-members = ["crates/dx-pattern", "crates/dx-core", "crates/dx-tree", "crates/dx-ir"]
+members = ["crates/dx-pattern", "crates/dx-core", "crates/dx-tree", "crates/dx-ir", "crates/dx-config"]
 
 [dependencies]
 dx-pattern = { path = "crates/dx-pattern" }
 dx-core = { path = "crates/dx-core" }
 dx-tree = { path = "crates/dx-tree" }
 dx-ir = { path = "crates/dx-ir" }
+dx-config = { path = "crates/dx-config" }
 memchr = "2.7"
 regex-automata = "0.4"
 regex-syntax = "0.8"

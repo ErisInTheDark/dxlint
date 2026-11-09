@@ -1,7 +1,7 @@
 //! Parsing call declarations; conditions stay with the shared name item.
 
 use super::Parser;
-use crate::config::ast::calls::{ExpectedAt, Item, Path, Variance};
+use crate::ast::calls::{ExpectedAt, Item, Path, Variance};
 
 impl Parser<'_> {
     pub(super) fn call_item(&mut self, keyword: &str) -> Option<Item> {

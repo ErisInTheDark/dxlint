@@ -1,10 +1,10 @@
 //! Structured grammar expressions.
 
 use super::super::Parser;
-use crate::config::error::ConfigError;
-use crate::config::lexer::{decode_escapes, Tk};
-use crate::pattern::syntax::{ContextChange, Expr, TokenMatch};
-use crate::pattern::regex;
+use crate::error::ConfigError;
+use crate::lexer::{decode_escapes, Tk};
+use dx_pattern::syntax::{ContextChange, Expr, TokenMatch};
+use dx_pattern::regex;
 
 impl Parser<'_> {
     pub(super) fn syntax_constructor_name(name: &str) -> bool {

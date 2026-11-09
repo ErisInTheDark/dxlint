@@ -1,7 +1,7 @@
 use super::{Context, Parser};
-use crate::config::ast::{Exclusive, Name, NameItem, Unwrap};
-use crate::config::error::ConfigError;
-use crate::config::source::Span;
+use crate::ast::{Exclusive, Name, NameItem, Unwrap};
+use crate::error::ConfigError;
+use crate::source::Span;
 
 impl Parser<'_> {
     pub(super) fn product_value(&mut self) -> Option<Unwrap> {
@@ -30,13 +30,13 @@ impl Parser<'_> {
         let traits = self.name_list("a product trait");
         if !self.word("as") { self.error_here("expected `as <constant carrier record>`"); return }
         let Some(open) = self.bump() else { return };
-        if open.kind != crate::config::lexer::Tk::LBrace {
+        if open.kind != crate::lexer::Tk::LBrace {
             self.errors.push(ConfigError::new(open.span, "product carriers are constant records"));
             return;
         }
         let Some(expression) = self.record(open) else { return };
         let description = match super::schema::literal(&expression) {
-            Ok(value @ crate::expr::Value::Record(_)) => value,
+            Ok(value @ dx_ir::value::Value::Record(_)) => value,
             _ => {
                 self.errors.push(ConfigError::new(expression.span, "product carriers are constant records"));
                 return;
@@ -62,7 +62,7 @@ impl Parser<'_> {
                 .related(previous.name.span, "first defined here"));
             return;
         }
-        self.config.products.push(crate::config::ast::values::ProductShape {
+        self.config.products.push(crate::ast::values::ProductShape {
             name, items, traits, description, inherits, readonly_inherits, optional, count,
         });
     }
@@ -82,7 +82,7 @@ impl Parser<'_> {
                 .related(previous.name.span, "first defined here"));
             return;
         }
-        self.config.apparent.push(crate::config::ast::values::Apparent { name, inherits });
+        self.config.apparent.push(crate::ast::values::Apparent { name, inherits });
     }
 
     pub(super) fn select_value(&mut self) -> Option<Unwrap> {
@@ -118,7 +118,7 @@ impl Parser<'_> {
             self.config.key_truthiness = Some((truthy, falsy));
             return;
         }
-        let Some(domain) = crate::config::ast::values::KeyDomain::parse(&domain.text) else {
+        let Some(domain) = crate::ast::values::KeyDomain::parse(&domain.text) else {
             self.error_here("expected key domain `text`, `ordinal`, or `symbol`");
             return;
         };
@@ -132,7 +132,7 @@ impl Parser<'_> {
     }
 
     pub(super) fn indexed_item(&mut self) -> Option<NameItem> {
-        use crate::config::ast::values::{IndexedMode, KeyDomain};
+        use crate::ast::values::{IndexedMode, KeyDomain};
         let runtime = self.word("runtime");
         let domain = self.peek().and_then(|token| KeyDomain::parse(&token.text));
         let keyed = domain.is_none() && self.word("keyed");
@@ -328,7 +328,7 @@ impl Parser<'_> {
 #[cfg(test)]
 mod tests {
     use super::super::parse_str;
-    use crate::config::ast::{NameItem, Unwrap};
+    use crate::ast::{NameItem, Unwrap};
 
     #[test]
     fn nullary_carriers_do_not_need_an_argument_field() {

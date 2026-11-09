@@ -1,9 +1,9 @@
 //! Declared precedence rows.
 
 use super::super::Parser;
-use crate::config::error::ConfigError;
-use crate::config::lexer::Tk;
-use crate::pattern::syntax::{Expr, Operator, Precedence, Prefix};
+use crate::error::ConfigError;
+use crate::lexer::Tk;
+use dx_pattern::syntax::{Expr, Operator, Precedence, Prefix};
 
 impl Parser<'_> {
     pub(super) fn syntax_precedence(&mut self) -> Option<Expr> {

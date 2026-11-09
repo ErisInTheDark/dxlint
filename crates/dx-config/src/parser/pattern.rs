@@ -8,7 +8,7 @@ use super::super::error::ConfigError;
 use super::super::lexer::{decode_escapes, Tk, Token};
 use super::super::source::Span;
 use super::Parser;
-use crate::pattern::{regex, Pat};
+use dx_pattern::{regex, Pat};
 
 impl Parser<'_> {
     pub(super) fn field_name(&mut self, token: &Token) -> bool {

@@ -9,7 +9,7 @@
 //! - `vm` evaluates attributes and rule conditions lowered to typed code
 
 pub mod cli;
-pub mod config;
+pub use dx_config as config;
 pub mod engine;
 pub mod expr;
 pub mod grammar;

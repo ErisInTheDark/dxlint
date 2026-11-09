@@ -1,5 +1,5 @@
 use super::{Parser, Tk};
-use crate::config::ast::effects::{Flow, Item, Path};
+use crate::ast::effects::{Flow, Item, Path};
 
 impl Parser<'_> {
     pub(super) fn execution_item(&mut self, keyword: &str) -> Option<Item> {
