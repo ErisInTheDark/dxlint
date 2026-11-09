@@ -18,5 +18,5 @@ Rule behaviour tests. Run `dxlint fixtures [paths...]` (default `fixtures/`; `ca
 - A `.dxcache` marker also checks cold and warm runs agree; the runner restores its bytes.
 
 ## runs
-- Every run rewrites ignored `actual/` and prints differences.
+- A failing scenario gets ignored `actual/` rewritten and prints differences; a passing one has its `actual/` removed.
 - `--bless` copies `actual/` into `expected/` (removes stale fixed files; updates `fixed-diagnostics`/`fix-preview` only where they exist, else adds previews differing from fixpoint). Bless only intentional changes; review before committing.

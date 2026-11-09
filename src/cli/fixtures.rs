@@ -198,11 +198,12 @@ fn write_outputs(root: &Path, files: &BTreeMap<PathBuf, String>) -> Result<(), S
     Ok(())
 }
 
-fn write_actual(root: &Path, actual: &Actual, bless: bool) -> Result<(), String> {
+fn write_actual(root: &Path, actual: &Actual, dirtied: &BTreeMap<PathBuf, String>, bless: bool) -> Result<(), String> {
     let actual_dir = root.join("actual");
     clear_owned(&actual_dir)?;
     write_outputs(&actual_dir.join("fixed"), &actual.fixed)?;
     write_outputs(&actual_dir.join("fix-preview"), &actual.fix_preview)?;
+    write_outputs(&actual_dir.join("dirtied"), dirtied)?;
     fs::write(actual_dir.join("diagnostics"), diagnostic_text(&actual.diagnostics)).map_err(|e| e.to_string())?;
     fs::write(actual_dir.join("fixed-diagnostics"), diagnostic_text(&actual.fixed_diagnostics)).map_err(|e| e.to_string())?;
     fs::write(actual_dir.join("suggestions"), diagnostic_text(&actual.suggestions)).map_err(|e| e.to_string())?;
@@ -228,6 +229,10 @@ fn write_actual(root: &Path, actual: &Actual, bless: bool) -> Result<(), String>
         clear_owned(&preview_dir)?;
         if opted_in || !previews.is_empty() {
             write_outputs(&preview_dir, &previews)?;
+        }
+        if !dirtied.is_empty() || expected.join("dirtied").is_dir() {
+            clear_owned(&expected.join("dirtied"))?;
+            write_outputs(&expected.join("dirtied"), dirtied)?;
         }
     }
     Ok(())
@@ -289,70 +294,82 @@ fn scenario(output: &mut Output<'_>, root: &Path, bless: bool) -> Result<Vec<Str
             }
             Ok(())
         })();
-        write_actual(root, &actual, bless && replay.is_ok())?;
-        replay?;
-        let expected = root.join("expected");
-        let dirtied = dirtied(&project.linter, root, &files)?;
-        write_outputs(&root.join("actual/dirtied"), &dirtied)?;
-        if bless && (!dirtied.is_empty() || expected.join("dirtied").is_dir()) {
-            clear_owned(&expected.join("dirtied"))?;
-            write_outputs(&expected.join("dirtied"), &dirtied)?;
+        let dirtied = match &replay {
+            Ok(()) => dirtied(&project.linter, root, &files)?,
+            Err(_) => BTreeMap::new(),
+        };
+        if bless {
+            write_actual(root, &actual, &dirtied, replay.is_ok())?;
         }
-        let diagnostics = fs::read_to_string(expected.join("diagnostics")).map_err(|e| format!("expected/diagnostics: {e}"))?;
-        let mut differences = Vec::new();
-        let text = diagnostic_text(&actual.diagnostics);
-        if !same_lines(&diagnostics, &text) { differences.push(format!("diagnostics:\n{}", difference(&diagnostics, &text))); }
-        if expected.join("fixed-diagnostics").is_file() {
-            let diagnostics = fs::read_to_string(expected.join("fixed-diagnostics")).map_err(|e| e.to_string())?;
-            let text = diagnostic_text(&actual.fixed_diagnostics);
-            if !same_lines(&diagnostics, &text) { differences.push(format!("fixed-diagnostics:\n{}", difference(&diagnostics, &text))); }
-        }
-        let text = diagnostic_text(&actual.suggestions);
-        match fs::read_to_string(expected.join("suggestions")) {
-            Ok(suggestions) if !same_lines(&suggestions, &text) => differences.push(format!("suggestions:\n{}", difference(&suggestions, &text))),
-            Err(_) if !actual.suggestions.is_empty() => differences.push("suggestions: offered, but expected/suggestions is missing".into()),
+        let differences = replay.clone().and_then(|()| differences(root, &actual, &dirtied));
+        // Only a failing scenario keeps `actual/`: most pass, and creating
+        // files is a large share of a run.
+        match &differences {
+            Ok(found) if found.is_empty() && !bless => clear_owned(&root.join("actual"))?,
+            _ if !bless => write_actual(root, &actual, &dirtied, false)?,
             _ => {}
         }
-        let fixed_root = expected.join("fixed");
-        let mut fixed = BTreeMap::new();
-        fixed_outputs(&fixed_root, &fixed_root, &mut fixed)?;
-        for relative in fixed.keys().chain(actual.fixed.keys()).collect::<BTreeSet<_>>() {
-            match (fixed.get(relative), actual.fixed.get(relative)) {
-                (Some(expected), Some(actual)) if expected != actual =>
-                    differences.push(format!("fixed/{}:\n{}", relative.display(), difference(expected, actual))),
-                (Some(_), None) => differences.push(format!("fixed/{}: expected change, input unchanged", relative.display())),
-                (None, Some(_)) => differences.push(format!("fixed/{}: missing expected change", relative.display())),
-                _ => {}
-            }
-        }
-        let dirtied_root = expected.join("dirtied");
-        let mut expected_dirtied = BTreeMap::new();
-        fixed_outputs(&dirtied_root, &dirtied_root, &mut expected_dirtied)?;
-        for name in expected_dirtied.keys().chain(dirtied.keys()).collect::<BTreeSet<_>>() {
-            let (wanted, got) = (expected_dirtied.get(name).map_or("", String::as_str), dirtied.get(name).map_or("", String::as_str));
-            if !dirtied.contains_key(name) {
-                differences.push(format!("dirtied/{}: no edits/{0}", name.display()));
-            } else if !expected_dirtied.contains_key(name) {
-                differences.push(format!("dirtied/{}: missing expected", name.display()));
-            } else if !same_lines(wanted, got) {
-                differences.push(format!("dirtied/{}:\n{}", name.display(), difference(wanted, got)));
-            }
-        }
-        let preview_root = expected.join("fix-preview");
-        let mut previews = BTreeMap::new();
-        fixed_outputs(&preview_root, &preview_root, &mut previews)?;
-        for (relative, expected) in previews {
-            match actual.fix_preview.get(&relative) {
-                Some(actual) if expected != *actual =>
-                    differences.push(format!("fix-preview/{}:\n{}", relative.display(), difference(&expected, actual))),
-                None => differences.push(format!("fix-preview/{}: expected fix, input has no fixes", relative.display())),
-                _ => {}
-            }
-        }
-        Ok(differences)
+        differences
     })();
     if let Some(bytes) = original_cache { fs::write(marker, bytes).map_err(|e| format!("restore cache marker: {e}"))?; }
     result
+}
+
+/// What a scenario's outputs get wrong against its `expected/`.
+fn differences(root: &Path, actual: &Actual, dirtied: &BTreeMap<PathBuf, String>) -> Result<Vec<String>, String> {
+    let expected = root.join("expected");
+    let diagnostics = fs::read_to_string(expected.join("diagnostics")).map_err(|e| format!("expected/diagnostics: {e}"))?;
+    let mut differences = Vec::new();
+    let text = diagnostic_text(&actual.diagnostics);
+    if !same_lines(&diagnostics, &text) { differences.push(format!("diagnostics:\n{}", difference(&diagnostics, &text))); }
+    if expected.join("fixed-diagnostics").is_file() {
+        let diagnostics = fs::read_to_string(expected.join("fixed-diagnostics")).map_err(|e| e.to_string())?;
+        let text = diagnostic_text(&actual.fixed_diagnostics);
+        if !same_lines(&diagnostics, &text) { differences.push(format!("fixed-diagnostics:\n{}", difference(&diagnostics, &text))); }
+    }
+    let text = diagnostic_text(&actual.suggestions);
+    match fs::read_to_string(expected.join("suggestions")) {
+        Ok(suggestions) if !same_lines(&suggestions, &text) => differences.push(format!("suggestions:\n{}", difference(&suggestions, &text))),
+        Err(_) if !actual.suggestions.is_empty() => differences.push("suggestions: offered, but expected/suggestions is missing".into()),
+        _ => {}
+    }
+    let fixed_root = expected.join("fixed");
+    let mut fixed = BTreeMap::new();
+    fixed_outputs(&fixed_root, &fixed_root, &mut fixed)?;
+    for relative in fixed.keys().chain(actual.fixed.keys()).collect::<BTreeSet<_>>() {
+        match (fixed.get(relative), actual.fixed.get(relative)) {
+            (Some(expected), Some(actual)) if expected != actual =>
+                differences.push(format!("fixed/{}:\n{}", relative.display(), difference(expected, actual))),
+            (Some(_), None) => differences.push(format!("fixed/{}: expected change, input unchanged", relative.display())),
+            (None, Some(_)) => differences.push(format!("fixed/{}: missing expected change", relative.display())),
+            _ => {}
+        }
+    }
+    let dirtied_root = expected.join("dirtied");
+    let mut expected_dirtied = BTreeMap::new();
+    fixed_outputs(&dirtied_root, &dirtied_root, &mut expected_dirtied)?;
+    for name in expected_dirtied.keys().chain(dirtied.keys()).collect::<BTreeSet<_>>() {
+        let (wanted, got) = (expected_dirtied.get(name).map_or("", String::as_str), dirtied.get(name).map_or("", String::as_str));
+        if !dirtied.contains_key(name) {
+            differences.push(format!("dirtied/{}: no edits/{0}", name.display()));
+        } else if !expected_dirtied.contains_key(name) {
+            differences.push(format!("dirtied/{}: missing expected", name.display()));
+        } else if !same_lines(wanted, got) {
+            differences.push(format!("dirtied/{}:\n{}", name.display(), difference(wanted, got)));
+        }
+    }
+    let preview_root = expected.join("fix-preview");
+    let mut previews = BTreeMap::new();
+    fixed_outputs(&preview_root, &preview_root, &mut previews)?;
+    for (relative, expected) in previews {
+        match actual.fix_preview.get(&relative) {
+            Some(actual) if expected != *actual =>
+                differences.push(format!("fix-preview/{}:\n{}", relative.display(), difference(&expected, actual))),
+            None => differences.push(format!("fix-preview/{}: expected fix, input has no fixes", relative.display())),
+            _ => {}
+        }
+    }
+    Ok(differences)
 }
 
 /// One scenario's verdict and everything it printed.
@@ -477,6 +494,7 @@ mod tests {
         fs::create_dir(project.0.join("expected/fix-preview")).unwrap();
         fs::write(project.0.join("expected/fix-preview/input.t"), "wrong").unwrap();
         assert!(!scenario(&mut output, &project.0, false).unwrap().is_empty(), "preview mismatch was ignored");
+        assert!(project.0.join("actual/diagnostics").is_file(), "a failing scenario keeps its actual outputs");
         fs::write(project.0.join("expected/fix-preview/stale.t"), "stale").unwrap();
         assert!(scenario(&mut output, &project.0, true).unwrap().is_empty());
         assert_eq!(fs::read_to_string(project.0.join("expected/fix-preview/input.t")).unwrap(), "b");
@@ -494,7 +512,7 @@ mod tests {
             fix_preview: BTreeMap::from([(PathBuf::from("input.t"), "b".into()), (PathBuf::from("same.t"), "z".into())]),
             ..Actual::default()
         };
-        write_actual(&project.0, &actual, true).unwrap();
+        write_actual(&project.0, &actual, &BTreeMap::new(), true).unwrap();
         assert_eq!(fs::read_to_string(project.0.join("expected/fix-preview/input.t")).unwrap(), "b");
         assert!(!project.0.join("expected/fix-preview/same.t").exists(), "bless added an unrelated redundant preview");
     }
@@ -521,8 +539,10 @@ mod tests {
         fs::remove_file(bad.join("expected/diagnostics")).unwrap();
         let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
         let mut output = Output { cwd: &project.0, stdout: &mut stdout, stderr: &mut stderr };
+        fs::create_dir(good.join("actual")).unwrap();
         assert_eq!(run(&mut output, &[], false, 2), 1);
-        assert!(good.join("actual/diagnostics").is_file());
+        assert!(bad.join("actual/diagnostics").is_file());
+        assert!(!good.join("actual").exists(), "the run stopped at the first failure");
         fs::write(bad.join("expected/diagnostics"), "").unwrap();
         assert_eq!(run(&mut output, &[], false, 1), 0);
         fs::remove_file(good.join("expected/diagnostics")).unwrap();
