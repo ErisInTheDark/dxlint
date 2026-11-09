@@ -26,7 +26,7 @@ Rust linter; rules in `.dx` (docs/advanced.md). Binary `dxlint`.
 - `crates/dx-tree`: `Tree`, node types and path steps, `footprint` (recorded reads), `line_index`
 - `crates/dx-ir`: compiled expression and VM value types (`CExpr`, `VExpr`, `Value`, `V`, record cells, builtin/function metadata); no evaluation
 - `crates/dx-grammar`: layers per language, `parse.rs` builds trees
-- `src/expr`: rule expressions; functions registry in `functions.rs`
+- `crates/dx-runtime` (`expr`, `vm`, `language_options`): rule expressions (`expr/`; functions registry in `expr/functions.rs`), the lowered VM (`vm/`) and file-scoped language settings; owns transform piece marks and fix placeholders
 - `src/engine`: linter, fixes, suppressions, `.dxcache` (`cache.rs`), symbol index; end-to-end tests in `engine/tests.rs`
 - `crates/dx-grammar/src/frontend.rs`: the `Frontend` trait, the engine's only view of a front end (kinds/fields, parse, per-file tokens and names)
 - `crates/dx-grammar/src/syntax`: declared parsers (`parser x in lang`, `extend parser`): compile to a program, run by `run/descend.rs` (valid input) and `run/execute.rs` (diagnosing, deep nesting); `frontend.rs` makes one a language's front end (`native x`). `std/ts/grammar.dx` is TypeScript; parse bench `scratch/tools/zbench.ps1`

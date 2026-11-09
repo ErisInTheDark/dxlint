@@ -11,17 +11,19 @@
 pub mod cli;
 pub use dx_config as config;
 pub mod engine;
-pub mod expr;
+pub use dx_runtime::expr;
 pub use dx_grammar as grammar;
 #[cfg(test)]
 mod grammar_tests;
+#[cfg(test)]
+mod runtime_tests;
 pub mod lsp;
 pub use dx_core::{alloc, fx_hash, levers, parts, path_globs, reads, sampler};
 pub use dx_tree::{footprint, line_index};
 pub use dx_pattern as pattern;
 #[cfg(feature = "work")]
 pub use dx_core::work;
-pub(crate) mod vm;
+pub(crate) use dx_runtime::vm;
 
 /// The test binary allocates like the shipped one (`main.rs`): `npm run
 /// check` runs fixtures and self-lint from it.

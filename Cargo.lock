@@ -199,6 +199,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "dx-runtime"
+version = "0.1.0"
+dependencies = [
+ "dx-config",
+ "dx-core",
+ "dx-grammar",
+ "dx-ir",
+ "dx-pattern",
+ "dx-tree",
+ "regex-automata",
+ "regex-syntax",
+ "serde_json",
+]
+
+[[package]]
 name = "dx-tree"
 version = "0.1.0"
 dependencies = [
@@ -219,6 +234,7 @@ dependencies = [
  "dx-grammar",
  "dx-ir",
  "dx-pattern",
+ "dx-runtime",
  "dx-tree",
  "globset",
  "ignore",

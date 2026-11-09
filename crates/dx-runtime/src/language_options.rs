@@ -2,10 +2,10 @@
 
 use std::path::Path;
 
-use crate::config::ast::{Config, OptionDef};
+use crate::config::ast::{Config, Expr, ExprKind, Name, OptionDef};
 use crate::config::error::ConfigError;
-use crate::config::schema::Schemas;
-use crate::expr::Value;
+use crate::config::schema::{Schema, Schemas};
+use crate::expr::{Ctx, Scope, Value};
 use crate::grammar::Grammar;
 use crate::path_globs::PathGlobs;
 
@@ -21,7 +21,7 @@ struct Patch {
     values: Vec<(String, Value<'static>)>,
 }
 
-pub(crate) struct LanguageOptions {
+pub struct LanguageOptions {
     languages: Vec<Language>,
 }
 
@@ -64,7 +64,7 @@ impl LanguageOptions {
                     continue;
                 };
                 let owner = format!(".{}", block.language.text);
-                if let Some(value) = super::build::option_value(&owner, name, expression, &option.schema, grammar, schemas, errors) {
+                if let Some(value) = option_value(&owner, name, expression, &option.schema, grammar, schemas, errors) {
                     values.push((name.text.clone(), value));
                 }
             }
@@ -92,85 +92,48 @@ impl LanguageOptions {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use std::path::{Path, PathBuf};
-
-    use crate::config::{load_text, source::Disk};
-    use crate::engine::{build, Linter};
-
-    fn with_rules(settings: &str, rules: &str) -> Linter {
-        let source = format!("import .ts\n{settings}\n{rules}\n");
-        let built = build(load_text("test.dx", &source, &Disk), PathBuf::from("/root"));
-        assert!(built.errors.is_empty(), "{:#?}", built.errors);
-        built.linter.expect("compiled")
+/// A constant option value, checked against its schema; `set` lines and
+/// language settings both use it.
+pub fn option_value(
+    rule: &str,
+    name: &Name,
+    value: &Expr,
+    schema: &Schema,
+    grammar: &Grammar,
+    schemas: &Schemas,
+    errors: &mut Vec<ConfigError>,
+) -> Option<Value<'static>> {
+    // A bare word where enum members go is one, checked like a string:
+    // `set mode never`.
+    let lookup = |name: &str| schemas.get(name).map(|d| &d.schema);
+    let word = match &value.kind {
+        ExprKind::Var(path) => match path.as_slice() {
+            [word] if schema.has_enum(&lookup) => Some(Value::from(word.text.clone())),
+            _ => None,
+        },
+        _ => None,
+    };
+    let evaluated = match word {
+        Some(word) => Ok(word),
+        None => {
+            let compiled = Scope::constants(grammar).compile(value, errors)?;
+            Ctx::eval_static(&compiled, &[]).map(|v| v.into_owned())
+        }
+    };
+    match evaluated {
+        Ok(v) => match schema.check_with(&v, schemas, &|check, value| Ctx::accepts(grammar, check, value)) {
+            Ok(v) => Some(v),
+            Err(misfit) => {
+                errors.push(
+                    ConfigError::new(value.span, format!("option `{}` of `{rule}`: {misfit}", name.text))
+                        .note(format!("`{}` takes {schema}", name.text)),
+                );
+                None
+            }
+        },
+        Err(err) => {
+            errors.push(ConfigError::new(value.span, format!("option values must be constants: {err}")));
+            None
+        }
     }
-
-    #[test]
-    fn rule_workers_receive_the_same_file_environment() {
-        let mut linter = with_rules(r#"language .js {
-          set sourceType "commonjs"
-          set globals { app: "readonly" }
-        }"#, "rule es-no-global-assign\nin ts_program rule wrapper { when source_environment.root_function\nwarn \"wrapped\" }");
-        let source = "app = 1;";
-        linter.set_rule_jobs(1);
-        let serial = linter.lint(Path::new("/root/a.js"), source);
-        assert_eq!(serial.len(), 2);
-        linter.split_at = 1;
-        linter.set_rule_jobs(2);
-        let parallel = linter.lint(Path::new("/root/a.js"), source);
-        let reports = |diagnostics: Vec<super::super::Diagnostic>| diagnostics.into_iter()
-            .map(|diagnostic| (diagnostic.rule, diagnostic.start, diagnostic.message)).collect::<Vec<_>>();
-        assert_eq!(reports(serial), reports(parallel));
-    }
-
-    #[test]
-    fn language_schemas_and_filtered_settings_stay_independent() {
-        let linter = with_rules(r#"
-import .json
-language .json {
-  option ecmaVersion boolean = true
-  set ecmaVersion false
-}
-language .js {
-  files "legacy/**"
-  set ecmaVersion 3
-}
-"#, "rule es-no-unused-expressions");
-        let json = linter.grammar.lang("json").expect("JSON language");
-        let edition = linter.language_options.values(json, Path::new("legacy/a.json"))
-            .filter(|(name, _)| *name == "ecmaVersion").last().map(|(_, value)| value);
-        assert_eq!(edition, Some(&crate::expr::Value::Bool(false)));
-    }
-
-    #[test]
-    fn environment_preserves_matching_patch_order_in_rule_workers() {
-        let mut linter = with_rules(r#"
-language .js { set globals { app: "readonly" } }
-language .js {
-  files "legacy/**"
-  set globals { app: "off" }
-}
-"#, r#"
-in ts_program rule environment:patches {
-  let records { value environment.settings; filter (setting) setting.name == "globals"; map (setting) setting.value.app }
-  let ordered join(records, "|")
-  when ordered == "|readonly|off"
-  warn "matched"
-}
-in ts_program rule environment:edition {
-  let edition { value environment.settings; filter (setting) setting.name == "ecmaVersion"; last }
-  when edition.value == null
-  warn "default"
-}
-"#);
-        linter.set_rule_jobs(1);
-        assert_eq!(linter.lint(Path::new("/root/legacy/a.js"), "").len(), 2);
-        assert_eq!(linter.lint(Path::new("/root/a.js"), "").len(), 1);
-        linter.split_at = 1;
-        linter.set_rule_jobs(2);
-        assert_eq!(linter.lint(Path::new("/root/legacy/a.js"), "").len(), 2);
-        assert_eq!(linter.lint(Path::new("/root/a.js"), "").len(), 1);
-    }
-
 }

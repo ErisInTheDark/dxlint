@@ -11,7 +11,7 @@ pub mod diagnostic;
 mod fix;
 pub use dx_grammar::frontend;
 mod inspect;
-pub(crate) mod language_options;
+pub(crate) use dx_runtime::language_options;
 pub mod transform;
 mod message;
 mod module_graph;
@@ -250,7 +250,7 @@ pub struct Compiled {
     /// What asks units for tokens: helpers, layers or name items.
     unit_token_reasons: Vec<String>,
     pub grammar: Grammar,
-    language_options: language_options::LanguageOptions,
+    pub(crate) language_options: language_options::LanguageOptions,
     pub rules: Vec<Rule>,
     pub inert: Vec<InertRule>,
     ignores: PathGlobs,

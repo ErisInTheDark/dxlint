@@ -47,7 +47,7 @@ pub struct FileVm {
 }
 
 /// What reading wall `attr` reads.
-pub(crate) fn wall_atom(attr: u16) -> footprint::Atom {
+pub fn wall_atom(attr: u16) -> footprint::Atom {
     footprint::Atom::table(footprint::tables::WALLS, u32::from(attr))
 }
 
@@ -131,7 +131,7 @@ pub enum Begin {
 }
 
 impl FileVm {
-    pub(crate) fn sync_revision(&self, revision: u64, allow_reset: bool) -> bool {
+    pub fn sync_revision(&self, revision: u64, allow_reset: bool) -> bool {
         match self.revision.get() {
             Some(current) if current == revision => return true,
             Some(_) if !allow_reset => return false,
@@ -253,7 +253,7 @@ impl FileVm {
     }
 
     /// Makes `root`'s attributes walls (`None`: none, outside editors).
-    pub(crate) fn set_firewall(&self, root: Option<u32>) {
+    pub fn set_firewall(&self, root: Option<u32>) {
         self.firewall.set(root);
     }
 
@@ -274,7 +274,7 @@ impl FileVm {
     }
 
     /// Each wall computed so far, with its own reads.
-    pub(crate) fn walls(&self) -> Vec<(u16, Footprint)> {
+    pub fn walls(&self) -> Vec<(u16, Footprint)> {
         self.walls.borrow().iter().map(|(&attr, read)| (attr, read.clone())).collect()
     }
 

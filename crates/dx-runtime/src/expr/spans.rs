@@ -1,7 +1,7 @@
 //! File-local interval queries over a selector's sorted syntax nodes.
 
 use super::{Ctx, NodeSel};
-use crate::engine::Query;
+use dx_core::profile::Query;
 
 pub(super) struct LayerSpans {
     nodes: Vec<(u32, u32, u32)>,
@@ -165,7 +165,7 @@ impl<'a> Ctx<'a> {
 
     /// `descendants(sel)` under this node.
     pub(crate) fn descendant_ids<'s>(&'s self, node: u32, sel: &NodeSel) -> impl Iterator<Item = u32> + 's {
-        crate::engine::Profile::iter_query(self.profile, Query::Descendants, || sel.descendants(self.tree, node))
+        dx_core::profile::Profile::iter_query(self.profile, Query::Descendants, || sel.descendants(self.tree, node))
     }
 
 }

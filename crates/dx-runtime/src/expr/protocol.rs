@@ -9,7 +9,7 @@ use super::Value;
 
 pub trait Host {
     /// `text` of `path` as its config's transforms map it: `{ text, pieces,
-    /// problems }` ([`crate::engine::transform::Mapped`]).
+    /// problems }` (the engine's `Mapped`).
     fn map_file(&mut self, path: &str, text: &str) -> Result<Value<'static>, String>;
     /// What a mapping depends on besides file text, for the config `path`
     /// (a file or directory) falls under.

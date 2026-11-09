@@ -4,16 +4,17 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use super::language_options::option_value;
 use super::scopes::{Change, Scoped, Scopes, Setting};
 use super::symbols::Symbols;
 use super::fix::{Clause, FixPlan, PartPlan};
 use super::{Compiled, InertRule, Linter, NodeSelection, OptionSlot, Rule, Target};
-use crate::config::ast::{Config, Dropped, Expr, ExprKind, FixDef, Name, Parent, RuleDef, Severity, Target as AstTarget, Use};
+use crate::config::ast::{Config, Dropped, Expr, FixDef, Name, Parent, RuleDef, Severity, Target as AstTarget, Use};
 use crate::config::schema::{Schema, Schemas};
 use crate::config::error::ConfigError;
 use crate::config::source::SourceMap;
 use crate::config::Loaded;
-use crate::expr::{Attr, AttrNames, Attributes, CExpr, Ctx, Scope, Value};
+use crate::expr::{Attr, AttrNames, Attributes, CExpr, Scope, Value};
 use crate::grammar::Grammar;
 use crate::path_globs::{wildcard, PathGlobs};
 use crate::pattern::Pat;
@@ -550,50 +551,6 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
 fn commands(config: &Config, root: PathBuf) -> std::sync::Arc<super::commands::Commands> {
     std::sync::Arc::new(super::commands::Commands::new(root,
         config.commands.iter().map(|command| (command.name.text.clone(), super::commands::Declared { argv: command.argv.clone(), batch: command.batch }))))
-}
-
-pub(super) fn option_value(
-    rule: &str,
-    name: &Name,
-    value: &Expr,
-    schema: &Schema,
-    grammar: &Grammar,
-    schemas: &Schemas,
-    errors: &mut Vec<ConfigError>,
-) -> Option<Value<'static>> {
-    // A bare word where enum members go is one, checked like a string:
-    // `set mode never`.
-    let lookup = |name: &str| schemas.get(name).map(|d| &d.schema);
-    let word = match &value.kind {
-        ExprKind::Var(path) => match path.as_slice() {
-            [word] if schema.has_enum(&lookup) => Some(Value::from(word.text.clone())),
-            _ => None,
-        },
-        _ => None,
-    };
-    let evaluated = match word {
-        Some(word) => Ok(word),
-        None => {
-            let compiled = Scope::constants(grammar).compile(value, errors)?;
-            Ctx::eval_static(&compiled, &[]).map(|v| v.into_owned())
-        }
-    };
-    match evaluated {
-        Ok(v) => match schema.check_with(&v, schemas, &|check, value| Ctx::accepts(grammar, check, value)) {
-            Ok(v) => Some(v),
-            Err(misfit) => {
-                errors.push(
-                    ConfigError::new(value.span, format!("option `{}` of `{rule}`: {misfit}", name.text))
-                        .note(format!("`{}` takes {schema}", name.text)),
-                );
-                None
-            }
-        },
-        Err(err) => {
-            errors.push(ConfigError::new(value.span, format!("option values must be constants: {err}")));
-            None
-        }
-    }
 }
 
 #[cfg(test)]

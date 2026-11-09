@@ -11,7 +11,7 @@ name = "dxlint"
 path = "src/main.rs"
 
 [workspace]
-members = ["crates/dx-pattern", "crates/dx-core", "crates/dx-tree", "crates/dx-ir", "crates/dx-config", "crates/dx-grammar"]
+members = ["crates/dx-pattern", "crates/dx-core", "crates/dx-tree", "crates/dx-ir", "crates/dx-config", "crates/dx-grammar", "crates/dx-runtime"]
 
 [dependencies]
 dx-pattern = { path = "crates/dx-pattern" }
@@ -20,6 +20,7 @@ dx-tree = { path = "crates/dx-tree" }
 dx-ir = { path = "crates/dx-ir" }
 dx-config = { path = "crates/dx-config" }
 dx-grammar = { path = "crates/dx-grammar" }
+dx-runtime = { path = "crates/dx-runtime" }
 memchr = "2.7"
 regex-automata = "0.4"
 regex-syntax = "0.8"
@@ -33,7 +34,7 @@ serde_json = "1.0"
 
 [features]
 # Measuring builds: exact work counts and a census of repeated facts (crates/dx-core/src/work.rs).
-work = ["dx-core/work", "dx-grammar/work"]
+work = ["dx-core/work", "dx-grammar/work", "dx-runtime/work"]
 
 [profile.dev]
 opt-level = 1

@@ -154,12 +154,12 @@ impl<'a> Ctx<'a> {
 
     /// Whether this tree's names are being resolved right now (their
     /// conditions are running), so they cannot be read yet.
-    pub(crate) fn names_resolving(&self) -> bool {
+    pub fn names_resolving(&self) -> bool {
         self.memo.resolving_names.get()
     }
 
     /// This tree's names, resolved on first use.
-    pub(crate) fn names(&self) -> &'a crate::grammar::names::Resolved {
+    pub fn names(&self) -> &'a crate::grammar::names::Resolved {
         assert!(!self.memo.resolving_names.get(), "name conditions cannot read resolved names");
         let cached = self.memo.names.get_or_init(|| {
             let resolve = || {
@@ -218,7 +218,7 @@ impl<'a> Ctx<'a> {
                 };
                 // Readers record the entries they read, not the whole build.
                 let complete = crate::footprint::quiet(|| match self.world {
-                    Some(world) => world.complete_attribute(run).known().is_some(),
+                    Some(world) => world.complete_unit(&mut run),
                     None => { run(); true }
                 });
                 let mut resolved = resolved.expect("name resolution ran");
@@ -235,21 +235,21 @@ impl<'a> Ctx<'a> {
                 Some(cache) => match cache.get() {
                     Some(cached) => cached.clone(),
                     None => {
-                        let answer = crate::engine::reads::Cached::compute(resolve);
+                        let answer = crate::reads::Cached::compute(resolve);
                         if answer.value.complete {
                             let _ = cache.set(answer.clone());
                             cache.get().expect("completed names").clone()
                         } else { answer }
                     }
                 },
-                None => crate::engine::reads::Cached::compute(resolve),
+                None => crate::reads::Cached::compute(resolve),
             }
         });
         cached.as_ref()
     }
 
     /// The tree's native facts.
-    pub(crate) fn native_facts(&self) -> Option<&'a (dyn crate::engine::frontend::Native + 'a)> {
+    pub fn native_facts(&self) -> Option<&'a (dyn crate::grammar::frontend::Native + 'a)> {
         self.native
     }
 }

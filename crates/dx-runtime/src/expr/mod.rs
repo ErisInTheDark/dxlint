@@ -3,13 +3,14 @@
 
 mod attributes;
 mod builtins;
-mod descendants;
 pub mod case;
 pub mod facts;
 pub mod functions;
+pub mod mapped;
 pub mod pipeline;
+pub mod placeholder;
 pub mod queries;
-pub(crate) mod fold;
+pub mod fold;
 pub mod indent;
 mod lookaround;
 pub mod protocol;
@@ -18,6 +19,9 @@ pub mod text;
 pub(crate) mod re;
 mod spans;
 mod static_eval;
+pub mod world;
+
+pub use world::TypeWorld;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -77,7 +81,7 @@ pub fn is_builtin_call(name: &str) -> bool {
 
 /// What [`Grammar::build`] needs from this module: builtin names and
 /// constant folding of `.dx` settings.
-pub(crate) fn build_env() -> crate::grammar::BuildEnv<'static> {
+pub fn build_env() -> crate::grammar::BuildEnv<'static> {
     fn constant(grammar: &Grammar, expr: &Expr, errors: &mut Vec<ConfigError>) -> Result<Value<'static>, Option<String>> {
         let compiled = Scope::constants(grammar).compile(expr, errors).ok_or(None)?;
         Ctx::eval_static(&compiled, &[]).map(|value| value.into_owned()).map_err(Some)
@@ -120,28 +124,28 @@ pub struct AttrMemo<'a> {
     /// Indentation queries shared only within the active rule invocation.
     indent_hits: RefCell<FxHashMap<u32, Option<IndentHit>>>,
     /// The tree's names resolved (`scope_declaration`), on first read.
-    names: std::cell::OnceCell<crate::engine::reads::Cached<std::sync::Arc<crate::grammar::names::Resolved>>>,
+    names: std::cell::OnceCell<crate::reads::Cached<std::sync::Arc<crate::grammar::names::Resolved>>>,
     /// Names are being resolved: native reads meanwhile get no names.
     resolving_names: std::cell::Cell<bool>,
     /// An editor's file: the names of its last lint, whose scope numbers
     /// these keep ([`crate::grammar::names::Resolved::renumber_scopes`]).
-    pub(crate) previous_names: RefCell<Option<std::sync::Arc<crate::grammar::names::Resolved>>>,
+    pub previous_names: RefCell<Option<std::sync::Arc<crate::grammar::names::Resolved>>>,
     /// An editor's file: name conditions' answers by (node, condition),
     /// with what each read; the last lint's that the edit left standing.
-    pub(crate) name_conditions: RefCell<NameConditions>,
+    pub name_conditions: RefCell<NameConditions>,
 }
 
 /// Name conditions' answers by (node, condition), with what each read.
-pub(crate) type NameConditions = FxHashMap<(u32, u32), (bool, crate::footprint::Footprint)>;
+pub type NameConditions = FxHashMap<(u32, u32), (bool, crate::footprint::Footprint)>;
 
 impl AttrMemo<'_> {
     /// The VM's cells for the file.
-    pub(crate) fn file_vm(&self) -> &crate::vm::FileVm {
+    pub fn file_vm(&self) -> &crate::vm::FileVm {
         &self.vm
     }
 
     /// The tree's names, when resolved.
-    pub(crate) fn names_resolved(&self) -> Option<std::sync::Arc<crate::grammar::names::Resolved>> {
+    pub fn names_resolved(&self) -> Option<std::sync::Arc<crate::grammar::names::Resolved>> {
         self.names.get().map(|cached| cached.value.clone())
     }
 
@@ -163,7 +167,7 @@ impl AttrMemo<'_> {
 
 /// The `descendants`/`overlapping`/`containing` selection: `kinds` with their
 /// specialisations, and the field to read.
-pub(crate) fn selection(grammar: &Grammar, kinds: &[u32], field: Option<u16>) -> NodeSel {
+pub fn selection(grammar: &Grammar, kinds: &[u32], field: Option<u16>) -> NodeSel {
     let mut matchers: Vec<u32> = kinds.iter().flat_map(|&kind| grammar.specialisations(kind).iter().copied()).collect();
     matchers.sort_unstable();
     matchers.dedup();
@@ -1352,7 +1356,7 @@ pub struct Ctx<'a> {
     pub file: &'a str,
     pub file_id: u32,
     pub options: &'a [Value<'static>],
-    pub(crate) language_options: Option<&'a crate::engine::language_options::LanguageOptions>,
+    pub language_options: Option<&'a crate::language_options::LanguageOptions>,
     /// Lines whose indentation a fix already changes: line -> its leading
     /// whitespace after the fix. Builtins reading lines above the node see
     /// these, so lines inside a mis-indented block are measured from where
@@ -1364,14 +1368,14 @@ pub struct Ctx<'a> {
     /// layers it targets (empty: not only whole layers).
     pub locals: Option<(u32, &'a [crate::vm::VExpr], &'a [u32])>,
     /// Facts of the native front end, when `tree` is a native tree.
-    pub native: Option<&'a (dyn crate::engine::frontend::Native + 'a)>,
+    pub native: Option<&'a (dyn crate::grammar::frontend::Native + 'a)>,
     /// The applied rule's `indent` lines (`indented`, `indent_level`, ...).
     pub indents: &'a IndentPlan,
     pub indent_reset: Option<&'a CExpr>,
     /// `--profile`: where fact time is added up.
-    pub profile: Option<&'a crate::engine::Profile>,
-    /// The lint's files behind type questions ([`crate::engine::world`]).
-    pub world: Option<&'a crate::engine::world::LintWorld<'a>>,
+    pub profile: Option<&'a dx_core::profile::Profile>,
+    /// The lint's files behind type questions ([`TypeWorld`]).
+    pub world: Option<&'a dyn TypeWorld<'a>>,
 }
 
 impl<'a> Ctx<'a> {
@@ -1615,95 +1619,4 @@ pub fn binary<'s>(op: BinOp, a: Value<'s>, b: Value<'s>) -> Result<Value<'s>, St
             Value::Num(a.num()? % d)
         }
     })
-}
-
-#[cfg(test)]
-mod evaluation_tests {
-    use super::{CExpr, Ctx, Value};
-    use crate::config::ast::BinOp;
-
-    #[test]
-    fn nodes_keys_read_records_but_project_syntax_fields() {
-        let linter = crate::engine::tests::linter(r#"
-            fn entries(value) = value.nodes
-            fn children(value) = value.element.nodes
-            in .t match item /[ab]/
-            in .t match bag "[" (element:item)* "]" {
-                rule record warn "record" {
-                    let result { nodes: [1, 2] }
-                    when (len(entries(result)) == 2) && (len(result.nodes) == 2)
-                }
-                rule nodes warn "nodes" {
-                    when (len(element.nodes) == 2) && all(element.nodes, n => n is item)
-                }
-                rule broad warn "broad" {
-                    let projected children(node)
-                    when (len(projected) == 2) && any([node], n => len(n.element.nodes) == 2)
-                }
-                rule absent warn "absent" { when len(element.nodes) == 0 }
-            }
-        "#);
-        let reports = crate::engine::tests::lint(&linter, "[ab] []");
-        assert_eq!(reports.iter().filter(|report| report.rule == "record").count(), 2);
-        assert_eq!(reports.iter().filter(|report| report.rule == "nodes").count(), 1, "{reports:?}");
-        assert_eq!(reports.iter().filter(|report| report.rule == "broad").count(), 1);
-        assert_eq!(reports.iter().filter(|report| report.rule == "absent").count(), 1);
-    }
-
-    #[test]
-    fn node_properties_prefer_syntax_fields_but_keep_attributes_on_other_nodes() {
-        let linter = crate::engine::tests::linter(r#"
-            fn declarations(value) = value.declaration.nodes
-            in .t match item /[ab]/
-            in .t match bag "[" (declaration:item)* "]"
-            in .t match marker "!"
-            in item, bag, marker let declaration "attribute"
-            in bag rule field {
-                when len(declarations(node)) == 2 && all(declarations(node), child => child is item)
-                warn "field"
-            }
-            in marker rule attribute {
-                when node.declaration == "attribute"
-                warn "attribute"
-            }
-            in item rule parent_field {
-                when len(parent.declaration.nodes) == 2 && len(declarations(node.parent)) == 2
-                warn "parent"
-            }
-        "#);
-        let reports = crate::engine::tests::lint(&linter, "[ab] !");
-        assert_eq!((
-            reports.iter().filter(|report| report.rule == "field").count(),
-            reports.iter().filter(|report| report.rule == "attribute").count(),
-            reports.iter().filter(|report| report.rule == "parent_field").count(),
-        ), (1, 1, 2));
-    }
-
-    #[test]
-    fn pipeline_labels_do_not_leak_or_resolve_before_their_step() {
-        for body in [
-            "let result { value 1; stored: then (value) value }\nwhen stored == 1",
-            "let result { value future; future: then (value) value }",
-            "let result { value stored: 1; stored: then (value) value }",
-        ] {
-            assert!(!crate::engine::tests::errors(&format!("in .t match word /[a-z]+/ {{ rule scoped {{ {body}\nwarn \"invalid\" }} }}")).is_empty());
-        }
-    }
-
-    #[test]
-    fn static_booleans_match_runtime_truth_tables_and_skip_dead_errors() {
-        let boolean = |value| Box::new(CExpr::Const(Value::Bool(value)));
-        for a in [false, true] {
-            for b in [false, true] {
-                for (op, expected) in [(BinOp::And, a && b), (BinOp::Or, a || b)] {
-                    let result = Ctx::eval_static(&CExpr::Binary(op, boolean(a), boolean(b)), &[]).unwrap();
-                    assert_eq!(result, Value::Bool(expected));
-                }
-            }
-        }
-        for (op, first) in [(BinOp::And, false), (BinOp::Or, true)] {
-            let failure = CExpr::Binary(BinOp::Rem, Box::new(CExpr::Const(Value::Num(1.0))), Box::new(CExpr::Const(Value::Num(0.0))));
-            assert_eq!(Ctx::eval_static(&CExpr::Binary(op, boolean(first), Box::new(failure)), &[]).unwrap(), Value::Bool(first));
-        }
-    }
 }

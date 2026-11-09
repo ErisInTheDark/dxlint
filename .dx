@@ -48,7 +48,7 @@ in rs_code match rs_filesystem /\bstd::fs\b|\bfs::\w+|\.(?:is_file|is_dir|exists
   rule native-reads-through-door error "native code reads the filesystem through `engine/reads.rs`, which records the read for the cache" {
     # Lint-time code; the CLI, server, config loading and the cache itself
     # read around a lint, not inside one.
-    files "src/engine/**" "src/expr/**" "src/vm/**" "crates/**"
+    files "src/engine/**" "crates/**"
     when rs_test_module == null
     ignore "crates/dx-core/src/reads.rs" "crates/dx-core/src/sampler.rs" "crates/dx-config/**" "src/engine/cache.rs" "tests.rs" "tests/**"
   }

@@ -15,9 +15,9 @@ pub struct Attr {
 }
 
 pub struct Attributes {
-    pub(crate) lowering_errors: Vec<(String, String)>,
-    pub(crate) vm_stats: bool,
-    pub(crate) values: vm::Values,
+    pub lowering_errors: Vec<(String, String)>,
+    pub vm_stats: bool,
+    pub values: vm::Values,
     attrs: Vec<CompiledAttr>,
     /// Per matcher: how many fields its VM records hold
     /// ([`Attributes::shape_records`]).
@@ -134,7 +134,7 @@ impl Attributes {
         Self { lowering_errors, vm_stats: stats, values, attrs, layout }
     }
 
-    pub(crate) fn report_vm_stats(&self, memo: &AttrMemo<'_>, tree: &crate::grammar::Tree, file: &str) {
+    pub fn report_vm_stats(&self, memo: &AttrMemo<'_>, tree: &crate::grammar::Tree, file: &str) {
         if !self.vm_stats { return; }
         memo.vm.report_stats(tree, &self.layout, file);
         let mut owners = crate::fx_hash::FxHashMap::default();
@@ -196,7 +196,7 @@ impl Attributes {
 impl Attributes {
     /// Attribute `attr`'s name, for the work census.
     #[cfg(feature = "work")]
-    pub(crate) fn name_of(&self, attr: u16) -> &str {
+    pub fn name_of(&self, attr: u16) -> &str {
         self.attrs.get(usize::from(attr)).map_or("?", |compiled| &compiled.name)
     }
 }
@@ -486,7 +486,7 @@ impl vm::Host for Ctx<'_> {
         Some(self.position_at(offset))
     }
 
-    fn tokens(&self) -> Option<std::rc::Rc<crate::engine::frontend::Tokens>> {
+    fn tokens(&self) -> Option<std::rc::Rc<crate::grammar::frontend::Tokens>> {
         self.native?.tokens()
     }
 
@@ -542,7 +542,7 @@ impl vm::Host for Ctx<'_> {
         self.lang
     }
 
-    fn profile(&self) -> Option<&crate::engine::Profile> {
+    fn profile(&self) -> Option<&dx_core::profile::Profile> {
         self.profile
     }
 
@@ -615,9 +615,9 @@ impl<'a> Ctx<'a> {
             Lowered::Semantic(body) => match self.world.filter(|world| world.cache_attribute(&self.memo.vm)) {
                 Some(world) => (body, Some(world)),
                 None => return self.memo.vm.uncached(node, attr, || if let Some(world) = self.world { world.note_cycle() }, || {
-                    let compute = || vm::eval(self, node, body)?.persist(&self.memo.vm);
+                    let mut compute = || vm::eval(self, node, body)?.persist(&self.memo.vm);
                     match self.world {
-                        Some(world) => world.semantic_attribute(self.file_id, node, attr, compute),
+                        Some(world) => world.semantic_attribute(self.file_id, node, attr, &mut compute),
                         None => compute(),
                     }
                 }),
@@ -647,7 +647,7 @@ impl<'a> Ctx<'a> {
                 evaluated
             };
             let answer = match world {
-                Some(world) => world.complete_attribute(run),
+                Some(world) => world.complete_value(&mut run),
                 None => Known::Yes(run()),
             };
             complete = matches!(answer, Known::Yes(_));

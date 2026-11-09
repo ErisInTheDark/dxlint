@@ -4,7 +4,7 @@
 
 use std::sync::LazyLock;
 
-use crate::engine::frontend::Native;
+use crate::grammar::frontend::Native;
 
 use super::Value;
 

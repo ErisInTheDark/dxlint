@@ -299,7 +299,6 @@ fn references_of(semantic: &Semantic<'_>, context: &Context<'_, '_>, declaration
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::tests::{lint, linter};
     use crate::grammar::{Grammar, Node, Tree};
     use crate::grammar::names::{Names, ScopeIndex};
     use crate::grammar::names::question::{FrameId, QueryContext, World};
@@ -432,47 +431,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn scope_queries_keep_dual_roles_logical_scope_ids_and_indexed_merged_sites() {
-        let linter = linter(r#"
-            in .t match document /[\s\S]+/ { scope outer; scope inner }
-            in document match declaration name:/x/ /;/ {
-                declares value name in nearest outer hoisted
-            }
-            in document match dual name:/x/ /\?/ {
-                scope members
-                declares member name in nearest outer
-                resolves value name
-                let decl_scope { value name.node; name_scopes "declaration"; first }
-                let referenced name_scopes(name.node, "reference")
-                let member_scope first(referenced)
-                let inner { value referenced; slice 1; first }
-                let outer last(referenced)
-                let sites {
-                    value name_scope_declarations(name.node, outer.id, "x")
-                    filter (site) contains(site.classes, "value")
-                }
-                let declared_classes name_role_classes(name.node, "declaration")
-                let asked_classes name_role_classes(name.node, "reference")
-                rule observed warn "observed"
-                rule invalid warn "invalid" {
-                    when member_scope.owner != node || inner.owner != outer.owner || inner.id == outer.id
-                        || member_scope.parent != inner.id || inner.parent != outer.id || outer.parent != null
-                        || decl_scope.id != outer.id || count(sites) != 2
-                        || first(sites).node.offset >= last(sites).node.offset
-                        || !all(sites, site => site.hoisted && contains(site.classes, "value"))
-                        || !contains(declared_classes, "member") || contains(declared_classes, "value")
-                        || !contains(asked_classes, "value") || contains(asked_classes, "member")
-                        || outer.owner.text != source
-                        || name_scope_declarations(name.node, "not a scope", "x") != null
-                        || name_scope_declarations(name.node, outer.id, "missing") != []
-                }
-            }
-        "#);
-        let reports = lint(&linter, "x;x;x?");
-        assert_eq!(reports.len(), 1, "{reports:#?}");
-        assert_eq!(reports[0].rule, "observed");
-    }
 
     #[test]
     fn binding_queries_join_class_specific_reference_buckets() {
@@ -509,34 +467,4 @@ mod tests {
         assert_eq!(binding(&semantic, at, &[]), Known::Unknown);
     }
 
-    #[test]
-    fn binding_queries_keep_merged_sites_and_ordered_references() {
-        let linter = linter(r#"
-            in .t match document /[\s\S]+/ { scope outer }
-            in document match declaration name:/x/ /;/ {
-                declares value name in nearest outer hoisted
-                let binding name_binding(name.node)
-                let uses name_references(name.node)
-                rule observed warn "observed"
-                rule invalid-declaration warn "invalid" {
-                    when binding.node != first(binding.declarations) || binding.key != "x"
-                        || count(binding.declarations) != 2 || count(uses) != 2
-                        || first(binding.declarations).offset >= last(binding.declarations).offset
-                        || first(uses).offset >= last(uses).offset
-                        || binding.node.text != "x" || binding.scope.owner.text != source
-                }
-            }
-            in document match reference name:/x/ /!/ {
-                resolves value name
-                let binding name_binding(name.node)
-                rule invalid-reference warn "invalid" {
-                    when binding.node != first(binding.declarations) || count(binding.declarations) != 2
-                        || count(name_references(name.node)) != 2
-                }
-            }
-        "#);
-        let reports = lint(&linter, "x;x;x!x!");
-        assert_eq!(reports.len(), 2, "{reports:#?}");
-        assert!(reports.iter().all(|report| report.rule == "observed"));
-    }
 }

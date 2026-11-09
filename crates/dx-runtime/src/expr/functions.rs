@@ -266,11 +266,11 @@ pub static FUNCTIONS: &[Function] = &[
         call: |a| Ok(match (&a[2], &a[3]) {
             (Value::Num(start), Value::Num(end)) => {
                 let kind = match &*a[0].text() {
-                    "mirror" => crate::engine::transform::PieceKind::Mirror,
-                    "renamed" => crate::engine::transform::PieceKind::Renamed,
-                    _ => crate::engine::transform::PieceKind::Copy,
+                    "mirror" => crate::expr::mapped::PieceKind::Mirror,
+                    "renamed" => crate::expr::mapped::PieceKind::Renamed,
+                    _ => crate::expr::mapped::PieceKind::Copy,
                 };
-                Value::from(crate::engine::transform::copy_mark::mark(kind, *start as usize, *end as usize, &a[4].text()))
+                Value::from(crate::expr::mapped::copy_mark::mark(kind, *start as usize, *end as usize, &a[4].text()))
             }
             _ => Value::from(a[4].text().into_owned()),
         }),
@@ -540,7 +540,7 @@ pub static FUNCTIONS: &[Function] = &[
         doc: "in fix text: a name for the user to choose. Editors start renaming it after the fix; `dxlint suggest --name` fills it in",
         min: 1,
         max: 1,
-        call: |a| Ok(Value::from(crate::engine::placeholder::mark(&a[0].text()))),
+        call: |a| Ok(Value::from(crate::expr::placeholder::mark(&a[0].text()))),
     },
     text_fn!("lower", "lowercase text", |s| s.to_lowercase()),
     text_fn!("upper", "uppercase text", |s| s.to_uppercase()),

@@ -418,7 +418,7 @@ impl<'a> LintWorld<'a> {
     /// A semantic attribute read inside a question, memoised per root
     /// session by where its queries stand (see [`Self::asked_at`]); only
     /// complete answers are kept. Outside a question `compute` runs as is.
-    pub(crate) fn semantic_attribute(&'a self, file: u32, node: u32, attr: u16, compute: impl FnOnce() -> Option<crate::vm::V>) -> Option<crate::vm::V> {
+    pub(crate) fn semantic_attribute(&'a self, file: u32, node: u32, attr: u16, compute: &mut dyn FnMut() -> Option<crate::vm::V>) -> Option<crate::vm::V> {
         let Some(question) = self.question() else { return compute() };
         let semantic = question.semantic;
         // Like `asked_at`, without reading names: a scope target of this
@@ -636,6 +636,50 @@ struct Restore<'c> {
 impl Drop for Restore<'_> {
     fn drop(&mut self) {
         self.slot.set(self.before);
+    }
+}
+
+/// The runtime's view of this lint: type questions, attribute caching and
+/// name resolution.
+impl<'a> crate::expr::TypeWorld<'a> for LintWorld<'a> {
+    fn query(&'a self, file: u32, node: u32, subject: &crate::grammar::names::Value, query: &crate::expr::queries::Query, mask: u64) -> bool {
+        LintWorld::query(self, file, node, subject, query, mask)
+    }
+
+    fn query_function(&'a self, file: u32, node: u32, query: &crate::expr::queries::QueryFunction, args: &[Value<'static>]) -> Value<'static> {
+        LintWorld::query_function(self, file, node, query, args)
+    }
+
+    fn query_handle(&'a self, file: u32, handle: crate::grammar::names::question::Handle, query: &crate::expr::queries::HandleFunction, args: &[Value<'static>]) -> Value<'static> {
+        LintWorld::query_handle(self, file, handle, query, args)
+    }
+
+    fn name_cache(&'a self, file: u32) -> Option<&'a std::sync::OnceLock<super::reads::Cached<Arc<Resolved>>>> {
+        LintWorld::name_cache(self, file)
+    }
+
+    fn cache_attribute(&'a self, memo: &crate::vm::FileVm) -> bool {
+        LintWorld::cache_attribute(self, memo)
+    }
+
+    fn note_cycle(&'a self) {
+        LintWorld::note_cycle(self)
+    }
+
+    fn semantic_attribute(&'a self, file: u32, node: u32, attr: u16, compute: &mut dyn FnMut() -> Option<crate::vm::V>) -> Option<crate::vm::V> {
+        LintWorld::semantic_attribute(self, file, node, attr, compute)
+    }
+
+    fn mark_unknown(&'a self) {
+        LintWorld::mark_unknown(self)
+    }
+
+    fn complete_value(&'a self, run: &mut dyn FnMut() -> Option<crate::vm::V>) -> Known<Option<crate::vm::V>> {
+        self.complete_attribute(run)
+    }
+
+    fn complete_unit(&'a self, run: &mut dyn FnMut()) -> bool {
+        matches!(self.complete_attribute(run), Known::Yes(()))
     }
 }
 

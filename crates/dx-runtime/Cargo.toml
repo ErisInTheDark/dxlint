@@ -1,0 +1,20 @@
+[package]
+name = "dx-runtime"
+version = "0.1.0"
+edition = "2021"
+description = "Rule expressions and the lowered VM that evaluates them: the language-neutral runtime"
+license = "MIT"
+
+[dependencies]
+dx-config = { path = "../dx-config" }
+dx-core = { path = "../dx-core" }
+dx-tree = { path = "../dx-tree" }
+dx-ir = { path = "../dx-ir" }
+dx-grammar = { path = "../dx-grammar" }
+dx-pattern = { path = "../dx-pattern" }
+regex-automata = "0.4"
+regex-syntax = "0.8"
+serde_json = "1.0"
+
+[features]
+work = ["dx-core/work"]

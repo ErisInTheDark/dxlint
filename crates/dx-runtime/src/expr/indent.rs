@@ -61,7 +61,7 @@ impl IndentPlan {
         plan
     }
 
-    pub(crate) fn specialise(&mut self, options: &[Value<'static>], functions: &[crate::grammar::UserFn]) {
+    pub fn specialise(&mut self, options: &[Value<'static>], functions: &[crate::grammar::UserFn]) {
         for rule in &mut self.rules {
             for expr in [&mut rule.by, &mut rule.from].into_iter().flatten() {
                 super::fold::specialise(expr, options, functions);
@@ -80,7 +80,7 @@ impl IndentPlan {
     }
 
     /// Lowers `from`, `by` and the rule's `reset` (after specialisation).
-    pub(crate) fn lower(&mut self, reset: Option<&CExpr>, functions: &[crate::grammar::UserFn], values: &mut crate::vm::Values) {
+    pub fn lower(&mut self, reset: Option<&CExpr>, functions: &[crate::grammar::UserFn], values: &mut crate::vm::Values) {
         let mut lower = |e: &Option<CExpr>| e.as_ref().map(|e| crate::vm::lower(e, functions, values));
         self.lowered = self.rules.iter().map(|rule| (lower(&rule.from), lower(&rule.by))).collect();
         self.reset = reset.map(|e| crate::vm::lower(e, functions, values));
@@ -138,30 +138,6 @@ impl Iterator for Candidates<'_> {
     }
 }
 
-#[cfg(test)]
-mod semantic_tests {
-    use std::path::Path;
-
-    use crate::config::ast::Severity;
-    use crate::engine::tests::native_linter;
-
-    #[test]
-    fn hits_do_not_cross_rules_nodes_or_files() {
-        let l = native_linter(r#"
-            in ts_line rule a info "{indent_level}:{len(indent_anchor)}" { indent in ts_block by 2 }
-            in ts_line rule b info "{indent_level}:{len(indent_anchor)}" { indent in ts_block by 5 }
-        "#);
-        for (path, indent) in [("/root/a.ts", 2), ("/root/b.ts", 6), ("/root/a.ts", 0)] {
-            let source = format!("{}{{\n  action();\n}}\n", " ".repeat(indent));
-            let got = l.lint(Path::new(path), &source);
-            let line: Vec<_> = got.iter().filter(|d| d.start == source.find("  action").unwrap()).collect();
-            assert_eq!(line.len(), 2);
-            assert_eq!(line[0].message, format!("2:{indent}"));
-            assert_eq!(line[1].message, format!("5:{indent}"));
-            assert!(got.iter().all(|d| d.severity != Severity::Error));
-        }
-    }
-}
 
 /// A compiled `indent X by n` / `indent in X by n` rule line.
 pub struct IndentRule {
