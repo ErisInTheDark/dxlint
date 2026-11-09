@@ -263,6 +263,18 @@ enum Command {
     Lsp,
 }
 
+thread_local! {
+    /// This thread serves a single invocation ([`run_process`]); callers of
+    /// [`run`] that invoke it again (tests) keep library parses for reuse.
+    static ONE_INVOCATION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// This invocation builds one configuration: when nothing else runs on the
+/// thread afterwards, library imports parse in place instead of being kept.
+fn building_one_config() {
+    if ONE_INVOCATION.with(std::cell::Cell::get) { crate::config::build_one_config() }
+}
+
 /// A whole `dxlint` process around [`run`] on the real stdio: the
 /// semantic budget lever, the sampler, a worker-sized stack and the
 /// end-of-run reports. The binary and the test binary (`npm run check`)
@@ -280,6 +292,7 @@ pub fn run_process(args: Vec<OsString>, color: anstream::ColorChoice) -> u8 {
         // loop) asks questions as deep as a lint worker's, and the process
         // main thread's stack is far smaller.
         let worker = std::thread::Builder::new().stack_size(crate::engine::WORKER_STACK).spawn(move || {
+            ONE_INVOCATION.with(|one| one.set(true));
             let cwd = std::env::current_dir().unwrap_or_default();
             run(args, &cwd, std::io::stdin(), anstream::AutoStream::new(std::io::stdout(), color), anstream::AutoStream::new(std::io::stderr(), color))
         }).expect("main thread");

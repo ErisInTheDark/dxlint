@@ -336,7 +336,7 @@ fn lint(output: &mut Output<'_>, args: LintArgs, config: &ConfigArg, sources: Op
         crate::grammar::syntax::set_phase_profiling(true);
     }
     if sources.is_some() {
-        crate::config::build_one_config();
+        super::building_one_config();
         let mut project = match load_for_lint(output, config) {
             Ok(project) => project,
             Err(code) => return code,
@@ -348,7 +348,7 @@ fn lint(output: &mut Output<'_>, args: LintArgs, config: &ConfigArg, sources: Op
         Err(code) => return code,
     };
     if configs.len() == 1 {
-        crate::config::build_one_config();
+        super::building_one_config();
     }
     let named: Vec<PathBuf> = args.paths.iter().map(|p| normalize_path(&output.cwd.join(p))).collect();
     let jobs = args.jobs.map_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get()), |n| n.get());
