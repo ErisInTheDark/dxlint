@@ -4,7 +4,7 @@
 use std::sync::{Arc, Mutex};
 
 use crate::fx_hash::FxHashMap;
-use crate::grammar::names::Resolved;
+use crate::names::Resolved;
 use crate::parts::{name_hash, Diff, FileParts, Name, Part, PartReads};
 
 use super::reads::{self, DepPath};

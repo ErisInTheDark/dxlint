@@ -13,6 +13,7 @@ pub use dx_config as config;
 pub mod engine;
 pub use dx_runtime::expr;
 pub use dx_grammar as grammar;
+pub use dx_names as names;
 #[cfg(test)]
 mod grammar_tests;
 #[cfg(test)]

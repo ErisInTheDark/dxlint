@@ -271,7 +271,7 @@ pub fn run_process(args: Vec<OsString>, color: anstream::ColorChoice) -> u8 {
     #[cfg(feature = "work")]
     crate::work::start();
     if let Some(units) = std::env::var("DXLINT_SEMANTIC_BUDGET").ok().and_then(|units| units.parse().ok()) {
-        crate::grammar::names::question::Budget::set_per_question(units);
+        crate::names::question::Budget::set_per_question(units);
     }
     let code = {
         // The sampler reports when it drops, before the levers do.

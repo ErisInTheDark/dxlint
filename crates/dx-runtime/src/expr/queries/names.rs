@@ -1,7 +1,7 @@
 use crate::expr::Value;
-use crate::grammar::names::{ClassKind, Kept, ReferenceLookup, Resolved, ScopeInfo};
-use crate::grammar::names::question::{Known, Leaf, NodeRef, ScopeRef, Target};
-use crate::grammar::names::semantic::Semantic;
+use crate::names::{ClassKind, Kept, ReferenceLookup, Resolved, ScopeInfo};
+use crate::names::question::{Known, Leaf, NodeRef, ScopeRef, Target};
+use crate::names::semantic::Semantic;
 
 use super::QueryFunction;
 
@@ -300,8 +300,8 @@ fn references_of(semantic: &Semantic<'_>, context: &Context<'_, '_>, declaration
 mod tests {
     use super::*;
     use crate::grammar::{Grammar, Node, Tree};
-    use crate::grammar::names::{Names, ScopeIndex};
-    use crate::grammar::names::question::{FrameId, QueryContext, World};
+    use crate::names::{Names, ScopeIndex};
+    use crate::names::question::{FrameId, QueryContext, World};
 
     struct ScopeWorld {
         grammar: Grammar,
@@ -416,7 +416,7 @@ mod tests {
         assert_eq!(role_classes(&semantic, bound, &args), Known::Unknown);
         assert_eq!(scopes(&semantic, bound, &args), Known::Unknown);
         world.available.set(true);
-        let session = crate::grammar::names::semantic::Session::default();
+        let session = crate::names::semantic::Session::default();
         assert_eq!(session.run(&world, &tables, |semantic| {
             while semantic.question.budget.step() {}
             role_classes(semantic, at, &args)

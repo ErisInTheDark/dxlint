@@ -1,0 +1,22 @@
+[package]
+name = "dx-names"
+version = "0.1.0"
+edition = "2021"
+description = "Name tables, per-file resolution and the semantic evaluator: the language-neutral names layer"
+license = "MIT"
+
+[dependencies]
+dx-config = { path = "../dx-config" }
+dx-core = { path = "../dx-core" }
+dx-tree = { path = "../dx-tree" }
+dx-ir = { path = "../dx-ir" }
+dx-grammar = { path = "../dx-grammar" }
+memchr = "2.7"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[dev-dependencies]
+dx-pattern = { path = "../dx-pattern" }
+
+[features]
+work = ["dx-core/work"]

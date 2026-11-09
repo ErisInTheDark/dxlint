@@ -12,15 +12,15 @@ use super::diagnostic::Diagnostic;
 use super::reads::{self, Reads};
 use crate::footprint::{Dirty, Edit, Footprint};
 use crate::fx_hash::FxHashMap;
-use crate::grammar::names::semantic::State;
-use crate::grammar::names::Resolved;
+use crate::names::semantic::State;
+use crate::names::Resolved;
 use crate::grammar::Tree;
 
 /// One rule group's world, between two lints of its file.
 pub(super) struct WorldCarry {
     pub units: Vec<Arc<super::units::Unit>>,
     pub state: Rc<State>,
-    pub interned: crate::grammar::names::question::Interned,
+    pub interned: crate::names::question::Interned,
     /// The file's names as the group resolved them.
     pub names: Option<Arc<Resolved>>,
     /// The group's diagnostics by node id.

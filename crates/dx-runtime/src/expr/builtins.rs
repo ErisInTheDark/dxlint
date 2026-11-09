@@ -136,7 +136,7 @@ impl<'a> Ctx<'a> {
                     .unwrap_or_default(),
             ),
             Builtin::ScopeEffect => match self.names().effects.get(&self.node) {
-                Some(&(effect, _)) => Value::from(self.grammar.names.vocabulary.effects[effect as usize].as_str()),
+                Some(&(effect, _)) => Value::from(self.names.vocabulary.effects[effect as usize].as_str()),
                 None => Value::Null,
             },
             Builtin::ScopeEffectSite => match self.names().effects.get(&self.node) {
@@ -159,7 +159,7 @@ impl<'a> Ctx<'a> {
     }
 
     /// This tree's names, resolved on first use.
-    pub fn names(&self) -> &'a crate::grammar::names::Resolved {
+    pub fn names(&self) -> &'a crate::names::Resolved {
         assert!(!self.memo.resolving_names.get(), "name conditions cannot read resolved names");
         let cached = self.memo.names.get_or_init(|| {
             let resolve = || {
@@ -167,7 +167,7 @@ impl<'a> Ctx<'a> {
                 #[cfg(feature = "work")]
                 let _owner = crate::work::owner("names.resolve");
                 let incomplete = std::cell::Cell::new(false);
-                let names = &self.grammar.names;
+                let names = self.names;
                 let session = crate::vm::Session::new(self, self.node, &[]);
                 // An editor's file keeps each answer with what it read, for
                 // the next lint's names ([`AttrMemo::name_conditions`]).

@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::thread::ThreadId;
 
-use crate::grammar::names::question::Known;
+use crate::names::question::Known;
 use crate::fx_hash::FxHashMap;
 
 use super::{Profile, reads::{self, Cached, Reads}};
@@ -386,9 +386,9 @@ pub(super) struct Snapshot {
     /// Per surveyed program, the inputs each word occurs in.
     words: Slots<(usize, u64), Words>,
     /// Program configurations by revision, settings and program directory.
-    configurations: RwLock<FxHashMap<(u64, usize, PathBuf), Cached<Arc<crate::grammar::names::modules::resolution::Configuration>>>>,
+    configurations: RwLock<FxHashMap<(u64, usize, PathBuf), Cached<Arc<crate::names::modules::resolution::Configuration>>>>,
     /// Metadata parsed from those texts, by text hash (`None`: malformed).
-    metadata: RwLock<FxHashMap<PathBuf, (u64, Option<Arc<crate::grammar::names::modules::resolution::Json>>)>>,
+    metadata: RwLock<FxHashMap<PathBuf, (u64, Option<Arc<crate::names::modules::resolution::Json>>)>>,
     /// What each package directory offers, by root, subpath and conditions:
     /// importers in every directory below it share the probes (and their
     /// reads, kept once instead of in every importer's answer).
@@ -447,7 +447,7 @@ pub(super) struct StableBinding {
 }
 
 /// A value's rows by stable leaf, and how far they are normalized.
-pub(super) type StableValue = (Arc<[Box<[StableLeaf]>]>, crate::grammar::names::question::Normal);
+pub(super) type StableValue = (Arc<[Box<[StableLeaf]>]>, crate::names::question::Normal);
 
 /// (settings, program, outside).
 type ProgramKey = (usize, u64, Option<PathBuf>);
@@ -482,7 +482,7 @@ impl ProgramAnswers {
 /// (revision, leaf).
 pub(super) type ValueKey = (u64, StableLeaf);
 
-/// A [`crate::grammar::names::question::FactKey`] by path.
+/// A [`crate::names::question::FactKey`] by path.
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub(super) enum StableFactKey {
     Trait(StableLeaf, u16),
@@ -507,8 +507,8 @@ pub(super) enum StableKey {
 #[derive(Clone)]
 pub(super) struct StableSource {
     pub site: StableLeaf,
-    pub value: Option<crate::grammar::names::Value>,
-    pub origin: crate::grammar::names::values::MemberOrigin,
+    pub value: Option<crate::names::Value>,
+    pub origin: crate::names::values::MemberOrigin,
 }
 
 #[derive(Clone)]
@@ -529,12 +529,12 @@ pub(super) enum StableFact {
 pub(super) type TestedKey = (u64, usize, reads::DepPath);
 pub(super) type TestedRoot = (reads::DepPath, u32, Vec<u32>);
 
-type PackageProbe = crate::grammar::names::modules::resolution::Probe<std::path::PathBuf>;
+type PackageProbe = crate::names::modules::resolution::Probe<std::path::PathBuf>;
 
 /// (revision, settings, package root, subpath, conditions).
 pub(super) type PackageKey = (u64, usize, std::path::PathBuf, Box<str>, Box<[Box<str>]>);
 
-/// A shared module question ([`crate::grammar::names::modules::SharedQuestion`])
+/// A shared module question ([`crate::names::modules::SharedQuestion`])
 /// with files by path, under one program.
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub(super) struct ModuleKey {
@@ -550,7 +550,7 @@ pub(super) struct ModuleKey {
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub(super) enum StableQuestion {
-    Publication { kind: crate::grammar::names::modules::index::PublicationKind, path: reads::DepPath, scope: u32, name: Box<str>, class: u64 },
+    Publication { kind: crate::names::modules::index::PublicationKind, path: reads::DepPath, scope: u32, name: Box<str>, class: u64 },
     Global { name: Box<str>, class: u64 },
     /// Every scope merged into module scope `scope` of `path`.
     Scopes { path: reads::DepPath, scope: u32 },
@@ -889,8 +889,8 @@ impl Snapshot {
     /// A program configuration, loaded once per run (`load` records its
     /// reads; failures are not kept).
     pub(super) fn configuration(&self, key: (u64, usize, PathBuf),
-        load: impl FnOnce() -> Result<Arc<crate::grammar::names::modules::resolution::Configuration>, ()>)
-        -> Result<Cached<Arc<crate::grammar::names::modules::resolution::Configuration>>, ()> {
+        load: impl FnOnce() -> Result<Arc<crate::names::modules::resolution::Configuration>, ()>)
+        -> Result<Cached<Arc<crate::names::modules::resolution::Configuration>>, ()> {
         if let Some(found) = self.configurations.read().expect("run configurations").get(&key) { return Ok(found.clone()) }
         let answer = Cached::compute(load);
         let Ok(value) = answer.value else { reads::note_group(&answer.reads); return Err(()) };
@@ -918,11 +918,11 @@ impl Snapshot {
     /// `path`'s metadata parsed from the text with `hash`, parsed once per
     /// text.
     pub(super) fn metadata(&self, path: &std::path::Path, hash: u64, text: &str)
-        -> Option<Arc<crate::grammar::names::modules::resolution::Json>> {
+        -> Option<Arc<crate::names::modules::resolution::Json>> {
         if let Some((at, parsed)) = self.metadata.read().expect("run metadata").get(path) {
             if *at == hash { return parsed.clone() }
         }
-        let parsed = crate::grammar::names::modules::resolution::parse_metadata(Some(text)).ok().flatten();
+        let parsed = crate::names::modules::resolution::parse_metadata(Some(text)).ok().flatten();
         self.metadata.write().expect("run metadata").insert(path.to_owned(), (hash, parsed.clone()));
         parsed
     }

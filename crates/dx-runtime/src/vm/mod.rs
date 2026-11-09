@@ -415,7 +415,7 @@ fn lower_in<'a>(e: &'a CExpr, g: &Scope<'a, '_>, args: &[Lowered], bound: u16) -
         CExpr::Trait(subject, quantifier, mask) => {
             let (subject, path) = match subject.as_ref() {
                 CExpr::Semantic(subject, path) => (subject.as_ref(), path.clone()),
-                subject => (subject, crate::grammar::names::Value::Path(Vec::new())),
+                subject => (subject, crate::names::Value::Path(Vec::new())),
             };
             VExpr::Trait(boxed(subject)?, path, *quantifier, *mask)
         }
@@ -576,9 +576,9 @@ pub trait Host {
     fn file_vm(&self) -> Option<&FileVm> { None }
     /// A built-in variable on a node.
     fn builtin(&self, _node: u32, _builtin: Builtin) -> Option<Value<'_>> { None }
-    fn query(&self, _node: u32, _subject: &crate::grammar::names::Value, _query: &crate::expr::queries::Query, _mask: u64) -> Option<bool> { None }
+    fn query(&self, _node: u32, _subject: &crate::names::Value, _query: &crate::expr::queries::Query, _mask: u64) -> Option<bool> { None }
     fn query_function(&self, _node: u32, _query: &crate::expr::queries::QueryFunction, _args: &[Value<'static>]) -> Option<Value<'static>> { None }
-    fn query_handle(&self, _handle: crate::grammar::names::question::Handle, _query: &crate::expr::queries::HandleFunction, _args: &[Value<'static>]) -> Option<Value<'static>> { None }
+    fn query_handle(&self, _handle: crate::names::question::Handle, _query: &crate::expr::queries::HandleFunction, _args: &[Value<'static>]) -> Option<Value<'static>> { None }
     fn option(&self, _index: usize) -> Option<Value<'_>> { None }
     fn debug(&self, _node: u32, _label: &str, _value: &Value) {}
     /// `position(offset)`.

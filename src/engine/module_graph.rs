@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use crate::fx_hash::{FxHashMap, FxHashSet};
-use crate::grammar::names::modules::resolution::{parse_metadata, program_sources, Configuration, DiscoveryRequest, Host, Json, Origin, Resolver, Settings};
-use crate::grammar::names::question::{Known, QueryContext, ScopeRef};
+use crate::names::modules::resolution::{parse_metadata, program_sources, Configuration, DiscoveryRequest, Host, Json, Origin, Resolver, Settings};
+use crate::names::question::{Known, QueryContext, ScopeRef};
 use crate::path_globs::PathGlobs;
 
 use super::reads::{self, Dep, DepPath, ModuleAsk, Reads};
@@ -392,7 +392,7 @@ impl Linter {
     /// What `ask`'s program's graph answers now; `None` when the module is
     /// not one of its files or the program cannot be read.
     pub(super) fn module_answer(&self, ask: &ModuleAsk) -> Option<Arc<ModuleAnswer>> {
-        let settings = self.grammar.names.settings_at(ask.settings)?;
+        let settings = self.names.settings_at(ask.settings)?;
         let revision = self.invalidation.load(std::sync::atomic::Ordering::Acquire);
         let mut graphs = self.module_graphs.graphs.lock().expect("module graphs");
         let key = (ask.root.clone(), ask.settings);
@@ -580,7 +580,7 @@ impl Linter {
         let mut whole: Vec<Box<str>> = Vec::new();
         for (id, node) in tree.nodes.iter().enumerate() {
             let Some((_, paths)) = kinds.iter().find(|(kind, _)| *kind == node.matcher) else { continue };
-            let nameless = self.grammar.names.kinds.get(node.matcher as usize).is_none_or(|kind| kind.modules.items.is_empty());
+            let nameless = self.names.kinds.get(node.matcher as usize).is_none_or(|kind| kind.modules.items.is_empty());
             for labels in paths {
                 let mut at = Some(id as u32);
                 for &label in labels { at = at.and_then(|at| tree.fields(at, label).first().copied()) }

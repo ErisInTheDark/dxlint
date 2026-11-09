@@ -7,6 +7,7 @@ use crate::config::error::ConfigError;
 use crate::config::schema::{Schema, Schemas};
 use crate::expr::{Ctx, Scope, Value};
 use crate::grammar::Grammar;
+use crate::names::Names;
 use crate::path_globs::PathGlobs;
 
 #[derive(Default)]
@@ -26,7 +27,7 @@ pub struct LanguageOptions {
 }
 
 impl LanguageOptions {
-    pub fn compile(config: &Config, grammar: &Grammar, schemas: &Schemas, errors: &mut Vec<ConfigError>) -> Self {
+    pub fn compile(config: &Config, grammar: &Grammar, names: &Names, schemas: &Schemas, errors: &mut Vec<ConfigError>) -> Self {
         let mut languages: Vec<Language> = grammar.langs.iter().map(|_| Language::default()).collect();
         let mut declarations: Vec<Vec<&OptionDef>> = grammar.langs.iter().map(|_| Vec::new()).collect();
         for block in &config.language_options {
@@ -64,7 +65,7 @@ impl LanguageOptions {
                     continue;
                 };
                 let owner = format!(".{}", block.language.text);
-                if let Some(value) = option_value(&owner, name, expression, &option.schema, grammar, schemas, errors) {
+                if let Some(value) = option_value(&owner, name, expression, &option.schema, grammar, names, schemas, errors) {
                     values.push((name.text.clone(), value));
                 }
             }
@@ -100,6 +101,7 @@ pub fn option_value(
     value: &Expr,
     schema: &Schema,
     grammar: &Grammar,
+    names: &Names,
     schemas: &Schemas,
     errors: &mut Vec<ConfigError>,
 ) -> Option<Value<'static>> {
@@ -116,7 +118,7 @@ pub fn option_value(
     let evaluated = match word {
         Some(word) => Ok(word),
         None => {
-            let compiled = Scope::constants(grammar).compile(value, errors)?;
+            let compiled = Scope::constants(grammar).with_names(names).compile(value, errors)?;
             Ctx::eval_static(&compiled, &[]).map(|v| v.into_owned())
         }
     };

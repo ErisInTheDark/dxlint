@@ -11,13 +11,13 @@ use std::sync::Arc;
 
 use crate::expr::{Ctx, Value};
 use crate::expr::queries::Uncertainty;
-use crate::grammar::names::question::{Budget, Fact, FactKey, FrameId, Known, Leaf, NodeRef, NodeValue, ScopeRef, Target, World};
-use crate::grammar::names::semantic::{AttributeKey, Semantic};
-use crate::grammar::names::modules::compile::Action;
-use crate::grammar::names::modules::SharedQuestion;
-use crate::grammar::names::modules::resolution::{parse_metadata, program_anchor, program_inputs, Configuration, Probe, DiscoveryRequest, Host, Json, Resolver, Settings};
-use crate::grammar::names::question::QueryContext;
-use crate::grammar::names::{Resolved, ScopeIndex};
+use crate::names::question::{Budget, Fact, FactKey, FrameId, Known, Leaf, NodeRef, NodeValue, ScopeRef, Target, World};
+use crate::names::semantic::{AttributeKey, Semantic};
+use crate::names::modules::compile::Action;
+use crate::names::modules::SharedQuestion;
+use crate::names::modules::resolution::{parse_metadata, program_anchor, program_inputs, Configuration, Probe, DiscoveryRequest, Host, Json, Resolver, Settings};
+use crate::names::question::QueryContext;
+use crate::names::{Resolved, ScopeIndex};
 use crate::grammar::{Grammar, Tree};
 use crate::vm::{Session, VExpr};
 
@@ -87,7 +87,7 @@ pub struct LintWorld<'a> {
     /// File 0 outside any rule (no locals, no indents).
     ctx: Ctx<'a>,
     evaluation: Cell<*const ()>,
-    semantic: crate::grammar::names::semantic::Session,
+    semantic: crate::names::semantic::Session,
     /// Name-item conditions being decided, by node and condition.
     conditions: RefCell<Vec<(Target, u32)>>,
     /// A whole-file syntax scan is stepping through bodies
@@ -174,7 +174,7 @@ impl<'a> LintWorld<'a> {
         let mut scans = true;
         loop {
             let rescan = std::mem::take(&mut scans);
-            let changed = self.semantic.run(&files, &self.ctx.grammar.names, |semantic| {
+            let changed = self.semantic.run(&files, &self.ctx.names, |semantic| {
                 self.evaluating(Some(ActiveQuestion { semantic, at }), crate::expr::queries::Uncertainty::Explicit, || {
                     let mut changed = crate::footprint::Dirty::default();
                     if rescan { semantic.narrowing().recheck(at, &mut changed) }
@@ -435,7 +435,7 @@ impl<'a> LintWorld<'a> {
         static ATTRIBUTES: u8 = 0;
         let kept = |key: &AttributeKey| semantic.attribute(key).map(|(value, unknown)| {
             if unknown { self.mark_unknown() }
-            values.read_kept(crate::grammar::names::values::fact_tag(&ATTRIBUTES, key));
+            values.read_kept(crate::names::values::fact_tag(&ATTRIBUTES, key));
             value
         });
         if let Some(value) = kept(&key) {
@@ -460,14 +460,14 @@ impl<'a> LintWorld<'a> {
         let mark = values.cycle_mark();
         let mut value = None;
         let outer = crate::footprint::begin();
-        let answer = values.fact(crate::grammar::names::values::fact_tag(&ATTRIBUTES, &key), Budget::per_question(),
+        let answer = values.fact(crate::names::values::fact_tag(&ATTRIBUTES, &key), Budget::per_question(),
             || self.complete_attribute(|| { value = compute(); value }));
         #[cfg(feature = "work")]
         crate::work::fact_steps("attribute", semantic.question.budget.last_spent(), || {
             format!("{} {}", self.linter.attrs.name_of(attr), values.census_leaf(Leaf { target: Target::Node(NodeRef { file, node }), frame }).2)
         });
         let read = crate::footprint::end(outer);
-        let unpaid = answer == Err(crate::grammar::names::question::Cut::Unpaid);
+        let unpaid = answer == Err(crate::names::question::Cut::Unpaid);
         let unknown = !matches!(answer, Ok(Known::Yes(Some(_))));
         if unknown { self.mark_unknown() }
         // Unknown only because something further up is still undecided, or
@@ -510,7 +510,7 @@ impl<'a> LintWorld<'a> {
         let at = Leaf { target, frame: FrameId::ROOT };
         let _root = self.ctx.profile.and(World::tree(&files, file))
             .map(|tree| crate::engine::Profile::root_scope(tree.node(node).matcher as usize));
-        let answer = self.semantic.run(&files, &self.ctx.grammar.names, |semantic| {
+        let answer = self.semantic.run(&files, &self.ctx.names, |semantic| {
             let Known::Yes(at) = semantic.leaf(at) else { return Known::Unknown };
             #[cfg(feature = "work")]
             crate::work::fact_steps_open();
@@ -525,7 +525,7 @@ impl<'a> LintWorld<'a> {
                 crate::work::fact_steps("root", budget.root_spent(), || semantic.values().census_leaf(at).2);
             }
             if let (Some(profile), Some(tree)) = (self.ctx.profile, World::tree(&files, file)) {
-                let used = u64::from(crate::grammar::names::question::Budget::per_question() - budget.remaining());
+                let used = u64::from(crate::names::question::Budget::per_question() - budget.remaining());
                 profile.record_root(tree.node(node).matcher as usize, used, budget.limited());
                 if let Some(path) = World::path(&files, file) { profile.note_root_outcome(path, node, budget.limited()); }
                 if budget.limited() {
@@ -541,7 +541,7 @@ impl<'a> LintWorld<'a> {
         answer
     }
 
-    pub fn query(&'a self, file: u32, node: u32, subject: &crate::grammar::names::Value, query: &crate::expr::queries::Query, mask: u64) -> bool {
+    pub fn query(&'a self, file: u32, node: u32, subject: &crate::names::Value, query: &crate::expr::queries::Query, mask: u64) -> bool {
         // could/always quantify over alternatives and answer Unknown themselves
         // unless a known alternative decides, so their known answers stand.
         let run = || self.semantic_query(file, node, Uncertainty::Explicit, |semantic, at| (query.call)(semantic, at, subject, mask));
@@ -586,7 +586,7 @@ impl<'a> LintWorld<'a> {
         answer.known().unwrap_or(Value::Null)
     }
 
-    pub fn query_handle(&'a self, file: u32, handle: crate::grammar::names::question::Handle, query: &crate::expr::queries::HandleFunction, args: &[Value<'static>]) -> Value<'static> {
+    pub fn query_handle(&'a self, file: u32, handle: crate::names::question::Handle, query: &crate::expr::queries::HandleFunction, args: &[Value<'static>]) -> Value<'static> {
         let run = || self.semantic_query(file, 0, Uncertainty::Explicit, |semantic, _| match semantic.question.handle_value(handle) {
             Some(value) => (query.call)(semantic, value, args),
             None => Known::Unknown,
@@ -642,7 +642,7 @@ impl Drop for Restore<'_> {
 /// The runtime's view of this lint: type questions, attribute caching and
 /// name resolution.
 impl<'a> crate::expr::TypeWorld<'a> for LintWorld<'a> {
-    fn query(&'a self, file: u32, node: u32, subject: &crate::grammar::names::Value, query: &crate::expr::queries::Query, mask: u64) -> bool {
+    fn query(&'a self, file: u32, node: u32, subject: &crate::names::Value, query: &crate::expr::queries::Query, mask: u64) -> bool {
         LintWorld::query(self, file, node, subject, query, mask)
     }
 
@@ -650,7 +650,7 @@ impl<'a> crate::expr::TypeWorld<'a> for LintWorld<'a> {
         LintWorld::query_function(self, file, node, query, args)
     }
 
-    fn query_handle(&'a self, file: u32, handle: crate::grammar::names::question::Handle, query: &crate::expr::queries::HandleFunction, args: &[Value<'static>]) -> Value<'static> {
+    fn query_handle(&'a self, file: u32, handle: crate::names::question::Handle, query: &crate::expr::queries::HandleFunction, args: &[Value<'static>]) -> Value<'static> {
         LintWorld::query_handle(self, file, handle, query, args)
     }
 
@@ -700,7 +700,7 @@ impl<'a> Files<'a> {
         let tree = World::tree(&self, file)?;
         let node = World::names(&self, file)?.scopes.first().map(|scope| scope.node)
             .or_else(|| tree.order.iter().copied().find(|&node| {
-                self.0.ctx.grammar.names.kinds.get(tree.node(node).matcher as usize)
+                self.0.ctx.names.kinds.get(tree.node(node).matcher as usize)
                     .is_some_and(|kind| kind.modules.items.iter().any(|item| matches!(item.action, Action::Uses(_))))
             })).unwrap_or(tree.root);
         Some(Leaf { target: Target::Node(NodeRef { file, node }), frame: FrameId::ROOT })
@@ -712,7 +712,7 @@ impl<'a> Files<'a> {
         while let Some(id) = node {
             if !semantic.question.budget.step() { return Known::Unknown; }
             let leaf = Leaf { target: Target::Node(NodeRef { file: ctx.file_id, node: id }), ..at };
-            if let Some(kind) = ctx.grammar.names.kinds.get(ctx.tree.node(id).matcher as usize) {
+            if let Some(kind) = ctx.names.kinds.get(ctx.tree.node(id).matcher as usize) {
                 for item in &kind.modules.items {
                     let Action::Uses(name) = &item.action else { continue };
                     match item.when.map_or(Known::Yes(true), |when| self.condition(leaf, when, semantic)) {
@@ -720,7 +720,7 @@ impl<'a> Files<'a> {
                         Known::Unknown => return Known::Unknown,
                         Known::Yes(true) => {}
                     }
-                    let Some(profile) = ctx.grammar.names.module_resolutions.iter().find(|profile| profile.name == *name) else { return Known::Unknown };
+                    let Some(profile) = ctx.names.module_resolutions.iter().find(|profile| profile.name == *name) else { return Known::Unknown };
                     let mut settings = &profile.settings;
                     if !profile.modes.is_empty() {
                         let Known::Yes(context) = (Resolver { host: &self, settings }).context(ctx.file_id, semantic.question) else { return Known::Unknown };
@@ -728,7 +728,7 @@ impl<'a> Files<'a> {
                         let session = Session::new(&ctx, id, &[]);
                         for mode in &profile.modes {
                             if !semantic.question.budget.step() { return Known::Unknown; }
-                            let Some(expression) = ctx.grammar.names.operands.get(mode.when as usize).and_then(|operand| operand.lowered.get()) else { return Known::Unknown };
+                            let Some(expression) = ctx.names.operands.get(mode.when as usize).and_then(|operand| operand.lowered.get()) else { return Known::Unknown };
                             match self.0.asking(semantic, leaf, || session.holds_with(expression, &context).map_or(Known::Unknown, Known::Yes)) {
                                 Known::Yes(true) => { settings = &mode.settings; break; }
                                 Known::Yes(false) => {}
@@ -779,7 +779,7 @@ impl<'a> Files<'a> {
         }
         let cached = super::reads::Cached::compute(|| {
             let question = QueryContext::once();
-            let semantic = Semantic::new(&self, &self.0.ctx.grammar.names, &question);
+            let semantic = Semantic::new(&self, &self.0.ctx.names, &question);
             let selected = (|| {
                 let Known::Yes(program) = Host::program(&self) else { return Known::Unknown };
                 let Some(at) = self.file_leaf(program) else { return Known::Unknown };
@@ -1364,7 +1364,7 @@ impl<'a> Files<'a> {
         let (rows, normal) = value;
         let rows = rows.iter().map(|row| row.iter().map(|leaf| self.local_leaf(leaf, semantic)).collect::<Option<Vec<_>>>())
             .collect::<Option<Vec<_>>>()?;
-        Some(NodeValue::Alternatives(crate::grammar::names::question::Rows::normalized(rows, *normal)))
+        Some(NodeValue::Alternatives(crate::names::question::Rows::normalized(rows, *normal)))
     }
 
     /// Where the run keeps fact `key`, when every linted file of this
@@ -1384,8 +1384,8 @@ impl<'a> Files<'a> {
         Some((self.program_answers(snapshot)?, (self.0.revision(), stable)))
     }
 
-    fn stable_key(self, key: &crate::grammar::names::values::Key) -> Option<super::program::StableKey> {
-        use crate::grammar::names::values::Key;
+    fn stable_key(self, key: &crate::names::values::Key) -> Option<super::program::StableKey> {
+        use crate::names::values::Key;
         use super::program::StableKey as Stable;
         Some(match key {
             Key::Text(text) => Stable::Text(text.clone()),
@@ -1395,8 +1395,8 @@ impl<'a> Files<'a> {
         })
     }
 
-    fn local_key(self, key: &super::program::StableKey) -> Option<crate::grammar::names::values::Key> {
-        use crate::grammar::names::values::Key;
+    fn local_key(self, key: &super::program::StableKey) -> Option<crate::names::values::Key> {
+        use crate::names::values::Key;
         use super::program::StableKey as Stable;
         Some(match key {
             Stable::Text(text) => Key::Text(text.clone()),
@@ -1406,7 +1406,7 @@ impl<'a> Files<'a> {
         })
     }
 
-    fn stable_member(self, member: &crate::grammar::names::values::Member, semantic: &Semantic<'_>) -> Option<super::program::StableMember> {
+    fn stable_member(self, member: &crate::names::values::Member, semantic: &Semantic<'_>) -> Option<super::program::StableMember> {
         let sources = member.sources.iter().map(|source| {
             if source.edits.is_some() { return None }
             Some(super::program::StableSource { site: self.stable_leaf(source.site, semantic)?, value: source.value.clone(), origin: source.origin })
@@ -1414,8 +1414,8 @@ impl<'a> Files<'a> {
         Some(super::program::StableMember { key: self.stable_key(&member.key)?, sources, required: member.required })
     }
 
-    fn local_member(self, member: &super::program::StableMember, semantic: &Semantic<'_>) -> Option<crate::grammar::names::values::Member> {
-        use crate::grammar::names::values::{Member, MemberSource};
+    fn local_member(self, member: &super::program::StableMember, semantic: &Semantic<'_>) -> Option<crate::names::values::Member> {
+        use crate::names::values::{Member, MemberSource};
         let sources = member.sources.iter().map(|source| Some(MemberSource { site: self.local_leaf(&source.site, semantic)?, value: source.value.clone(), origin: source.origin, edits: None }))
             .collect::<Option<Vec<_>>>()?;
         Some(Member { key: self.local_key(&member.key)?, sources, required: member.required })
@@ -1538,7 +1538,7 @@ impl<'a> Files<'a> {
     /// whose condition cannot be decided counts.
     fn opens_scopes(self, file: u32, classes: u64, semantic: &Semantic<'_>) -> bool {
         let Some(tree) = World::tree(&self, file) else { return true };
-        let kinds = &self.0.ctx.grammar.names.kinds;
+        let kinds = &self.0.ctx.names.kinds;
         tree.order.iter().any(|&node| {
             let Some(kind) = kinds.get(tree.node(node).matcher as usize) else { return false };
             let at = Leaf { target: Target::Node(NodeRef { file, node }), frame: FrameId::ROOT };
@@ -1561,7 +1561,7 @@ impl<'a> Files<'a> {
         if info.classes & classes == 0 { return Known::Yes(Vec::new()) }
         let Some(tree) = World::tree(&self, scope.file) else { return Known::Unknown };
         let at = Leaf { target: Target::Node(NodeRef { file: scope.file, node: info.node }), frame: FrameId::ROOT };
-        let Some(kind) = self.0.ctx.grammar.names.kinds.get(tree.node(info.node).matcher as usize) else { return Known::Yes(Vec::new()) };
+        let Some(kind) = self.0.ctx.names.kinds.get(tree.node(info.node).matcher as usize) else { return Known::Yes(Vec::new()) };
         let mut modules = Vec::new();
         for item in &kind.modules.items {
             let Action::Scope { classes: opened, name, module } = item.action else { continue };
@@ -1716,9 +1716,9 @@ impl World for Files<'_> {
         Some(names.index(ctx.tree, ctx.source, &|text| self.0.key(file, text)))
     }
 
-    fn module_index(&self, file: u32, tables: &crate::grammar::names::Names) -> Option<&crate::grammar::names::modules::index::Index> {
+    fn module_index(&self, file: u32, tables: &crate::names::Names) -> Option<&crate::names::modules::index::Index> {
         if file != 0 { self.0.settle_parts(file); }
-        Some(crate::grammar::names::modules::index::module_index(World::tree(self, file)?, tables, World::text(self, file)?, &|text| self.name_key(file, text), self.profile()))
+        Some(crate::names::modules::index::module_index(World::tree(self, file)?, tables, World::text(self, file)?, &|text| self.name_key(file, text), self.profile()))
     }
 
     fn name_key<'s>(&self, file: u32, text: &'s str) -> Cow<'s, str> {
@@ -1760,7 +1760,7 @@ impl World for Files<'_> {
         self.0.program.modules.borrow_mut().entry(key).or_default().insert(specifier.into(), ModuleAnswer::Busy(revision));
         // Resolution depends only on the importer's directory (not its tree
         // or name), so imports are shared by directory, the linted file's too.
-        let resolve = || self.timed("modules.resolve.search", || semantic.question.budget.sized(crate::grammar::names::question::Budget::DEFAULT,
+        let resolve = || self.timed("modules.resolve.search", || semantic.question.budget.sized(crate::names::question::Budget::DEFAULT,
             || self.0.asking(semantic, at, || Resolver { host: self, settings: selected }.resolve(ctx.file_id, specifier, &[], semantic.question)))
             .unwrap_or(Known::Unknown));
         let answer = super::reads::Cached::compute(|| match World::path(self, ctx.file_id).and_then(Path::parent) {
@@ -1835,7 +1835,7 @@ impl World for Files<'_> {
         }))
     }
 
-    fn origin(&self, file: u32) -> Known<crate::grammar::names::modules::resolution::Origin> {
+    fn origin(&self, file: u32) -> Known<crate::names::modules::resolution::Origin> {
         let Known::Yes(Some(selected)) = self.program_selected() else { return Known::Unknown };
         World::path(self, file).map_or(Known::Unknown, |path| Known::Yes(selected.origin(path)))
     }
@@ -1917,7 +1917,7 @@ impl World for Files<'_> {
         // Only a value no step of which read the linted file is every
         // linted file's (a global augmentation there would change it). An
         // unknown one is too, unless it rests on something still undecided
-        // (as in [`crate::grammar::names::values::Values::memoized`]).
+        // (as in [`crate::names::values::Values::memoized`]).
         let stable = if values.root_reads() != before { Err(3) }
             else if semantic.question.budget.limited() { Err(4) }
             else if answer.value == NodeValue::Unknown { if values.cycled_since(mark) { Err(2) } else { Ok(None) } }
@@ -1995,7 +1995,7 @@ impl World for Files<'_> {
 
     fn refuted_by_syntax(&self, at: Leaf, condition: u32) -> bool {
         let world = self.0;
-        let Some(item) = world.ctx.grammar.names.conditions.get(condition as usize) else { return false };
+        let Some(item) = world.ctx.names.conditions.get(condition as usize) else { return false };
         let Some(lowered) = item.lowered.get() else { return false };
         let Some(guard) = item.guard.get_or_init(|| lowered.syntax_guard()) else { return false };
         let Some(ctx) = world.here(at) else { return false };
@@ -2005,7 +2005,7 @@ impl World for Files<'_> {
 
     fn condition(&self, at: Leaf, condition: u32, semantic: &Semantic<'_>) -> Known<bool> {
         let world = self.0;
-        let lowered = world.ctx.grammar.names.conditions.get(condition as usize).and_then(|c| c.lowered.get());
+        let lowered = world.ctx.names.conditions.get(condition as usize).and_then(|c| c.lowered.get());
         let (Some(ctx), Some(e)) = (world.here(at), lowered) else { return Known::Unknown };
         // A condition asked again while it is being decided on the same
         // node (in any frame: each round can bind a new one) is a cycle.
@@ -2026,7 +2026,7 @@ impl World for Files<'_> {
 
     fn operand(&self, at: Leaf, operand: u32, semantic: &Semantic<'_>) -> Known<Value<'static>> {
         let world = self.0;
-        let lowered = world.ctx.grammar.names.operands.get(operand as usize).and_then(|o| o.lowered.get());
+        let lowered = world.ctx.names.operands.get(operand as usize).and_then(|o| o.lowered.get());
         let (Some(ctx), Some(e)) = (world.here(at), lowered) else { return Known::Unknown };
         world.asking(semantic, at, || run(&ctx, e))
     }
@@ -2103,7 +2103,7 @@ impl Host for Files<'_> {
 
     fn ambient(&self, _importer: u32, name: &str, classes: u64, question: &QueryContext) -> Known<Option<ScopeRef>> {
         if let Some(active) = self.0.question() { return self.ambient_with(name, classes, active.semantic); }
-        let semantic = Semantic::new(self, &self.0.ctx.grammar.names, question);
+        let semantic = Semantic::new(self, &self.0.ctx.names, question);
         self.ambient_with(name, classes, &semantic)
     }
 
@@ -2117,7 +2117,7 @@ impl Host for Files<'_> {
 pub(super) fn opens_scopes<'a>(world: &'a LintWorld<'a>, classes: u64) -> bool {
     let files = Files(world);
     let question = QueryContext::once();
-    let semantic = Semantic::new(&files, &world.ctx.grammar.names, &question);
+    let semantic = Semantic::new(&files, &world.ctx.names, &question);
     files.opens_scopes(0, classes, &semantic)
 }
 
@@ -2134,7 +2134,7 @@ pub(super) fn describe_alone<'a>(world: &'a LintWorld<'a>, unit: &super::units::
 /// conditional `export *` one.
 pub(super) fn publications<'a>(world: &'a LintWorld<'a>, unit: &super::units::Unit) -> Vec<(Option<String>, u32)> {
     let files = Files(world);
-    let Some(index) = World::module_index(&files, 0, &world.ctx.grammar.names) else { return Vec::new() };
+    let Some(index) = World::module_index(&files, 0, &world.ctx.names) else { return Vec::new() };
     index.published(unit.parsed.tree.root).into_iter()
         .filter(|(name, plan)| name.is_some() || any_holds(world, &[(plan.node, plan.item.when)]))
         .map(|(name, plan)| (name.map(str::to_owned), plan.node)).collect()
@@ -2153,7 +2153,7 @@ impl Files<'_> {
         let Known::Yes(Some(selected)) = self.program_selected() else { return None };
         let path = World::path(self, ctx.file_id)?;
         let linter = self.0.linter;
-        let settings = linter.grammar.names.settings_index(selected)?;
+        let settings = linter.names.settings_index(selected)?;
         let module = linter.relative(path).to_string_lossy().replace('\\', "/").into();
         let ask = super::reads::ModuleAsk { root: super::reads::dep_path(&linter.root), settings, module, stop, ignore, exports };
         let answer = linter.module_answer(&ask);
@@ -2168,7 +2168,7 @@ impl Files<'_> {
 pub(super) fn module_links<'a>(world: &'a LintWorld<'a>, unit: &'a super::units::Unit) -> super::module_graph::Links {
     let files = Files(world);
     let question = QueryContext::once();
-    let tables = &world.ctx.grammar.names;
+    let tables = &world.ctx.names;
     let semantic = Semantic::new(&files, tables, &question);
     let tree = &unit.parsed.tree;
     let at = |node: u32| Leaf { target: Target::Node(NodeRef { file: 0, node }), frame: FrameId::ROOT };
@@ -2248,7 +2248,7 @@ pub(super) fn module_links<'a>(world: &'a LintWorld<'a>, unit: &'a super::units:
 pub(super) fn any_holds<'a>(world: &'a LintWorld<'a>, items: &[(u32, Option<u32>)]) -> bool {
     let files = Files(world);
     let question = QueryContext::once();
-    let semantic = Semantic::new(&files, &world.ctx.grammar.names, &question);
+    let semantic = Semantic::new(&files, &world.ctx.names, &question);
     items.iter().any(|&(node, when)| {
         let at = Leaf { target: Target::Node(NodeRef { file: 0, node }), frame: FrameId::ROOT };
         when.is_none_or(|when| World::condition(&files, at, when, &semantic) != Known::Yes(false))
@@ -2265,7 +2265,7 @@ fn run(ctx: &Ctx<'_>, e: &VExpr) -> Known<Value<'static>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::grammar::names::question::{FrameId, NodeRef, QueryContext, ScopeRef};
+    use crate::names::question::{FrameId, NodeRef, QueryContext, ScopeRef};
     use crate::engine::{reads, tests::linter};
 
     fn with_world<T>(linter: &super::super::Linter, f: impl FnOnce(Files<'_>) -> T) -> T {
@@ -2323,10 +2323,10 @@ mod tests {
         reads::set_buffer(&library, "(library)");
         let inputs = r#"{"files":["library.t","main.t","next.t"]}"#;
         reads::set_buffer(&config, inputs);
-        let classes = linter.grammar.names.vocabulary.scope_class("ambient");
+        let classes = linter.names.vocabulary.scope_class("ambient");
         with_source_world(&linter, &main, "()", |files| {
             let question = QueryContext::default();
-            let semantic = Semantic::new(&files, &linter.grammar.names, &question);
+            let semantic = Semantic::new(&files, &linter.names, &question);
             let Known::Yes(Some(scope)) = files.ambient_with("shared", classes, &semantic) else { panic!("ambient declaration exists") };
             assert_eq!(World::text(&files, scope.file), Some("(library)"));
             let remaining = question.budget.remaining();
@@ -2340,8 +2340,8 @@ mod tests {
         with_source_world(&linter, &next, "()", |files| {
             files.0.file(&main).unwrap();
             let mut question = QueryContext::default();
-            question.budget = crate::grammar::names::question::Budget::new(0);
-            let semantic = Semantic::new(&files, &linter.grammar.names, &question);
+            question.budget = crate::names::question::Budget::new(0);
+            let semantic = Semantic::new(&files, &linter.names, &question);
             let Known::Yes(Some(scope)) = files.ambient_with("shared", classes, &semantic) else { panic!("shared catalog is available without rebuilding") };
             assert_eq!(World::text(&files, scope.file), Some("(library)"), "shared descriptors must not retain another world's file ids");
             for _ in 0..20 {
@@ -2354,8 +2354,8 @@ mod tests {
         for path in [&main, &next].into_iter().cycle().take(20) {
             let (_, dependencies) = reads::track(|| with_snapshot_world(&linter, path, "()", Some(&snapshot), |files| {
                 let mut question = QueryContext::default();
-                question.budget = crate::grammar::names::question::Budget::new(0);
-                let semantic = Semantic::new(&files, &linter.grammar.names, &question);
+                question.budget = crate::names::question::Budget::new(0);
+                let semantic = Semantic::new(&files, &linter.names, &question);
                 let Known::Yes(Some(scope)) = files.ambient_with("shared", classes, &semantic) else { panic!("run snapshot crosses files without rebuilding") };
                 assert_eq!(World::text(&files, scope.file), Some("(library)"));
             }));
@@ -2366,7 +2366,7 @@ mod tests {
         for (source, present) in [("(unsaved)", true), ("()", false)] {
             with_snapshot_world(&linter, &main, source, Some(&snapshot), |files| {
                 let question = QueryContext::default();
-                let semantic = Semantic::new(&files, &linter.grammar.names, &question);
+                let semantic = Semantic::new(&files, &linter.names, &question);
                 let Known::Yes(answer) = files.ambient_with("local", classes, &semantic) else { panic!("provided file text is known") };
                 assert_eq!(answer.is_some(), present, "the caller's text must not be replaced by a shared disk snapshot");
             });
@@ -2375,7 +2375,7 @@ mod tests {
             reads::set_buffer(&config, metadata);
             with_source_world(&linter, &main, "()", |files| {
                 let question = QueryContext::default();
-                let semantic = Semantic::new(&files, &linter.grammar.names, &question);
+                let semantic = Semantic::new(&files, &linter.names, &question);
                 let Known::Yes(answer) = files.ambient_with("shared", classes, &semantic) else { panic!("changed project inputs are known") };
                 assert_eq!(answer.is_some(), present);
             });
@@ -2384,17 +2384,17 @@ mod tests {
         linter.invalidate(std::slice::from_ref(&library));
         with_snapshot_world(&linter, &main, "()", Some(&snapshot), |files| {
             let question = QueryContext::default();
-            let semantic = Semantic::new(&files, &linter.grammar.names, &question);
+            let semantic = Semantic::new(&files, &linter.names, &question);
             assert_eq!(files.ambient_with("shared", classes, &semantic), Known::Yes(None));
         });
         reads::set_buffer(&library, "(library)");
         with_source_world(&linter, &main, "()", |files| {
             let mut bounded = QueryContext::default();
-            bounded.budget = crate::grammar::names::question::Budget::new(0);
-            let semantic = Semantic::new(&files, &linter.grammar.names, &bounded);
+            bounded.budget = crate::names::question::Budget::new(0);
+            let semantic = Semantic::new(&files, &linter.names, &bounded);
             assert_eq!(files.ambient_with("shared", classes, &semantic), Known::Unknown);
             let question = QueryContext::default();
-            let semantic = Semantic::new(&files, &linter.grammar.names, &question);
+            let semantic = Semantic::new(&files, &linter.names, &question);
             let Known::Yes(Some(scope)) = files.ambient_with("shared", classes, &semantic) else { panic!("unknown catalog is retried") };
             assert_eq!(World::text(&files, scope.file), Some("(library)"));
         });
@@ -2429,7 +2429,7 @@ mod tests {
                 when text == "(library)" { scope ambient named "shared" }
             }
         "#);
-        for condition in &mut linter.compiled_mut().grammar.names.conditions {
+        for condition in &mut linter.compiled_mut().names.conditions {
             let original = condition.lowered.take().unwrap();
             condition.lowered.set(VExpr::Binary(crate::config::ast::BinOp::And,
                 Box::new(original), Box::new(VExpr::QueryCall(crate::expr::queries::test_query_id(&QUERY),
@@ -2442,12 +2442,12 @@ mod tests {
         reads::set_buffer(&main, "()");
         reads::set_buffer(&library, "(library)");
         reads::set_buffer(&config, r#"{"files":["library.t","main.t"]}"#);
-        let classes = linter.grammar.names.vocabulary.scope_class("ambient");
+        let classes = linter.names.vocabulary.scope_class("ambient");
         let mut previous = 0;
         for _ in 0..2 {
             with_source_world(&linter, &main, "()", |files| {
                 let question = QueryContext::default();
-                let semantic = Semantic::new(&files, &linter.grammar.names, &question);
+                let semantic = Semantic::new(&files, &linter.names, &question);
                 assert_eq!(files.ambient_with("shared", classes, &semantic), Known::Unknown);
                 let calls = CALLS.with(Cell::get);
                 assert!(calls > previous, "a new world must retry incomplete names");
@@ -2470,10 +2470,10 @@ mod tests {
         let linter = linter("");
         with_world(&linter, |files| {
             let question = QueryContext::default();
-            let semantic = Semantic::new(&files, &linter.grammar.names, &question);
+            let semantic = Semantic::new(&files, &linter.names, &question);
             let at = Leaf { target: Target::Node(NodeRef::here(0)), frame: FrameId::ROOT };
             assert_eq!(reenter(files.0, &semantic, at, 2), Known::Yes(true));
-            assert_eq!(reenter(files.0, &semantic, at, crate::grammar::names::question::Budget::DEPTH + 1), Known::Unknown);
+            assert_eq!(reenter(files.0, &semantic, at, crate::names::question::Budget::DEPTH + 1), Known::Unknown);
             assert!(files.0.question().is_none());
         });
     }
@@ -2493,8 +2493,8 @@ mod tests {
             let node = tree.order.iter().copied().find(|&node| tree.node(node).matcher == matcher).unwrap();
             let at = Leaf { target: Target::Node(NodeRef::here(node)), frame: FrameId::ROOT };
             let question = QueryContext::default();
-            let semantic = Semantic::new(&files, &linter.grammar.names, &question);
-            let trait_id = linter.grammar.names.vocabulary.traits.iter().position(|name| name == "conditional").unwrap() as u16;
+            let semantic = Semantic::new(&files, &linter.names, &question);
+            let trait_id = linter.names.vocabulary.traits.iter().position(|name| name == "conditional").unwrap() as u16;
             assert_eq!(semantic.values().fits(at, trait_id), Known::Unknown);
         });
     }
@@ -2590,11 +2590,11 @@ mod tests {
             let node = tree.order.iter().copied().find(|&node| tree.node(node).matcher == matcher).unwrap();
             let at = Leaf { target: Target::Node(NodeRef::here(node)), frame: FrameId::ROOT };
             let ctx = files.0.here(at).unwrap();
-            let condition = linter.grammar.names.conditions[0].lowered.get().unwrap();
+            let condition = linter.names.conditions[0].lowered.get().unwrap();
             assert_eq!(Session::new(&ctx, node, &[]).holds_on(node, condition), Some(false));
             let question = QueryContext::default();
-            let semantic = Semantic::new(&files, &linter.grammar.names, &question);
-            let trait_id = linter.grammar.names.vocabulary.traits.iter().position(|name| name == "conditional").unwrap() as u16;
+            let semantic = Semantic::new(&files, &linter.names, &question);
+            let trait_id = linter.names.vocabulary.traits.iter().position(|name| name == "conditional").unwrap() as u16;
             assert_eq!(semantic.values().fits(at, trait_id), Known::Unknown);
         });
     }
@@ -2619,11 +2619,11 @@ mod tests {
             let node = tree.order.iter().copied().find(|&node| tree.node(node).matcher == linter.grammar.matcher("paren").unwrap()).unwrap();
             let at = Leaf { target: Target::Node(NodeRef { file, node }), frame: FrameId::ROOT };
             let q = QueryContext::default();
-            let semantic = Semantic::new(&files, &linter.grammar.names, &q);
+            let semantic = Semantic::new(&files, &linter.names, &q);
             let scope = files.names(file).unwrap().scopes.iter().position(|scope| scope.node == node).unwrap() as u32;
             let frame = q.bind(FrameId::ROOT, NodeRef { file, node }, None, Some(vec![]));
             let scoped = Leaf { target: Target::Scope(ScopeRef { file, scope }), frame };
-            let trait_id = linter.grammar.names.vocabulary.traits.iter().position(|name| name == "marked").unwrap() as u16;
+            let trait_id = linter.names.vocabulary.traits.iter().position(|name| name == "marked").unwrap() as u16;
             for subject in [at, scoped] {
                 assert_eq!(semantic.values().fits(subject, trait_id), Known::Yes(true));
                 assert_eq!(files.condition(subject, 0, &semantic), Known::Yes(true));
@@ -2632,9 +2632,9 @@ mod tests {
                 let Known::Yes(value) = files.attribute(subject, 0, &semantic) else { panic!("attribute answers") };
                 assert_eq!(value.text(), "(leaf)");
             }
-            let viewed = linter.grammar.names.vocabulary.trait_bit("viewed");
-            assert!(!files.0.query(file, node, &crate::grammar::names::Value::Path(vec![]), crate::expr::queries::query(crate::config::ast::Quantifier::Could), viewed));
-            assert_eq!(files.0.asking(&semantic, scoped, || Known::Yes(files.0.query(file, node, &crate::grammar::names::Value::Path(vec![]), crate::expr::queries::query(crate::config::ast::Quantifier::Could), viewed))), Known::Yes(true));
+            let viewed = linter.names.vocabulary.trait_bit("viewed");
+            assert!(!files.0.query(file, node, &crate::names::Value::Path(vec![]), crate::expr::queries::query(crate::config::ast::Quantifier::Could), viewed));
+            assert_eq!(files.0.asking(&semantic, scoped, || Known::Yes(files.0.query(file, node, &crate::names::Value::Path(vec![]), crate::expr::queries::query(crate::config::ast::Quantifier::Could), viewed))), Known::Yes(true));
             assert_eq!(files.0.asking(&semantic, scoped, || files.0.semantic_query(file, node, Uncertainty::Strict, |_, nested| Known::Yes(nested))), Known::Yes(scoped));
             let other = tree.root;
             assert_eq!(files.0.asking(&semantic, scoped, || files.0.semantic_query(file, other, Uncertainty::Strict, |_, nested| Known::Yes(nested))), Known::Yes(Leaf { target: Target::Node(NodeRef { file, node: other }), frame }));
@@ -2823,8 +2823,8 @@ mod tests {
         reads::set_buffer(config, r#"{"compilerOptions":{"variant":"chosen"}}"#);
         with_world(&linter, |files| {
             let mut question = QueryContext::default();
-            question.budget = crate::grammar::names::question::Budget::new(0);
-            let semantic = Semantic::new(&files, &linter.grammar.names, &question);
+            question.budget = crate::names::question::Budget::new(0);
+            let semantic = Semantic::new(&files, &linter.names, &question);
             assert_eq!(files.global_scopes(0, "x", &semantic), Known::Yes(vec![ScopeRef { file: 0, scope: 0 }]));
             let Known::Yes(Some(selected)) = files.program_selected() else { panic!("root selection is not question work") };
             assert_eq!(selected.star_excludes, [Box::<str>::from("chosen")]);
@@ -2864,11 +2864,11 @@ mod tests {
         with_world(&linter, |files| {
             let file = files.0.file(library).unwrap();
             let question = QueryContext::default();
-            let semantic = Semantic::new(&files, &linter.grammar.names, &question);
+            let semantic = Semantic::new(&files, &linter.names, &question);
             let Known::Yes(Some(selected)) = files.selected(files.file_leaf(0).unwrap(), &semantic) else { panic!("program settings exist") };
             let mut bounded = QueryContext::default();
-            bounded.budget = crate::grammar::names::question::Budget::new(0);
-            let semantic = Semantic::new(&files, &linter.grammar.names, &bounded);
+            bounded.budget = crate::names::question::Budget::new(0);
+            let semantic = Semantic::new(&files, &linter.names, &bounded);
             let expected = Known::Yes(vec![ScopeRef { file, scope: 0 }, ScopeRef { file: 0, scope: 0 }]);
             let at = files.file_leaf(0).unwrap();
             assert_eq!(files.0.asking(&semantic, at, || files.roots(selected, "x")), expected);
@@ -2879,7 +2879,7 @@ mod tests {
         });
         with_world(&linter, |files| {
             let question = QueryContext::default();
-            let semantic = Semantic::new(&files, &linter.grammar.names, &question);
+            let semantic = Semantic::new(&files, &linter.names, &question);
             assert_eq!(files.global_scopes(0, "x", &semantic), Known::Yes(vec![ScopeRef { file: 0, scope: 0 }]));
         });
         for path in [config, library] { reads::drop_buffer(path); }
@@ -2923,13 +2923,13 @@ mod tests {
             let node = tree.order.iter().copied().find(|&node| tree.node(node).matcher == linter.grammar.matcher("paren").unwrap()).unwrap();
             let at = Leaf { target: Target::Node(NodeRef { file, node }), frame: FrameId::ROOT };
             let question = QueryContext::default();
-            let semantic = Semantic::new(&files, &linter.grammar.names, &question);
+            let semantic = Semantic::new(&files, &linter.names, &question);
             assert_eq!(files.global_scopes(file, "x", &semantic), Known::Yes(vec![ScopeRef { file: library_file, scope: 0 }, ScopeRef { file: 0, scope: 0 }]));
             assert_eq!(files.module_star_excludes(ScopeRef { file, scope: 0 }, "program-only", &semantic), Known::Yes(true));
             assert_eq!(files.module(files.file_leaf(0).unwrap(), "./target", &semantic), Known::Yes(None));
             let Known::Yes(Some(relative)) = files.module(at, "./target", &semantic) else { panic!("relative importer is preserved") };
             assert_eq!(World::text(&files, relative.file), Some("(target)"));
-            let classes = linter.grammar.names.vocabulary.scope_class("ambient");
+            let classes = linter.names.vocabulary.scope_class("ambient");
             let expected = ScopeRef { file: library_file, scope: 1 };
             assert_eq!(files.ambient_with("shared", classes, &semantic), Known::Yes(Some(expected)));
             let own = ScopeRef { file, scope: 1 };
@@ -2940,8 +2940,8 @@ mod tests {
 
     #[test]
     fn module_lookup_loads_a_unit_and_missing_candidates_invalidate_on_creation() {
-        use crate::grammar::names::modules::compile::{Conditional, Profile};
-        use crate::grammar::names::modules::resolution::{Search, Settings};
+        use crate::names::modules::compile::{Conditional, Profile};
+        use crate::names::modules::resolution::{Search, Settings};
         static CREATED: crate::expr::queries::QueryFunction = crate::expr::queries::QueryFunction {
             name: "created",
             arity: 1,
@@ -2953,8 +2953,8 @@ mod tests {
         let mut linter = linter("in paren fits marked");
         let matcher = linter.grammar.matcher("paren").unwrap();
         let compiled = linter.compiled_mut();
-        compiled.grammar.names.kinds[matcher as usize].modules.items.push(Conditional { action: Action::Uses("unit-test".into()), when: None });
-        compiled.grammar.names.module_resolutions.push(Profile { name: "unit-test".into(), modes: Vec::new(), settings: Settings {
+        compiled.names.kinds[matcher as usize].modules.items.push(Conditional { action: Action::Uses("unit-test".into()), when: None });
+        compiled.names.module_resolutions.push(Profile { name: "unit-test".into(), modes: Vec::new(), settings: Settings {
             search: vec![Search::Relative], extensions: vec![".t".into()], candidates: vec!["{dir}/{name}{ext}".into()], ..Settings::default()
         } });
         compiled.attrs = crate::expr::Attributes::new(vec![
@@ -2971,13 +2971,13 @@ mod tests {
             let node = tree.order.iter().copied().find(|&node| tree.node(node).matcher == matcher).unwrap();
             let at = Leaf { target: Target::Node(NodeRef::here(node)), frame: FrameId::ROOT };
             let q = QueryContext::default();
-            let semantic = Semantic::new(&files, &linter.grammar.names, &q);
+            let semantic = Semantic::new(&files, &linter.names, &q);
             let Known::Yes(Some(scope)) = files.module(at, "./module-unit", &semantic) else { panic!("module reaches unit") };
             assert_ne!(scope.file, 0);
             assert_eq!(World::text(&files, scope.file), Some("(remote)"));
             let mut bounded = QueryContext::default();
-            bounded.budget = crate::grammar::names::question::Budget::new(0);
-            let repeated = Semantic::new(&files, &linter.grammar.names, &bounded);
+            bounded.budget = crate::names::question::Budget::new(0);
+            let repeated = Semantic::new(&files, &linter.names, &bounded);
             let (answer, dependencies) = reads::track(|| files.module(at, "./module-unit", &repeated));
             assert_eq!(answer, Known::Yes(Some(scope)));
             // Which module a specifier names does not depend on its text.

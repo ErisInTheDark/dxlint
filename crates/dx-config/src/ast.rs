@@ -312,7 +312,7 @@ impl NameItem {
     pub const OUTSIDE_OPERAND: u8 = 2;
 
     /// Expression `part` the item evaluates on its nodes
-    /// (`grammar::names::Operand`).
+    /// (`names::Operand`).
     pub fn operand(&self, part: u8) -> Option<&Expr> {
         match self {
             NameItem::Declares { keyed, .. } | NameItem::Resolves { keyed, .. } if part == Self::KEY_OPERAND => keyed.as_ref(),

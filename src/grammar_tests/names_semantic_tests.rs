@@ -1,11 +1,11 @@
 use std::cell::Cell;
 
 use crate::engine::tests::linter as make_linter;
-use crate::grammar::names::question::{
+use crate::names::question::{
     Budget, FrameId, Known, Leaf, NodeRef, NodeValue, QueryContext, ScopeRef, Target, World,
 };
-use crate::grammar::names::semantic::{Semantic, Session};
-use crate::grammar::names::{Resolved, ScopeIndex, PARENT};
+use crate::names::semantic::{Semantic, Session};
+use crate::names::{Resolved, ScopeIndex, PARENT};
 use crate::grammar::{Edge, Node, TEXT};
 use crate::pattern::compile::NO_LABEL;
 
@@ -19,9 +19,9 @@ fn semantic_capture_items_keep_their_parent_and_order() {
         Node { matcher: TEXT, start: 1, end: 2, children: vec![Edge { label: NO_LABEL, node: 2 }] },
         Node { matcher: 0, start: 0, end: 2, children: vec![Edge { label: 0, node: 1 }, Edge { label: 0, node: 3 }] },
     ], 4);
-    let world = CountingWorld { grammar: &linter.grammar, tree: &tree, conditions: Cell::new(0), cut: Cell::new(0), revision: Cell::new(0), profile: None };
+    let world = CountingWorld { grammar: &linter.grammar, tables: &linter.names, tree: &tree, conditions: Cell::new(0), cut: Cell::new(0), revision: Cell::new(0), profile: None };
     let question = QueryContext::default();
-    let semantic = Semantic::new(&world, &linter.grammar.names, &question);
+    let semantic = Semantic::new(&world, &linter.names, &question);
     let frame = question.bind(FrameId::ROOT, NodeRef::here(4), None, None);
     let parent = Leaf { target: Target::Node(NodeRef::here(4)), frame };
     for (node, position) in [(0, 0), (1, 0), (2, 1), (3, 1)] {
@@ -47,9 +47,9 @@ fn semantic_captures_preserve_views_and_reject_broken_chains() {
         Node { matcher: TEXT, start: 0, end: 2, children: vec![Edge { label: 0, node: 0 }] },
         Node { matcher: TEXT, start: 0, end: 2, children: vec![Edge { label: NO_LABEL, node: 0 }, Edge { label: NO_LABEL, node: 3 }] },
     ], 2);
-    let world = CountingWorld { grammar: &linter.grammar, tree: &tree, conditions: Cell::new(0), cut: Cell::new(0), revision: Cell::new(0), profile: None };
+    let world = CountingWorld { grammar: &linter.grammar, tables: &linter.names, tree: &tree, conditions: Cell::new(0), cut: Cell::new(0), revision: Cell::new(0), profile: None };
     let question = QueryContext::default();
-    let semantic = Semantic::new(&world, &linter.grammar.names, &question);
+    let semantic = Semantic::new(&world, &linter.names, &question);
     let frame = question.bind(FrameId::ROOT, NodeRef::here(0), None, None);
     let enclosing = question.bind(FrameId::ROOT, NodeRef { file: 7, node: 0 }, None, None);
     let at = Leaf { target: Target::Node(NodeRef { file: 7, node: 2 }), frame: enclosing };
@@ -69,12 +69,13 @@ fn semantic_captures_preserve_views_and_reject_broken_chains() {
     assert_eq!(semantic.leaf(Leaf { target: Target::Node(NodeRef::here(99)), frame }), Known::Unknown);
     let mut bounded = QueryContext::default();
     bounded.budget = Budget::new(1);
-    let semantic = Semantic::new(&world, &linter.grammar.names, &bounded);
+    let semantic = Semantic::new(&world, &linter.names, &bounded);
     assert_eq!(semantic.leaf(at), Known::Unknown);
 }
 
 struct CountingWorld<'a> {
     grammar: &'a crate::grammar::Grammar,
+    tables: &'a crate::names::Names,
     tree: &'a crate::grammar::Tree,
     conditions: Cell<u32>,
     cut: Cell<u8>,
@@ -114,7 +115,7 @@ impl World for CountingWorld<'_> {
             }
             // A cycle: the condition asks the fact it decides.
             4 => {
-                let marked = self.grammar.names.vocabulary.traits.iter().position(|name| name == "marked").unwrap() as u16;
+                let marked = self.tables.vocabulary.traits.iter().position(|name| name == "marked").unwrap() as u16;
                 return semantic.values().fits(at, marked);
             }
             _ => {}
@@ -133,12 +134,12 @@ fn root_sessions_reuse_answers_without_mixing_frames_or_retaining_limit_cuts() {
     let matcher = linter.grammar.matcher("paren").unwrap();
     let node = tree.order.iter().copied().find(|&node| tree.node(node).matcher == matcher).unwrap();
     let profile = crate::engine::Profile::default();
-    let world = CountingWorld { grammar: &linter.grammar, tree: &tree, conditions: Cell::new(0), cut: Cell::new(0), revision: Cell::new(0), profile: Some(&profile) };
+    let world = CountingWorld { grammar: &linter.grammar, tables: &linter.names, tree: &tree, conditions: Cell::new(0), cut: Cell::new(0), revision: Cell::new(0), profile: Some(&profile) };
     let at = Leaf { target: Target::Node(NodeRef::here(node)), frame: FrameId::ROOT };
-    let trait_id = linter.grammar.names.vocabulary.traits.iter().position(|name| name == "marked").unwrap() as u16;
+    let trait_id = linter.names.vocabulary.traits.iter().position(|name| name == "marked").unwrap() as u16;
     let session = Session::default();
     for _ in 0..2 {
-        assert_eq!(session.run(&world, &linter.grammar.names, |semantic| semantic.values().fits(at, trait_id)), Known::Yes(true));
+        assert_eq!(session.run(&world, &linter.names, |semantic| semantic.values().fits(at, trait_id)), Known::Yes(true));
     }
     assert_eq!(world.conditions.get(), 1);
     for (argument, expected) in [
@@ -146,7 +147,7 @@ fn root_sessions_reuse_answers_without_mixing_frames_or_retaining_limit_cuts() {
         (NodeValue::leaf(at), false),
         (NodeValue::never(), true),
     ] {
-        assert_eq!(session.run(&world, &linter.grammar.names, |semantic| {
+        assert_eq!(session.run(&world, &linter.names, |semantic| {
             let frame = semantic.question.bind(FrameId::ROOT, NodeRef::here(node), None, Some(vec![argument]));
             semantic.values().fits(Leaf { frame, ..at }, trait_id)
         }), Known::Yes(expected));
@@ -154,9 +155,9 @@ fn root_sessions_reuse_answers_without_mixing_frames_or_retaining_limit_cuts() {
     assert_eq!(world.conditions.get(), 3);
     for cut in [1, 2] {
         let session = Session::default();
-        assert_eq!(session.run(&world, &linter.grammar.names, |semantic| semantic.values().fits(at, trait_id)), Known::Yes(true));
+        assert_eq!(session.run(&world, &linter.names, |semantic| semantic.values().fits(at, trait_id)), Known::Yes(true));
         let before = world.conditions.get();
-        assert_eq!(session.run(&world, &linter.grammar.names, |semantic| {
+        assert_eq!(session.run(&world, &linter.names, |semantic| {
             let complete = semantic.question.bind(FrameId::ROOT, NodeRef::here(node), None,
                 Some(vec![NodeValue::leaf(at)]));
             assert_eq!(semantic.values().fits(Leaf { frame: complete, ..at }, trait_id), Known::Yes(false));
@@ -166,8 +167,8 @@ fn root_sessions_reuse_answers_without_mixing_frames_or_retaining_limit_cuts() {
             semantic.values().fits(Leaf { frame, ..at }, trait_id)
         }), Known::Unknown);
         world.cut.set(0);
-        assert_eq!(session.run(&world, &linter.grammar.names, |semantic| semantic.values().fits(at, trait_id)), Known::Yes(true));
-        assert_eq!(session.run(&world, &linter.grammar.names, |semantic| {
+        assert_eq!(session.run(&world, &linter.names, |semantic| semantic.values().fits(at, trait_id)), Known::Yes(true));
+        assert_eq!(session.run(&world, &linter.names, |semantic| {
             let frame = semantic.question.bind(FrameId::ROOT, NodeRef::here(node), None,
                 Some(vec![NodeValue::leaf(at)]));
             semantic.values().fits(Leaf { frame, ..at }, trait_id)
@@ -177,7 +178,7 @@ fn root_sessions_reuse_answers_without_mixing_frames_or_retaining_limit_cuts() {
         // being redone; one cut by nesting depth (which depends on who
         // asked) is computed again.
         let (answer, conditions) = if cut == 1 { (Known::Unknown, before + 2) } else { (Known::Yes(true), before + 3) };
-        assert_eq!(session.run(&world, &linter.grammar.names, |semantic| {
+        assert_eq!(session.run(&world, &linter.names, |semantic| {
             let frame = semantic.question.bind(FrameId::ROOT, NodeRef::here(node), None,
                 Some(vec![NodeValue::never()]));
             semantic.values().fits(Leaf { frame, ..at }, trait_id)
@@ -187,11 +188,11 @@ fn root_sessions_reuse_answers_without_mixing_frames_or_retaining_limit_cuts() {
     let before = world.conditions.get();
     world.revision.set(1);
     for _ in 0..2 {
-        assert_eq!(session.run(&world, &linter.grammar.names, |semantic| semantic.values().fits(at, trait_id)), Known::Yes(false));
+        assert_eq!(session.run(&world, &linter.names, |semantic| semantic.values().fits(at, trait_id)), Known::Yes(false));
     }
     assert_eq!(world.conditions.get(), before + 1);
     world.revision.set(2);
-    assert_eq!(session.run(&world, &linter.grammar.names, |semantic| semantic.values().fits(at, trait_id)), Known::Yes(true));
+    assert_eq!(session.run(&world, &linter.names, |semantic| semantic.values().fits(at, trait_id)), Known::Yes(true));
     assert_eq!(world.conditions.get(), before + 2);
 }
 
@@ -201,12 +202,12 @@ fn a_fact_answers_the_same_whichever_root_reaches_it_first() {
     let tree = linter.grammar.parse_tree_with(0, "()", None, None);
     let matcher = linter.grammar.matcher("paren").unwrap();
     let node = tree.order.iter().copied().find(|&node| tree.node(node).matcher == matcher).unwrap();
-    let world = CountingWorld { grammar: &linter.grammar, tree: &tree, conditions: Cell::new(0), cut: Cell::new(3), revision: Cell::new(0), profile: None };
+    let world = CountingWorld { grammar: &linter.grammar, tables: &linter.names, tree: &tree, conditions: Cell::new(0), cut: Cell::new(3), revision: Cell::new(0), profile: None };
     let at = Leaf { target: Target::Node(NodeRef::here(node)), frame: FrameId::ROOT };
-    let trait_id = linter.grammar.names.vocabulary.traits.iter().position(|name| name == "marked").unwrap() as u16;
+    let trait_id = linter.names.vocabulary.traits.iter().position(|name| name == "marked").unwrap() as u16;
     // The fact spends 50 steps of its own allowance: a root with 20 left
     // gets it as a fresh root does, whichever of them computes it.
-    let ask = |session: &Session, late: bool| session.run(&world, &linter.grammar.names, |semantic| {
+    let ask = |session: &Session, late: bool| session.run(&world, &linter.names, |semantic| {
         while late && semantic.question.budget.remaining() > 20 { semantic.question.budget.step(); }
         Known::Yes(semantic.values().fits(at, trait_id))
     });
@@ -224,38 +225,38 @@ fn an_unknown_resting_on_an_unfinished_cycle_expires_with_the_fact_computing_it(
     let tree = linter.grammar.parse_tree_with(0, "()", None, None);
     let matcher = linter.grammar.matcher("paren").unwrap();
     let node = tree.order.iter().copied().find(|&node| tree.node(node).matcher == matcher).unwrap();
-    let world = CountingWorld { grammar: &linter.grammar, tree: &tree, conditions: Cell::new(0), cut: Cell::new(4), revision: Cell::new(0), profile: None };
+    let world = CountingWorld { grammar: &linter.grammar, tables: &linter.names, tree: &tree, conditions: Cell::new(0), cut: Cell::new(4), revision: Cell::new(0), profile: None };
     let at = Leaf { target: Target::Node(NodeRef::here(node)), frame: FrameId::ROOT };
-    let trait_id = linter.grammar.names.vocabulary.traits.iter().position(|name| name == "marked").unwrap() as u16;
+    let trait_id = linter.names.vocabulary.traits.iter().position(|name| name == "marked").unwrap() as u16;
     let session = Session::default();
     for _ in 0..2 {
-        assert_eq!(session.run(&world, &linter.grammar.names, |semantic| semantic.values().fits(at, trait_id)), Known::Unknown);
+        assert_eq!(session.run(&world, &linter.names, |semantic| semantic.values().fits(at, trait_id)), Known::Unknown);
     }
     // Never kept for good: each root computes it afresh (a cycle head
     // once more after its cycle), and a world where the cycle is gone
     // answers.
     assert_eq!(world.conditions.get(), 4);
     world.cut.set(0);
-    assert_eq!(session.run(&world, &linter.grammar.names, |semantic| semantic.values().fits(at, trait_id)), Known::Yes(true));
+    assert_eq!(session.run(&world, &linter.names, |semantic| semantic.values().fits(at, trait_id)), Known::Yes(true));
 }
 
 #[test]
 fn root_questions_cut_short_answer_unknown_whatever_they_built() {
     let linter = make_linter("");
     let tree = linter.grammar.parse_tree_with(0, "()", None, None);
-    let world = CountingWorld { grammar: &linter.grammar, tree: &tree, conditions: Cell::new(0), cut: Cell::new(0), revision: Cell::new(0), profile: None };
+    let world = CountingWorld { grammar: &linter.grammar, tables: &linter.names, tree: &tree, conditions: Cell::new(0), cut: Cell::new(0), revision: Cell::new(0), profile: None };
     let session = Session::default();
-    assert_eq!(session.run(&world, &linter.grammar.names, |semantic| {
+    assert_eq!(session.run(&world, &linter.names, |semantic| {
         while semantic.question.budget.step() {}
         Known::Yes(0)
     }), Known::Unknown);
-    assert_eq!(session.run(&world, &linter.grammar.names, |semantic| {
+    assert_eq!(session.run(&world, &linter.names, |semantic| {
         let mut guards = Vec::new();
         while let Some(guard) = semantic.question.budget.nest() { guards.push(guard); }
         drop(guards);
         Known::Yes(0)
     }), Known::Unknown);
-    assert_eq!(session.run(&world, &linter.grammar.names, |semantic| {
+    assert_eq!(session.run(&world, &linter.names, |semantic| {
         assert!(semantic.question.budget.step());
         Known::Yes(0)
     }), Known::Yes(0));
@@ -268,14 +269,14 @@ fn root_budget_profile_counts_known_unknown_and_limit_work_before_restart() {
     let tree = linter.grammar.parse_tree_with(0, "()", None, None);
     let profile = crate::engine::Profile::default();
     let world = CountingWorld {
-        grammar: &linter.grammar, tree: &tree, conditions: Cell::new(0),
+        grammar: &linter.grammar, tables: &linter.names, tree: &tree, conditions: Cell::new(0),
         cut: Cell::new(0), revision: Cell::new(0), profile: Some(&profile),
     };
     let session = Session::default();
     let budget = Budget::per_question();
     let half = budget / 2;
     for (units, known) in [(half, true), (half + 1, false), (budget, false), (3, true)] {
-        session.run(&world, &linter.grammar.names, |semantic| {
+        session.run(&world, &linter.names, |semantic| {
             for _ in 0..units { assert!(semantic.question.budget.step()); }
             if known { Known::Yes(()) } else { Known::Unknown }
         });

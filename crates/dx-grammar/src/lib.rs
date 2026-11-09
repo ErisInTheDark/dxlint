@@ -2,7 +2,6 @@
 //! and pre-resolved per language so parsing a file is pure table lookups.
 
 pub mod frontend;
-pub mod names;
 mod parse;
 mod shapes;
 mod states;
@@ -233,8 +232,6 @@ pub struct Grammar {
     /// function is known (they may call each other).
     pub functions: Vec<UserFn>,
     pub parsers: syntax::Parsers,
-    /// `scope`, `declares` and `resolves` tables.
-    pub names: names::Names,
 }
 
 /// A config `fn`: its name, its arity and its compiled body.
@@ -641,10 +638,8 @@ impl Grammar {
             dropped: config.dropped.clone(),
             functions: user_functions(config, errors, env.is_builtin),
             parsers: syntax::Parsers::build(&config.parsers, errors),
-            names: names::Names::default(),
         };
         grammar.shapes = shapes::Shapes::build(&grammar);
-        grammar.names = names::Names::build(config, &grammar, errors, env.constant);
         grammar
     }
 

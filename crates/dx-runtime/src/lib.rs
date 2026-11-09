@@ -11,6 +11,7 @@ pub mod vm;
 pub use dx_config as config;
 pub use dx_core::{fx_hash, path_globs, reads};
 pub use dx_grammar as grammar;
+pub use dx_names as names;
 pub use dx_pattern as pattern;
 pub use dx_tree::{footprint, line_index};
 #[cfg(feature = "work")]

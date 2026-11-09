@@ -5,8 +5,8 @@ use std::sync::{Arc, OnceLock};
 
 use crate::expr::queries::{HandleFunction, Query, QueryFunction};
 use crate::expr::Value;
-use crate::grammar::names::question::{Handle, Known};
-use crate::grammar::names::{Resolved, Value as NameValue};
+use crate::names::question::{Handle, Known};
+use crate::names::{Resolved, Value as NameValue};
 use crate::reads::Cached;
 use crate::vm::{FileVm, V};
 

@@ -124,12 +124,12 @@ pub struct AttrMemo<'a> {
     /// Indentation queries shared only within the active rule invocation.
     indent_hits: RefCell<FxHashMap<u32, Option<IndentHit>>>,
     /// The tree's names resolved (`scope_declaration`), on first read.
-    names: std::cell::OnceCell<crate::reads::Cached<std::sync::Arc<crate::grammar::names::Resolved>>>,
+    names: std::cell::OnceCell<crate::reads::Cached<std::sync::Arc<crate::names::Resolved>>>,
     /// Names are being resolved: native reads meanwhile get no names.
     resolving_names: std::cell::Cell<bool>,
     /// An editor's file: the names of its last lint, whose scope numbers
-    /// these keep ([`crate::grammar::names::Resolved::renumber_scopes`]).
-    pub previous_names: RefCell<Option<std::sync::Arc<crate::grammar::names::Resolved>>>,
+    /// these keep ([`crate::names::Resolved::renumber_scopes`]).
+    pub previous_names: RefCell<Option<std::sync::Arc<crate::names::Resolved>>>,
     /// An editor's file: name conditions' answers by (node, condition),
     /// with what each read; the last lint's that the edit left standing.
     pub name_conditions: RefCell<NameConditions>,
@@ -145,7 +145,7 @@ impl AttrMemo<'_> {
     }
 
     /// The tree's names, when resolved.
-    pub fn names_resolved(&self) -> Option<std::sync::Arc<crate::grammar::names::Resolved>> {
+    pub fn names_resolved(&self) -> Option<std::sync::Arc<crate::names::Resolved>> {
         self.names.get().map(|cached| cached.value.clone())
     }
 
@@ -180,6 +180,8 @@ static NO_ATTRS: AttrNames = AttrNames::EMPTY;
 #[derive(Clone)]
 pub struct Scope<'a> {
     pub grammar: &'a Grammar,
+    /// What the names items' classes and effects mean.
+    pub vocabulary: &'a crate::names::Vocabulary,
     /// Fields of the target node: label name -> label id.
     pub fields: Vec<(String, u16)>,
     pub options: Vec<String>,
@@ -238,6 +240,7 @@ impl<'a> Scope<'a> {
     pub fn new(grammar: &'a Grammar) -> Self {
         Scope {
             grammar,
+            vocabulary: &crate::names::EMPTY_VOCABULARY,
             fields: Vec::new(),
             options: Vec::new(),
             options_only: false,
@@ -252,6 +255,11 @@ impl<'a> Scope<'a> {
             param_read: None,
             inlined: Vec::new(),
         }
+    }
+
+    /// The same scope, with the names tables' classes and effects.
+    pub fn with_names(self, names: &'a crate::names::Names) -> Self {
+        Self { vocabulary: &names.vocabulary, ..self }
     }
 
     /// An `each` block `let` by name, marking the item read when it reads it.
@@ -430,9 +438,9 @@ impl Scope<'_> {
                 };
                 if let Some(base) = base {
                     let key = match &key.kind {
-                        ExprKind::Str(text) => crate::grammar::names::Value::Text(text.clone().into()),
+                        ExprKind::Str(text) => crate::names::Value::Text(text.clone().into()),
                         ExprKind::Num(number) if *number >= 0.0 && *number <= f64::from(u32::MAX) && number.fract() == 0.0 =>
-                            crate::grammar::names::Value::Ordinal(*number as u32),
+                            crate::names::Value::Ordinal(*number as u32),
                         _ => {
                             errors.push(ConfigError::new(key.span, "a semantic member key must be a string or non-negative integer literal"));
                             return None;
@@ -440,9 +448,9 @@ impl Scope<'_> {
                     };
                     let (base, subject) = match self.trait_subject(&base, errors)? {
                         CExpr::Semantic(base, subject) => (base, subject),
-                        base => (Box::new(base), crate::grammar::names::Value::Path(Vec::new())),
+                        base => (Box::new(base), crate::names::Value::Path(Vec::new())),
                     };
-                    return Some(CExpr::Semantic(base, crate::grammar::names::Value::From(Box::new(subject), Box::new(key), 0)));
+                    return Some(CExpr::Semantic(base, crate::names::Value::From(Box::new(subject), Box::new(key), 0)));
                 }
             }
             ExprKind::Var(path) => {
@@ -456,22 +464,22 @@ impl Scope<'_> {
                         steps.push(step);
                     }
                     let base = Expr { kind: ExprKind::Var(path[..index].to_vec()), span: value.span };
-                    return Some(CExpr::Semantic(Box::new(self.node_subject(&base, errors)?), crate::grammar::names::Value::Path(steps)));
+                    return Some(CExpr::Semantic(Box::new(self.node_subject(&base, errors)?), crate::names::Value::Path(steps)));
                 }
             }
             ExprKind::Key(base, key) if queries::semantic_step(&key.text).is_some() => {
                 let step = queries::semantic_step(&key.text).expect("matched");
                 let base = self.trait_subject(base, errors)?;
                 return Some(match base {
-                    CExpr::Semantic(base, crate::grammar::names::Value::Path(mut steps)) => {
+                    CExpr::Semantic(base, crate::names::Value::Path(mut steps)) => {
                         steps.push(step);
-                        CExpr::Semantic(base, crate::grammar::names::Value::Path(steps))
+                        CExpr::Semantic(base, crate::names::Value::Path(steps))
                     }
                     CExpr::Semantic(..) => {
                         errors.push(ConfigError::new(key.span, "a member subject must be consumed directly by `could` / `always`"));
                         return None;
                     }
-                    base => CExpr::Semantic(Box::new(base), crate::grammar::names::Value::Path(vec![step])),
+                    base => CExpr::Semantic(Box::new(base), crate::names::Value::Path(vec![step])),
                 });
             }
             _ => {}
@@ -861,10 +869,10 @@ impl Scope<'_> {
                 let value = self.trait_subject(value, errors)?;
                 let mut mask = 0;
                 for name in names {
-                    let bit = self.grammar.names.vocabulary.trait_bit(&name.text);
+                    let bit = self.vocabulary.trait_bit(&name.text);
                     if bit == 0 {
                         errors.push(ConfigError::new(name.span, format!("nothing fits trait `{}`", name.text))
-                            .suggest(&name.text, self.grammar.names.vocabulary.traits.iter().map(String::as_str)));
+                            .suggest(&name.text, self.vocabulary.traits.iter().map(String::as_str)));
                         return None;
                     }
                     mask |= bit;
@@ -1348,6 +1356,7 @@ fn arity(f: &Function) -> String {
 #[derive(Clone, Copy)]
 pub struct Ctx<'a> {
     pub grammar: &'a Grammar,
+    pub names: &'a crate::names::Names,
     pub lang: usize,
     pub tree: &'a Tree,
     pub node: u32,

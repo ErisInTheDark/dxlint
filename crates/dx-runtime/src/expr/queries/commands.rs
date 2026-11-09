@@ -1,6 +1,6 @@
 use crate::expr::Value;
-use crate::grammar::names::question::{Known, Leaf};
-use crate::grammar::names::semantic::Semantic;
+use crate::names::question::{Known, Leaf};
+use crate::names::semantic::Semantic;
 
 use super::QueryFunction;
 

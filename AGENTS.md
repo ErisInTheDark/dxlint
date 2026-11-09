@@ -25,7 +25,8 @@ Rust linter; rules in `.dx` (docs/advanced.md). Binary `dxlint`.
 - `crates/dx-tree`: `Tree`, node types and path steps, `footprint` (recorded reads), `line_index`
 - `crates/dx-ir`: compiled expression and VM value types (`CExpr`, `VExpr`, `Value`, `V`, record cells, builtin/function metadata); no evaluation
 - `crates/dx-config` (`config`): lexer, token stream (imports + macros splice tokens), parser
-- `crates/dx-grammar` (`grammar`): layers per language, `parse.rs` builds trees, name resolution (`names/`); the engine hands it builtin names and constant folding (`BuildEnv`)
+- `crates/dx-grammar` (`grammar`): layers per language, `parse.rs` builds trees; the engine hands it builtin names and constant folding (`BuildEnv`)
+- `crates/dx-names` (`names`): name tables, `Names::build`, per-file resolution, the semantic evaluator (values/calls/effects/narrowing/modules)
 - `crates/dx-runtime` (`expr`, `vm`, `language_options`): rule expressions (`expr/`; functions registry in `expr/functions.rs`), the lowered VM (`vm/`) and file-scoped language settings; reaches the lint world through `expr::TypeWorld`
 - `src/engine`: linter (`Compiled` config shared by equal configs + per-project state), fixes, suppressions, `.dxcache` (`cache.rs`), symbol index; end-to-end tests in `engine/tests.rs`
 - `crates/dx-grammar/src/frontend.rs`: the `Frontend` trait, the engine's only view of a front end (kinds/fields, parse, per-file tokens and names)

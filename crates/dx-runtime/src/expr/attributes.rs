@@ -2,7 +2,7 @@
 
 use super::{AttrMemo, CExpr, Ctx, Value};
 use crate::grammar::{Grammar, ROOT, TEXT};
-use crate::grammar::names::question::Known;
+use crate::names::question::Known;
 use crate::vm::{self, Begin, KindSet, VExpr, V};
 
 /// A `let` attribute: its expression on each layer that defines it.
@@ -443,7 +443,7 @@ impl<'e> Needs<'e> {
 }
 
 impl vm::Host for Ctx<'_> {
-    fn query(&self, node: u32, subject: &crate::grammar::names::Value, query: &super::queries::Query, mask: u64) -> Option<bool> {
+    fn query(&self, node: u32, subject: &crate::names::Value, query: &super::queries::Query, mask: u64) -> Option<bool> {
         Some(self.world?.query(self.file_id, node, subject, query, mask))
     }
 
@@ -451,7 +451,7 @@ impl vm::Host for Ctx<'_> {
         Some(self.world?.query_function(self.file_id, node, query, args))
     }
 
-    fn query_handle(&self, handle: crate::grammar::names::question::Handle, query: &super::queries::HandleFunction, args: &[Value<'static>]) -> Option<Value<'static>> {
+    fn query_handle(&self, handle: crate::names::question::Handle, query: &super::queries::HandleFunction, args: &[Value<'static>]) -> Option<Value<'static>> {
         Some(self.world?.query_handle(self.file_id, handle, query, args))
     }
 

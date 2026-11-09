@@ -30,7 +30,7 @@ pub(super) struct Unit {
     /// `text`'s hash, as its [`reads::Dep::Text`] records it.
     pub hash: u64,
     pub parsed: ParsedFile,
-    pub names: OnceLock<reads::Cached<Arc<crate::grammar::names::Resolved>>>,
+    pub names: OnceLock<reads::Cached<Arc<crate::names::Resolved>>>,
     lines: OnceLock<crate::line_index::LineIndex>,
     /// The bodies other files read only by entering them.
     bodies: OnceLock<Option<Arc<reads::Bodies>>>,

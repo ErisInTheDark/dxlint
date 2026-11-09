@@ -250,6 +250,7 @@ pub struct Compiled {
     /// What asks units for tokens: helpers, layers or name items.
     unit_token_reasons: Vec<String>,
     pub grammar: Grammar,
+    pub names: crate::names::Names,
     pub(crate) language_options: language_options::LanguageOptions,
     pub rules: Vec<Rule>,
     pub inert: Vec<InertRule>,
@@ -284,7 +285,7 @@ pub struct Linter {
     /// an edit of a file that stays changes no directory listing.
     existed: std::sync::Mutex<crate::fx_hash::FxHashMap<PathBuf, bool>>,
     units: std::sync::Mutex<crate::fx_hash::FxHashMap<PathBuf, std::sync::Arc<units::Unit>>>,
-    discoveries: std::sync::Mutex<crate::fx_hash::FxHashMap<crate::grammar::names::modules::resolution::DiscoveryRequest, reads::Cached<Option<Vec<PathBuf>>>>>,
+    discoveries: std::sync::Mutex<crate::fx_hash::FxHashMap<crate::names::modules::resolution::DiscoveryRequest, reads::Cached<Option<Vec<PathBuf>>>>>,
     programs: program::Programs,
     module_graphs: module_graph::ModuleGraphs,
     /// Part reads judged against files as they read now ([`Linter::holds`]).
@@ -618,7 +619,7 @@ impl Compiled {
             }
             errors.extend(failed.into_iter().map(|error| ConfigError::new(rule.span, error)));
         }
-        for condition in &self.grammar.names.conditions {
+        for condition in &self.names.conditions {
             if let Some(e) = condition.expr.get() {
                 let body = crate::vm::lower(e, functions, values);
                 let failed = values.take_lowering_errors("name condition");
@@ -627,7 +628,7 @@ impl Compiled {
                 errors.extend(failed.into_iter().map(|error| ConfigError::new(span, error)));
             }
         }
-        for operand in &self.grammar.names.operands {
+        for operand in &self.names.operands {
             if let Some(e) = operand.expr.get() {
                 let item = config.operand_parameter(operand.of).is_some();
                 let body = crate::vm::lower_condition(e, functions, &[], values, item);
@@ -790,8 +791,8 @@ impl Linter {
 
     /// The files `request` finds, recorded; walked once until one of them
     /// comes or goes.
-    fn discovered(&self, request: &crate::grammar::names::modules::resolution::DiscoveryRequest) -> crate::grammar::names::question::Known<Vec<PathBuf>> {
-        use crate::grammar::names::question::Known;
+    fn discovered(&self, request: &crate::names::modules::resolution::DiscoveryRequest) -> crate::names::question::Known<Vec<PathBuf>> {
+        use crate::names::question::Known;
         let mut discoveries = self.discoveries.lock().expect("unit discoveries");
         let paths = discoveries.entry(request.clone()).or_insert_with(|| reads::Cached::compute(|| reads::requested(request))).get();
         paths.map_or(Known::Unknown, Known::Yes)
@@ -854,7 +855,7 @@ impl Linter {
 
     /// `unit`'s opaque body nodes.
     fn opaque_body_nodes(&self, unit: &units::Unit) -> Vec<u32> {
-        let names = &self.grammar.names;
+        let names = &self.names;
         let tree = &unit.parsed.tree;
         if !tree.nodes.iter().any(|node| names.kinds.get(node.matcher as usize).is_some_and(|kind| !kind.opaque.is_empty())) { return Vec::new() }
         let run = Run { path: &unit.path, lang: unit.lang, text: &unit.text, lines: unit.lines(), file: &unit.rel, active: &[], settings: None };
@@ -900,12 +901,12 @@ impl Linter {
     /// it whose condition holds there (a module's own declarations publish
     /// none). True when it does not parse.
     fn mentions_global(&self, path: &Path, name: &str) -> bool {
-        use crate::grammar::names::modules::index::PublicationKind;
+        use crate::names::modules::index::PublicationKind;
         let Some(unit) = self.unit_quiet(path, None).1 else { return true };
         let Some(front) = unit.parsed.front else { return true };
         let run = Run { path: &unit.path, lang: unit.lang, text: &unit.text, lines: unit.lines(), file: &unit.rel, active: &[], settings: None };
         let native = self.native_facts(front, &unit.parsed.tree, &run, (&*unit.path, Path::new(&unit.rel)), unit.parsed.state.clone());
-        let index = crate::grammar::names::modules::index::module_index(&unit.parsed.tree, &self.grammar.names, &unit.text, &|text| native.name_key(text), None);
+        let index = crate::names::modules::index::module_index(&unit.parsed.tree, &self.names, &unit.text, &|text| native.name_key(text), None);
         let links = index.links(unit.parsed.tree.root);
         if links.is_empty() && !index.mentions(name, u64::MAX, PublicationKind::Globals) { return false }
         let plans: Vec<_> = index.plans(unit.parsed.tree.root, Some((name, u64::MAX)), PublicationKind::Globals)
@@ -1233,6 +1234,7 @@ impl Linter {
     ) -> Ctx<'a> {
         Ctx {
             grammar: &self.grammar,
+            names: &self.names,
             lang,
             tree,
             node: tree.root,
@@ -1392,6 +1394,7 @@ impl Linter {
                     memo.enter_rule(fi as u32);
                     let ctx = Ctx {
                         grammar: &self.grammar,
+                        names: &self.names,
                         lang: run.lang,
                         tree,
                         node: id,

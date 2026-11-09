@@ -1,0 +1,997 @@
+use std::borrow::Cow;
+
+use dx_core::fx_hash::FxHashMap;
+use dx_tree::Tree;
+
+use crate::{question, Names, Vocabulary};
+
+/// One tree's resolved names.
+///
+/// For an editor's file ([`Resolved::track`]), every read of a node's
+/// entries is recorded ([`dx_tree::footprint::names`]); scopes keep their
+/// numbers across edits ([`Resolved::renumber_scopes`]).
+#[derive(Default)]
+pub struct Resolved {
+    pub complete: bool,
+    /// What the class bits and effect indexes below mean.
+    pub vocabulary: std::sync::Arc<Vocabulary>,
+    pub keys: Table<Option<Box<str>>>,
+    pub failures: Vec<(u32, Box<str>)>,
+    /// Using name -> the name node that declares it (the first of merged
+    /// declarations); a later merged declaration -> the first.
+    pub declaration: Table<u32>,
+    /// Later declarations of a merged name (`var a; var a;`, `class X` +
+    /// `interface X`) -> the first, which owns the binding.
+    pub merged: Table<u32>,
+    /// The first of merged declarations -> the later ones, in order.
+    merged_later: Table<Vec<u32>>,
+    /// Declaring name (the first of merged ones) -> using names, in order.
+    pub references: Table<Vec<u32>>,
+    /// Node an effect targets (and every `targets` node on the way) ->
+    /// the effect ([`Names::effects`]) and the node whose evaluation has it.
+    /// The first effect on a node wins.
+    pub effects: Table<(u16, u32)>,
+    /// Scopes in document order; the first is the outermost opened.
+    pub scopes: Scopes,
+    /// Declared name -> the scope it lands in, the node whose `declares`
+    /// item declares it, its classes and whether it is hoisted.
+    pub declared: Table<(u32, u32, u64, bool)>,
+    /// Further scopes the same name also lands in, as in `declared` (a
+    /// constructor parameter property: a parameter and a class member).
+    /// `declared` keeps the first: the name's own lexical binding.
+    pub also_declared: Table<Vec<(u32, u32, u64, bool)>>,
+    /// Semantic descriptors stay separate from declarations' lexical owners.
+    pub bindings: Table<u32>,
+    /// Implicit declarations (`declares value "arguments"`): node -> names.
+    pub implicit: Table<Vec<Box<str>>>,
+    pub asked: Table<ReferenceLookup>,
+    /// Declarations by scope and name, built on first ask ([`Resolved::index`]).
+    index: std::sync::OnceLock<ScopeIndex>,
+    /// Declaring node -> the first explicit name it declares, built on first
+    /// ask ([`Resolved::declared_by`]).
+    declared_by: std::sync::OnceLock<dx_core::fx_hash::FxHashMap<u32, u32>>,
+    /// Node -> the innermost scope it sits in (its own when it opens one),
+    /// `within` fields respected; [`NO_SCOPE`] outside every scope.
+    pub(crate) scope_of: Vec<u32>,
+    tracked: bool,
+    /// Another file's names: lookups by name, listings and uses read are
+    /// recorded ([`dx_core::parts`], [`Resolved::own`]).
+    owner: Option<std::sync::Arc<dx_core::parts::Owner>>,
+}
+
+/// One of a tree's name tables, by node: reads of an editor's file record
+/// the node they read the entry of.
+#[derive(Clone, Debug)]
+pub struct Table<V> {
+    entries: FxHashMap<u32, V>,
+    tracked: Tracked,
+    /// Another file's table whose entries depend on the whole file (a
+    /// declaration's uses): reads are recorded as such ([`dx_core::parts`]).
+    uses_of: Option<std::sync::Arc<dx_core::parts::Owner>>,
+}
+
+/// How reads of a [`Table`] are recorded.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Tracked {
+    #[default]
+    No,
+    /// As the names of the chunk holding the node read.
+    Chunk,
+    /// As the node's own entry in table `t` ([`dx_tree::footprint::tables`]):
+    /// for entries edits elsewhere change (a declaration's uses).
+    Own(u8),
+}
+
+impl<V> Default for Table<V> {
+    fn default() -> Self {
+        Self { entries: FxHashMap::default(), tracked: Tracked::No, uses_of: None }
+    }
+}
+
+impl<V> Table<V> {
+    #[inline]
+    fn read(&self, node: u32) {
+        match self.tracked {
+            Tracked::No => {}
+            Tracked::Chunk => dx_tree::footprint::names(node),
+            Tracked::Own(table) => dx_tree::footprint::table(table, node),
+        }
+        if let Some(owner) = &self.uses_of { dx_core::parts::note(owner, dx_core::parts::Read::UsesOf(node)) }
+    }
+
+    pub fn get(&self, node: &u32) -> Option<&V> {
+        self.read(*node);
+        self.entries.get(node)
+    }
+
+    pub fn contains_key(&self, node: &u32) -> bool {
+        self.read(*node);
+        self.entries.contains_key(node)
+    }
+
+    pub fn insert(&mut self, node: u32, value: V) -> Option<V> {
+        self.entries.insert(node, value)
+    }
+
+    pub fn entry(&mut self, node: u32) -> std::collections::hash_map::Entry<'_, u32, V> {
+        self.entries.entry(node)
+    }
+
+    pub fn values_mut(&mut self) -> impl Iterator<Item = &mut V> {
+        self.entries.values_mut()
+    }
+
+    pub fn get_mut(&mut self, node: &u32) -> Option<&mut V> {
+        self.entries.get_mut(node)
+    }
+
+    pub fn remove(&mut self, node: &u32) -> Option<V> {
+        self.entries.remove(node)
+    }
+
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
+
+    /// Every entry, unrecorded: for building and comparing tables.
+    pub fn iter(&self) -> impl Iterator<Item = (&u32, &V)> {
+        self.entries.iter()
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+
+impl<V> Extend<(u32, V)> for Table<V> {
+    fn extend<I: IntoIterator<Item = (u32, V)>>(&mut self, entries: I) {
+        self.entries.extend(entries);
+    }
+}
+
+impl Extend<ScopeInfo> for Scopes {
+    fn extend<I: IntoIterator<Item = ScopeInfo>>(&mut self, scopes: I) {
+        self.list.extend(scopes);
+    }
+}
+
+impl<V> std::ops::Index<&u32> for Table<V> {
+    type Output = V;
+    fn index(&self, node: &u32) -> &V {
+        self.get(node).expect("table entry")
+    }
+}
+
+/// A tree's scopes by number: reads of an editor's file record the node
+/// opening the scope read.
+#[derive(Clone, Debug, Default)]
+pub struct Scopes {
+    list: Vec<ScopeInfo>,
+    tracked: bool,
+}
+
+impl Scopes {
+    pub fn get(&self, scope: usize) -> Option<&ScopeInfo> {
+        let info = self.list.get(scope)?;
+        if self.tracked { dx_tree::footprint::names(info.node) }
+        Some(info)
+    }
+
+    pub fn first(&self) -> Option<&ScopeInfo> {
+        self.get(0)
+    }
+
+    pub fn push(&mut self, info: ScopeInfo) {
+        self.list.push(info);
+    }
+
+    /// Every scope, unrecorded: for building and comparing scopes.
+    pub fn iter(&self) -> impl Iterator<Item = &ScopeInfo> {
+        self.list.iter()
+    }
+
+    pub fn len(&self) -> usize {
+        self.list.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.list.is_empty()
+    }
+}
+
+impl std::ops::Index<usize> for Scopes {
+    type Output = ScopeInfo;
+    fn index(&self, scope: usize) -> &ScopeInfo {
+        self.get(scope).expect("scope")
+    }
+}
+
+/// What a name's text means as a key (a language's escapes):
+/// [`dx_grammar::frontend::Frontend::name_key`].
+pub type NameKey<'k> = dyn for<'a> Fn(&'a str) -> Cow<'a, str> + 'k;
+
+pub type ResolveOperand<'a> = dyn Fn(u32, u32, Option<u32>) -> Result<dx_ir::value::Value<'static>, Box<str>> + 'a;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ReferenceLookup {
+    pub scope: u32,
+    pub classes: u64,
+    /// Ignore only this owner's scopes, preserving nested locals.
+    pub outside: Option<u32>,
+}
+
+/// One resolved tree's declarations by scope and name, and the scopes each
+/// node opens: what type questions look members up in.
+#[derive(Default)]
+pub struct ScopeIndex {
+    /// Scope -> name key -> declaring nodes in document order (implicit
+    /// declarations under their text, see [`Resolved::implicit`]).
+    declared: Vec<FxHashMap<Box<str>, Vec<u32>>>,
+    /// Node -> the scopes it opens, outermost first.
+    opened: FxHashMap<u32, (u32, u32)>,
+    /// For an editor's file: each scope's opening node, whose entries a
+    /// read of the scope's declarations reads.
+    tracked: Option<Vec<u32>>,
+    /// Another file's index: lookups by name and listings are recorded.
+    owner: Option<std::sync::Arc<dx_core::parts::Owner>>,
+    /// Another file's index: the text each scope's listing reads (`None`:
+    /// the whole file).
+    spans: Vec<Option<(u32, u32)>>,
+}
+
+impl ScopeIndex {
+    #[inline]
+    fn read(&self, scope: u32) {
+        if let Some(node) = self.tracked.as_ref().and_then(|nodes| nodes.get(scope as usize)) { dx_tree::footprint::names(*node) }
+    }
+
+    #[inline]
+    fn read_foreign(&self, read: impl FnOnce() -> dx_core::parts::Read) {
+        if let Some(owner) = &self.owner { dx_core::parts::note(owner, read()) }
+    }
+
+    /// The scopes `node` opens, outermost first.
+    pub fn opened(&self, node: u32) -> std::ops::Range<u32> {
+        if self.tracked.is_some() { dx_tree::footprint::names(node) }
+        self.opened.get(&node).map_or(0..0, |&(first, end)| first..end)
+    }
+
+    /// What declares `key` in `scope`, in document order.
+    pub fn declared(&self, scope: u32, key: &str) -> &[u32] {
+        self.read(scope);
+        self.read_foreign(|| dx_core::parts::Read::Name(dx_core::parts::name_hash(key)));
+        self.declared.get(scope as usize).and_then(|names| names.get(key)).map_or(&[], Vec::as_slice)
+    }
+
+    /// Every name declared in `scope`, with its declarations.
+    pub fn names(&self, scope: u32) -> impl Iterator<Item = (&str, &[u32])> {
+        self.read(scope);
+        self.read_foreign(|| match self.spans.get(scope as usize) {
+            Some(&Some((start, end))) => dx_core::parts::Read::Span(start, end),
+            _ => dx_core::parts::Read::Whole,
+        });
+        self.declared.get(scope as usize).into_iter().flat_map(|names| names.iter().map(|(key, decls)| (&**key, decls.as_slice())))
+    }
+}
+
+/// One scope of a resolved tree.
+#[derive(Clone, Debug)]
+pub struct ScopeInfo {
+    /// The node opening it.
+    pub node: u32,
+    pub classes: u64,
+    pub parent: Option<u32>,
+}
+
+/// A declaration in one scope.
+#[derive(Clone, Copy, Debug)]
+struct Declared {
+    name: u32,
+    start: u32,
+    classes: u64,
+    hoisted: bool,
+    /// Declared by a text (`"arguments"`): found only when nothing declares
+    /// the name explicitly in the scope.
+    implicit: bool,
+}
+
+struct Scope<'t> {
+    /// Name -> its declarations in document order.
+    declared: FxHashMap<Cow<'t, str>, Vec<Declared>>,
+}
+
+/// No scope (in the dense node -> scope table).
+const NO_SCOPE: u32 = u32::MAX;
+
+impl Names {
+    /// Nothing for [`Names::resolve`] to do: no item opens scopes,
+    /// declares, uses or writes names (type-layer items are answered on
+    /// demand, not here).
+    fn resolves_nothing(&self) -> bool {
+        self.kinds.iter().all(|k| k.scopes.is_empty() && k.declares.is_empty() && k.resolves.is_empty() && k.effects.is_empty() && k.targets.is_empty())
+    }
+
+    /// What a declaration or effect targeting `node` reaches: the node
+    /// itself, or what its `targets` paths lead to, recursively. `passed`
+    /// collects the nodes passing it on.
+    fn targets(&self, tree: &Tree, node: u32, holds: &dyn Fn(u32, Option<u32>) -> bool, out: &mut Vec<u32>, passed: &mut Vec<u32>, active: &mut Vec<u32>) -> bool {
+        const MAX_TARGET_DEPTH: usize = 256;
+        let Some(node) = tree.semantic_node(node) else { return false };
+        if active.len() > MAX_TARGET_DEPTH || active.contains(&node) { return false; }
+        let targets = self.kinds.get(tree.node(node).matcher as usize).map_or(&[][..], |k| &k.targets[..]);
+        let mut targets = targets.iter().filter(|(_, when)| holds(node, *when)).peekable();
+        if targets.peek().is_none() {
+            out.push(node);
+            return true;
+        }
+        let (reached, passing) = (out.len(), passed.len());
+        active.push(node);
+        passed.push(node);
+        // Per group, the first alternative that reaches anything: `value ??
+        // key` falls back to the key when the value is a pattern reaching
+        // nothing (`{ a = 1 }`).
+        for (group, _) in targets {
+            for path in group {
+                let before = out.len();
+                let Some(nodes) = tree.semantic_follow(node, path) else {
+                    out.truncate(reached);
+                    passed.truncate(passing);
+                    active.pop();
+                    return false;
+                };
+                for n in nodes {
+                    if !self.targets(tree, n, holds, out, passed, active) {
+                        out.truncate(reached);
+                        passed.truncate(passing);
+                        active.pop();
+                        return false;
+                    }
+                }
+                if out.len() > before {
+                    break;
+                }
+            }
+        }
+        if out.len() == reached {
+            passed.truncate(passing);
+        }
+        active.pop();
+        true
+    }
+
+    /// What a declaration or effect aimed at `node` reaches through
+    /// `targets` (the node itself where none apply); unknown when a
+    /// `targets` condition cannot be decided.
+    pub fn targets_of(&self, tree: &Tree, node: u32, holds: &dyn Fn(u32, u32) -> question::Known<bool>) -> question::Known<Vec<u32>> {
+        let unknown = std::cell::Cell::new(false);
+        let decide = |at: u32, condition: Option<u32>| {
+            condition.is_none_or(|c| match holds(at, c) {
+                question::Known::Yes(held) => held,
+                question::Known::Unknown => {
+                    unknown.set(true);
+                    false
+                }
+            })
+        };
+        let (mut out, mut passed) = (Vec::new(), Vec::new());
+        let complete = self.targets(tree, node, &decide, &mut out, &mut passed, &mut Vec::new());
+        if !complete || unknown.get() { question::Known::Unknown } else { question::Known::Yes(out) }
+    }
+
+    /// Resolves every name `tree` uses. `key` turns a name's text into what
+    /// it means (a language's escapes); `when(node, condition)` evaluates a
+    /// `when` condition on a node.
+    pub fn resolve<'t>(&self, tree: &Tree, text: &'t str, key: &dyn Fn(&'t str) -> Cow<'t, str>, when: &dyn Fn(u32, u32) -> bool, operand: &ResolveOperand<'_>) -> Resolved {
+        #[cfg(feature = "work")]
+        let _work = dx_core::work::enter("names.resolve", || (text.len() as u64, text.len() as u64, "names".to_owned()));
+        let mut out = Resolved { vocabulary: self.vocabulary.clone(), complete: true, ..Resolved::default() };
+        if self.resolves_nothing() {
+            return out;
+        }
+        let holds = |node: u32, c: Option<u32>| c.is_none_or(|c| when(node, c));
+        let name_key = |id: u32| {
+            let n = tree.node(id);
+            key(&text[n.start as usize..n.end as usize])
+        };
+        let mut scopes: Vec<Scope> = Vec::new();
+        // Node -> the innermost scope it sits in (its own, when it opens one).
+        let mut scope_of = vec![NO_SCOPE; tree.nodes.len()];
+        let at = |scope_of: &[u32], id: u32| Some(scope_of[id as usize] as usize).filter(|&s| s != NO_SCOPE as usize);
+        let mut uses = Vec::new();
+        let mut declared = Vec::new();
+        let mut passed = Vec::new();
+        // Node opening a scope `within` some fields -> those fields, and the
+        // scope its other children sit in.
+        let mut limited: FxHashMap<u32, (&[u16], Option<usize>)> = FxHashMap::default();
+        for &id in &tree.order {
+            let outer = tree.parent(id).and_then(|p| match limited.get(&p) {
+                Some(&(within, outside)) if !tree.label(id).is_some_and(|l| within.contains(&l)) => outside,
+                _ => at(&scope_of, p),
+            });
+            let Some(kind) = self.kinds.get(tree.node(id).matcher as usize) else {
+                if let Some(outer) = outer {
+                    scope_of[id as usize] = outer as u32;
+                }
+                continue;
+            };
+            // Each `scope` item opens one scope, inside the previous one
+            // (a function expression's name outside its parameters).
+            let mut here = outer;
+            for s in kind.scopes.iter().filter(|s| holds(id, s.when)) {
+                if !s.within.is_empty() && !limited.contains_key(&id) {
+                    limited.insert(id, (&s.within, here));
+                }
+                scopes.push(Scope { declared: FxHashMap::default() });
+                out.scopes.push(ScopeInfo { node: id, classes: s.classes, parent: here.map(|s| s as u32) });
+                here = Some(scopes.len() - 1);
+            }
+            if let Some(here) = here {
+                scope_of[id as usize] = here as u32;
+            }
+            for d in kind.declares.iter().filter(|d| holds(id, d.when)) {
+                let mut target = if d.enclosing { outer } else { here };
+                while let Some(s) = target.filter(|&s| out.scopes[s].classes & d.nearest == 0) {
+                    target = out.scopes[s].parent.map(|p| p as usize);
+                }
+                let Some(target) = target else { continue };
+                if let Some(name) = &d.implicit {
+                    if d.filter.is_some_and(|expression| !out.evaluate_filter(id, id, expression, operand)) { continue }
+                    let name = match d.key {
+                        Some(expression) => match out.evaluate_key(id, id, expression, operand) {
+                            Some(key) => key,
+                            None => continue,
+                        },
+                        None => name.clone(),
+                    };
+                    let entry = Declared { name: id, start: tree.node(id).start, classes: d.classes, hoisted: true, implicit: true };
+                    scopes[target].declared.entry(Cow::Owned(name.to_string())).or_default().push(entry);
+                    out.implicit.entry(id).or_default().push(name);
+                    out.declared.insert(id, (target as u32, id, d.classes, true));
+                    out.bindings.insert(id, id);
+                    continue;
+                }
+                let Some(named_nodes) = tree.semantic_follow(id, &d.path) else {
+                    out.failure(id, "name path cannot be resolved".into());
+                    continue;
+                };
+                for named in named_nodes {
+                    declared.clear();
+                    passed.clear();
+                    if !self.targets(tree, named, &holds, &mut declared, &mut passed, &mut Vec::new()) {
+                        out.failure(id, "name path cannot be resolved".into());
+                        continue;
+                    }
+                    let descriptor = if passed.first() == Some(&named) { named } else { id };
+                    for &name in &declared {
+                        if d.filter.is_some_and(|expression| !out.evaluate_filter(id, name, expression, operand)) { continue }
+                        let key = match d.key {
+                            Some(expression) => match out.evaluate_key(id, name, expression, operand) {
+                                Some(key) => Cow::Owned(key.into()),
+                                None => continue,
+                            },
+                            None => match out.keys.get(&name) {
+                                Some(Some(key)) => Cow::Owned(key.to_string()),
+                                Some(None) => continue,
+                                None => name_key(name),
+                            },
+                        };
+                        let entry = Declared { name, start: tree.node(name).start, classes: d.classes, hoisted: d.hoisted, implicit: false };
+                        scopes[target].declared.entry(key).or_default().push(entry);
+                        let membership = (target as u32, id, d.classes, d.hoisted);
+                        match out.declared.entry(name) {
+                            std::collections::hash_map::Entry::Vacant(entry) => { entry.insert(membership); }
+                            std::collections::hash_map::Entry::Occupied(mut entry) => {
+                                // Same scope: one membership (a second owner there adds nothing).
+                                let merge = |(scope, owner, classes, hoisted): &mut (u32, u32, u64, bool)| {
+                                    if *scope != membership.0 { return false }
+                                    if *owner == membership.1 { *classes |= membership.2; *hoisted |= membership.3; }
+                                    true
+                                };
+                                if !merge(entry.get_mut()) {
+                                    let others = out.also_declared.entry(name).or_default();
+                                    if !others.iter_mut().any(merge) { others.push(membership) }
+                                }
+                            }
+                        }
+                        out.bindings.entry(name).or_insert(descriptor);
+                    }
+                }
+                passed.clear();
+            }
+            for e in kind.effects.iter().filter(|e| holds(id, e.when)) {
+                declared.clear();
+                passed.clear();
+                let Some(targets) = tree.semantic_follow(id, &e.path) else {
+                    out.failure(id, "name path cannot be resolved".into());
+                    continue;
+                };
+                for target in targets {
+                    if !self.targets(tree, target, &holds, &mut declared, &mut passed, &mut Vec::new()) {
+                        out.failure(id, "name path cannot be resolved".into());
+                        declared.clear();
+                        passed.clear();
+                        break;
+                    }
+                }
+                for &node in passed.iter().chain(&declared) {
+                    out.effects.entry(node).or_insert((e.effect, id));
+                }
+            }
+            if here.is_none() && kind.resolves.iter().any(|resolve| resolve.outside.is_some() && holds(id, resolve.when)) {
+                out.failure(id, "outside lookup requires an active scope".into());
+            }
+            if let Some(here) = here {
+                for r in kind.resolves.iter().filter(|r| holds(id, r.when)) {
+                    if r.path.is_empty() {
+                        uses.push((id, here, r.classes, id, r.key, r.outside));
+                        continue;
+                    }
+                    // A use aimed at a qualified name or parentheses passes
+                    // on through `targets` (`A.B` in a type looks up `A`).
+                    declared.clear();
+                    let Some(named_nodes) = tree.semantic_follow(id, &r.path) else {
+                        out.failure(id, "name path cannot be resolved".into());
+                        continue;
+                    };
+                    for named in named_nodes {
+                        if !self.targets(tree, named, &holds, &mut declared, &mut passed, &mut Vec::new()) {
+                            out.failure(id, "name path cannot be resolved".into());
+                            declared.clear();
+                            break;
+                        }
+                    }
+                    passed.clear();
+                    uses.extend(declared.iter().map(|&name| (name, here, r.classes, id, r.key, r.outside)));
+                }
+            }
+        }
+        for scope in &scopes {
+            for decls in scope.declared.values() {
+                let mut hoisted = decls.iter().filter(|d| d.hoisted && !d.implicit);
+                if let Some(first) = hoisted.next() {
+                    for later in hoisted.filter(|d| d.name != first.name) {
+                        out.merged.insert(later.name, first.name);
+                        out.merged_later.entry(first.name).or_default().push(later.name);
+                    }
+                }
+            }
+        }
+        // A name looked up twice keeps the first lookup, found or not: a
+        // parent's `resolves type name` comes before the name's own
+        // `resolves value`.
+        for (name, scope, want, item, expression, outside) in uses {
+            if out.asked.contains_key(&name) || out.declared.get(&name).is_some_and(|(_, _, classes, _)| classes & want != 0) {
+                continue;
+            }
+            let mut lookup = ReferenceLookup { scope: scope as u32, classes: want, outside: None };
+            out.asked.insert(name, lookup);
+            if let Some(expression) = outside {
+                let owner = match operand(item, expression, Some(name)) {
+                    Ok(dx_ir::value::Value::Node(owner, _)) => owner,
+                    Ok(_) => {
+                        out.failure(item, "outside lookup must select a local ancestor opening scopes".into());
+                        continue;
+                    }
+                    Err(message) => {
+                        out.failure(item, message);
+                        continue;
+                    }
+                };
+                let ancestor = std::iter::successors(Some(name), |&node| tree.parent(node)).any(|node| node == owner);
+                if !ancestor || !out.lookup_scopes(lookup).any(|scope| out.scopes[scope as usize].node == owner) {
+                    out.failure(item, "outside lookup must select a local ancestor opening scopes".into());
+                    continue;
+                }
+                lookup.outside = Some(owner);
+                out.asked.insert(name, lookup);
+            }
+            let start = tree.node(name).start;
+            let key = match expression {
+                Some(expression) => match out.evaluate_key(item, name, expression, operand) {
+                    Some(key) => Cow::Owned(key.into()),
+                    None => continue,
+                },
+                None if out.declared.contains_key(&name) => name_key(name),
+                None => match out.keys.get(&name) {
+                    Some(Some(key)) => Cow::Owned(key.to_string()),
+                    Some(None) => continue,
+                    None => name_key(name),
+                },
+            };
+            let found = out.lookup_scopes(lookup).find_map(|scope| {
+                scopes[scope as usize].declared.get(&key).and_then(|decls| visible(decls, start, want))
+            });
+            if let Some(found) = found.filter(|&found| found != name) {
+                out.declaration.insert(name, found);
+                out.references.entry(found).or_default().push(name);
+            }
+        }
+        for refs in out.references.values_mut() {
+            refs.sort_by_key(|&r| tree.node(r).start);
+        }
+        out.scope_of = scope_of;
+        out.complete = out.failures.is_empty();
+        out
+    }
+}
+
+/// The declaration a use at `start` sees among one scope's declarations of
+/// its name: the latest one before it that is not hoisted (shadowing), else
+/// the first hoisted one matching the requested class.
+/// Implicit declarations count only when nothing declares the name here.
+fn visible(decls: &[Declared], start: u32, want: u64) -> Option<u32> {
+    let matching = || decls.iter().filter(|d| d.classes & want != 0 && !d.implicit);
+    let shadowing = matching().rfind(|d| !d.hoisted && d.start <= start);
+    let hoisted = || matching().find(|d| d.hoisted);
+    shadowing.or_else(hoisted).or_else(|| decls.iter().find(|d| d.implicit && d.classes & want != 0)).map(|d| d.name)
+}
+
+impl Resolved {
+    /// The first explicit name `owner` declares (implicit ones, a function's
+    /// `arguments`, are keyed by their declaring node and never name it).
+    pub fn declared_by(&self, owner: u32) -> Option<u32> {
+        self.declared_by.get_or_init(|| {
+            let mut first = dx_core::fx_hash::FxHashMap::<u32, u32>::default();
+            for (&name, &(_, owner, ..)) in self.declared.iter() {
+                if self.implicit.contains_key(&name) { continue }
+                first.entry(owner).and_modify(|kept| *kept = (*kept).min(name)).or_insert(name);
+            }
+            first
+        }).get(&owner).copied()
+    }
+
+    /// The declaration of `classes` that `node` (a use or a declaration)
+    /// stands for: among merged declarations (`interface X` + `namespace
+    /// X`), the first that declares one of them, else the first.
+    pub fn declaration_in(&self, node: u32, classes: u64) -> u32 {
+        let declares = |name: u32| self.declared.get(&name).is_some_and(|&(_, _, declared, _)| declared & classes != 0);
+        if declares(node) { return node }
+        let first = self.declaration.get(&node).copied().unwrap_or(node);
+        if declares(first) { return first }
+        self.merged_later.get(&first).and_then(|later| later.iter().copied().find(|&name| declares(name))).unwrap_or(first)
+    }
+
+    fn failure(&mut self, node: u32, message: Box<str>) {
+        if !self.failures.iter().any(|(at, previous)| *at == node && *previous == message) {
+            self.failures.push((node, message));
+        }
+    }
+
+    fn evaluate_filter(&mut self, node: u32, target: u32, expression: u32, operand: &ResolveOperand<'_>) -> bool {
+        match operand(node, expression, Some(target)) {
+            Ok(dx_ir::value::Value::Bool(value)) => value,
+            Ok(_) => {
+                self.failure(node, "declaration filter must return a boolean".into());
+                false
+            }
+            Err(message) => {
+                self.failure(node, message);
+                false
+            }
+        }
+    }
+
+    fn evaluate_key(&mut self, node: u32, target: u32, expression: u32, operand: &ResolveOperand<'_>) -> Option<Box<str>> {
+        let key = match operand(node, expression, Some(target)) {
+            Ok(dx_ir::value::Value::Str(text)) => Some(Box::<str>::from(&*text)),
+            Ok(_) => None,
+            Err(message) => {
+                self.failure(node, message);
+                None
+            }
+        };
+        self.keys.entry(target).or_insert(key).clone()
+    }
+
+    /// The innermost scope `node` sits in (its own when it opens one),
+    /// respecting `within`. Names are syntax-only, so this holds in every
+    /// generic frame.
+    pub fn scope_of(&self, node: u32) -> Option<u32> {
+        if self.tracked { dx_tree::footprint::names(node) }
+        self.scope_of.get(node as usize).copied().filter(|&s| s != NO_SCOPE)
+    }
+
+    /// Records reads of these names from now on: an editor's file.
+    /// Marks these as another file's names, read by other files' lints.
+    pub fn own(&mut self, owner: std::sync::Arc<dx_core::parts::Owner>) {
+        self.references.uses_of = Some(owner.clone());
+        self.owner = Some(owner);
+    }
+
+    pub fn track(&mut self) {
+        self.tracked = true;
+        self.keys.tracked = Tracked::Chunk;
+        self.declaration.tracked = Tracked::Chunk;
+        self.merged.tracked = Tracked::Chunk;
+        self.merged_later.tracked = Tracked::Chunk;
+        self.references.tracked = Tracked::Own(dx_tree::footprint::tables::USES);
+        self.effects.tracked = Tracked::Chunk;
+        self.scopes.tracked = true;
+        self.declared.tracked = Tracked::Chunk;
+        self.also_declared.tracked = Tracked::Chunk;
+        self.bindings.tracked = Tracked::Chunk;
+        self.implicit.tracked = Tracked::Chunk;
+        self.asked.tracked = Tracked::Chunk;
+    }
+
+    /// Renumbers the scopes so each one `previous` (the names of the tree
+    /// before an edit, renumbered alike) also has keeps its number: the
+    /// scopes a kept node opens, when it opens as many. Other scopes take
+    /// new numbers; numbers no scope takes stay as empty scopes nothing
+    /// reaches.
+    pub fn renumber_scopes(&mut self, previous: &Resolved) {
+        let opened_by = |scopes: &[ScopeInfo]| {
+            let mut by: FxHashMap<u32, Vec<u32>> = FxHashMap::default();
+            for (i, scope) in scopes.iter().enumerate().filter(|(_, scope)| scope.node != NO_SCOPE) { by.entry(scope.node).or_default().push(i as u32) }
+            by
+        };
+        let (before, now) = (opened_by(&previous.scopes.list), opened_by(&self.scopes.list));
+        let mut to = vec![NO_SCOPE; self.scopes.list.len()];
+        for (node, scopes) in &now {
+            if let Some(old) = before.get(node).filter(|old| old.len() == scopes.len()) {
+                for (&new, &old) in scopes.iter().zip(old) { to[new as usize] = old }
+            }
+        }
+        let mut next = previous.scopes.list.len() as u32;
+        for slot in to.iter_mut().filter(|slot| **slot == NO_SCOPE) {
+            *slot = next;
+            next += 1;
+        }
+        if to.iter().enumerate().all(|(i, &s)| s == i as u32) && next as usize == self.scopes.list.len() { return }
+        let mut list = vec![ScopeInfo { node: NO_SCOPE, classes: 0, parent: None }; next as usize];
+        for (i, scope) in self.scopes.list.drain(..).enumerate() {
+            list[to[i] as usize] = ScopeInfo { parent: scope.parent.map(|p| to[p as usize]), ..scope };
+        }
+        self.scopes.list = list;
+        let map = |scope: &mut u32| *scope = to[*scope as usize];
+        self.declared.values_mut().for_each(|(scope, ..)| map(scope));
+        self.also_declared.values_mut().flatten().for_each(|(scope, ..)| map(scope));
+        self.asked.values_mut().for_each(|lookup| map(&mut lookup.scope));
+        self.scope_of.iter_mut().filter(|scope| **scope != NO_SCOPE).for_each(map);
+    }
+
+    /// What differs between `self` and `previous` (the names of the tree
+    /// before an edit, scopes renumbered alike): the nodes whose entries
+    /// differ (every read of them may differ), and the declarations whose
+    /// uses differ (read as their own atoms, [`Table`]).
+    pub fn changed_since(&self, previous: &Resolved) -> (Vec<u32>, Vec<u32>) {
+        fn table<V: PartialEq>(now: &Table<V>, before: &Table<V>, out: &mut Vec<u32>) {
+            out.extend(now.entries.iter().filter(|(node, value)| before.entries.get(node) != Some(value)).map(|(&node, _)| node));
+            out.extend(before.entries.keys().filter(|node| !now.entries.contains_key(node)));
+        }
+        let mut uses = Vec::new();
+        table(&self.references, &previous.references, &mut uses);
+        let mut out = Vec::new();
+        table(&self.keys, &previous.keys, &mut out);
+        table(&self.declaration, &previous.declaration, &mut out);
+        table(&self.merged, &previous.merged, &mut out);
+        table(&self.merged_later, &previous.merged_later, &mut out);
+        table(&self.effects, &previous.effects, &mut out);
+        table(&self.bindings, &previous.bindings, &mut out);
+        table(&self.implicit, &previous.implicit, &mut out);
+        table(&self.asked, &previous.asked, &mut out);
+        // A declaration's entry, and the scope it lands in (whose
+        // declarations a lookup reads).
+        let mut scopes = Vec::new();
+        for (declared, other) in [(&self.declared, &previous.declared), (&previous.declared, &self.declared)] {
+            for (&node, value) in declared.entries.iter().filter(|(node, value)| other.entries.get(node) != Some(value)) {
+                out.push(node);
+                scopes.push(value.0);
+            }
+        }
+        for (also, other) in [(&self.also_declared, &previous.also_declared), (&previous.also_declared, &self.also_declared)] {
+            for (&node, values) in also.entries.iter().filter(|(node, values)| other.entries.get(node) != Some(values)) {
+                out.push(node);
+                scopes.extend(values.iter().map(|value| value.0));
+            }
+        }
+        let count = self.scopes.list.len().max(previous.scopes.list.len());
+        for scope in 0..count {
+            let (now, before) = (self.scopes.list.get(scope), previous.scopes.list.get(scope));
+            let same = match (now, before) {
+                (Some(a), Some(b)) => a.node == b.node && a.classes == b.classes && a.parent == b.parent,
+                (None, None) => true,
+                _ => false,
+            };
+            if !same { scopes.push(scope as u32) }
+        }
+        for scope in scopes {
+            for list in [&self.scopes.list, &previous.scopes.list] {
+                if let Some(info) = list.get(scope as usize).filter(|info| info.node != NO_SCOPE) { out.push(info.node) }
+            }
+        }
+        let nodes = self.scope_of.len().max(previous.scope_of.len());
+        out.extend((0..nodes).filter(|&node| self.scope_of.get(node) != previous.scope_of.get(node)).map(|node| node as u32));
+        out.sort_unstable();
+        out.dedup();
+        (out, uses)
+    }
+
+    /// Whether every read of these names reads alike in `previous`'s:
+    /// the whole tables, not one entry.
+    pub fn same_shape(&self, previous: &Resolved) -> bool {
+        self.complete == previous.complete && self.failures == previous.failures
+    }
+
+    pub fn lookup_scopes(&self, lookup: ReferenceLookup) -> impl Iterator<Item = u32> + '_ {
+        std::iter::successors(Some(lookup.scope), |&scope| self.scopes.get(scope as usize)?.parent)
+            .filter(move |&scope| self.scopes.get(scope as usize).is_some_and(|scope| Some(scope.node) != lookup.outside))
+    }
+
+    /// The tree's declarations by scope and name. `key` must be the file's
+    /// name key: the index is built once, with the first caller's.
+    pub fn index(&self, tree: &Tree, text: &str, key: &NameKey<'_>) -> &ScopeIndex {
+        // Readers record the scopes they read, not the whole build.
+        self.index.get_or_init(|| dx_tree::footprint::quiet(|| {
+            let tracked = self.tracked.then(|| self.scopes.iter().map(|scope| scope.node).collect());
+            let mut index = ScopeIndex { declared: vec![FxHashMap::default(); self.scopes.len()], opened: FxHashMap::default(), tracked, owner: self.owner.clone(), spans: Vec::new() };
+            for (i, scope) in self.scopes.iter().enumerate().filter(|(_, scope)| scope.node != NO_SCOPE) {
+                let i = i as u32;
+                index.opened.entry(scope.node).or_insert((i, i)).1 = i + 1;
+            }
+            let memberships = self.declared.iter().map(|(&name, &(scope, ..))| (name, scope))
+                .chain(self.also_declared.iter().flat_map(|(&name, others)| others.iter().map(move |&(scope, ..)| (name, scope))));
+            for (name, scope) in memberships {
+                let Some(names) = index.declared.get_mut(scope as usize) else { continue };
+                match self.implicit.get(&name) {
+                    Some(texts) => texts.iter().for_each(|t| names.entry(t.clone()).or_default().push(name)),
+                    None => {
+                        let n = tree.node(name);
+                        let named = match self.keys.get(&name) {
+                            Some(Some(key)) => key.clone(),
+                            Some(None) => continue,
+                            None => key(&text[n.start as usize..n.end as usize]).into(),
+                        };
+                        names.entry(named).or_default().push(name);
+                    }
+                }
+            }
+            for names in &mut index.declared {
+                names.values_mut().for_each(|decls| decls.sort_by_key(|&d| (tree.node(d).start, d)));
+            }
+            if index.owner.is_some() {
+                // A listing of a scope inside the file reads the text from its
+                // opening node to its last declaration; the file's own scope
+                // (or one without a node) changes with any statement.
+                index.spans = self.scopes.iter().zip(&index.declared).map(|(scope, names)| {
+                    if scope.node == NO_SCOPE || scope.node == tree.root { return None }
+                    let opening = tree.node(scope.node);
+                    Some(names.values().flatten().map(|&name| tree.node(name))
+                        .fold((opening.start, opening.end), |(start, end), node| (start.min(node.start), end.max(node.end))))
+                }).collect();
+            }
+            index
+        }))
+    }
+
+    /// How `name` is declared in `scope` (`declared` or one of
+    /// `also_declared`); the primary membership when it is in neither.
+    pub fn membership(&self, name: u32, scope: u32) -> (u32, u32, u64, bool) {
+        let primary = self.declared.get(&name).copied().unwrap_or((scope, name, 0, false));
+        if primary.0 == scope { return primary }
+        self.also_declared.get(&name).and_then(|others| others.iter().find(|other| other.0 == scope)).copied().unwrap_or(primary)
+    }
+
+    /// The declaration `name` (a name's key) means at `at`, searching the
+    /// scopes around it outward for one of `classes`.
+    pub fn visible(&self, tree: &Tree, text: &str, key: &NameKey<'_>, at: u32, name: &str, classes: u64) -> Option<u32> {
+        self.visible_except(tree, text, key, at, name, classes, &[])
+    }
+
+    /// [`Self::visible`] as if the `skipped` declarations did not exist
+    /// (an import proven not to carry the class gives way to the next).
+    #[allow(clippy::too_many_arguments)]
+    pub fn visible_except(&self, tree: &Tree, text: &str, key: &NameKey<'_>, at: u32, name: &str, classes: u64, skipped: &[u32]) -> Option<u32> {
+        if !self.failures.is_empty() { return None }
+        let index = self.index(tree, text, key);
+        let start = tree.node(at).start;
+        let lookup = match self.asked.get(&at) {
+            Some(&lookup) => lookup,
+            None => {
+                let scope = std::iter::successors(Some(at), |&node| tree.parent(node))
+                    .find_map(|node| index.opened(node).last())
+                    .or((!self.scopes.is_empty()).then_some(0))?;
+                ReferenceLookup { scope, classes, outside: None }
+            }
+        };
+        for s in self.lookup_scopes(lookup) {
+            let decls: Vec<Declared> = index
+                .declared(s, name)
+                .iter()
+                .filter(|d| !skipped.contains(d))
+                .map(|&d| {
+                    let (_, _, classes, hoisted) = self.membership(d, s);
+                    Declared { name: d, start: tree.node(d).start, classes, hoisted, implicit: self.implicit.contains_key(&d) }
+                })
+                .collect();
+            if let Some(found) = visible(&decls, start, classes) {
+                return Some(found);
+            }
+        }
+        None
+    }
+}
+
+#[cfg(test)]
+mod keyed_tests;
+#[cfg(test)]
+mod filter_tests;
+#[cfg(test)]
+mod lookup_tests;
+
+#[cfg(test)]
+mod tests {
+    use super::{visible, Declared};
+
+    const VALUE: u64 = 1;
+    const TYPE: u64 = 2;
+
+    #[test]
+    fn target_depth_exhaustion_is_unknown_not_a_terminal() {
+        use crate::{question::Known, KindNames, Names};
+        use dx_tree::{Edge, Node, Tree};
+        let tables = Names {
+            kinds: vec![KindNames { targets: vec![(vec![vec![0]], None)], ..KindNames::default() }],
+            ..Names::default()
+        };
+        let chain = |length: u32| Tree::from_native((0..length).map(|at| Node {
+            matcher: if at + 1 == length { 1 } else { 0 }, start: 0, end: 0,
+            children: if at + 1 == length { vec![] } else { vec![Edge { label: 0, node: at + 1 }] },
+        }).collect(), 0);
+        assert_eq!(tables.targets_of(&chain(2), 0, &|_, _| Known::Yes(true)), Known::Yes(vec![1]));
+        assert_eq!(tables.targets_of(&chain(300), 0, &|_, _| Known::Yes(true)), Known::Unknown);
+    }
+
+    #[test]
+    fn target_cycles_are_unknown_not_terminal_nodes() {
+        use crate::{question::Known, KindNames, Names, IT};
+        use dx_tree::{Node, Tree};
+        let tables = Names {
+            kinds: vec![KindNames { targets: vec![(vec![vec![IT]], None)], ..KindNames::default() }],
+            ..Names::default()
+        };
+        let tree = Tree::from_native(vec![Node { matcher: 0, start: 0, end: 0, children: vec![] }], 0);
+        assert_eq!(tables.targets_of(&tree, 0, &|_, _| Known::Yes(true)), Known::Unknown);
+    }
+
+    fn d(name: u32, start: u32, classes: u64, hoisted: bool) -> Declared {
+        Declared { name, start, classes, hoisted, implicit: false }
+    }
+
+    #[test]
+    fn hoisted_lookups_select_the_requested_declaration_class() {
+        let decls = [d(1, 10, TYPE, true), d(2, 20, VALUE | TYPE, true), d(3, 30, VALUE, false)];
+        assert_eq!(visible(&decls, 25, VALUE), Some(2));
+        assert_eq!(visible(&decls, 25, TYPE), Some(1));
+        assert_eq!(visible(&decls, 40, VALUE), Some(3));
+    }
+
+    #[test]
+    fn later_declarations_shadow_and_hoisted_ones_merge_into_the_first() {
+        // `let x` at 10 and 30: a use at 20 sees the first, at 40 the second.
+        let lets = [d(1, 10, VALUE, false), d(2, 30, VALUE, false)];
+        assert_eq!(visible(&lets, 5, VALUE), None);
+        assert_eq!(visible(&lets, 20, VALUE), Some(1));
+        assert_eq!(visible(&lets, 40, VALUE), Some(2));
+        // `var x` twice: one binding, the first, visible before both.
+        let vars = [d(3, 10, VALUE, true), d(4, 30, VALUE, true)];
+        assert_eq!(visible(&vars, 5, VALUE), Some(3));
+        assert_eq!(visible(&vars, 40, VALUE), Some(3));
+        assert_eq!(visible(&[d(5, 10, TYPE, true)], 30, VALUE), None);
+        let both = [d(5, 10, TYPE, true), d(6, 20, VALUE, true)];
+        assert_eq!(visible(&both, 30, VALUE), Some(6));
+        assert_eq!(visible(&both, 30, TYPE), Some(5));
+    }
+
+    #[test]
+    fn implicit_declarations_yield_to_explicit_ones() {
+        // `function f(arguments)`: the parameter, not the implicit binding.
+        let implicit = Declared { name: 1, start: 0, classes: VALUE, hoisted: true, implicit: true };
+        assert_eq!(visible(&[implicit, d(2, 11, VALUE, true)], 20, VALUE), Some(2));
+        assert_eq!(visible(&[implicit], 20, VALUE), Some(1));
+    }
+}

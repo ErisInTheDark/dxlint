@@ -1121,7 +1121,7 @@ impl<'a> Reader<'a> {
             // An unknown discovery (another build's front end) drops the entry.
             5 => Dep::Discovered(Arc::new(super::reads::Discovered { name: super::reads::discovery_name(&self.str()?)?, dir: path, hash: a })),
             6 => {
-                let request = crate::grammar::names::modules::resolution::DiscoveryRequest { root: raw, include: self.string_list()?, exclude: self.string_list()?, extensions: self.string_list()? };
+                let request = crate::names::modules::resolution::DiscoveryRequest { root: raw, include: self.string_list()?, exclude: self.string_list()?, extensions: self.string_list()? };
                 Dep::Requested(std::sync::Arc::new(request), a)
             }
             7 => {
@@ -1319,7 +1319,7 @@ mod tests {
         let root = Path::new("/root/cached-engine-inputs");
         let first = root.join("src/first.ts");
         super::super::reads::set_buffer(&first, "");
-        let request = crate::grammar::names::modules::resolution::DiscoveryRequest { root: root.to_owned(), include: vec!["src/**".into()], exclude: vec!["generated/**".into()], extensions: vec![".ts".into()] };
+        let request = crate::names::modules::resolution::DiscoveryRequest { root: root.to_owned(), include: vec!["src/**".into()], exclude: vec!["generated/**".into()], extensions: vec![".ts".into()] };
         let (_, reads) = super::super::reads::track(|| super::super::reads::requested(&request));
         let mut writer = Writer { out: Vec::new(), root: root.to_path_buf(), strings: Vec::new(), string_ids: HashMap::new() };
         writer.dep(&reads.deps[0], &HashMap::new());

@@ -1,8 +1,8 @@
 use crate::expr::Value;
-use crate::grammar::names::question::{Known, Leaf, NodeRef, NodeValue, Target};
-use crate::grammar::names::semantic::Semantic;
-use crate::grammar::names::values::{Identity, Key, MemberOrigin};
-use crate::grammar::names::calls::InvokeKind;
+use crate::names::question::{Known, Leaf, NodeRef, NodeValue, Target};
+use crate::names::semantic::Semantic;
+use crate::names::values::{Identity, Key, MemberOrigin};
+use crate::names::calls::InvokeKind;
 
 use super::QueryFunction;
 
@@ -201,7 +201,7 @@ fn global_value(semantic: &Semantic<'_>, at: Leaf, value: &Value<'static>) -> Kn
     let classes = semantic.tables.vocabulary.declaration_class(class);
     if classes == 0 { return Known::Unknown }
     let values = semantic.values();
-    let mut value = values.evaluate(at, &crate::grammar::names::Value::Instance {
+    let mut value = values.evaluate(at, &crate::names::Value::Instance {
         name: (&**name).into(), classes, arguments: Vec::new(),
     });
     for key in path.iter() {
@@ -218,7 +218,7 @@ fn global_value(semantic: &Semantic<'_>, at: Leaf, value: &Value<'static>) -> Kn
 /// normalising it here (which asks those traits) would cycle. Other nodes
 /// (expressions) keep their full, narrowed value.
 fn own_value(semantic: &Semantic<'_>, at: Leaf) -> Known<NodeValue> {
-    use crate::grammar::names::Value as Recipe;
+    use crate::names::Value as Recipe;
     let values = semantic.values();
     match values.unwrap_recipe(at) {
         Known::Yes(None | Some(Recipe::Current)) => Known::Yes(NodeValue::leaf(at)),
@@ -251,7 +251,7 @@ fn has_member(semantic: &Semantic<'_>, at: Leaf, args: &[Value<'static>]) -> Kno
 
 /// One member source: how the member is keyed, the node declaring it and
 /// that declaration's flags.
-pub(super) fn source_value(semantic: &Semantic<'_>, source: &crate::grammar::names::values::MemberSource) -> Known<Value<'static>> {
+pub(super) fn source_value(semantic: &Semantic<'_>, source: &crate::names::values::MemberSource) -> Known<Value<'static>> {
     let (kind, domain) = origin_parts(source.origin);
     let site = match source.site.target {
         Target::Node(node) => Value::record(vec![
@@ -430,7 +430,7 @@ fn has_expected(semantic: &Semantic<'_>, at: Leaf, _: &[Value<'static>]) -> Know
 
 fn widened(semantic: &Semantic<'_>, at: Leaf, _: &[Value<'static>]) -> Known<Value<'static>> {
     project(semantic, semantic.values().evaluate(at,
-        &crate::grammar::names::Value::Path(vec![crate::grammar::names::WIDENED])))
+        &crate::names::Value::Path(vec![crate::names::WIDENED])))
 }
 
 /// Whether every value the second node may be is one the first allows, each
@@ -443,7 +443,7 @@ fn accepts(semantic: &Semantic<'_>, at: Leaf, args: &[Value<'static>]) -> Known<
         "value" => Known::Yes(Some(semantic.values().values(at))),
         "expected" => semantic.calls().expected(at),
         "widened" => Known::Yes(Some(semantic.values().evaluate(at,
-            &crate::grammar::names::Value::Path(vec![crate::grammar::names::WIDENED])))),
+            &crate::names::Value::Path(vec![crate::names::WIDENED])))),
         _ => Known::Unknown,
     };
     let (Known::Yes(Some(expected)), Known::Yes(Some(actual))) = (side(at, allowing), side(other, given)) else { return Known::Unknown };

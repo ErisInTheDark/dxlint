@@ -1,5 +1,5 @@
-use crate::grammar::names::question::{Known, Leaf};
-use crate::grammar::names::semantic::Semantic;
+use crate::names::question::{Known, Leaf};
+use crate::names::semantic::Semantic;
 use crate::config::ast::Quantifier;
 use crate::expr::Value;
 
@@ -25,7 +25,7 @@ pub enum Uncertainty {
 pub struct Query {
     pub name: &'static str,
     pub quantifier: Quantifier,
-    pub call: fn(&Semantic<'_>, Leaf, &crate::grammar::names::Value, u64) -> Known<bool>,
+    pub call: fn(&Semantic<'_>, Leaf, &crate::names::Value, u64) -> Known<bool>,
 }
 
 pub static QUERIES: &[Query] = &[
@@ -106,7 +106,7 @@ pub fn test_query_id(function: &'static QueryFunction) -> QueryId {
 }
 
 pub fn semantic_step(name: &str) -> Option<u16> {
-    use crate::grammar::names::{EXPECTED, INFERRED, RESULT, RETURNED, WIDENED};
+    use crate::names::{EXPECTED, INFERRED, RESULT, RETURNED, WIDENED};
     match name {
         "result" => Some(RESULT),
         "expected" => Some(EXPECTED),

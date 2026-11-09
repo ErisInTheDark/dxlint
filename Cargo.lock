@@ -175,8 +175,6 @@ dependencies = [
  "memchr",
  "regex-automata",
  "regex-syntax",
- "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -187,6 +185,21 @@ dependencies = [
  "dx-pattern",
  "dx-tree",
  "regex-automata",
+]
+
+[[package]]
+name = "dx-names"
+version = "0.1.0"
+dependencies = [
+ "dx-config",
+ "dx-core",
+ "dx-grammar",
+ "dx-ir",
+ "dx-pattern",
+ "dx-tree",
+ "memchr",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -206,6 +219,7 @@ dependencies = [
  "dx-core",
  "dx-grammar",
  "dx-ir",
+ "dx-names",
  "dx-pattern",
  "dx-tree",
  "regex-automata",
@@ -233,6 +247,7 @@ dependencies = [
  "dx-core",
  "dx-grammar",
  "dx-ir",
+ "dx-names",
  "dx-pattern",
  "dx-runtime",
  "dx-tree",

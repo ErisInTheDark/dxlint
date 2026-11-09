@@ -489,7 +489,7 @@ fn lint_project(output: &mut Output<'_>, args: &LintArgs, project: &mut Project,
         linter.enable_profile();
     }
     if let Some(units) = args.semantic_budget {
-        crate::grammar::names::question::Budget::set_per_question(units.get());
+        crate::names::question::Budget::set_per_question(units.get());
     }
     // Profiling measures linting, so it never reads results instead; another
     // budget gives other results than cached ones.

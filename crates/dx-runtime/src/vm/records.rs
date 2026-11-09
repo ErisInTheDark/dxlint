@@ -1,6 +1,6 @@
 use super::V;
 use crate::grammar::Tree;
-use crate::grammar::names::question::Known;
+use crate::names::question::Known;
 use std::cell::RefCell;
 
 pub(crate) use dx_ir::vm::{decode, encode, stored, Cell, BUSY, GAVE_UP, UNSET};
