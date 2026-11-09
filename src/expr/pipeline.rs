@@ -1,16 +1,8 @@
 //! Item-stage values and ordering; node reads and parameter frames stay with Ctx.
 
-use super::{CExpr, Each, Value};
+use super::{Each, Value};
 
-#[derive(Clone, Debug)]
-pub struct Stage {
-    pub kind: Each,
-    pub depth: u16,
-    pub arity: u8,
-    pub input: CExpr,
-    pub args: Vec<CExpr>,
-    pub body: CExpr,
-}
+pub use dx_ir::pipeline::Stage;
 
 pub(super) fn run<'a>(
     kind: Each,

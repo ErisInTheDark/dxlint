@@ -24,7 +24,7 @@ pub enum Value<'s> {
 /// Text of a value: borrowed from the linted file, or shared, so copying a
 /// value (a memoised fact's `space_before.text`) never copies the text.
 /// `Read` text is borrowed too, but reading it was recorded already
-/// ([`crate::footprint`]): a node's text, recorded as the node's.
+/// ([`dx_tree::footprint`]): a node's text, recorded as the node's.
 #[derive(Clone)]
 pub enum Text<'s> {
     Borrowed(&'s str),
@@ -62,7 +62,7 @@ impl From<String> for Text<'_> {
 
 impl<'s> Text<'s> {
     /// `part` must be a subslice of this text. Only source text can stay borrowed.
-    pub(super) fn subslice(&self, part: &str) -> Self {
+    pub fn subslice(&self, part: &str) -> Self {
         let (Text::Borrowed(source) | Text::Read(source)) = self else {
             return part.to_string().into();
         };
@@ -75,17 +75,17 @@ impl<'s> Text<'s> {
         }
     }
 
-    /// The text, its reading recorded ([`crate::footprint::source_text`]).
+    /// The text, its reading recorded ([`dx_tree::footprint::source_text`]).
     #[inline]
     pub fn read(&self) -> &str {
-        if let Text::Borrowed(s) = self { crate::footprint::source_text(s) }
+        if let Text::Borrowed(s) = self { dx_tree::footprint::source_text(s) }
         self
     }
 
     fn into_static(self) -> Text<'static> {
         match self {
             Text::Borrowed(s) => {
-                crate::footprint::source_text(s);
+                dx_tree::footprint::source_text(s);
                 Text::Shared(s.into())
             }
             Text::Read(s) => Text::Shared(s.into()),
@@ -121,10 +121,10 @@ impl fmt::Debug for Text<'_> {
 /// Literal keys borrow; compiled names share their allocation across evaluations.
 pub type Key = Text<'static>;
 
-/// Node `id`'s `text`, read ([`crate::footprint::value_text`]).
+/// Node `id`'s `text`, read ([`dx_tree::footprint::value_text`]).
 #[inline]
 fn node_text<'t>(id: u32, text: &'t Text<'_>) -> &'t str {
-    crate::footprint::value_text(id, text);
+    dx_tree::footprint::value_text(id, text);
     text
 }
 
@@ -276,7 +276,7 @@ impl<'s> Value<'s> {
     }
 
     /// [`Self::text`] for slicing it: only the part kept is read (when used).
-    pub(super) fn text_unread(&self) -> Cow<'_, str> {
+    pub fn text_unread(&self) -> Cow<'_, str> {
         match self {
             Value::Str(s) | Value::Node(_, s) => Cow::Borrowed(s),
             _ => self.text(),
@@ -293,7 +293,7 @@ impl<'s> Value<'s> {
     }
 
     /// A part returned by `self.text()`, retaining file-source ownership only.
-    pub(super) fn text_part(&self, part: &str) -> Self {
+    pub fn text_part(&self, part: &str) -> Self {
         match self {
             Value::Str(text) => Value::Str(text.subslice(part)),
             Value::Node(id, text) => {

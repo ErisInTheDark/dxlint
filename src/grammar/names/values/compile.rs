@@ -4,61 +4,8 @@ use crate::config::ast::{Name, Unwrap};
 use crate::config::error::ConfigError;
 
 use super::super::{class_bits, intern, PathOf, Vocabulary};
-use super::super::question::{NodeValue, ProductShapeId};
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ProductRecipe {
-    pub shape: ProductShapeId,
-    pub sites: Vec<u16>,
-    pub value: Option<Box<Value>>,
-    pub optional: Option<Vec<u16>>,
-    pub repeated: Option<Vec<u16>>,
-    pub values: Option<Vec<u16>>,
-    pub readonly: Option<Vec<u16>>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Selection {
-    pub check: Value,
-    pub pattern: Value,
-    pub yes: Value,
-    pub no: Value,
-    pub distribute: Option<Vec<u16>>,
-    pub dynamic_both: bool,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Value {
-    Current,
-    Unknown,
-    Path(Vec<u16>),
-    Text(Box<str>),
-    Traits(u64),
-    Returned { default: Box<Value> },
-    Either(Box<Value>, Box<Value>),
-    Union(Vec<Value>),
-    Intersection(Vec<Value>),
-    Spread { intersection: bool, path: Vec<u16>, value: Option<Box<Value>> },
-    /// Scope mask zero uses the source kind's member defaults.
-    From(Box<Value>, Box<Value>, u64),
-    /// Project scopes without expanding the source values.
-    Scope { classes: u64, from: Box<Value> },
-    Not(Box<Value>),
-    Excludes { traits: u64, from: Option<Box<Value>> },
-    Includes { value: Box<Value>, from: Option<Box<Value>> },
-    Has { key: Box<Value>, from: Option<Box<Value>> },
-    /// The value's member keys, one literal leaf each (`keyof`).
-    Keys { of: Box<Value> },
-    /// The nth type argument of the value's carriers.
-    Argument { index: u32, of: Box<Value> },
-    Ordinal(u32),
-    Instance { name: Box<str>, classes: u64, arguments: Vec<Value> },
-    Select(Box<Selection>),
-    Product(ProductRecipe),
-    Captured(Box<NodeValue>),
-    /// See [`crate::grammar::names::question::Modified`].
-    Modified { source: Box<Value>, required: Option<bool>, readonly: Option<bool>, flags: Box<[(Box<str>, bool)]> },
-}
+use dx_ir::semantic::ProductShapeId;
+pub use dx_ir::semantic::{ProductRecipe, Selection, Value};
 
 pub(in crate::grammar::names) fn lower_value(
     value: &Unwrap,

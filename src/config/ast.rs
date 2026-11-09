@@ -696,29 +696,7 @@ pub struct FilesScope {
     pub span: Span,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum BinOp {
-    Or,
-    And,
-    Eq,
-    Ne,
-    Lt,
-    Le,
-    Gt,
-    Ge,
-    /// Values side by side: text joins as text, lists as lists.
-    Join,
-    Add,
-    Sub,
-    Mul,
-    Rem,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum UnOp {
-    Not,
-    Neg,
-}
+pub use dx_ir::ops::{BinOp, Quantifier, UnOp};
 
 #[derive(Clone, Debug)]
 pub enum TemplatePart {
@@ -759,12 +737,6 @@ pub enum ExprKind {
     /// `is .rust`: does the node pass one of these tests?
     Is(Box<Expr>, Vec<IsName>),
     Trait(Box<Expr>, Quantifier, Vec<Name>),
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Quantifier {
-    Could,
-    Always,
 }
 
 #[derive(Clone, Debug)]

@@ -24,6 +24,7 @@ Rust linter; rules in `.dx` (docs/advanced.md). Binary `dxlint`.
 - `crates/dx-pattern` (`pattern`): `Pat`, regex subset parser, compiler, DFA bridge, prefilters
 - `crates/dx-core`: hashing, path globs, allocator, levers, sampler, work counts, file parts, `reads` (also `engine::reads`)
 - `crates/dx-tree`: `Tree`, node types and path steps, `footprint` (recorded reads), `line_index`
+- `crates/dx-ir`: compiled expression and VM value types (`CExpr`, `VExpr`, `Value`, `V`, record cells, builtin/function metadata); no evaluation
 - `src/grammar`: layers per language, `parse.rs` builds trees
 - `src/expr`: rule expressions; functions registry in `functions.rs`
 - `src/engine`: linter, fixes, suppressions, `.dxcache` (`cache.rs`), symbol index; end-to-end tests in `engine/tests.rs`

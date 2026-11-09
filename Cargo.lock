@@ -151,6 +151,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "dx-ir"
+version = "0.1.0"
+dependencies = [
+ "dx-core",
+ "dx-pattern",
+ "dx-tree",
+ "regex-automata",
+]
+
+[[package]]
 name = "dx-pattern"
 version = "0.1.0"
 dependencies = [
@@ -176,6 +186,7 @@ dependencies = [
  "anstyle",
  "clap",
  "dx-core",
+ "dx-ir",
  "dx-pattern",
  "dx-tree",
  "globset",

@@ -12,6 +12,7 @@ mod handles;
 mod commands;
 
 pub(crate) use names::Memo as NamesMemo;
+pub use dx_ir::expr::QueryId;
 pub use handles::{handle_function, handle_of, HandleFunction};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,8 +60,52 @@ impl QueryFunction {
     }
 }
 
-pub fn lookup_function(name: &str) -> Option<&'static QueryFunction> {
-    QUERY_FUNCTIONS.iter().flat_map(|group| group.iter()).find(|function| function.name == name)
+pub fn lookup_function(name: &str) -> Option<QueryId> {
+    functions().iter().position(|function| function.name == name).map(|id| QueryId(id as u16))
+}
+
+/// Every query function, in id order.
+fn functions() -> &'static [&'static QueryFunction] {
+    static FUNCTIONS: std::sync::OnceLock<Vec<&'static QueryFunction>> = std::sync::OnceLock::new();
+    FUNCTIONS.get_or_init(|| QUERY_FUNCTIONS.iter().flat_map(|group| group.iter()).collect())
+}
+
+pub fn query_function(id: QueryId) -> &'static QueryFunction {
+    let functions = functions();
+    if let Some(function) = functions.get(id.0 as usize) {
+        return *function;
+    }
+    #[cfg(test)]
+    {
+        let extra = test_functions();
+        if let Some(function) = extra.get(id.0 as usize - functions.len()) {
+            return *function;
+        }
+    }
+    panic!("unknown query function id {}", id.0)
+}
+
+/// Registrations for the tests' own query functions, past the real ones.
+#[cfg(test)]
+fn test_functions() -> std::sync::MutexGuard<'static, Vec<&'static QueryFunction>> {
+    static FUNCTIONS: std::sync::Mutex<Vec<&'static QueryFunction>> = std::sync::Mutex::new(Vec::new());
+    FUNCTIONS.lock().expect("test query functions")
+}
+
+/// The id the VM's test query functions use: the same as [`lookup_function`]
+/// for a real one.
+#[cfg(test)]
+pub fn test_query_id(function: &'static QueryFunction) -> QueryId {
+    let functions = functions();
+    if let Some(id) = functions.iter().position(|f| std::ptr::eq(*f, function)) {
+        return QueryId(id as u16);
+    }
+    let mut extra = test_functions();
+    if let Some(id) = extra.iter().position(|f| std::ptr::eq(*f, function)) {
+        return QueryId((functions.len() + id) as u16);
+    }
+    extra.push(function);
+    QueryId((functions.len() + extra.len() - 1) as u16)
 }
 
 pub fn semantic_step(name: &str) -> Option<u16> {

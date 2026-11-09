@@ -1,0 +1,12 @@
+[package]
+name = "dx-ir"
+version = "0.1.0"
+edition = "2021"
+description = "Data types of compiled rule expressions and VM programs, without evaluation"
+license = "MIT"
+
+[dependencies]
+dx-core = { path = "../dx-core" }
+dx-pattern = { path = "../dx-pattern" }
+dx-tree = { path = "../dx-tree" }
+regex-automata = "0.4"

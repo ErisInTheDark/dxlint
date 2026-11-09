@@ -1,33 +1,7 @@
-use super::NodeSel;
-use crate::grammar::{Tree, ROOT};
-
-impl NodeSel {
-    pub(crate) fn descendants<'a>(&self, tree: &'a Tree, node: u32) -> impl Iterator<Item = u32> + 'a {
-        let indexed = (!self.kinds.is_empty()).then(|| tree.descendant_nodes(node, &self.kinds, self.field)).flatten();
-        // The walk reads what the indexed search records itself
-        // ([`Tree::descendant_nodes`]), not each node it passes.
-        let fallback = (indexed.is_none() && !self.kinds.is_empty()).then(|| crate::footprint::quiet(|| self.walk(tree, node)));
-        indexed.into_iter().flatten().chain(fallback.into_iter().flatten())
-    }
-
-    fn walk(&self, tree: &Tree, node: u32) -> Vec<u32> {
-        let mut found = Vec::new();
-        let mut stack: Vec<u32> = tree.children(node).iter().map(|edge| edge.node).collect();
-        while let Some(id) = stack.pop() {
-            let child = tree.node(id);
-            if child.matcher == ROOT { continue; }
-            if self.matches(tree, id) { found.push((child.start, std::cmp::Reverse(child.end), id)); }
-            stack.extend(tree.children(id).iter().map(|edge| edge.node));
-        }
-        found.sort_unstable();
-        found.into_iter().map(|(_, _, id)| id).collect()
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::grammar::{Edge, Node, TEXT};
+    use crate::expr::selection;
+    use crate::grammar::{Edge, Node, Tree, TEXT, ROOT};
 
     #[test]
     fn indexed_descendants_preserve_order_fields_and_structural_membership() {
@@ -49,10 +23,10 @@ mod tests {
             node(base, 0, 1, vec![]),
         ], 5);
         let selectors = [
-            NodeSel::new(grammar, &[base], None),
-            NodeSel::new(grammar, &[base, other, specialised], None),
-            NodeSel::new(grammar, &[base], Some(3)),
-            NodeSel::new(grammar, &[other], Some(4)),
+            selection(grammar, &[base], None),
+            selection(grammar, &[base, other, specialised], None),
+            selection(grammar, &[base], Some(3)),
+            selection(grammar, &[other], Some(4)),
         ];
         for selector in &selectors {
             for id in 0..tree.nodes.len() as u32 {
@@ -78,7 +52,7 @@ mod tests {
             node(item, 7, 8, vec![]),
             node(ROOT, 0, 10, vec![edge(1, 1), edge(2, 1), edge(3, 1)]),
         ], 5);
-        let selector = NodeSel::new(&linter.grammar, &[item], None);
+        let selector = selection(&linter.grammar, &[item], None);
         for id in 0..tree.nodes.len() as u32 {
             assert_eq!(selector.descendants(&tree, id).collect::<Vec<_>>(), selector.walk(&tree, id));
         }

@@ -530,7 +530,7 @@ impl vm::Host for Ctx<'_> {
                 [one] => vm::Host::attr(self, *one, attr),
                 many => {
                     let items = many.iter()
-                        .map(|&id| vm::Host::attr(self, id, attr).map(|value| value.to_value(self, self.source)))
+                        .map(|&id| vm::Host::attr(self, id, attr).map(|value| crate::vm::to_value(value, self, self.source)))
                         .collect::<Option<Vec<_>>>()?;
                     self.memo.vm.pack(&Value::list(items), &self.attrs.values, self.source)
                 }

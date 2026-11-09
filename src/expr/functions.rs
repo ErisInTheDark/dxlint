@@ -5,20 +5,7 @@ use super::case;
 use super::value::Value;
 use std::borrow::Cow;
 
-pub struct Function {
-    pub name: &'static str,
-    pub signature: &'static str,
-    pub doc: &'static str,
-    pub min: usize,
-    pub max: usize,
-    pub call: for<'s> fn(&[Value<'s>]) -> Result<Value<'s>, String>,
-}
-
-impl std::fmt::Debug for Function {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.signature)
-    }
-}
+pub use dx_ir::functions::Function;
 
 pub fn lookup(name: &str) -> Option<&'static Function> {
     FUNCTIONS.iter().find(|f| f.name == name)

@@ -10,35 +10,7 @@ const BORROWED_TEXT: u8 = 0;
 const OWNED_TEXT: u8 = 1;
 const READ_TEXT: u8 = 2;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Handle(u32);
-
-const CELL_OFFSET_MASK: u32 = (1 << 30) - 1;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Region {
-    Config = 0,
-    Scratch = 1,
-    File = 2,
-}
-
-impl Handle {
-    pub(super) fn bits(self) -> u32 { self.0 }
-    pub(super) fn from_bits(bits: u32) -> Self { Self(bits) }
-    fn region(self) -> Region {
-        match self.0 >> 30 {
-            0 => Region::Config,
-            1 => Region::Scratch,
-            2 => Region::File,
-            _ => unreachable!("invalid VM value region"),
-        }
-    }
-    fn offset(self) -> usize { (self.0 & CELL_OFFSET_MASK) as usize }
-    pub(super) fn is_scratch(self) -> bool { self.region() == Region::Scratch }
-}
-
-/// The bit marking a [`V::Text`] handle as evaluation scratch, not file.
-pub(super) const SCRATCH_TEXT: u32 = 1 << 31;
+pub(crate) use super::{Handle, Region, CELL_OFFSET_MASK, SCRATCH_TEXT};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum PackError {
@@ -91,7 +63,7 @@ impl Arena {
         cells_end(offset, items.len())?;
         self.cells.push(items.len() as u64);
         self.cells.extend(items.iter().copied().map(super::records::encode));
-        Ok(Handle(offset as u32 | (region as u32) << 30))
+        Ok(Handle::from_bits(offset as u32 | (region as u32) << 30))
     }
 
     fn len(&self, handle: Handle) -> usize { self.cells[handle.offset()] as usize }

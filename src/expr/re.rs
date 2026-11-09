@@ -19,22 +19,7 @@ use regex_automata::Input;
 use super::value::Value;
 use crate::fx_hash::FxHashMap;
 
-fn shared() -> &'static Mutex<HashMap<String, Arc<Regex>>> {
-    static SHARED: OnceLock<Mutex<HashMap<String, Arc<Regex>>>> = OnceLock::new();
-    SHARED.get_or_init(Default::default)
-}
-
-/// The compiled pattern, or a readable error.
-pub fn compile(pattern: &str) -> Result<Arc<Regex>, String> {
-    if let Some(re) = shared().lock().ok().and_then(|c| c.get(pattern).cloned()) {
-        return Ok(re);
-    }
-    let re = Arc::new(Regex::new(pattern).map_err(|e| format!("invalid regex `{pattern}`: {e}"))?);
-    if let Ok(mut c) = shared().lock() {
-        c.insert(pattern.to_string(), re.clone());
-    }
-    Ok(re)
-}
+pub(crate) use dx_ir::re::compile;
 
 struct Local {
     re: Arc<Regex>,

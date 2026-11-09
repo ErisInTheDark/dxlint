@@ -2388,7 +2388,7 @@ mod tests {
         for condition in &mut linter.compiled_mut().grammar.names.conditions {
             let original = condition.lowered.take().unwrap();
             condition.lowered.set(VExpr::Binary(crate::config::ast::BinOp::And,
-                Box::new(original), Box::new(VExpr::QueryCall(&QUERY,
+                Box::new(original), Box::new(VExpr::QueryCall(crate::expr::queries::test_query_id(&QUERY),
                     Box::new([VExpr::Builtin(crate::expr::Builtin::Node)]))))).unwrap();
         }
         let root = Path::new("/root/catalog-unknown");
@@ -2510,7 +2510,7 @@ mod tests {
             linter.compiled_mut().attrs = crate::expr::Attributes::new(vec![crate::expr::Attr {
                 name: "answer".into(),
                 defs: vec![(matcher, crate::expr::CExpr::Nullish(
-                    Box::new(crate::expr::CExpr::QueryCall(&QUERY, vec![crate::expr::CExpr::Builtin(crate::expr::Builtin::Node)])),
+                    Box::new(crate::expr::CExpr::QueryCall(crate::expr::queries::test_query_id(&QUERY), vec![crate::expr::CExpr::Builtin(crate::expr::Builtin::Node)])),
                     Box::new(crate::expr::CExpr::Const(Value::Bool(true))),
                 ), 1)],
             }], &[], &linter.grammar);
@@ -2915,7 +2915,7 @@ mod tests {
         } });
         compiled.attrs = crate::expr::Attributes::new(vec![
             crate::expr::Attr { name: "created".into(), defs: vec![(matcher, crate::expr::CExpr::QueryCall(
-                &CREATED, vec![crate::expr::CExpr::Builtin(crate::expr::Builtin::Node)],
+                crate::expr::queries::test_query_id(&CREATED), vec![crate::expr::CExpr::Builtin(crate::expr::Builtin::Node)],
             ), 1)] },
             crate::expr::Attr { name: "alias".into(), defs: vec![(matcher, crate::expr::CExpr::Attr(0), 2)] },
         ], &[], &compiled.grammar);

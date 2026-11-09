@@ -1279,7 +1279,7 @@ impl Linter {
         let editor = programs.editor.is_some() && tree.regions().is_some();
         memo.file_vm().set_firewall(editor.then_some(tree.root));
         let root_ctx = Ctx { node: tree.root, world: Some(&world), ..tree_ctx };
-        let wall_value = |attr: u16| crate::vm::Host::attr(&root_ctx, tree.root, attr).map(|value| value.to_value(&root_ctx, run.text).fingerprint());
+        let wall_value = |attr: u16| crate::vm::Host::attr(&root_ctx, tree.root, attr).map(|value| crate::vm::to_value(value, &root_ctx, run.text).fingerprint());
         let mut walls = Vec::new();
         let mut kept: Vec<Option<editing::NodeResult>> = Vec::new();
         if let Some((mut carried, previous)) = carry {
