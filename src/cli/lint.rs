@@ -135,7 +135,7 @@ fn watch(linter: &Linter, profile: &crate::engine::Profile, every: std::time::Du
         waited += tick;
         if waited >= every {
             waited = std::time::Duration::ZERO;
-            eprintln!("{}", profile.watch_line(attribute));
+            eprintln!("{}", crate::engine::profile::watch_line(profile, attribute));
         }
     }
 }

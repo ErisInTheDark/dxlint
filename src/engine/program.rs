@@ -1137,7 +1137,7 @@ mod tests {
         reads::set_buffer(main, "main");
         reads::set_buffer(library, "one");
         let programs = Programs::default();
-        let profile = Profile::new(0, 0);
+        let profile = crate::engine::new_profile(0, 0);
         let key = CatalogKey { settings: 0, program: 0, classes: 1 };
         let snapshot = Snapshot::default();
         let hash = reads::hash_bytes(b"main");

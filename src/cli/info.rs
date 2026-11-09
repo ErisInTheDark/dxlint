@@ -430,7 +430,7 @@ pub fn profile(output: &mut Output<'_>, linter: &Linter, format: super::Format, 
             });
             output.out(format_args!("{row}"));
         }
-        for (nanos, file) in p.slowest_files() {
+        for (nanos, file) in crate::engine::profile::slowest_files(p) {
             let row = serde_json::json!({ "kind": "file-profile", "file": file, "ms": ms(nanos) });
             output.out(format_args!("{row}"));
         }
@@ -448,7 +448,7 @@ pub fn profile(output: &mut Output<'_>, linter: &Linter, format: super::Format, 
             output.err(format_args!("  {:>11.1} ms {evals:>11} nodes  {CYAN}{name}{CYAN:#}", ms(*nanos)));
         }
         output.err(format_args!("\n  {BOLD}files{BOLD:#} {DIM}by rules' wall time, slowest first{DIM:#}"));
-        for (nanos, file) in p.slowest_files() {
+        for (nanos, file) in crate::engine::profile::slowest_files(p) {
             output.err(format_args!("  {:>11.1} ms  {file}", ms(nanos)));
         }
         output.err(format_args!("\n  {BOLD}lets{BOLD:#} {DIM}by self time (total includes lets and queries they read; reads include memo hits){DIM:#}"));
@@ -495,7 +495,7 @@ pub fn profile(output: &mut Output<'_>, linter: &Linter, format: super::Format, 
         Profile::get(&p.program_catalogue_builds),
         Profile::get(&p.catalogue_read_validations)
     ));
-    let (foreign_steps, foreign_nodes, repeated_nodes, repeated_steps, cross_steps) = p.foreign_summary();
+    let (foreign_steps, foreign_nodes, repeated_nodes, repeated_steps, cross_steps) = crate::engine::profile::foreign_summary(p);
     output.err(format_args!(
         "  steps on other files' node values: {foreign_steps} over {foreign_nodes} nodes; {repeated_nodes} nodes computed more than once, their repeats {repeated_steps} steps ({cross_steps} by other linted files)"
     ));
@@ -540,7 +540,7 @@ pub fn profile(output: &mut Output<'_>, linter: &Linter, format: super::Format, 
         Profile::get(&p.effect_entry_calls),
         ms(Profile::get(&p.effect_entry_nanos))
     ));
-    let failed_graphs = p.effect_failures();
+    let failed_graphs = crate::engine::profile::effect_failures(p);
     output.err(format_args!(
         "  units: {} files parsed for semantic questions ({:.1} ms)",
         Profile::get(&p.unit_parses),
@@ -568,7 +568,7 @@ pub fn profile(output: &mut Output<'_>, linter: &Linter, format: super::Format, 
                 ms(row.nanos), row.calls, path.display(), cause.name()));
         }
     }
-    let cut_roots = p.cut_roots();
+    let cut_roots = crate::engine::profile::cut_roots(p);
     if !cut_roots.is_empty() {
         output.err(format_args!("  root questions cut by their budget, by query and code (top 25 of {}):", cut_roots.len()));
         for (count, query, text) in cut_roots.into_iter().take(25) {

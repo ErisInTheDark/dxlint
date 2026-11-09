@@ -6,6 +6,7 @@ pub mod fx_hash;
 pub mod levers;
 pub mod parts;
 pub mod path_globs;
+pub mod profile;
 pub mod reads;
 pub mod sampler;
 #[cfg(feature = "work")]

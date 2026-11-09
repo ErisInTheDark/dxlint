@@ -1,6 +1,8 @@
 use super::{After, Catch, Event, Exit, Flow, NodeRef, Phase, Point, Step, StepId};
 use crate::grammar::names::question::{Known, Leaf, QueryContext, Target};
 
+pub use dx_core::profile::Failure;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Control {
     Returned,
@@ -10,25 +12,6 @@ pub enum Control {
     Thrown,
     Broken,
     Continued,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Failure {
-    Budget,
-    Dependency,
-    Shape,
-    Condition,
-}
-
-impl Failure {
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Budget => "budget",
-            Self::Dependency => "dependency",
-            Self::Shape => "shape",
-            Self::Condition => "condition",
-        }
-    }
 }
 
 impl Control {

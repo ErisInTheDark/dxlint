@@ -15,7 +15,7 @@ pub(crate) mod language_options;
 pub mod transform;
 mod message;
 mod module_graph;
-mod profile;
+pub(crate) mod profile;
 mod program;
 mod prune;
 pub use dx_core::reads;
@@ -35,7 +35,7 @@ pub use diagnostic::{Diagnostic, Edit, Fix, Suggestion, ENGINE_RULE};
 pub use fix::{apply_fixes, placeholder, Fixed};
 use fix::{FixPlan, Region};
 pub use profile::{EffectBuild, Profile, Query, StepSite};
-pub(crate) use profile::ValueEvaluation;
+pub(crate) use profile::{new_profile, ValueEvaluation};
 
 use crate::config::ast::{FixTarget, Report, Severity};
 use crate::config::source::{FileId, SourceMap, Span};
@@ -693,7 +693,7 @@ impl Linter {
 
     /// Collect `--profile` counters from now on.
     pub fn enable_profile(&mut self) {
-        self.profile = Some(Profile::new(self.grammar.matchers.len(), self.rules.len())
+        self.profile = Some(new_profile(self.grammar.matchers.len(), self.rules.len())
             .with_attributes(self.attrs.count()).with_functions(self.grammar.functions.len()));
     }
 

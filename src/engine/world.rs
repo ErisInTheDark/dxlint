@@ -2471,7 +2471,7 @@ mod tests {
                 },
                 crate::expr::Attr { name: "alias".into(), defs: vec![(matcher, crate::expr::CExpr::Attr(0), 2)] },
             ], &[], &linter.grammar);
-            linter.profile = Some(super::super::Profile::new(linter.grammar.matchers.len(), linter.rules.len()));
+            linter.profile = Some(super::super::new_profile(linter.grammar.matchers.len(), linter.rules.len()));
             let expression = crate::expr::CExpr::Attr(attr);
             if shaped {
                 linter.attrs.shape_records(&linter.grammar, vec![(crate::vm::KindSet::all(linter.grammar.matchers.len()), &expression)]);

@@ -925,7 +925,7 @@ mod tests {
             let question = QueryContext::default();
             let semantic = Semantic::new(&world, &tables, &question);
             assert!(matches!(semantic.effects().execution(leaf(0)), Known::Unknown));
-            let rows = world.profile.as_ref().expect("profile").effect_failures();
+            let rows = crate::engine::profile::effect_failures(world.profile.as_ref().expect("profile"));
             assert_eq!(rows.len(), 1);
             assert_eq!(rows[0].2, failure);
             assert_eq!(rows[0].3.calls, 1);

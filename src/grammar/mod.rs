@@ -1089,7 +1089,7 @@ in .t layer candidate match candidate prefix branch "suffix"
         let grammar = fixture();
         let id = grammar.matcher("attributes").unwrap();
         for source in [r#""module""#, r#""module" /* irrelevant */"#] {
-            let profile = crate::engine::Profile::new(grammar.matchers.len(), 0);
+            let profile = crate::engine::new_profile(grammar.matchers.len(), 0);
             grammar.parse_tree_with(0, source, None, Some(&profile));
             assert_eq!(profile.matcher_runs[id as usize].load(Ordering::Relaxed), 0, "{source}");
         }
