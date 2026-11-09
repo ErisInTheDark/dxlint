@@ -37,6 +37,21 @@ fn scenarios(path: &Path, found: &mut BTreeSet<PathBuf>) -> Result<(), String> {
     Ok(())
 }
 
+/// A scenario's files to lint: everything but its configs, cache and
+/// outputs. A plain listing: no ignore files above the scenario apply.
+fn inputs(path: &Path, found: &mut Vec<PathBuf>) -> Result<(), String> {
+    for entry in entries(path)? {
+        let name = entry.file_name();
+        let kind = entry.file_type().map_err(|e| e.to_string())?;
+        if kind.is_dir() {
+            if !matches!(name.to_str(), Some("actual" | "expected" | "edits" | ".git")) { inputs(&entry.path(), found)? }
+        } else if kind.is_file() && name != FILE_NAME && Path::new(&name).extension().is_none_or(|ext| ext != "dx") {
+            found.push(entry.path());
+        }
+    }
+    Ok(())
+}
+
 fn reports(name: &str, text: &str, diagnostics: &[crate::engine::Diagnostic], local: &BTreeSet<&str>) -> Vec<String> {
     let lines = LineIndex::new(text);
     diagnostics.iter().map(|diagnostic| {
@@ -255,13 +270,8 @@ fn difference(expected: &str, actual: &str) -> String {
 fn scenario(output: &mut Output<'_>, root: &Path, bless: bool) -> Result<Vec<String>, String> {
     let project = load_from_with(output, &root.join(".dx"), true).map_err(|_| "configuration failed".to_string())?;
     if !project.config_ok { return Err("configuration failed".into()); }
-    let outputs = |entry: &ignore::DirEntry| !matches!(entry.file_name().to_str(), Some("actual" | "expected" | "edits"));
-    let mut files = super::lint::walker(&[root.to_path_buf()], 1, outputs).build()
-        .map(|entry| entry.map_err(|e| e.to_string())).collect::<Result<Vec<_>, _>>()?.into_iter()
-        .filter(|entry| entry.file_type().is_some_and(|kind| kind.is_file()))
-        .map(|entry| entry.into_path())
-        .filter(|path| path.extension().is_none_or(|ext| ext != "dx") && path.file_name().is_none_or(|name| name != FILE_NAME))
-        .collect::<Vec<_>>();
+    let mut files = Vec::new();
+    inputs(root, &mut files)?;
     files.sort();
     let marker = root.join(FILE_NAME);
     if fs::symlink_metadata(&marker).is_ok_and(|meta| meta.file_type().is_symlink()) {

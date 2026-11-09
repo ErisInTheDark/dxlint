@@ -4,7 +4,7 @@ Rust linter; rules in `.dx` (docs/advanced.md). Binary `dxlint`.
 
 ## Commands
 
-- test: `cargo test` (stable Rust owners only: VM, parser, patterns/DFA, cache/reads, type APIs, CLI/LSP; rule behaviour lives in fixtures)
+- test: `cargo test --lib` (plain `cargo test` compiles the crate a second time for a bin with no tests; stable Rust owners only: VM, parser, patterns/DFA, cache/reads, type APIs, CLI/LSP; rule behaviour lives in fixtures)
 - rule fixtures: `dxlint fixtures [paths...] [--bless]` (default `fixtures/`)
 - package binaries: `npm run build:binaries` (Windows, Linux, macOS; setup in its header); any change to `src/` or Cargo files ships with it in the same batch (publishing refuses binaries whose `package/source.sha256` stamp is stale)
 - Windows binary's PGO profile: `npm run build:profile <project>...` (needs `rustup component add llvm-tools-preview`; lints real projects on an instrumented build), commit `scripts/dxlint-win32-x64.profdata`, then `build:binaries`; refresh when big engine changes landed, a stale one only gains less

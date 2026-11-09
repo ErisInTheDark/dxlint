@@ -12,7 +12,7 @@ pub mod syntax;
 use class::CharClass;
 
 /// Zero-width assertions.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Look {
     /// `^`: start of a line.
     Bol,
@@ -26,7 +26,7 @@ pub enum Look {
     NotWordBoundary,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Pat {
     Empty,
     Lit { bytes: Vec<u8>, fold: bool },

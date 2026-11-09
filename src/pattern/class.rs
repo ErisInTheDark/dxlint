@@ -1,7 +1,7 @@
 //! Character classes: `[a-z_]`, `[^"\\]`, `\w`, plus the unicode-aware
 //! builtin classes (`alpha`, `alnum`, ...). ASCII membership is a bitmap.
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Named {
     Alpha,
     Alnum,
@@ -35,7 +35,7 @@ pub struct ClassParts<'a> {
     pub negated: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct CharClass {
     ranges: Vec<(char, char)>,
     named: Vec<Named>,

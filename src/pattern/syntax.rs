@@ -2,7 +2,7 @@
 
 use super::Pat;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Definition {
     pub name: String,
     pub trivia: Vec<Pat>,
@@ -15,7 +15,7 @@ pub struct Definition {
     pub root: String,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Token {
     pub name: String,
     pub pattern: Pat,
@@ -26,7 +26,7 @@ pub struct Token {
     pub lines: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Goal {
     pub name: String,
     /// Longest match wins; declaration order breaks ties.
@@ -34,14 +34,14 @@ pub struct Goal {
     pub trivia: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Node {
     pub name: String,
     pub fields: Vec<Field>,
     pub literal_text: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Field {
     pub name: String,
     pub kinds: Vec<String>,
@@ -50,13 +50,13 @@ pub struct Field {
     pub repeated: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Production {
     pub name: String,
     pub body: Expr,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct TokenMatch {
     pub token: String,
     pub text: Option<String>,
@@ -64,14 +64,14 @@ pub struct TokenMatch {
     pub emit: Option<String>,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct ContextChange {
     pub goal: Option<String>,
     pub set: Vec<String>,
     pub clear: Vec<String>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Expr {
     Token(TokenMatch),
     TokenPattern { pattern: Pat, emit: Option<String> },
@@ -102,14 +102,14 @@ pub enum Expr {
     Pratt(Precedence),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Precedence {
     pub atom: Box<Expr>,
     pub prefix: Vec<Prefix>,
     pub rows: Vec<Operator>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Prefix {
     pub operator: Expr,
     pub binding_power: u16,
@@ -118,7 +118,7 @@ pub struct Prefix {
     pub argument: String,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Operator {
     pub operator: Expr,
     pub binding_power: u16,

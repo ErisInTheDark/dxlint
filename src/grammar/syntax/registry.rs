@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::config::ast::ParserDecl;
 use crate::config::error::ConfigError;
@@ -6,7 +7,7 @@ use crate::config::error::ConfigError;
 use super::{CompiledParser, Context, Registration};
 
 pub struct DeclaredParser {
-    pub parser: CompiledParser,
+    pub parser: Arc<CompiledParser>,
     pub registration: Registration,
 }
 
@@ -29,7 +30,7 @@ impl DeclaredParser {
     }
 
     fn compile(definition: &crate::pattern::syntax::Definition) -> Result<Self, String> {
-        let parser = CompiledParser::compile(definition)?;
+        let parser = CompiledParser::shared(definition)?;
         let matchers = (0..parser.nodes().len()).map(u32::try_from).collect::<Result<Vec<_>, _>>()
             .map_err(|_| "declared parser kind count exceeds node ids")?;
         let labels = parser.nodes().iter().map(|node| {

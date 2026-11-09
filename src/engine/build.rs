@@ -1041,20 +1041,20 @@ fn attributes(
 /// Labels named anywhere in `expr` or the functions it calls (an
 /// over-estimate: only ever splits compiles more finely).
 fn mentioned_labels(g: &Grammar, expr: &crate::config::ast::Expr, functions: &HashMap<&str, &crate::config::ast::FnDef>) -> Vec<u16> {
-    let mut names = std::collections::HashSet::new();
+    let mut names = super::prune::Names::default();
     super::prune::expr_names(expr, &mut names);
-    let mut pending: Vec<String> = names.iter().cloned().collect();
-    let mut visited = std::collections::HashSet::new();
+    let mut pending: Vec<&str> = names.iter().copied().collect();
+    let mut visited = super::prune::Names::default();
     while let Some(name) = pending.pop() {
-        let Some(function) = functions.get(name.as_str()) else { continue };
+        let Some(function) = functions.get(name) else { continue };
         if !visited.insert(name) { continue }
-        let mut inner = std::collections::HashSet::new();
+        let mut inner = super::prune::Names::default();
         super::prune::expr_names(&function.body, &mut inner);
         for found in inner {
-            if names.insert(found.clone()) { pending.push(found) }
+            if names.insert(found) { pending.push(found) }
         }
     }
-    let mut labels: Vec<u16> = names.iter().filter_map(|name| g.labels.get(name)).collect();
+    let mut labels: Vec<u16> = names.iter().filter_map(|&name| g.labels.get(name)).collect();
     labels.sort_unstable();
     labels.dedup();
     labels

@@ -26,6 +26,18 @@ fn lowered_choices_preserve_fallback_failure_offsets_labels_and_cuts() {
     }
 }
 
+#[test]
+fn equal_definitions_share_one_compiled_parser_and_others_get_their_own() {
+    let words = grammar(emit("root", Expr::Seq(vec![lexeme("word"), Expr::End])));
+    let sums = grammar(emit("root", Expr::Seq(vec![lexeme("word"), lexeme("plus"), lexeme("word"), Expr::End])));
+    let first = CompiledParser::shared(&words).unwrap();
+    assert!(Arc::ptr_eq(&first, &CompiledParser::shared(&words.clone()).unwrap()));
+    let other = CompiledParser::shared(&sums).unwrap();
+    assert!(!Arc::ptr_eq(&first, &other));
+    assert!(other.parse_root("a+b", Context::default(), &registration()).is_ok());
+    assert!(first.parse_root("a+b", Context::default(), &registration()).is_err());
+}
+
 fn lexeme(name: &str) -> Expr {
     Expr::Token(TokenMatch { token: name.into(), text: None, emit: None })
 }

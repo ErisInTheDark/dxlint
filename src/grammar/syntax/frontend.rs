@@ -16,7 +16,7 @@ use crate::expr::Value;
 use crate::grammar::{Edge, Node, TEXT};
 
 pub struct DeclaredFrontend {
-    parser: CompiledParser,
+    parser: Arc<CompiledParser>,
     registration: Registration,
     /// Node kinds, then the visible token kinds.
     kinds: Vec<String>,
@@ -46,7 +46,7 @@ struct Spans {
 
 impl DeclaredFrontend {
     pub fn build(declaration: &ParserDecl) -> Result<Self, String> {
-        let parser = CompiledParser::compile(&declaration.definition)?;
+        let parser = CompiledParser::shared(&declaration.definition)?;
         let nodes = parser.nodes();
         let mut kinds: Vec<String> = nodes.iter().map(|node| node.name.clone()).collect();
         let mut fields: Vec<String> = Vec::new();
