@@ -4,7 +4,7 @@
 //! until it is measured: kept levers lose their switch, rejected ones their
 //! code. Off by default; with none set output is the released behaviour.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::OnceLock;
 
 #[derive(Clone, Copy)]
@@ -59,4 +59,20 @@ pub fn on(lever: Lever) -> bool {
         })
     });
     set & 1 << lever as u8 != 0
+}
+
+/// The work one semantic root question may do by default: a question past it
+/// is waste, and speed ranks before parity.
+pub const SEMANTIC_BUDGET_DEFAULT: u32 = 500;
+
+static SEMANTIC_BUDGET: AtomicU32 = AtomicU32::new(SEMANTIC_BUDGET_DEFAULT);
+
+/// The work each semantic root question gets in this process:
+/// [`SEMANTIC_BUDGET_DEFAULT`] unless `--semantic-budget` set it.
+pub fn semantic_budget() -> u32 {
+    SEMANTIC_BUDGET.load(Ordering::Relaxed)
+}
+
+pub fn set_semantic_budget(units: u32) {
+    SEMANTIC_BUDGET.store(units, Ordering::Relaxed);
 }

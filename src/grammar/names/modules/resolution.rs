@@ -7,13 +7,7 @@ pub use super::metadata::Json;
 pub use super::configuration::Configuration;
 pub use super::inputs::{program_anchor, program_inputs, program_sources};
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct DiscoveryRequest {
-    pub root: PathBuf,
-    pub include: Vec<Box<str>>,
-    pub exclude: Vec<Box<str>>,
-    pub extensions: Vec<Box<str>>,
-}
+pub use crate::engine::reads::DiscoveryRequest;
 
 pub trait Host {
     fn program(&self) -> Known<u32>;

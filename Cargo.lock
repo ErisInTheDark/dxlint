@@ -143,6 +143,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "61803da095bee82a81bb1a452ecc25d3b2f1416d1897eb86430c6159ef717c17"
 
 [[package]]
+name = "dx-core"
+version = "0.1.0"
+dependencies = [
+ "globset",
+ "ignore",
+]
+
+[[package]]
 name = "dx-pattern"
 version = "0.1.0"
 dependencies = [
@@ -158,6 +166,7 @@ dependencies = [
  "anstream",
  "anstyle",
  "clap",
+ "dx-core",
  "dx-pattern",
  "globset",
  "ignore",

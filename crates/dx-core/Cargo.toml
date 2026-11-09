@@ -1,0 +1,14 @@
+[package]
+name = "dx-core"
+version = "0.1.0"
+edition = "2021"
+description = "Shared low-level helpers: hashing, path globs, allocation, file parts and recorded reads"
+license = "MIT"
+
+[dependencies]
+globset = "0.4"
+ignore = "0.4"
+
+[features]
+# Measuring builds: the work counter these helpers charge (src/work.rs).
+work = []

@@ -49,7 +49,7 @@ pub struct Part {
 #[derive(Debug)]
 pub struct FileParts {
     /// The file (interned): reads of a version name it through it.
-    pub path: crate::engine::reads::DepPath,
+    pub path: crate::reads::DepPath,
     /// The whole text's hash: equal hashes, equal parts.
     pub hash: u64,
     /// The text with the opaque bodies blanked, hashed with their places.
@@ -67,7 +67,7 @@ pub struct FileParts {
     pub declared: crate::fx_hash::FxHashMap<u32, Name>,
     /// The file outside its bodies, as `.dxcache` keeps every read of it
     /// (`None`: a file without bodies, kept as its whole text).
-    pub coarse: Option<Arc<crate::engine::reads::Bodies>>,
+    pub coarse: Option<Arc<crate::reads::Bodies>>,
     /// Per statement: the statements its reads may reach (itself included).
     reach: OnceLock<Box<[Box<[u64]>]>>,
 }
@@ -177,8 +177,8 @@ pub struct Diff {
 }
 
 impl FileParts {
-    pub fn new((path, hash): (crate::engine::reads::DepPath, u64), outside: u64, statements: Vec<Part>, bodies: Vec<Part>, (precise, failed): (bool, bool), declared: crate::fx_hash::FxHashMap<u32, Name>,
-        coarse: Option<Arc<crate::engine::reads::Bodies>>) -> FileParts {
+    pub fn new((path, hash): (crate::reads::DepPath, u64), outside: u64, statements: Vec<Part>, bodies: Vec<Part>, (precise, failed): (bool, bool), declared: crate::fx_hash::FxHashMap<u32, Name>,
+        coarse: Option<Arc<crate::reads::Bodies>>) -> FileParts {
         FileParts { path, hash, outside, statements: statements.into(), bodies: bodies.into(), precise, failed, declared, coarse, reach: OnceLock::new() }
     }
 
@@ -370,7 +370,7 @@ impl FileParts {
 /// A file as reads of it are recorded: its path and, once known, its parts.
 #[derive(Debug)]
 pub struct Owner {
-    pub path: crate::engine::reads::DepPath,
+    pub path: crate::reads::DepPath,
     /// The text's hash: reads of a file whose parts are not known yet
     /// depend on its whole text.
     pub hash: u64,
@@ -382,7 +382,7 @@ pub struct Owner {
 }
 
 impl Owner {
-    pub fn new(path: crate::engine::reads::DepPath, hash: u64) -> Owner {
+    pub fn new(path: crate::reads::DepPath, hash: u64) -> Owner {
         Owner { path, hash, parts: std::sync::Mutex::new(None), settled: std::sync::atomic::AtomicBool::new(false) }
     }
 
@@ -495,7 +495,7 @@ mod tests {
     }
 
     fn file(hash: u64, statements: Vec<Part>) -> FileParts {
-        FileParts::new((crate::engine::reads::dep_path(Path::new("/parts/file.ts")), hash), hash, statements, Vec::new(), (true, false), Default::default(), None)
+        FileParts::new((crate::reads::dep_path(Path::new("/parts/file.ts")), hash), hash, statements, Vec::new(), (true, false), Default::default(), None)
     }
 
     #[test]

@@ -18,7 +18,7 @@ mod module_graph;
 mod profile;
 mod program;
 mod prune;
-pub mod reads;
+pub use dx_core::reads;
 pub mod scopes;
 mod suppress;
 pub mod symbols;
@@ -43,7 +43,7 @@ use crate::expr::{Attributes, AttrMemo, CExpr, Ctx, Value};
 use crate::grammar::{Grammar, Tree, ROOT, TEXT};
 use crate::line_index::LineIndex;
 use crate::path_globs::PathGlobs;
-use reads::{Dep, Reads};
+use dx_core::reads::{Dep, Reads};
 use frontend::{FileInput, Native};
 use suppress::Suppressions;
 

@@ -119,7 +119,7 @@ impl Budget {
     pub const DEFAULT: u32 = 100_000;
     /// The work one root question may do by default: a question past it is
     /// waste, and speed ranks before parity.
-    pub const QUESTION: u32 = 500;
+    pub const QUESTION: u32 = crate::levers::SEMANTIC_BUDGET_DEFAULT;
     /// How deeply engines may call into each other in one question.
     pub const DEPTH: u32 = 256;
 
@@ -294,11 +294,11 @@ impl Budget {
     /// unless `--semantic-budget` set it (a diagnostic ruler: questions
     /// doing more than it give up and show in the profile).
     pub fn per_question() -> u32 {
-        PER_QUESTION.load(std::sync::atomic::Ordering::Relaxed)
+        crate::levers::semantic_budget()
     }
 
     pub fn set_per_question(units: u32) {
-        PER_QUESTION.store(units, std::sync::atomic::Ordering::Relaxed);
+        crate::levers::set_semantic_budget(units);
     }
 
     pub(crate) fn restart(&self) {
@@ -314,8 +314,6 @@ impl Budget {
         self.limited.get() || self.exhausted()
     }
 }
-
-static PER_QUESTION: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(Budget::QUESTION);
 
 impl Default for Budget {
     fn default() -> Budget {

@@ -173,7 +173,7 @@ fn report_fact_steps() {
     eprintln!("facts spending most altogether:");
     named.sort_by_key(|(_, (.., total))| std::cmp::Reverse(*total));
     print(&named[..named.len().min(80)]);
-    let budget = crate::grammar::names::question::Budget::per_question();
+    let budget = crate::levers::semantic_budget();
     let mut out: FxHashMap<(&str, String), (u32, u64)> = FxHashMap::default();
     for (steps, kind, label) in heavy.iter().filter(|(steps, ..)| *steps >= budget) {
         let shape: String = label.chars().take(60).map(|c| if c.is_control() { ' ' } else { c }).collect();

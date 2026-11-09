@@ -10,7 +10,15 @@ use std::ffi::OsString;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock, RwLock};
-use crate::grammar::names::modules::resolution::DiscoveryRequest;
+
+/// A policy-filtered discovery of a program's input files.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct DiscoveryRequest {
+    pub root: PathBuf,
+    pub include: Vec<Box<str>>,
+    pub exclude: Vec<Box<str>>,
+    pub extensions: Vec<Box<str>>,
+}
 
 /// A path a [`Dep`] names, interned: a run records the same few thousand
 /// paths in millions of reads, so each is stored once.
@@ -91,18 +99,18 @@ pub enum Dep {
     Part(Arc<crate::parts::FileParts>, Arc<crate::parts::PartReads>),
     /// What a program's import graph answers for a module, hashed: any file
     /// could change it, but only a changed answer breaks the read
-    /// ([`Linter::holds`](super::Linter::holds)).
+    /// ([`Linter::holds`]).
     Module(Arc<ModuleAsk>, u64),
 }
 
-/// A question to a program's import graph ([`super::module_graph`]).
+/// A question to a program's import graph (`module_graph`).
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ModuleAsk {
     /// The directory whose program (its configuration and references) the
     /// graph covers: the config root, as one file's own program sees only
     /// what it references, never what imports it.
     pub root: DepPath,
-    /// The resolution profile's place ([`crate::grammar::names::Names::settings_at`]).
+    /// The resolution profile's place (`Names::settings_at`).
     pub settings: u32,
     /// The module, relative to the root and `/` separated.
     pub module: Box<str>,
@@ -338,7 +346,7 @@ pub struct Reads {
     pub groups: Vec<Arc<Reads>>,
     pub scans: Vec<Arc<Scan>>,
     /// [`Reads::names`], once.
-    pub(super) names: std::sync::OnceLock<Names>,
+    pub names: std::sync::OnceLock<Names>,
 }
 
 /// The file names some reads (their groups and scans too) read, as blooms:
@@ -399,22 +407,22 @@ impl Scan {
 
 /// An answer and its dependencies; every consumer records those reads.
 #[derive(Clone)]
-pub(crate) struct Cached<T> {
-    pub(crate) value: T,
-    pub(crate) reads: Arc<Reads>,
+pub struct Cached<T> {
+    pub value: T,
+    pub reads: Arc<Reads>,
 }
 
 impl<T: Clone> Cached<T> {
-    pub(crate) fn compute(f: impl FnOnce() -> T) -> Self {
+    pub fn compute(f: impl FnOnce() -> T) -> Self {
         let (value, reads) = track(f);
         Cached { value, reads: Arc::new(reads) }
     }
 
-    pub(crate) fn get(&self) -> T {
+    pub fn get(&self) -> T {
         self.as_ref().clone()
     }
 
-    pub(crate) fn as_ref(&self) -> &T {
+    pub fn as_ref(&self) -> &T {
         note_group(&self.reads);
         &self.value
     }
@@ -805,7 +813,7 @@ pub fn drop_buffer(path: &Path) {
     }
 }
 
-pub(crate) fn buffer(path: &Path) -> Option<Arc<str>> {
+pub fn buffer(path: &Path) -> Option<Arc<str>> {
     buffers().read().ok()?.texts.get(path).cloned()
 }
 
@@ -897,7 +905,7 @@ fn file_exists(path: &Path) -> bool {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum DiskKind { Missing, File, Directory }
+pub enum DiskKind { Missing, File, Directory }
 
 /// What is at `path`. Module resolution probes thousands of paths: on Windows
 /// `Path::is_file` opens each one, where its attributes are a far cheaper ask.
@@ -1057,7 +1065,7 @@ fn discovery(name: &str) -> Option<&'static Discovery> {
 
 static PROGRAM_FILES: Discovery = Discovery { name: "engine:program-inputs", wanted: |_| true, matches: |_, _| true };
 
-pub(crate) fn requested(request: &DiscoveryRequest) -> Option<Vec<PathBuf>> {
+pub fn requested(request: &DiscoveryRequest) -> Option<Vec<PathBuf>> {
     let found = request_walk(request);
     let hash = found.as_ref().map_or(MISSING, |(_, hash)| *hash);
     note(Dep::Requested(Arc::new(request.clone()), hash));
@@ -1087,14 +1095,14 @@ fn request_walk(request: &DiscoveryRequest) -> Option<(Vec<PathBuf>, u64)> {
 
 /// Whether a recorded request still finds what it found, `probe` answering
 /// what is at a path: a caller checking many requests probes each path once.
-pub(crate) fn request_holds(request: &DiscoveryRequest, hash: u64, probe: &dyn Fn(&Path) -> PathKind) -> bool {
+pub fn request_holds(request: &DiscoveryRequest, hash: u64, probe: &dyn Fn(&Path) -> PathKind) -> bool {
     request_walk_probing(request, &|path| probe(path)).map_or(MISSING, |(_, current)| current) == hash
 }
 
 /// What is at a path, for [`request_holds`]'s probe ([`path_kind`]).
-pub(crate) type PathKind = DiskKind;
+pub type PathKind = DiskKind;
 
-pub(crate) fn path_kind(path: &Path) -> PathKind {
+pub fn path_kind(path: &Path) -> PathKind {
     disk_kind(path)
 }
 
@@ -1162,7 +1170,7 @@ fn request_walk_probing(request: &DiscoveryRequest, disk_kind: &dyn Fn(&Path) ->
 
 /// A registered discovery's name with its `'static` lifetime (decoding a
 /// cached [`Dep::Discovered`]).
-pub(crate) fn discovery_name(name: &str) -> Option<&'static str> {
+pub fn discovery_name(name: &str) -> Option<&'static str> {
     discovery(name).map(|d| d.name)
 }
 

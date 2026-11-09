@@ -8,24 +8,25 @@
 //! - [`engine`] runs formatters over trees and applies fixes
 //! - `vm` evaluates attributes and rule conditions lowered to typed code
 
-pub mod alloc;
 pub mod cli;
 pub mod config;
 pub mod engine;
 pub mod expr;
 pub mod footprint;
-pub mod fx_hash;
 pub mod grammar;
-pub mod levers;
 pub mod line_index;
 pub mod lsp;
-pub mod parts;
-pub mod path_globs;
+pub use dx_core::{alloc, fx_hash, levers, parts, path_globs, reads, sampler};
 pub use dx_pattern as pattern;
-pub mod sampler;
 #[cfg(feature = "work")]
-pub mod work;
+pub use dx_core::work;
 pub(crate) mod vm;
+
+/// The test binary allocates like the shipped one (`main.rs`): `npm run
+/// check` runs fixtures and self-lint from it.
+#[cfg(test)]
+#[global_allocator]
+static TEST_ALLOCATOR: alloc::Pooled = alloc::Pooled;
 
 /// A crash ends the process with its exit code instead of a modal error
 /// dialog: dxlint runs unattended (CI, editors, batch runs, test runs), where
