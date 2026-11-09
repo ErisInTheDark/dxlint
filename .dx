@@ -46,18 +46,11 @@ in rs_code match rs_unwrap /\.unwrap\(\)/ {
 # so native code must read the filesystem through the one door that records it.
 in rs_code match rs_filesystem /\bstd::fs\b|\bfs::\w+|\.(?:is_file|is_dir|exists|metadata)\(\)|\bread_dir\b|\bWalkBuilder\b/ {
   rule native-reads-through-door error "native code reads the filesystem through `engine/reads.rs`, which records the read for the cache" {
-    files "src/native/**"
-    # These tests write fixture files to disk.
-    ignore "src/native/ts/reads.rs" "src/native/ts/tests.rs"
-  }
-}
-
-# Front ends plug into the engine through `engine/frontend.rs`; only
-# `lib.rs` names them (`FRONTENDS`). Tests may use the real ones.
-in rs_code match rs_front_end_path /\bnative::(?:ts\b|\{)/ {
-  rule engine-names-no-front-end error "the engine reaches front ends only through `engine/frontend.rs`; list them in `FRONTENDS` (lib.rs)" {
+    # Lint-time code; the CLI, server, config loading and the cache itself
+    # read around a lint, not inside one.
+    files "src/engine/**" "src/grammar/**" "src/expr/**" "src/vm/**" "crates/**"
     when rs_test_module == null
-    ignore "src/native/**" "src/lib.rs" "tests.rs" "tests/**"
+    ignore "src/engine/reads.rs" "src/engine/cache.rs" "tests.rs" "tests/**"
   }
 }
 
