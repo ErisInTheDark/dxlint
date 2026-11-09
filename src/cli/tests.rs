@@ -12,15 +12,8 @@ use std::sync::{Arc, Mutex};
 #[ignore = "tool: npm run check sets DXLINT_CLI_ARGS"]
 fn cli_from_env() {
     let Ok(args) = std::env::var("DXLINT_CLI_ARGS") else { return };
-    let cwd = std::env::current_dir().unwrap_or_default();
-    let run = std::thread::Builder::new().stack_size(crate::engine::WORKER_STACK).spawn(move || super::run(
-        std::iter::once("dxlint".to_owned()).chain(args.split_whitespace().map(str::to_owned)),
-        &cwd,
-        io::empty(),
-        anstream::AutoStream::new(io::stdout(), anstream::ColorChoice::Never),
-        anstream::AutoStream::new(io::stderr(), anstream::ColorChoice::Never),
-    )).expect("cli thread");
-    std::process::exit(i32::from(run.join().expect("cli run")));
+    let args = std::iter::once("dxlint").chain(args.split_whitespace()).map(std::ffi::OsString::from).collect();
+    std::process::exit(i32::from(super::run_process(args, anstream::ColorChoice::Never)));
 }
 
 #[derive(Clone, Default)]

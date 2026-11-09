@@ -263,6 +263,34 @@ enum Command {
     Lsp,
 }
 
+/// A whole `dxlint` process around [`run`] on the real stdio: the
+/// semantic budget lever, the sampler, a worker-sized stack and the
+/// end-of-run reports. The binary and the test binary (`npm run check`)
+/// both run this.
+pub fn run_process(args: Vec<OsString>, color: anstream::ColorChoice) -> u8 {
+    #[cfg(feature = "work")]
+    crate::work::start();
+    if let Some(units) = std::env::var("DXLINT_SEMANTIC_BUDGET").ok().and_then(|units| units.parse().ok()) {
+        crate::grammar::names::question::Budget::set_per_question(units);
+    }
+    let code = {
+        // The sampler reports when it drops, before the levers do.
+        let _sampler = crate::sampler::start_from_env();
+        // A file linted on this thread (fixtures, the language server's
+        // loop) asks questions as deep as a lint worker's, and the process
+        // main thread's stack is far smaller.
+        let worker = std::thread::Builder::new().stack_size(crate::engine::WORKER_STACK).spawn(move || {
+            let cwd = std::env::current_dir().unwrap_or_default();
+            run(args, &cwd, std::io::stdin(), anstream::AutoStream::new(std::io::stdout(), color), anstream::AutoStream::new(std::io::stderr(), color))
+        }).expect("main thread");
+        worker.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+    };
+    crate::levers::report();
+    #[cfg(feature = "work")]
+    crate::work::report();
+    code
+}
+
 /// Runs one invocation without changing the process directory or exiting.
 /// Writers receive terminal style sequences; the host chooses colour policy.
 pub fn run<I, T, R, W, E>(args: I, cwd: &Path, input: R, mut stdout: W, mut stderr: E) -> u8
