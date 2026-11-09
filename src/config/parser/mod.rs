@@ -652,7 +652,7 @@ impl<'a> Parser<'a> {
         if overriding.is_some() && self.remove_attr_targets(&name.text, &targets) == 0 && !defined {
             self.errors.push(ConfigError::new(name.span, format!("nothing to override: no attribute `{}`", name.text)));
         }
-        self.config.attrs.push(AttrDef { name, targets, expr, library: self.defining > 0 });
+        self.config.attrs.push(AttrDef { name, targets, expr: expr.into(), library: self.defining > 0 });
     }
 
     /// Removes these layers from every definition of attribute `name`;
@@ -1726,7 +1726,7 @@ impl<'a> Parser<'a> {
             return;
         }
         let Some(body) = self.expr() else { return };
-        self.config.functions.push(FnDef { name, params, body });
+        self.config.functions.push(FnDef { name, params, body: body.into() });
         self.end_of_item();
     }
 
@@ -1763,7 +1763,7 @@ impl<'a> Parser<'a> {
                             self.errors.push(ConfigError::new(method.span, format!("method `{}` is answered twice", method.text)));
                         }
                         let function = Protocol::function_name(&name.text, &method.text);
-                        self.config.functions.push(FnDef { name: Name { text: function.clone(), span: method.span }, params: vec![param], body });
+                        self.config.functions.push(FnDef { name: Name { text: function.clone(), span: method.span }, params: vec![param], body: body.into() });
                         methods.push((method, function));
                     }
                 }

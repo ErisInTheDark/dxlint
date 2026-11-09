@@ -129,7 +129,8 @@ impl Config {
 pub struct FnDef {
     pub name: Name,
     pub params: Vec<Name>,
-    pub body: Expr,
+    /// Shared: every configuration replaying a library import copies it.
+    pub body: std::sync::Arc<Expr>,
 }
 
 #[derive(Clone, Debug)]
@@ -198,7 +199,8 @@ impl Dropped {
 pub struct AttrDef {
     pub name: Name,
     pub targets: Vec<Name>,
-    pub expr: Expr,
+    /// Shared: every configuration replaying a library import copies it.
+    pub expr: std::sync::Arc<Expr>,
     /// Written inside `define { ... }`: kept only while something needs it.
     pub library: bool,
 }
