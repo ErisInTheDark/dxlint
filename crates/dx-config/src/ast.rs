@@ -134,6 +134,19 @@ pub struct FnDef {
     pub params: Vec<Name>,
     /// Shared: every configuration replaying a library import copies it.
     pub body: std::sync::Arc<Expr>,
+    pub mentions: Mentions,
+}
+
+/// The names an item's fixed parts mention, as the engine's pruning reads
+/// them: found once and shared by every copy (configurations replaying a
+/// library import).
+#[derive(Clone, Debug, Default)]
+pub struct Mentions(std::sync::Arc<std::sync::OnceLock<Box<[Box<str>]>>>);
+
+impl Mentions {
+    pub fn get_or_init(&self, find: impl FnOnce() -> Vec<Box<str>>) -> &[Box<str>] {
+        self.0.get_or_init(|| find().into_boxed_slice())
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -206,6 +219,8 @@ pub struct AttrDef {
     pub expr: std::sync::Arc<Expr>,
     /// Written inside `define { ... }`: kept only while something needs it.
     pub library: bool,
+    /// Of `expr`.
+    pub mentions: Mentions,
 }
 
 /// A name item on the nodes of `targets`.
@@ -216,6 +231,7 @@ pub struct NameDef {
     /// `when cond { ... }` around the item: it applies to nodes where the
     /// condition holds.
     pub when: Option<Expr>,
+    pub mentions: Mentions,
 }
 
 #[derive(Clone, Debug)]
@@ -402,6 +418,8 @@ pub struct MatcherDef {
     /// Written inside `define { ... }`: a library layer, which only takes
     /// part in parsing while something needs it (see `engine::prune`).
     pub library: bool,
+    /// Of `pattern`.
+    pub mentions: Mentions,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]

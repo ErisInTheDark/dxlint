@@ -652,7 +652,7 @@ impl<'a> Parser<'a> {
         if overriding.is_some() && self.remove_attr_targets(&name.text, &targets) == 0 && !defined {
             self.errors.push(ConfigError::new(name.span, format!("nothing to override: no attribute `{}`", name.text)));
         }
-        self.config.attrs.push(AttrDef { name, targets, expr: expr.into(), library: self.defining > 0 });
+        self.config.attrs.push(AttrDef { name, targets, expr: expr.into(), library: self.defining > 0, mentions: Default::default() });
     }
 
     /// Removes these layers from every definition of attribute `name`;
@@ -1238,7 +1238,7 @@ impl<'a> Parser<'a> {
             return;
         }
         let when = self.condition();
-        self.config.names.push(NameDef { targets, item, when }.into());
+        self.config.names.push(NameDef { targets, item, when, mentions: Default::default() }.into());
     }
 
     /// `when cond { items }` in a layer block: the name items inside apply
@@ -1726,7 +1726,7 @@ impl<'a> Parser<'a> {
             return;
         }
         let Some(body) = self.expr() else { return };
-        self.config.functions.push(FnDef { name, params, body: body.into() });
+        self.config.functions.push(FnDef { name, params, body: body.into(), mentions: Default::default() });
         self.end_of_item();
     }
 
@@ -1763,7 +1763,7 @@ impl<'a> Parser<'a> {
                             self.errors.push(ConfigError::new(method.span, format!("method `{}` is answered twice", method.text)));
                         }
                         let function = Protocol::function_name(&name.text, &method.text);
-                        self.config.functions.push(FnDef { name: Name { text: function.clone(), span: method.span }, params: vec![param], body: body.into() });
+                        self.config.functions.push(FnDef { name: Name { text: function.clone(), span: method.span }, params: vec![param], body: body.into(), mentions: Default::default() });
                         methods.push((method, function));
                     }
                 }
@@ -2065,7 +2065,7 @@ impl<'a> Parser<'a> {
             return;
         }
         let own = Parent::Matcher(name.clone());
-        let def = MatcherDef { name, parents, layer, pattern, like, library: self.defining > 0 };
+        let def = MatcherDef { name, parents, layer, pattern, like, library: self.defining > 0, mentions: Default::default() };
         match overriding {
             Some(kw) if def.pattern.is_none() => {
                 self.errors.push(ConfigError::new(kw, "`override match` needs the new pattern: `override match name pattern`"));

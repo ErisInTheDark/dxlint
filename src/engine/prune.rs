@@ -15,7 +15,7 @@
 
 use std::collections::HashSet;
 
-use crate::config::ast::{calls, effects, Config, Expr, ExprKind, Name, NameItem, Parent, PipelineStage, Target, TemplatePart, Unwrap};
+use crate::config::ast::{calls, effects, Config, Expr, ExprKind, Mentions, Name, NameItem, Parent, PipelineStage, Target, TemplatePart, Unwrap};
 use crate::fx_hash::{FxHashMap, FxHashSet};
 use crate::pattern::Pat;
 
@@ -426,11 +426,13 @@ fn decide(config: &Config, runtime: bool) -> Option<Decision> {
     }
     // Name items always apply, including their helper dependencies.
     for n in &config.names {
-        path_names(&n.targets, &mut needed);
-        if let Some(when) = &n.when {
-            expr_names(when, &mut needed);
-        }
-        item_names(&n.item, &mut needed);
+        mentioned(&n.mentions, &mut needed, |found| {
+            path_names(&n.targets, found);
+            if let Some(when) = &n.when {
+                expr_names(when, found);
+            }
+            item_names(&n.item, found);
+        });
     }
     for profile in &config.module_resolutions {
         for mode in &profile.modes {
@@ -468,20 +470,20 @@ fn decide(config: &Config, runtime: bool) -> Option<Decision> {
     for m in &config.matchers {
         let found = dependencies.entry(&m.name.text).or_default();
         if let Some((pat, _)) = &m.pattern {
-            pattern_names(pat, found);
+            mentioned(&m.mentions, found, |found| pattern_names(pat, found));
         }
         found.extend(m.like.iter().map(|l| l.text.as_str()));
         found.extend(m.parents.iter().filter_map(parent_name));
     }
     for a in &config.attrs {
         let found = dependencies.entry(&a.name.text).or_default();
-        expr_names(&a.expr, found);
+        mentioned(&a.mentions, found, |found| expr_names(&a.expr, found));
         if runtime {
             path_names(&a.targets, found);
         }
     }
     for f in &config.functions {
-        expr_names(&f.body, dependencies.entry(&f.name.text).or_default());
+        mentioned(&f.mentions, dependencies.entry(&f.name.text).or_default(), |found| expr_names(&f.body, found));
     }
     for g in &config.groups {
         dependencies.entry(&g.name.text).or_default().extend(g.parents.iter().filter_map(parent_name));
@@ -516,6 +518,17 @@ fn decide(config: &Config, runtime: bool) -> Option<Decision> {
             .collect())
     };
     Some(Decision { gone, unneeded_attrs, functions })
+}
+
+/// Adds what `find` adds, found once per item (`slot` is shared by every
+/// copy of it).
+fn mentioned<'a>(slot: &'a Mentions, out: &mut Names<'a>, find: impl FnOnce(&mut Names<'a>)) {
+    let names = slot.get_or_init(|| {
+        let mut found: Names<'a> = Names::default();
+        find(&mut found);
+        found.into_iter().map(Box::from).collect()
+    });
+    out.extend(names.iter().map(|name| &**name));
 }
 
 /// Names a rule's clauses mention.

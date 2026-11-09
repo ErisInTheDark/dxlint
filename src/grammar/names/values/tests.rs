@@ -1353,6 +1353,7 @@ fn instance_classes_must_have_real_declarations_not_only_queries() {
         config.names.push(NameDef {
             targets: vec![target.clone()],
             when: None,
+            mentions: Default::default(),
             item: NameItem::Unwraps {
                 effect: None, possible: false, nearest: Vec::new(), classes: Vec::new(),
                 value: Some(Unwrap::Instance {
