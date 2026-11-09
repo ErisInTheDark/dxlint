@@ -65,16 +65,27 @@ type Inbox = mpsc::Sender<io::Result<Option<Value>>>;
 /// A finished background command run, posted to the request loop.
 const COMMAND_DONE: &str = "dxlint/commandDone";
 
-/// How long without messages before the editor's kept answers go
-/// ([`scan::Shared::forget_editor_runs`]): typing keeps them, a pause frees
-/// their memory.
-const EDITOR_IDLE: Duration = Duration::from_secs(30);
+/// How long the request loop defers its background work.
+#[derive(Clone, Copy)]
+pub struct Pace {
+    /// Background relints wait until changes on disk stop for this long...
+    pub settle: Duration,
+    /// ...or a burst has gone on this long: an agent saving a file over and
+    /// over relints its readers once per half minute, not once per save.
+    pub settle_at_most: Duration,
+    /// How long without messages before the editor's kept answers go
+    /// ([`scan::Shared::forget_editor_runs`]): typing keeps them, a pause
+    /// frees their memory.
+    pub editor_idle: Duration,
+}
 
-/// Background relints wait until changes on disk stop for this long...
-const SETTLE: Duration = Duration::from_secs(3);
-/// ...or a burst has gone on this long: an agent saving a file over and
-/// over relints its readers once per half minute, not once per save.
-const SETTLE_AT_MOST: Duration = Duration::from_secs(30);
+impl Pace {
+    pub const EDITOR: Pace = Pace {
+        settle: Duration::from_secs(3),
+        settle_at_most: Duration::from_secs(30),
+        editor_idle: Duration::from_secs(30),
+    };
+}
 
 struct Server {
     out: Outbox,
@@ -114,6 +125,7 @@ struct Server {
     typed: HashSet<PathBuf>,
     /// Files on disk to relint in the background once changes settle.
     settling: Vec<PathBuf>,
+    pace: Pace,
     timers: Timers,
 }
 
@@ -124,7 +136,7 @@ struct Timers {
     /// (several saves, a formatter after a save, a checkout), and each file
     /// is relinted once per burst. With when the burst began.
     settled: Option<(Instant, Instant)>,
-    /// Forget the editor's kept answers ([`EDITOR_IDLE`]).
+    /// Forget the editor's kept answers ([`Pace::editor_idle`]).
     editor_idle: Option<Instant>,
 }
 
@@ -135,6 +147,11 @@ impl Timers {
 }
 
 pub fn run<R: Read + Send + 'static, W: Write + Send + 'static>(input: R, output: W, stderr: &mut dyn Write) -> u8 {
+    serve(Pace::EDITOR, input, output, stderr)
+}
+
+/// [`run`] at another pace (tests: background work at once).
+pub fn serve<R: Read + Send + 'static, W: Write + Send + 'static>(pace: Pace, input: R, output: W, stderr: &mut dyn Write) -> u8 {
     reads::host_keeps_reads();
     let (out, writer) = Outbox::spawn(output);
     let (tx, rx) = mpsc::channel();
@@ -159,6 +176,7 @@ pub fn run<R: Read + Send + 'static, W: Write + Send + 'static>(input: R, output
         changed: HashSet::new(),
         typed: HashSet::new(),
         settling: Vec::new(),
+        pace,
         timers: Timers::default(),
     };
     // Reading happens on its own thread so the loop below can see how much
@@ -187,7 +205,7 @@ pub fn run<R: Read + Send + 'static, W: Write + Send + 'static>(input: R, output
             },
             None => rx.recv().ok(),
         };
-        server.timers.editor_idle = Some(Instant::now() + EDITOR_IDLE);
+        server.timers.editor_idle = Some(Instant::now() + server.pace.editor_idle);
         while let Some(msg) = next.take() {
             let msg = match msg {
                 Ok(Some(m)) => m,
@@ -340,7 +358,7 @@ impl Server {
         }
         let now = Instant::now();
         let began = self.timers.settled.map_or(now, |(began, _)| began);
-        self.timers.settled = Some((began, (now + SETTLE).min(began + SETTLE_AT_MOST)));
+        self.timers.settled = Some((began, (now + self.pace.settle).min(began + self.pace.settle_at_most)));
     }
 
     /// Does the deferred work that is due: settled relints, and forgetting

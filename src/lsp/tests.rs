@@ -100,7 +100,8 @@ impl Client {
     fn start(root: &Path) -> Client {
         let (stdin, input) = pipe();
         let (output, stdout) = pipe();
-        let server = std::thread::spawn(move || super::run(input, output, &mut io::sink()));
+        let pace = super::Pace { settle: Duration::ZERO, ..super::Pace::EDITOR };
+        let server = std::thread::spawn(move || super::serve(pace, input, output, &mut io::sink()));
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
             let mut r = BufReader::new(stdout);
