@@ -5,6 +5,7 @@
   "scripts": {
     "build:binaries": "node scripts/build-binaries.mjs",
     "build:profile": "node scripts/build-profile.mjs",
+    "check": "node scripts/check.mjs",
     "docs:rules": "node scripts/rules-index.mjs",
     "pack": "node scripts/publish-package.mjs --pack",
     "package:vsix": "npm --prefix editors/vscode run package"

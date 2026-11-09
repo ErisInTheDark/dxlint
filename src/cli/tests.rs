@@ -5,6 +5,24 @@ use std::path::{Path, PathBuf};
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex};
 
+/// Not a test: runs the command line in `DXLINT_CLI_ARGS` (split on spaces)
+/// from the test build, so checking a change compiles the crate once
+/// (`npm run check`).
+#[test]
+#[ignore = "tool: npm run check sets DXLINT_CLI_ARGS"]
+fn cli_from_env() {
+    let Ok(args) = std::env::var("DXLINT_CLI_ARGS") else { return };
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let run = std::thread::Builder::new().stack_size(crate::engine::WORKER_STACK).spawn(move || super::run(
+        std::iter::once("dxlint".to_owned()).chain(args.split_whitespace().map(str::to_owned)),
+        &cwd,
+        io::empty(),
+        anstream::AutoStream::new(io::stdout(), anstream::ColorChoice::Never),
+        anstream::AutoStream::new(io::stderr(), anstream::ColorChoice::Never),
+    )).expect("cli thread");
+    std::process::exit(i32::from(run.join().expect("cli run")));
+}
+
 #[derive(Clone, Default)]
 struct Capture(Arc<Mutex<Vec<u8>>>);
 
