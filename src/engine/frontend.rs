@@ -24,9 +24,6 @@ pub trait Native {
     fn name_key<'s>(&self, text: &'s str) -> std::borrow::Cow<'s, str> {
         std::borrow::Cow::Borrowed(text)
     }
-    /// The engine's resolved names for this file ([`crate::grammar::names`]),
-    /// given before the first fact read that needs them.
-    fn set_names(&self, _names: Arc<crate::grammar::names::Resolved>) {}
 }
 
 /// A file's code tokens: byte spans in source order.

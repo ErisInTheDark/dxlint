@@ -227,13 +227,10 @@ impl<'a> Ctx<'a> {
         self.memo.resolving_names.get()
     }
 
-    /// This tree's names, resolved on first use and given to its native
-    /// front end.
+    /// This tree's names, resolved on first use.
     pub(crate) fn names(&self) -> &'a crate::grammar::names::Resolved {
         assert!(!self.memo.resolving_names.get(), "name conditions cannot read resolved names");
-        let mut fresh = false;
         let cached = self.memo.names.get_or_init(|| {
-            fresh = true;
             let resolve = || {
                 self.memo.resolving_names.set(true);
                 #[cfg(feature = "work")]
@@ -317,23 +314,11 @@ impl<'a> Ctx<'a> {
                 None => crate::engine::reads::Cached::compute(resolve),
             }
         });
-        let resolved = cached.as_ref();
-        if fresh {
-            if let Some(native) = self.native {
-                native.set_names(resolved.clone());
-            }
-        }
-        resolved
+        cached.as_ref()
     }
 
-    /// The tree's native facts, given the tree's names first (front ends
-    /// answer name questions from them). While names are being resolved,
-    /// as-is: name conditions read only name-free facts.
+    /// The tree's native facts.
     pub(crate) fn native_facts(&self) -> Option<&'a (dyn crate::engine::frontend::Native + 'a)> {
-        let native = self.native?;
-        if !self.memo.resolving_names.get() {
-            self.names();
-        }
-        Some(native)
+        self.native
     }
 }
