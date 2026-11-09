@@ -1,5 +1,6 @@
-// Checks a change with one compile on one core: builds the lib's test binary,
-// then runs the tests, rule fixtures and self-lint from that same binary.
+// Checks a change with one compile on one core: builds every workspace
+// crate's test binary, runs their tests, then rule fixtures and self-lint
+// from the dxlint crate's binary.
 // Usage: npm run check [-- [--no-tests] [--no-fixtures] [fixture paths...]]
 // Fixture paths default to all of fixtures/.
 import { spawnSync } from "node:child_process";
@@ -26,18 +27,22 @@ const step = (name, command, commandArgs, extraEnv = {}, stderr = "inherit") => 
   } };
 };
 
-const build = step("build", "cargo", ["test", "--lib", "-j", "1", "--no-run", "--message-format=json-render-diagnostics"]);
-const executable = build.stdout.split("\n").filter(line => line.startsWith("{")).map(line => JSON.parse(line))
-  .filter(message => message.reason === "compiler-artifact" && message.target?.kind?.includes("lib") && message.profile?.test)
-  .map(message => message.executable).find(Boolean);
+const build = step("build", "cargo", ["test", "--workspace", "--lib", "-j", "1", "--no-run", "--message-format=json-render-diagnostics"]);
+// Each crate's test binary, by crate name.
+const binaries = new Map(build.stdout.split("\n").filter(line => line.startsWith("{")).map(line => JSON.parse(line))
+  .filter(message => message.reason === "compiler-artifact" && message.target?.kind?.includes("lib") && message.profile?.test && message.executable)
+  .map(message => [message.target.name, message.executable]));
+const executable = binaries.get("dxlint");
 build.done(build.status === 0 && executable !== undefined);
 if (!executable) process.exit(1);
 
 if (!flags.has("--no-tests")) {
-  const tests = step("tests", executable, ["--test-threads=1", "-q"]);
-  const summary = tests.stdout.split("\n").filter(line => line.startsWith("test result") || line.includes("FAILED") || line.includes("panicked"));
-  summary.forEach(line => console.log(`     ${line}`));
-  tests.done(tests.status === 0);
+  for (const [crate, binary] of binaries) {
+    const tests = step(`tests ${crate}`, binary, ["--test-threads=1", "-q"]);
+    const summary = tests.stdout.split("\n").filter(line => line.startsWith("test result") || line.includes("FAILED") || line.includes("panicked"));
+    summary.forEach(line => console.log(`     ${line}`));
+    tests.done(tests.status === 0);
+  }
 }
 
 const cli = (name, cliArgs, stderr) =>
