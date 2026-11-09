@@ -243,8 +243,22 @@ impl Dfa {
         Dfa::from_hir(hir)
     }
 
+    /// Built once per process for each pattern (as regex text): configs
+    /// built in one process (fixtures, tests, a server's reloads) mostly
+    /// share their patterns.
     fn from_hir(hir: Hir) -> Result<Dfa, String> {
-        Regex::builder().build_from_hir(&hir).map(|re| Dfa { re }).map_err(|e| e.to_string())
+        const KEPT: usize = 1 << 14;
+        static BUILT: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, Regex>>> = std::sync::OnceLock::new();
+        let built = BUILT.get_or_init(Default::default);
+        let key = hir.to_string();
+        if let Some(re) = built.lock().expect("built DFAs").get(&key) {
+            return Ok(Dfa { re: re.clone() });
+        }
+        let re = Regex::builder().build_from_hir(&hir).map_err(|e| e.to_string())?;
+        let mut built = built.lock().expect("built DFAs");
+        if built.len() == KEPT { built.clear(); }
+        built.insert(key, re.clone());
+        Ok(Dfa { re })
     }
 
     pub fn cache(&self) -> Cache {
