@@ -1082,7 +1082,7 @@ fn attributes(
     for attr in &mut attrs {
         let targets: Vec<u32> = attr.defs.iter().map(|(m, ..)| *m).collect();
         let broader = |m: u32| targets.iter().filter(|&&t| t != m && g.is_a(m, t)).count();
-        attr.defs.sort_by_key(|(m, ..)| std::cmp::Reverse(broader(*m)));
+        attr.defs.sort_by_cached_key(|(m, ..)| std::cmp::Reverse(broader(*m)));
     }
     (attrs, dependencies)
 }
