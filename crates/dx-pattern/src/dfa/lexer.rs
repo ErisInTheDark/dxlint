@@ -4,7 +4,7 @@ use regex_automata::util::primitives::StateID;
 use regex_automata::{Anchored, Input, MatchKind};
 
 use super::{to_hir, Pat};
-use crate::pattern::prefilter::{first_set, ByteSet};
+use crate::prefilter::{first_set, ByteSet};
 
 pub struct Lexer {
     dfa: dense::DFA<Vec<u32>>,
@@ -16,8 +16,8 @@ pub struct Lexer {
 #[cfg(test)]
 mod tests {
     use super::Lexer;
-    use crate::pattern::dfa::Dfa;
-    use crate::pattern::regex::parse;
+    use crate::dfa::Dfa;
+    use crate::regex::parse;
 
     /// Patterns trusted to match longest (no verifying rerun) must agree with
     /// their leftmost-first DFA; the rest must not be trusted.

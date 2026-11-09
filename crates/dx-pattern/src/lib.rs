@@ -1,6 +1,6 @@
 //! Matcher patterns: a linear-time regex subset plus two layer-aware items,
 //! references to other matchers and the `*` skip. Patterns compile into flat
-//! programs run by [`crate::grammar`].
+//! programs run by the grammar.
 
 pub mod class;
 pub mod compile;

@@ -526,7 +526,7 @@ pub fn first_set(pat: &Pat, refs: &dyn Fn(&str) -> ByteSet, set: &mut ByteSet) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pattern::regex::parse;
+    use crate::regex::parse;
 
     fn no_refs(_: &str) -> ByteSet {
         ByteSet::default()

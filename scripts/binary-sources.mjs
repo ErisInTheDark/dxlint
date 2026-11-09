@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 export const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 export const stampPath = path.join(root, "package", "source.sha256");
 export const windowsProfile = path.join(root, "scripts", "dxlint-win32-x64.profdata");
-const inputs = ["src", "Cargo.toml", "Cargo.lock", ".cargo/config.toml", path.relative(root, windowsProfile)];
+const inputs = ["src", "crates", "Cargo.toml", "Cargo.lock", ".cargo/config.toml", path.relative(root, windowsProfile)];
 
 function files(entry) {
   const full = path.join(root, entry);
@@ -41,6 +41,6 @@ export function removeStamp() {
 export function checkStamp() {
   const stamped = fs.existsSync(stampPath) ? fs.readFileSync(stampPath, "utf8").trim() : null;
   if (stamped !== sourceHash()) {
-    throw new Error("package/bin was built from other sources than src/ and the Cargo files hold now; run npm run build:binaries");
+    throw new Error("package/bin was built from other sources than src/, crates/ and the Cargo files hold now; run npm run build:binaries");
   }
 }

@@ -1,6 +1,6 @@
 //! Pure-regex patterns (no matcher calls, no `*`) compile to a
 //! `regex-automata` meta regex: a lazy DFA with SIMD prefilters. The
-//! interpreter in [`crate::grammar`] only handles what a DFA cannot: child
+//! interpreter in the grammar only handles what a DFA cannot: child
 //! layers, `*`, and capturing every repetition of a label.
 
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -273,7 +273,7 @@ impl Dfa {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pattern::regex::parse;
+    use crate::regex::parse;
 
     fn none(_: &str) -> Option<&'static Pat> {
         None

@@ -21,7 +21,7 @@ pub mod line_index;
 pub mod lsp;
 pub mod parts;
 pub mod path_globs;
-pub mod pattern;
+pub use dx_pattern as pattern;
 pub mod sampler;
 #[cfg(feature = "work")]
 pub mod work;

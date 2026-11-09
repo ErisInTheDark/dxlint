@@ -20,7 +20,8 @@ Rust linter; rules in `.dx` (docs/advanced.md). Binary `dxlint`.
 ## Layout
 
 - `src/config`: lexer, token stream (imports + macros splice tokens), parser
-- `src/pattern`: `Pat`, regex subset parser, compiler, DFA bridge, prefilters
+- workspace: lower layers are crates under `crates/`, re-exported in `src/lib.rs` under their old module names (`crate::pattern::...` still works); a crate never depends upward
+- `crates/dx-pattern` (`pattern`): `Pat`, regex subset parser, compiler, DFA bridge, prefilters
 - `src/grammar`: layers per language, `parse.rs` builds trees
 - `src/expr`: rule expressions; functions registry in `functions.rs`
 - `src/engine`: linter, fixes, suppressions, `.dxcache` (`cache.rs`), symbol index; end-to-end tests in `engine/tests.rs`
