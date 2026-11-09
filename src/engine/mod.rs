@@ -232,20 +232,11 @@ pub struct InertRule {
 /// deeper than the default 2 MiB thread stack on large typed projects.
 pub const WORKER_STACK: usize = 64 << 20;
 
-pub struct Linter {
-    invalidation: std::sync::atomic::AtomicU64,
-    /// The recent invalidations, oldest first: (revision after it, files,
-    /// and per file whether it existed before as it does now).
-    invalidated: std::sync::Mutex<std::collections::VecDeque<(u64, Vec<PathBuf>, Vec<bool>)>>,
-    /// Whether each invalidated file existed when it was last invalidated:
-    /// an edit of a file that stays changes no directory listing.
-    existed: std::sync::Mutex<crate::fx_hash::FxHashMap<PathBuf, bool>>,
-    units: std::sync::Mutex<crate::fx_hash::FxHashMap<PathBuf, std::sync::Arc<units::Unit>>>,
-    discoveries: std::sync::Mutex<crate::fx_hash::FxHashMap<crate::grammar::names::modules::resolution::DiscoveryRequest, reads::Cached<Option<Vec<PathBuf>>>>>,
-    programs: program::Programs,
-    module_graphs: module_graph::ModuleGraphs,
-    /// Part reads judged against files as they read now ([`Linter::holds`]).
-    parts: file_parts::Judged,
+/// What a config compiles to: rules, grammar, attributes and dispatch, a
+/// function of the config's sources alone. Projects with equal configs
+/// share one ([`build::build_for_lint`]); a [`Linter`] reads it through
+/// `Deref`.
+pub struct Compiled {
     /// `files` blocks: per-file severities and option copies.
     pub scopes: scopes::Scopes,
     unit_overlays: Vec<bool>,
@@ -262,16 +253,9 @@ pub struct Linter {
     language_options: language_options::LanguageOptions,
     pub rules: Vec<Rule>,
     pub inert: Vec<InertRule>,
-    pub sources: std::sync::Arc<SourceMap>,
-    /// Paths are matched relative to this (the config file's directory).
-    pub root: PathBuf,
     ignores: PathGlobs,
-    /// Programs the root config declares, which rules may run.
-    pub commands: std::sync::Arc<commands::Commands>,
     /// See [`Grammar::reach`].
     reach: Vec<Vec<bool>>,
-    /// Set by [`Linter::enable_profile`].
-    pub profile: Option<Profile>,
     by_matcher: Vec<Vec<usize>>,
     by_field: crate::fx_hash::FxHashMap<(u32, u16), Vec<usize>>,
     by_selection: crate::fx_hash::FxHashMap<u32, Vec<(NodeSelection, Vec<usize>)>>,
@@ -286,9 +270,51 @@ pub struct Linter {
     /// Per rule of `rules`: a hash of the config items that touch it, which
     /// the fingerprint leaves out.
     pub(crate) rule_states: Vec<u64>,
+}
+
+/// A project's linter: its [`Compiled`] config, where it lies, and what
+/// linting it learned (units, programs, reads).
+pub struct Linter {
+    compiled: std::sync::Arc<Compiled>,
+    invalidation: std::sync::atomic::AtomicU64,
+    /// The recent invalidations, oldest first: (revision after it, files,
+    /// and per file whether it existed before as it does now).
+    invalidated: std::sync::Mutex<std::collections::VecDeque<(u64, Vec<PathBuf>, Vec<bool>)>>,
+    /// Whether each invalidated file existed when it was last invalidated:
+    /// an edit of a file that stays changes no directory listing.
+    existed: std::sync::Mutex<crate::fx_hash::FxHashMap<PathBuf, bool>>,
+    units: std::sync::Mutex<crate::fx_hash::FxHashMap<PathBuf, std::sync::Arc<units::Unit>>>,
+    discoveries: std::sync::Mutex<crate::fx_hash::FxHashMap<crate::grammar::names::modules::resolution::DiscoveryRequest, reads::Cached<Option<Vec<PathBuf>>>>>,
+    programs: program::Programs,
+    module_graphs: module_graph::ModuleGraphs,
+    /// Part reads judged against files as they read now ([`Linter::holds`]).
+    parts: file_parts::Judged,
+    pub sources: std::sync::Arc<SourceMap>,
+    /// Paths are matched relative to this (the config file's directory).
+    pub root: PathBuf,
+    /// Programs the root config declares, which rules may run.
+    pub commands: std::sync::Arc<commands::Commands>,
+    /// Set by [`Linter::enable_profile`].
+    pub profile: Option<Profile>,
     /// Files at least this big run their rules in groups on several threads.
     pub(crate) split_at: usize,
     rule_jobs: usize,
+}
+
+impl std::ops::Deref for Linter {
+    type Target = Compiled;
+
+    fn deref(&self) -> &Compiled {
+        &self.compiled
+    }
+}
+
+#[cfg(test)]
+impl Linter {
+    /// The compiled config of a linter built alone, for tests reshaping it.
+    pub(crate) fn compiled_mut(&mut self) -> &mut Compiled {
+        std::sync::Arc::get_mut(&mut self.compiled).expect("a test linter owns its config")
+    }
 }
 
 static NO_INDENTS: crate::expr::IndentPlan = crate::expr::IndentPlan::EMPTY;
@@ -556,6 +582,9 @@ impl Linter {
         self.attrs.values.clear_runtime();
     }
 
+}
+
+impl Compiled {
     /// Lowers every enabled rule's expressions and reports config errors.
     pub(crate) fn lower_conditions(&mut self, config: &crate::config::ast::Config) -> Vec<crate::config::error::ConfigError> {
         use crate::config::error::ConfigError;
@@ -612,7 +641,7 @@ impl Linter {
     }
 
     /// Sizes each node kind's VM record from what the enabled rules read on
-    /// the kinds they target (after [`Linter::lower_conditions`]).
+    /// the kinds they target (after [`Compiled::lower_conditions`]).
     pub(crate) fn shape_records(&mut self) {
         let fields = self.record_fields();
         if self.attrs.vm_stats {
@@ -620,7 +649,7 @@ impl Linter {
         }
     }
 
-    /// [`Linter::shape_records`]; the number of record fields.
+    /// [`Compiled::shape_records`]; the number of record fields.
     fn record_fields(&mut self) -> usize {
         use crate::vm::KindSet;
         let g = &self.grammar;
@@ -674,6 +703,29 @@ impl Linter {
         }).collect();
         roots.extend(selection_reads.iter().map(|(kinds, expr)| (kinds.clone(), expr)));
         self.attrs.shape_records(g, roots)
+    }
+}
+
+impl Linter {
+    /// A project at `root` linting with `compiled`, knowing nothing yet.
+    pub(crate) fn new(compiled: std::sync::Arc<Compiled>, sources: std::sync::Arc<SourceMap>, root: PathBuf, commands: std::sync::Arc<commands::Commands>) -> Linter {
+        Linter {
+            compiled,
+            invalidation: Default::default(),
+            invalidated: Default::default(),
+            existed: Default::default(),
+            units: Default::default(),
+            discoveries: Default::default(),
+            programs: Default::default(),
+            module_graphs: Default::default(),
+            parts: Default::default(),
+            sources,
+            root,
+            commands,
+            profile: None,
+            split_at: 128 * 1024,
+            rule_jobs: std::thread::available_parallelism().map_or(1, |n| n.get()),
+        }
     }
 
     /// Whether a rule's `i`th condition holds.

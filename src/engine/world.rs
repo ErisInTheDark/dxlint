@@ -2385,7 +2385,7 @@ mod tests {
                 when text == "(library)" { scope ambient named "shared" }
             }
         "#);
-        for condition in &mut linter.grammar.names.conditions {
+        for condition in &mut linter.compiled_mut().grammar.names.conditions {
             let original = condition.lowered.take().unwrap();
             condition.lowered.set(VExpr::Binary(crate::config::ast::BinOp::And,
                 Box::new(original), Box::new(VExpr::QueryCall(&QUERY,
@@ -2462,7 +2462,7 @@ mod tests {
             let matcher = linter.grammar.matcher("paren").unwrap();
             let query = crate::expr::queries::lookup_function("name_role_classes").unwrap();
             let attr = 1;
-            linter.attrs = crate::expr::Attributes::new(vec![
+            linter.compiled_mut().attrs = crate::expr::Attributes::new(vec![
                 crate::expr::Attr {
                     name: "classes".into(),
                     defs: vec![(matcher, crate::expr::CExpr::QueryCall(query, vec![
@@ -2474,7 +2474,8 @@ mod tests {
             linter.profile = Some(super::super::new_profile(linter.grammar.matchers.len(), linter.rules.len()));
             let expression = crate::expr::CExpr::Attr(attr);
             if shaped {
-                linter.attrs.shape_records(&linter.grammar, vec![(crate::vm::KindSet::all(linter.grammar.matchers.len()), &expression)]);
+                let compiled = linter.compiled_mut();
+                compiled.attrs.shape_records(&compiled.grammar, vec![(crate::vm::KindSet::all(compiled.grammar.matchers.len()), &expression)]);
             }
             with_world(&linter, |files| {
                 let tree = files.tree(0).unwrap();
@@ -2506,7 +2507,7 @@ mod tests {
             ATTEMPTS.with(|attempts| attempts.set(0));
             let mut linter = linter("");
             let matcher = linter.grammar.matcher("paren").unwrap();
-            linter.attrs = crate::expr::Attributes::new(vec![crate::expr::Attr {
+            linter.compiled_mut().attrs = crate::expr::Attributes::new(vec![crate::expr::Attr {
                 name: "answer".into(),
                 defs: vec![(matcher, crate::expr::CExpr::Nullish(
                     Box::new(crate::expr::CExpr::QueryCall(&QUERY, vec![crate::expr::CExpr::Builtin(crate::expr::Builtin::Node)])),
@@ -2514,7 +2515,8 @@ mod tests {
                 ), 1)],
             }], &[], &linter.grammar);
             if shaped {
-                linter.attrs.shape_records(&linter.grammar, vec![(crate::vm::KindSet::all(linter.grammar.matchers.len()), &crate::expr::CExpr::Attr(0))]);
+                let compiled = linter.compiled_mut();
+                compiled.attrs.shape_records(&compiled.grammar, vec![(crate::vm::KindSet::all(compiled.grammar.matchers.len()), &crate::expr::CExpr::Attr(0))]);
             }
             with_world(&linter, |files| {
                 let tree = files.tree(0).unwrap();
@@ -2906,17 +2908,18 @@ mod tests {
         };
         let mut linter = linter("in paren fits marked");
         let matcher = linter.grammar.matcher("paren").unwrap();
-        linter.grammar.names.kinds[matcher as usize].modules.items.push(Conditional { action: Action::Uses("unit-test".into()), when: None });
-        linter.grammar.names.module_resolutions.push(Profile { name: "unit-test".into(), modes: Vec::new(), settings: Settings {
+        let compiled = linter.compiled_mut();
+        compiled.grammar.names.kinds[matcher as usize].modules.items.push(Conditional { action: Action::Uses("unit-test".into()), when: None });
+        compiled.grammar.names.module_resolutions.push(Profile { name: "unit-test".into(), modes: Vec::new(), settings: Settings {
             search: vec![Search::Relative], extensions: vec![".t".into()], candidates: vec!["{dir}/{name}{ext}".into()], ..Settings::default()
         } });
-        linter.attrs = crate::expr::Attributes::new(vec![
+        compiled.attrs = crate::expr::Attributes::new(vec![
             crate::expr::Attr { name: "created".into(), defs: vec![(matcher, crate::expr::CExpr::QueryCall(
                 &CREATED, vec![crate::expr::CExpr::Builtin(crate::expr::Builtin::Node)],
             ), 1)] },
             crate::expr::Attr { name: "alias".into(), defs: vec![(matcher, crate::expr::CExpr::Attr(0), 2)] },
-        ], &[], &linter.grammar);
-        linter.attrs.shape_records(&linter.grammar, vec![(crate::vm::KindSet::all(linter.grammar.matchers.len()), &crate::expr::CExpr::Attr(0))]);
+        ], &[], &compiled.grammar);
+        compiled.attrs.shape_records(&compiled.grammar, vec![(crate::vm::KindSet::all(compiled.grammar.matchers.len()), &crate::expr::CExpr::Attr(0))]);
         let path = Path::new("/root/module-unit.t");
         reads::set_buffer(path, "(remote)");
         with_world(&linter, |files| {

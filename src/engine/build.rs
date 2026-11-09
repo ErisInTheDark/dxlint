@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use super::scopes::{Change, Scoped, Scopes, Setting};
 use super::symbols::Symbols;
 use super::fix::{Clause, FixPlan, PartPlan};
-use super::{InertRule, Linter, NodeSelection, OptionSlot, Rule, Target};
+use super::{Compiled, InertRule, Linter, NodeSelection, OptionSlot, Rule, Target};
 use crate::config::ast::{Config, Dropped, Expr, ExprKind, FixDef, Name, Parent, RuleDef, Severity, Target as AstTarget, Use};
 use crate::config::schema::{Schema, Schemas};
 use crate::config::error::ConfigError;
@@ -132,8 +132,62 @@ pub fn build(loaded: Loaded, root: PathBuf) -> Built {
 }
 
 /// Compiles enabled rules and reachable helpers without tooling symbols.
+/// A config equal to a recent one (same files, same texts, placed the same
+/// way under its root) shares its [`Compiled`]: fixtures and tests load equal
+/// configs from many directories.
 pub fn build_for_lint(loaded: Loaded, root: PathBuf) -> Built {
-    compile(loaded, root, false)
+    let key = ReuseKey::of(&loaded.sources, &root);
+    let reused = {
+        let mut recent = RECENT.lock().expect("recent builds");
+        recent.iter().position(|(seen, _)| *seen == key).map(|at| {
+            let entry = recent.remove(at);
+            let reuse = entry.1.clone();
+            recent.push(entry);
+            reuse
+        })
+    };
+    if let Some(Reuse { compiled, errors, notices }) = reused {
+        let started = std::time::Instant::now();
+        let commands = commands(&loaded.config, root.clone());
+        let sources = std::sync::Arc::new(loaded.sources);
+        let linter = Linter::new(compiled, sources.clone(), root, commands);
+        return Built { linter: Some(linter), errors, notices, sources, symbols: None, phases: vec![("reused", started.elapsed())] };
+    }
+    let built = compile(loaded, root, false);
+    if let Some(linter) = &built.linter {
+        let mut recent = RECENT.lock().expect("recent builds");
+        if recent.len() == KEPT_BUILDS { recent.remove(0); }
+        recent.push((key, Reuse { compiled: linter.compiled.clone(), errors: built.errors.clone(), notices: built.notices.clone() }));
+    }
+    built
+}
+
+/// How many recent runtime builds [`build_for_lint`] keeps.
+const KEPT_BUILDS: usize = 4;
+
+/// Recent runtime builds, least recently used first.
+static RECENT: std::sync::Mutex<Vec<(ReuseKey, Reuse)>> = std::sync::Mutex::new(Vec::new());
+
+#[derive(Clone)]
+struct Reuse {
+    compiled: std::sync::Arc<Compiled>,
+    errors: Vec<ConfigError>,
+    notices: Vec<ConfigError>,
+}
+
+/// A config's files as a build sees them: each one's text, and its path
+/// relative to the root when it lies under it.
+#[derive(PartialEq, Eq)]
+struct ReuseKey(Vec<(String, Option<PathBuf>, std::sync::Arc<str>)>);
+
+impl ReuseKey {
+    fn of(sources: &SourceMap, root: &std::path::Path) -> ReuseKey {
+        ReuseKey(sources.files().map(|(_, file)| {
+            let path = file.path.as_deref().map(|path| path.strip_prefix(root).unwrap_or(path).to_path_buf());
+            let name = if path.is_some() { String::new() } else { file.name.clone() };
+            (name, path, file.text.clone())
+        }).collect())
+    }
 }
 
 fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
@@ -460,20 +514,10 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
         .map(|command| ConfigError::new(command.span, format!("runs `{}` when a rule asks for command `{}`{}", command.argv.join(" "), command.name.text,
             if command.batch { " (once for every argument list)" } else { "" })))
         .collect();
-    let commands = std::sync::Arc::new(super::commands::Commands::new(root.clone(),
-        config.commands.iter().map(|command| (command.name.text.clone(), super::commands::Declared { argv: command.argv.clone(), batch: command.batch }))));
+    let commands = commands(&config, root.clone());
     let rule_states = rules.iter().map(|rule| rule_state(&rule.name, &config)).collect();
-    let mut linter = Linter {
+    let mut compiled = Compiled {
         rule_states,
-        commands,
-        invalidation: Default::default(),
-        invalidated: Default::default(),
-        existed: Default::default(),
-        units: Default::default(),
-        discoveries: Default::default(),
-        programs: Default::default(),
-        module_graphs: Default::default(),
-        parts: Default::default(),
         scopes,
         unit_overlays,
         unit_token_reasons,
@@ -481,15 +525,10 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
         unit_child_layers: !unit_reads.all_tokens && !unit_reads.own_tokens,
         semantic_layers: unit_layers.iter().copied().filter(|&m| grammar.native_kind(m).is_none()).collect(),
         reach,
-        profile: None,
-        split_at: 128 * 1024,
-        rule_jobs: std::thread::available_parallelism().map_or(1, |n| n.get()),
         grammar,
         language_options,
         rules,
         inert,
-        sources: sources.clone(),
-        root,
         ignores,
         by_matcher,
         by_field,
@@ -499,11 +538,19 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
         fingerprint,
     };
     phase("attributes and reach");
-    errors.extend(linter.lower_conditions(&config));
+    errors.extend(compiled.lower_conditions(&config));
     phase("lowering");
-    linter.shape_records();
+    compiled.shape_records();
     phase("record shapes");
+    let compiled = std::sync::Arc::new(compiled);
+    let linter = Linter::new(compiled, sources.clone(), root, commands);
     Built { linter: Some(linter), errors, notices, sources, symbols, phases }
+}
+
+/// The programs a config declares, run from `root`.
+fn commands(config: &Config, root: PathBuf) -> std::sync::Arc<super::commands::Commands> {
+    std::sync::Arc::new(super::commands::Commands::new(root,
+        config.commands.iter().map(|command| (command.name.text.clone(), super::commands::Declared { argv: command.argv.clone(), batch: command.batch }))))
 }
 
 pub(super) fn option_value(
