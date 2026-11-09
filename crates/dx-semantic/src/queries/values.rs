@@ -1,6 +1,6 @@
-use crate::expr::Value;
+use dx_ir::value::Value;
 use crate::names::question::{Known, Leaf, NodeRef, NodeValue, Target};
-use crate::names::semantic::Semantic;
+use crate::semantic::Semantic;
 use crate::names::values::{Identity, Key, MemberOrigin};
 use crate::names::calls::InvokeKind;
 

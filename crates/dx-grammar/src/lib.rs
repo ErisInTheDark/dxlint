@@ -178,6 +178,8 @@ pub struct BuildEnv<'a> {
     /// take it.
     pub is_builtin: &'a dyn Fn(&str) -> bool,
     pub constant: &'a Constant,
+    /// The query functions the semantic layer answers, by name.
+    pub queries: &'a [dx_ir::expr::QuerySpec],
 }
 
 /// Evaluates a constant `.dx` expression (module-resolution settings are
@@ -186,21 +188,20 @@ pub struct BuildEnv<'a> {
 /// when evaluating it failed.
 pub type Constant = dyn Fn(&Grammar, &Expr, &mut Vec<ConfigError>) -> Result<Value<'static>, Option<String>>;
 
-#[cfg(test)]
 fn no_builtin(_: &str) -> bool {
     false
 }
 
-#[cfg(test)]
 fn no_constant(_: &Grammar, _: &Expr, _: &mut Vec<ConfigError>) -> Result<Value<'static>, Option<String>> {
     Err(Some("no constant evaluator".into()))
 }
 
-#[cfg(test)]
 impl BuildEnv<'static> {
-    /// Builds plain grammars in tests: no builtin names and no constants.
+    /// Builds plain grammars where no built-in names, constants or queries
+    /// exist: tests, and the semantic layer's own test helpers.
+    #[doc(hidden)]
     pub fn plain() -> BuildEnv<'static> {
-        BuildEnv { is_builtin: &no_builtin, constant: &no_constant }
+        BuildEnv { is_builtin: &no_builtin, constant: &no_constant, queries: &[] }
     }
 }
 
@@ -636,7 +637,7 @@ impl Grammar {
             by_name,
             cache_pool: Mutex::new(Vec::new()),
             dropped: config.dropped.clone(),
-            functions: user_functions(config, errors, env.is_builtin),
+            functions: user_functions(config, errors, env.is_builtin, env.queries),
             parsers: syntax::Parsers::build(&config.parsers, errors),
         };
         grammar.shapes = shapes::Shapes::build(&grammar);
@@ -779,14 +780,14 @@ impl Grammar {
     }
 }
 
-/// The config's functions; a name taken twice, or by a built-in function
-/// or fact, is an error (the later definition is left out).
-pub fn function_declarations<'a>(config: &'a Config, errors: &mut Vec<ConfigError>, is_builtin: &dyn Fn(&str) -> bool) -> Vec<&'a dx_config::ast::FnDef> {
+/// The config's functions; a name taken twice, or by a built-in function,
+/// fact or query function, is an error (the later definition is left out).
+pub fn function_declarations<'a>(config: &'a Config, errors: &mut Vec<ConfigError>, is_builtin: &dyn Fn(&str) -> bool, queries: &[dx_ir::expr::QuerySpec]) -> Vec<&'a dx_config::ast::FnDef> {
     let mut out = Vec::new();
     let mut names = std::collections::HashSet::new();
     for def in &config.functions {
         let name = &def.name.text;
-        if is_builtin(name) {
+        if is_builtin(name) || queries.iter().any(|query| query.name == name) {
             errors.push(ConfigError::new(def.name.span, format!("`{name}` is a built-in function or fact; pick another name")));
         } else if !names.insert(name.as_str()) {
             errors.push(ConfigError::new(def.name.span, format!("function `{name}` is defined twice")));
@@ -797,8 +798,8 @@ pub fn function_declarations<'a>(config: &'a Config, errors: &mut Vec<ConfigErro
     out
 }
 
-fn user_functions(config: &Config, errors: &mut Vec<ConfigError>, is_builtin: &dyn Fn(&str) -> bool) -> Vec<UserFn> {
-    function_declarations(config, errors, is_builtin)
+fn user_functions(config: &Config, errors: &mut Vec<ConfigError>, is_builtin: &dyn Fn(&str) -> bool, queries: &[dx_ir::expr::QuerySpec]) -> Vec<UserFn> {
+    function_declarations(config, errors, is_builtin, queries)
         .into_iter()
         .map(|def| UserFn { name: def.name.text.clone(), arity: def.params.len(), body: std::sync::OnceLock::new() })
         .collect()

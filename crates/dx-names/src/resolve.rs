@@ -52,7 +52,7 @@ pub struct Resolved {
     declared_by: std::sync::OnceLock<dx_core::fx_hash::FxHashMap<u32, u32>>,
     /// Node -> the innermost scope it sits in (its own when it opens one),
     /// `within` fields respected; [`NO_SCOPE`] outside every scope.
-    pub(crate) scope_of: Vec<u32>,
+    pub scope_of: Vec<u32>,
     tracked: bool,
     /// Another file's names: lookups by name, listings and uses read are
     /// recorded ([`dx_core::parts`], [`Resolved::own`]).

@@ -11,9 +11,33 @@ use dx_pattern::dfa::Dfa;
 use dx_tree::{Tree, ROOT};
 use std::sync::Arc;
 
-/// A built-in query function, by position in the runtime's query table.
+/// A built-in query function, by position in the semantic query table.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct QueryId(pub u16);
+
+/// A query function's handle form, by position in the semantic handle table:
+/// rules that carry a value instead of a node read through it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct HandleId(pub u16);
+
+/// Whether a query function's result propagates unknowns or represents them
+/// in its schema.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Uncertainty {
+    Strict,
+    Explicit,
+}
+
+/// What the runtime needs to know about a query function the semantic layer
+/// answers: its name (for displays and census labels), its arity, and the
+/// handle form it reads a value subject through.
+#[derive(Debug)]
+pub struct QuerySpec {
+    pub name: &'static str,
+    pub arity: usize,
+    pub uncertainty: Uncertainty,
+    pub handle: Option<HandleId>,
+}
 
 #[derive(Clone, Debug)]
 pub enum CExpr {
@@ -32,7 +56,7 @@ pub enum CExpr {
     Fact(usize, FactOf),
     Opt(usize),
     Call(&'static Function, Vec<CExpr>),
-    QueryCall(QueryId, Vec<CExpr>),
+    QueryCall(QueryId, Option<HandleId>, Vec<CExpr>),
     Not(Box<CExpr>),
     Neg(Box<CExpr>),
     Binary(crate::ops::BinOp, Box<CExpr>, Box<CExpr>),
@@ -132,8 +156,11 @@ macro_rules! child_visitor {
         /// Calls `f` on each direct subexpression, in evaluation order.
         pub fn $name<'e>(&'e $($m)? self, f: &mut impl FnMut(&'e $($m)? CExpr)) {
             match self {
-                CExpr::Template(items) | CExpr::List(items) | CExpr::Call(_, items) | CExpr::QueryCall(_, items)
+                CExpr::Template(items) | CExpr::List(items) | CExpr::Call(_, items)
                 | CExpr::UserCall(_, items) => {
+                    for item in items { f(item) }
+                }
+                CExpr::QueryCall(_, _, items) => {
                     for item in items { f(item) }
                 }
                 CExpr::FactCall(_, items, receiver) => {

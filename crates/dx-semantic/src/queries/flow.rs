@@ -1,7 +1,7 @@
-use crate::expr::Value;
+use dx_ir::value::Value;
 use crate::names::question::{Budget, FrameId, Known, Leaf, NodeRef, Target};
-use crate::names::semantic::Semantic;
-use crate::names::effects::{DeclaredEffect, EffectId, EventKind, Execution, Phase, StepId};
+use crate::semantic::Semantic;
+use crate::effects::{DeclaredEffect, EffectId, EventKind, Execution, Phase, StepId};
 
 use super::QueryFunction;
 

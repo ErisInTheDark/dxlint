@@ -78,7 +78,7 @@ pub enum Cut {
 
 /// The asker's allowance while a fact runs on its own ([`Budget::begin_fact`]).
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct Asker {
+pub struct Asker {
     left: u32,
     limited: bool,
     /// [`Budget::depth_cuts`] when the fact began.
@@ -132,7 +132,7 @@ impl Budget {
         Self::per_question() - self.left_when_cut.get().unwrap_or(self.left.get())
     }
 
-    pub(crate) fn trace(&self, on: bool) {
+    pub fn trace(&self, on: bool) {
         self.traced.set(on);
     }
 
@@ -189,7 +189,7 @@ impl Budget {
     }
 
     /// See [`Budget::depth_cuts`] (the field).
-    pub(crate) fn depth_cuts(&self) -> u64 {
+    pub fn depth_cuts(&self) -> u64 {
         self.depth_cuts.get()
     }
 
@@ -206,7 +206,7 @@ impl Budget {
     /// it first or what they had left. One that ran out cuts its asker, and
     /// every later reader of its kept answer
     /// ([`super::values::Values::read_kept`]).
-    pub(crate) fn fact<R>(&self, units: u32, work: impl FnOnce() -> R) -> Result<R, Cut> {
+    pub fn fact<R>(&self, units: u32, work: impl FnOnce() -> R) -> Result<R, Cut> {
         if self.exhausted() {
             self.limit();
             return Err(Cut::Unpaid);
@@ -239,7 +239,7 @@ impl Budget {
     /// [`Budget::fact`] for work that can't be one call (the value
     /// evaluator's task loop): starts the fact's allowance, returning the
     /// asker's to hand to [`Budget::end_fact`].
-    pub(crate) fn begin_fact(&self, units: u32) -> Asker {
+    pub fn begin_fact(&self, units: u32) -> Asker {
         #[cfg(feature = "work")]
         dx_core::work::fact_steps_open();
         self.facts.set(self.facts.get() + 1);
@@ -251,14 +251,14 @@ impl Budget {
     }
 
     /// See [`Budget::fact_epoch`] (the field).
-    pub(crate) fn fact_epoch(&self) -> u64 {
+    pub fn fact_epoch(&self) -> u64 {
         self.fact_epoch.get()
     }
 
     /// Ends a fact begun with [`Budget::begin_fact`]: the asker's allowance
     /// is back as it was (cutting it is the caller's). Why the fact stopped
     /// short, if it did.
-    pub(crate) fn end_fact(&self, asker: Asker) -> Option<Cut> {
+    pub fn end_fact(&self, asker: Asker) -> Option<Cut> {
         let limited = self.limited();
         #[cfg(feature = "work")]
         {
@@ -289,7 +289,7 @@ impl Budget {
         dx_core::levers::set_semantic_budget(units);
     }
 
-    pub(crate) fn restart(&self) {
+    pub fn restart(&self) {
         assert_eq!(self.depth.get(), 0);
         debug_assert_eq!(self.facts.get(), 0, "a fact left open past its root");
         self.left.set(Self::per_question());
@@ -393,149 +393,6 @@ pub enum Fact {
     Members(Vec<super::values::Member>),
 }
 
-/// The files a question can see, for every type-layer engine: file 0 is
-/// the linted file; others come in as declarations or module resolution
-/// reach them (the engine owns reading, parsing and recorded reads).
-pub trait World {
-    fn grammar(&self) -> &dx_grammar::Grammar;
-    fn profile(&self) -> Option<&dx_core::profile::Profile> { None }
-    fn revision(&self) -> u64 { 0 }
-    fn path(&self, _file: u32) -> Option<&std::path::Path> { None }
-    fn tree(&self, file: u32) -> Option<&dx_tree::Tree>;
-    fn text(&self, file: u32) -> Option<&str>;
-    /// Whether the file's text spells `needle` anywhere.
-    fn text_mentions(&self, file: u32, needle: &str) -> Option<bool> {
-        Some(memchr::memmem::find(self.text(file)?.as_bytes(), needle.as_bytes()).is_some())
-    }
-    /// The file's resolved names (scopes, declarations, references).
-    fn names(&self, file: u32) -> Option<&super::Resolved>;
-    /// The file's declarations by scope and name, keyed by its front end.
-    fn index(&self, file: u32) -> Option<&super::ScopeIndex>;
-    fn module_index(&self, file: u32, tables: &super::Names) -> Option<&super::modules::index::Index> {
-        Some(super::modules::index::module_index(self.tree(file)?, tables, self.text(file)?, &|text| self.name_key(file, text), self.profile()))
-    }
-    /// Records that the answer being worked out depends on `file`'s whole
-    /// text: for files a scan reached that turn out to matter.
-    fn depends_on_file(&self, _file: u32) {}
-    /// Records that the answer read part `read` of another file `file`
-    /// ([`dx_core::parts`]).
-    fn note_part(&self, _file: u32, _read: dx_core::parts::Read) {}
-    /// Work is stepping onto `at`: inside another file's body, it depends on
-    /// that file's whole text, not only what lies outside its bodies.
-    fn note_entered(&self, _at: Leaf) {}
-    /// Turns [`Self::note_entered`] off (or back on) for a whole-file syntax
-    /// scan, which steps through every body although its answers only
-    /// matter where they reach; returns the previous setting.
-    fn quiet_entering(&self, _quiet: bool) -> bool { false }
-    /// How often the linted file's own syntax was read so far, which no
-    /// recorded read covers: answers that read it hold for this text only.
-    fn linted_reads(&self) -> u64 { 0 }
-    /// Counts a read of the linted file's syntax: a kept answer that read it
-    /// reads it again when used.
-    fn note_linted_read(&self) {}
-    /// What a name's text means in `file` (its front end's escapes).
-    fn name_key<'s>(&self, file: u32, text: &'s str) -> std::borrow::Cow<'s, str>;
-    /// The scope a module specifier names, asked by node `at` (its file's
-    /// resolution profile and modes decide; a file's root scope or an
-    /// ambient module); `Yes(None)` when nothing matches.
-    fn module(&self, at: Leaf, specifier: &str, semantic: &super::semantic::Semantic<'_>) -> Known<Option<ScopeRef>>;
-    /// Option `name` of the configuration the program around `at` loads
-    /// (its resolution profile's config `options`); null when unset.
-    fn program_option(&self, _at: Leaf, _name: &str, _semantic: &super::semantic::Semantic<'_>) -> Known<dx_ir::value::Value<'static>> {
-        Known::Unknown
-    }
-    /// What the root config's command `name` prints for `args`, as a
-    /// `{ state, output, message }` record (the engine runs it and records
-    /// its inputs).
-    fn command_output(&self, _name: &str, _args: &[String]) -> Known<dx_ir::value::Value<'static>> {
-        Known::Unknown
-    }
-    /// The directory of the configuration the program around `at` loads
-    /// (`/`-separated); null when it loads none.
-    fn program_directory(&self, _at: Leaf, _semantic: &super::semantic::Semantic<'_>) -> Known<dx_ir::value::Value<'static>> {
-        Known::Unknown
-    }
-    /// What imports `at`'s file, as a `{ importers, is_stop, reaches_stop,
-    /// reaches_entry }` record: null when it is not in the project's program.
-    fn module_importers(&self, _at: Leaf, _stop: Box<[Box<str>]>, _ignore: Box<[Box<str>]>, _semantic: &super::semantic::Semantic<'_>) -> Known<dx_ir::value::Value<'static>> {
-        Known::Unknown
-    }
-    /// Who reads each name `at`'s file publishes, as a `{ is_stop, is_entry, is_ignored,
-    /// exports: [{ name, importers, reaches_stop, reaches_entry }] }` record:
-    /// null when it is not in the project's program.
-    fn module_export_users(&self, _at: Leaf, _stop: Box<[Box<str>]>, _ignore: Box<[Box<str>]>, _semantic: &super::semantic::Semantic<'_>) -> Known<dx_ir::value::Value<'static>> {
-        Known::Unknown
-    }
-    /// Every scope merged into module scope `scope`, canonical first:
-    /// ambient `declare module "x"` across files and augmentations of a
-    /// file module. Just `scope` where nothing merges.
-    fn module_scopes(&self, scope: ScopeRef, _semantic: &super::semantic::Semantic<'_>) -> Known<Vec<ScopeRef>> {
-        Known::Yes(vec![scope])
-    }
-    fn module_star_excludes(&self, _scope: ScopeRef, _name: &str, _semantic: &super::semantic::Semantic<'_>) -> Known<bool> {
-        Known::Unknown
-    }
-    /// Where program file `file` comes from (its path under the program's
-    /// resolution profile).
-    fn origin(&self, _file: u32) -> Known<super::modules::resolution::Origin> {
-        Known::Unknown
-    }
-    /// The global scopes the program around file `importer` sees (libs,
-    /// type roots, script files, global augmentations), in policy order;
-    /// a world may leave out files that cannot publish global `name`.
-    fn global_scopes(&self, _importer: u32, _name: &str, _semantic: &super::semantic::Semantic<'_>) -> Known<Vec<ScopeRef>> {
-        Known::Unknown
-    }
-    /// The answer to `question`, shared with the other worlds that ask it
-    /// under the same program; `compute` answers it in this world.
-    fn shared_modules(&self, _question: super::modules::SharedQuestion<'_>, compute: &mut dyn FnMut() -> Known<Vec<Target>>) -> Known<Vec<Target>> {
-        compute()
-    }
-    /// The value of canonical `leaf` (a node in another file than the
-    /// linted one), shared with the other worlds of the run that read it;
-    /// `compute` evaluates it here.
-    fn shared_value(&self, _leaf: Leaf, _semantic: &super::semantic::Semantic<'_>, compute: &mut dyn FnMut() -> NodeValue) -> NodeValue {
-        compute()
-    }
-    /// Another file's tested roots ([`super::narrowing`]), shared with the
-    /// other worlds of the run: a whole-file scan each would repeat.
-    fn shared_tested_roots(&self, _file: u32, _semantic: &super::semantic::Semantic<'_>, compute: &mut dyn FnMut() -> Option<Vec<(NodeRef, Vec<u32>)>>) -> Option<Vec<(NodeRef, Vec<u32>)>> {
-        compute()
-    }
-    /// Fact `key`, shared with the other worlds of the run that would derive
-    /// the same; `compute` derives it here (`None`: unknown, never shared).
-    fn shared_fact(&self, _key: &FactKey, _semantic: &super::semantic::Semantic<'_>, compute: &mut dyn FnMut() -> Option<Fact>) -> Option<Fact> {
-        compute()
-    }
-    /// The value another world of the run already shared for canonical
-    /// `leaf`, without computing it.
-    fn shared_value_kept(&self, _leaf: Leaf, _semantic: &super::semantic::Semantic<'_>) -> Option<NodeValue> {
-        None
-    }
-    /// Whether the current evaluation has read an unknown answer (a strict
-    /// query then discards its own); `None` outside one.
-    fn unknown_read(&self) -> Option<bool> { None }
-    /// Resets [`Self::unknown_read`] to `read`: unknowns met by work whose
-    /// answer was discarded (an inference input skipped as undecidable) did
-    /// not shape the answer.
-    fn forget_unknown_reads(&self, _read: bool) {}
-    /// Whether item condition `condition` ([`super::Names::conditions`])
-    /// holds at `at` (run on the VM in that node's file; nested questions
-    /// see its frame and view).
-    fn condition(&self, at: Leaf, condition: u32, semantic: &super::semantic::Semantic<'_>) -> Known<bool>;
-    /// Whether `condition` fails at `at` on syntax alone (its syntax-only
-    /// conjuncts are false): false in every frame, decided without a type
-    /// question. `false` when that can't be told.
-    fn refuted_by_syntax(&self, _at: Leaf, _condition: u32) -> bool { false }
-    /// The value of item expression `operand` ([`super::Names::operands`])
-    /// at `at`, run on the VM in that node's file like [`World::condition`].
-    fn operand(&self, at: Leaf, operand: u32, semantic: &super::semantic::Semantic<'_>) -> Known<dx_ir::value::Value<'static>>;
-    /// `let` attribute `attr` (engine attribute id, as in
-    /// [`super::ATTR_STEP`] path steps) at `at`, run on the VM in that
-    /// node's file; `Yes(Null)` when the node's layer has none.
-    fn attribute(&self, at: Leaf, attr: u16, semantic: &super::semantic::Semantic<'_>) -> Known<dx_ir::value::Value<'static>>;
-}
-
 /// One linted file's question state, shared by every type-layer engine
 /// (values, calls, effects, narrowing, modules): the frame arena and the
 /// work budget of the question being answered. Memos keyed by
@@ -615,7 +472,7 @@ pub struct Interned {
 impl QueryContext {
     /// Moves out everything ids answers keep refer to (frames, keys,
     /// handles), leaving this context empty.
-    pub(crate) fn interned(&self) -> Interned {
+    pub fn interned(&self) -> Interned {
         Interned {
             frames: self.frames.take(),
             args: self.args.take(),
@@ -630,7 +487,7 @@ impl QueryContext {
     }
 
     /// Takes back what [`QueryContext::interned`] moved out.
-    pub(crate) fn restore(&self, interned: Interned) {
+    pub fn restore(&self, interned: Interned) {
         self.frames.replace(interned.frames);
         self.args.replace(interned.args);
         self.products.replace(interned.products);
@@ -665,7 +522,7 @@ impl QueryContext {
         self.handles.borrow().items.get((handle.0 & u64::from(u32::MAX)) as usize).cloned()
     }
 
-    pub(crate) fn intern_product(&self, product: Product) -> ProductId {
+    pub fn intern_product(&self, product: Product) -> ProductId {
         ProductId(self.products.borrow_mut().intern(product))
     }
 
@@ -673,7 +530,7 @@ impl QueryContext {
         self.products.borrow().items.get(id.0 as usize).cloned()
     }
 
-    pub(crate) fn intern_modified(&self, modified: Modified) -> ModifiedId {
+    pub fn intern_modified(&self, modified: Modified) -> ModifiedId {
         ModifiedId(self.modified.borrow_mut().intern(modified))
     }
 
@@ -681,7 +538,7 @@ impl QueryContext {
         self.modified.borrow().items.get(id.0 as usize).cloned()
     }
 
-    pub(crate) fn intern_key(&self, key: super::values::Key) -> KeyId {
+    pub fn intern_key(&self, key: super::values::Key) -> KeyId {
         KeyId(self.keys.borrow_mut().intern(key))
     }
 

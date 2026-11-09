@@ -5,7 +5,9 @@ use crate::{KindNames, Names, Resolved};
 use crate::question::{Budget, FrameId, Known, Leaf, NodeRef, NodeValue, QueryContext, ScopeRef, Target, World};
 use crate::semantic::Semantic;
 use crate::values::Values;
-use super::{Conditional, Expected, ExpectedAt, Invoke, InvokeKind, Signature};
+use dx_config::ast::calls::ExpectedAt;
+
+use super::{Conditional, Expected, Invoke, InvokeKind, Signature};
 
 struct TestWorld {
     grammar: Grammar,
@@ -1114,12 +1116,12 @@ fn container_results_follow_declared_header_sources() {
     tables.kinds[4].calls.sources.push(Conditional { item: super::Value::Path(vec![20]), when: None });
     tables.kinds.push(KindNames {
         fits: vec![(4, 0, None)],
-        calls: super::KindCalls {
+        calls: crate::names::calls::KindCalls {
             signatures: vec![Conditional {
                 item: Signature { parameters: vec![10], receiver: None, result: super::Value::Path(vec![21]) },
                 when: None,
             }],
-            ..super::KindCalls::default()
+            ..crate::names::calls::KindCalls::default()
         },
         ..KindNames::default()
     });

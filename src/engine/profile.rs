@@ -13,10 +13,10 @@ pub fn new_profile(matchers: usize, rules: usize) -> Profile {
 
 /// Every semantic query name the engine records.
 fn semantic_queries() -> impl Iterator<Item = &'static str> {
-    crate::expr::queries::QUERY_FUNCTIONS.iter().flat_map(|group| group.iter())
-        .map(|query| query.name).chain(crate::expr::queries::QUERIES.iter().map(|query| query.name))
-        .chain(crate::names::calls::ProfileQuery::ALL.iter().map(|query| query.name()))
-        .chain(crate::names::modules::queries::PROFILE_QUERIES.iter().copied())
+    crate::semantic::queries::QUERY_FUNCTIONS.iter().flat_map(|group| group.iter())
+        .map(|query| query.name).chain(crate::semantic::queries::QUERIES.iter().map(|query| query.name))
+        .chain(crate::semantic::calls::ProfileQuery::ALL.iter().map(|query| query.name()))
+        .chain(crate::semantic::modules::queries::PROFILE_QUERIES.iter().copied())
         .chain(["units.native", "units.view", "modules.resolve.search", "modules.resolve.shared", "modules.resolve.shared.key", "modules.resolve.shared.select", "modules.resolve.shared.identity","modules.resolve.shared.lookup", "modules.resolve.shared.targets", "modules.resolve.shared.record", "modules.resolve.shared.publish", "modules.resolve.catalog", "modules.roots.inputs", "modules.roots.survey", "modules.roots.candidates", "modules.roots.prefetch", "modules.roots.attach", "modules.identity.inputs", "modules.identity.scan"])
 }
 
@@ -95,7 +95,7 @@ mod tests {
         linter.enable_profile();
         assert_eq!(linter.lint(std::path::Path::new("/root/file.t"), "x").len(), 1);
         let profile = linter.profile.as_ref().unwrap();
-        for query in crate::expr::queries::QUERIES {
+        for query in crate::semantic::queries::QUERIES {
             assert!(Profile::get(&profile.semantic_queries[query.name].calls) > 0, "{}", query.name);
         }
     }

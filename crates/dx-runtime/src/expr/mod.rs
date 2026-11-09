@@ -9,7 +9,6 @@ pub mod functions;
 pub mod mapped;
 pub mod pipeline;
 pub mod placeholder;
-pub mod queries;
 pub mod fold;
 pub mod indent;
 mod lookaround;
@@ -76,17 +75,30 @@ pub(crate) const MAX_CALL_DEPTH: u32 = 256;
 /// Whether `name(...)` already means something built in: a function, a
 /// special form or a fact.
 pub fn is_builtin_call(name: &str) -> bool {
-    functions::lookup(name).is_some() || queries::lookup_function(name).is_some() || Each::named(name).is_some() || matches!(name, "reduce" | "dbg" | "position" | "walk" | "descendants" | "overlapping" | "containing" | "kind_name" | "node_at" | "token" | "token_list" | "token_pair") || facts::fact(name).is_some()
+    functions::lookup(name).is_some() || Each::named(name).is_some() || matches!(name, "reduce" | "dbg" | "position" | "walk" | "descendants" | "overlapping" | "containing" | "kind_name" | "node_at" | "token" | "token_list" | "token_pair") || facts::fact(name).is_some()
+}
+
+/// A path step that asks a value question (`result`, `expected`, ...).
+fn semantic_step(name: &str) -> Option<u16> {
+    use crate::names::{EXPECTED, INFERRED, RESULT, RETURNED, WIDENED};
+    match name {
+        "result" => Some(RESULT),
+        "expected" => Some(EXPECTED),
+        "inferred" => Some(INFERRED),
+        "returned" => Some(RETURNED),
+        "widened" => Some(WIDENED),
+        _ => None,
+    }
 }
 
 /// What [`Grammar::build`] needs from this module: builtin names and
 /// constant folding of `.dx` settings.
-pub fn build_env() -> crate::grammar::BuildEnv<'static> {
+pub fn build_env(queries: &'static [dx_ir::expr::QuerySpec]) -> crate::grammar::BuildEnv<'static> {
     fn constant(grammar: &Grammar, expr: &Expr, errors: &mut Vec<ConfigError>) -> Result<Value<'static>, Option<String>> {
         let compiled = Scope::constants(grammar).compile(expr, errors).ok_or(None)?;
         Ctx::eval_static(&compiled, &[]).map(|value| value.into_owned()).map_err(Some)
     }
-    crate::grammar::BuildEnv { is_builtin: &is_builtin_call, constant: &constant }
+    crate::grammar::BuildEnv { is_builtin: &is_builtin_call, constant: &constant, queries }
 }
 
 /// A value as `dbg` prints it: strings quoted, lists bracketed.
@@ -182,6 +194,8 @@ pub struct Scope<'a> {
     pub grammar: &'a Grammar,
     /// What the names items' classes and effects mean.
     pub vocabulary: &'a crate::names::Vocabulary,
+    /// The query functions the semantic layer answers, by name.
+    pub queries: &'a [dx_ir::expr::QuerySpec],
     /// Fields of the target node: label name -> label id.
     pub fields: Vec<(String, u16)>,
     pub options: Vec<String>,
@@ -241,6 +255,7 @@ impl<'a> Scope<'a> {
         Scope {
             grammar,
             vocabulary: &crate::names::EMPTY_VOCABULARY,
+            queries: &[],
             fields: Vec::new(),
             options: Vec::new(),
             options_only: false,
@@ -260,6 +275,17 @@ impl<'a> Scope<'a> {
     /// The same scope, with the names tables' classes and effects.
     pub fn with_names(self, names: &'a crate::names::Names) -> Self {
         Self { vocabulary: &names.vocabulary, ..self }
+    }
+
+    /// The same scope, with the semantic layer's query functions by name.
+    pub fn with_queries(self, queries: &'a [dx_ir::expr::QuerySpec]) -> Self {
+        Self { queries, ..self }
+    }
+
+    /// The id and spec of the query function `name`, when it is one.
+    fn query_spec(&self, name: &str) -> Option<(dx_ir::expr::QueryId, &'a dx_ir::expr::QuerySpec)> {
+        self.queries.iter().position(|spec| spec.name == name)
+            .map(|index| (dx_ir::expr::QueryId(index as u16), &self.queries[index]))
     }
 
     /// An `each` block `let` by name, marking the item read when it reads it.
@@ -454,10 +480,10 @@ impl Scope<'_> {
                 }
             }
             ExprKind::Var(path) => {
-                if let Some(index) = path.iter().enumerate().skip(1).find_map(|(index, name)| queries::semantic_step(&name.text).map(|_| index)) {
+                if let Some(index) = path.iter().enumerate().skip(1).find_map(|(index, name)| semantic_step(&name.text).map(|_| index)) {
                     let mut steps = Vec::new();
                     for name in &path[index..] {
-                        let Some(step) = queries::semantic_step(&name.text) else {
+                        let Some(step) = semantic_step(&name.text) else {
                             errors.push(ConfigError::new(name.span, "a semantic subject can only take further semantic steps or `could` / `always`"));
                             return None;
                         };
@@ -467,8 +493,8 @@ impl Scope<'_> {
                     return Some(CExpr::Semantic(Box::new(self.node_subject(&base, errors)?), crate::names::Value::Path(steps)));
                 }
             }
-            ExprKind::Key(base, key) if queries::semantic_step(&key.text).is_some() => {
-                let step = queries::semantic_step(&key.text).expect("matched");
+            ExprKind::Key(base, key) if semantic_step(&key.text).is_some() => {
+                let step = semantic_step(&key.text).expect("matched");
                 let base = self.trait_subject(base, errors)?;
                 return Some(match base {
                     CExpr::Semantic(base, crate::names::Value::Path(mut steps)) => {
@@ -581,7 +607,7 @@ impl Scope<'_> {
                 }
                 keys.reverse();
                 let base = self.compile(at, errors)?;
-                if keys.iter().any(|key| queries::semantic_step(&key.text).is_some())
+                if keys.iter().any(|key| semantic_step(&key.text).is_some())
                     && matches!(base, CExpr::Builtin(Builtin::Node | Builtin::Parent) | CExpr::Field(_) | CExpr::Ancestor(..)) {
                     errors.push(ConfigError::new(e.span, "a semantic subject can only be consumed by `could` / `always`"));
                     return None;
@@ -676,7 +702,7 @@ impl Scope<'_> {
                 return None;
             }
             ExprKind::Var(path) => {
-                if path.iter().enumerate().skip(1).any(|(index, name)| queries::semantic_step(&name.text).is_some()
+                if path.iter().enumerate().skip(1).any(|(index, name)| semantic_step(&name.text).is_some()
                     && (path[..index].iter().any(|name| name.text == "node")
                         || matches!(path[0].text.as_str(), "parent" | "previous" | "next")
                         || self.fields.iter().any(|(name, _)| *name == path[0].text))) {
@@ -772,10 +798,9 @@ impl Scope<'_> {
                 let args = args.iter().map(|a| self.compile(a, errors)).collect::<Option<Vec<_>>>()?;
                 CExpr::UserCall(i as u32, args)
             }
-            // `fact(args)`: a native analysis that takes the rule's values.
-            ExprKind::Call(name, args) if queries::lookup_function(&name.text).is_some() => {
-                let id = queries::lookup_function(&name.text).expect("matched");
-                let query = queries::query_function(id);
+            // `fact(args)`: a semantic query the runtime dispatches by id.
+            ExprKind::Call(name, args) if self.query_spec(&name.text).is_some() => {
+                let (id, query) = self.query_spec(&name.text).expect("matched");
                 if args.len() != query.arity {
                     errors.push(ConfigError::new(e.span, format!("`{}` takes {} arguments", query.name, query.arity)));
                     return None;
@@ -784,7 +809,7 @@ impl Scope<'_> {
                 let args = args.iter().enumerate().map(|(index, arg)| {
                     if index == 0 { self.node_subject(arg, errors) } else { self.compile(arg, errors) }
                 }).collect::<Option<Vec<_>>>()?;
-                CExpr::QueryCall(id, args)
+                CExpr::QueryCall(id, query.handle, args)
             }
             ExprKind::Call(name, args) if !self.options_only && functions::lookup(&name.text).is_none() && facts::fact(&name.text).is_some() => {
                 let i = facts::fact(&name.text).expect("checked");

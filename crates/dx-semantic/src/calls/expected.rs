@@ -1,4 +1,6 @@
-use super::{ExpectedAt, kind};
+use dx_config::ast::calls::ExpectedAt;
+
+use super::kind;
 use crate::question::{Known, Leaf, NodeValue};
 use crate::values::{Key, Values};
 

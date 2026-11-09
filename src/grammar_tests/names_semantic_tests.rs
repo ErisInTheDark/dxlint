@@ -2,9 +2,10 @@ use std::cell::Cell;
 
 use crate::engine::tests::linter as make_linter;
 use crate::names::question::{
-    Budget, FrameId, Known, Leaf, NodeRef, NodeValue, QueryContext, ScopeRef, Target, World,
+    Budget, FrameId, Known, Leaf, NodeRef, NodeValue, QueryContext, ScopeRef, Target,
 };
-use crate::names::semantic::{Semantic, Session};
+use crate::semantic::question::World;
+use crate::semantic::semantic::{Semantic, Session};
 use crate::names::{Resolved, ScopeIndex, PARENT};
 use crate::grammar::{Edge, Node, TEXT};
 use crate::pattern::compile::NO_LABEL;

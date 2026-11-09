@@ -1,7 +1,8 @@
-use crate::expr::Value;
-use crate::names::{ClassKind, Kept, ReferenceLookup, Resolved, ScopeInfo};
+use dx_ir::value::Value;
+use crate::name_queries::{ClassKind, Kept};
+use crate::names::{ReferenceLookup, Resolved, ScopeInfo};
 use crate::names::question::{Known, Leaf, NodeRef, ScopeRef, Target};
-use crate::names::semantic::Semantic;
+use crate::semantic::Semantic;
 
 use super::QueryFunction;
 
@@ -301,7 +302,8 @@ mod tests {
     use super::*;
     use crate::grammar::{Grammar, Node, Tree};
     use crate::names::{Names, ScopeIndex};
-    use crate::names::question::{FrameId, QueryContext, World};
+    use crate::names::question::{FrameId, QueryContext};
+    use crate::question::World;
 
     struct ScopeWorld {
         grammar: Grammar,
@@ -332,7 +334,7 @@ mod tests {
     #[test]
     fn reference_scope_queries_keep_nested_scopes_and_distinct_lookup_policies() {
         let mut world = ScopeWorld {
-            grammar: Grammar::build(&crate::config::ast::Config::default(), &mut Vec::new(), &crate::expr::build_env()),
+            grammar: Grammar::build(&crate::config::ast::Config::default(), &mut Vec::new(), &dx_grammar::BuildEnv::plain()),
             tree: Tree::from_native(vec![Node { matcher: 0, start: 0, end: 0, children: Vec::new() }; 3], 0),
             names: Resolved::default(),
             available: std::cell::Cell::new(true),
@@ -366,7 +368,7 @@ mod tests {
     #[test]
     fn lexical_name_queries_do_not_lose_answers_in_bound_frames() {
         let mut world = ScopeWorld {
-            grammar: Grammar::build(&crate::config::ast::Config::default(), &mut Vec::new(), &crate::expr::build_env()),
+            grammar: Grammar::build(&crate::config::ast::Config::default(), &mut Vec::new(), &dx_grammar::BuildEnv::plain()),
             tree: Tree::from_native(vec![Node { matcher: 0, start: 0, end: 0, children: Vec::new() }; 2], 0),
             names: Resolved::default(),
             available: std::cell::Cell::new(true),
@@ -416,7 +418,7 @@ mod tests {
         assert_eq!(role_classes(&semantic, bound, &args), Known::Unknown);
         assert_eq!(scopes(&semantic, bound, &args), Known::Unknown);
         world.available.set(true);
-        let session = crate::names::semantic::Session::default();
+        let session = crate::semantic::Session::default();
         assert_eq!(session.run(&world, &tables, |semantic| {
             while semantic.question.budget.step() {}
             role_classes(semantic, at, &args)
@@ -435,7 +437,7 @@ mod tests {
     #[test]
     fn binding_queries_join_class_specific_reference_buckets() {
         let mut world = ScopeWorld {
-            grammar: Grammar::build(&crate::config::ast::Config::default(), &mut Vec::new(), &crate::expr::build_env()),
+            grammar: Grammar::build(&crate::config::ast::Config::default(), &mut Vec::new(), &dx_grammar::BuildEnv::plain()),
             tree: Tree::from_native((0..5).map(|start| Node {
                 matcher: 0, start, end: start + 1, children: Vec::new(),
             }).collect(), 0),

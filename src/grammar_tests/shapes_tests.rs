@@ -9,7 +9,7 @@ fn grammar(source: &str) -> Grammar {
     let loaded = crate::config::load_text("shapes.dx", source, &Disk);
     assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
     let mut errors = Vec::new();
-    let env = crate::expr::build_env();
+    let env = crate::expr::build_env(crate::semantic::queries::specs());
     let grammar = Grammar::build(&loaded.config, &mut errors, &env);
     assert!(errors.is_empty(), "{errors:?}");
     grammar

@@ -10,11 +10,14 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::expr::{Ctx, Value};
-use crate::expr::queries::Uncertainty;
-use crate::names::question::{Budget, Fact, FactKey, FrameId, Known, Leaf, NodeRef, NodeValue, ScopeRef, Target, World};
-use crate::names::semantic::{AttributeKey, Semantic};
+use crate::semantic::queries::Uncertainty;
+use crate::names::question::{Budget, Fact, FactKey, FrameId, Known, Leaf, NodeRef, NodeValue, ScopeRef, Target};
+use crate::semantic::question::World;
+use crate::semantic::semantic::{AttributeKey, Semantic};
+use dx_ir::expr::{HandleId, QueryId, QuerySpec};
+use dx_ir::ops::Quantifier;
 use crate::names::modules::compile::Action;
-use crate::names::modules::SharedQuestion;
+use crate::semantic::modules::SharedQuestion;
 use crate::names::modules::resolution::{parse_metadata, program_anchor, program_inputs, Configuration, Probe, DiscoveryRequest, Host, Json, Resolver, Settings};
 use crate::names::question::QueryContext;
 use crate::names::{Resolved, ScopeIndex};
@@ -87,7 +90,7 @@ pub struct LintWorld<'a> {
     /// File 0 outside any rule (no locals, no indents).
     ctx: Ctx<'a>,
     evaluation: Cell<*const ()>,
-    semantic: crate::names::semantic::Session,
+    semantic: crate::semantic::semantic::Session,
     /// Name-item conditions being decided, by node and condition.
     conditions: RefCell<Vec<(Target, u32)>>,
     /// A whole-file syntax scan is stepping through bodies
@@ -175,7 +178,7 @@ impl<'a> LintWorld<'a> {
         loop {
             let rescan = std::mem::take(&mut scans);
             let changed = self.semantic.run(&files, &self.ctx.names, |semantic| {
-                self.evaluating(Some(ActiveQuestion { semantic, at }), crate::expr::queries::Uncertainty::Explicit, || {
+                self.evaluating(Some(ActiveQuestion { semantic, at }), crate::semantic::queries::Uncertainty::Explicit, || {
                     let mut changed = crate::footprint::Dirty::default();
                     if rescan { semantic.narrowing().recheck(at, &mut changed) }
                     semantic.values().recheck_members(&mut changed);
@@ -435,7 +438,7 @@ impl<'a> LintWorld<'a> {
         static ATTRIBUTES: u8 = 0;
         let kept = |key: &AttributeKey| semantic.attribute(key).map(|(value, unknown)| {
             if unknown { self.mark_unknown() }
-            values.read_kept(crate::names::values::fact_tag(&ATTRIBUTES, key));
+            values.read_kept(crate::semantic::values::fact_tag(&ATTRIBUTES, key));
             value
         });
         if let Some(value) = kept(&key) {
@@ -460,7 +463,7 @@ impl<'a> LintWorld<'a> {
         let mark = values.cycle_mark();
         let mut value = None;
         let outer = crate::footprint::begin();
-        let answer = values.fact(crate::names::values::fact_tag(&ATTRIBUTES, &key), Budget::per_question(),
+        let answer = values.fact(crate::semantic::values::fact_tag(&ATTRIBUTES, &key), Budget::per_question(),
             || self.complete_attribute(|| { value = compute(); value }));
         #[cfg(feature = "work")]
         crate::work::fact_steps("attribute", semantic.question.budget.last_spent(), || {
@@ -541,9 +544,10 @@ impl<'a> LintWorld<'a> {
         answer
     }
 
-    pub fn query(&'a self, file: u32, node: u32, subject: &crate::names::Value, query: &crate::expr::queries::Query, mask: u64) -> bool {
+    pub fn query(&'a self, file: u32, node: u32, subject: &crate::names::Value, quantifier: Quantifier, mask: u64) -> bool {
         // could/always quantify over alternatives and answer Unknown themselves
         // unless a known alternative decides, so their known answers stand.
+        let query = crate::semantic::queries::query(quantifier);
         let run = || self.semantic_query(file, node, Uncertainty::Explicit, |semantic, at| (query.call)(semantic, at, subject, mask));
         let root = self.question().is_none();
         let started = std::time::Instant::now();
@@ -573,7 +577,8 @@ impl<'a> LintWorld<'a> {
         eprintln!("UNK\t{name}\t{}\t{path}\t{text}", elapsed / 1000);
     }
 
-    pub fn query_function(&'a self, file: u32, node: u32, query: &crate::expr::queries::QueryFunction, args: &[Value<'static>]) -> Value<'static> {
+    pub fn query_function(&'a self, file: u32, node: u32, id: QueryId, args: &[Value<'static>]) -> Value<'static> {
+        let query = crate::semantic::queries::query_function(id);
         let run = || self.semantic_query(file, node, query.uncertainty(), |semantic, at| (query.call)(semantic, at, args));
         let root = self.question().is_none();
         let started = std::time::Instant::now();
@@ -586,7 +591,8 @@ impl<'a> LintWorld<'a> {
         answer.known().unwrap_or(Value::Null)
     }
 
-    pub fn query_handle(&'a self, file: u32, handle: crate::names::question::Handle, query: &crate::expr::queries::HandleFunction, args: &[Value<'static>]) -> Value<'static> {
+    pub fn query_handle(&'a self, file: u32, handle: crate::names::question::Handle, id: HandleId, args: &[Value<'static>]) -> Value<'static> {
+        let query = crate::semantic::queries::handle_function(id).expect("registered handle function id");
         let run = || self.semantic_query(file, 0, Uncertainty::Explicit, |semantic, _| match semantic.question.handle_value(handle) {
             Some(value) => (query.call)(semantic, value, args),
             None => Known::Unknown,
@@ -642,16 +648,20 @@ impl Drop for Restore<'_> {
 /// The runtime's view of this lint: type questions, attribute caching and
 /// name resolution.
 impl<'a> crate::expr::TypeWorld<'a> for LintWorld<'a> {
-    fn query(&'a self, file: u32, node: u32, subject: &crate::names::Value, query: &crate::expr::queries::Query, mask: u64) -> bool {
-        LintWorld::query(self, file, node, subject, query, mask)
+    fn query(&'a self, file: u32, node: u32, subject: &crate::names::Value, quantifier: Quantifier, mask: u64) -> bool {
+        LintWorld::query(self, file, node, subject, quantifier, mask)
     }
 
-    fn query_function(&'a self, file: u32, node: u32, query: &crate::expr::queries::QueryFunction, args: &[Value<'static>]) -> Value<'static> {
+    fn query_function(&'a self, file: u32, node: u32, query: QueryId, args: &[Value<'static>]) -> Value<'static> {
         LintWorld::query_function(self, file, node, query, args)
     }
 
-    fn query_handle(&'a self, file: u32, handle: crate::names::question::Handle, query: &crate::expr::queries::HandleFunction, args: &[Value<'static>]) -> Value<'static> {
+    fn query_handle(&'a self, file: u32, handle: crate::names::question::Handle, query: HandleId, args: &[Value<'static>]) -> Value<'static> {
         LintWorld::query_handle(self, file, handle, query, args)
+    }
+
+    fn query_spec(&self, query: QueryId) -> Option<&'static QuerySpec> {
+        crate::semantic::queries::spec(query)
     }
 
     fn name_cache(&'a self, file: u32) -> Option<&'a std::sync::OnceLock<super::reads::Cached<Arc<Resolved>>>> {
@@ -2404,7 +2414,7 @@ mod tests {
     #[test]
     fn unknown_scope_conditions_cannot_publish_partial_names_or_catalogs() {
         thread_local! { static CALLS: Cell<u32> = const { Cell::new(0) }; }
-        static QUERY: crate::expr::queries::QueryFunction = crate::expr::queries::QueryFunction {
+        static QUERY: crate::semantic::queries::QueryFunction = crate::semantic::queries::QueryFunction {
             name: "unresolved_scope",
             arity: 1,
             call: |_, _, _| {
@@ -2432,7 +2442,7 @@ mod tests {
         for condition in &mut linter.compiled_mut().names.conditions {
             let original = condition.lowered.take().unwrap();
             condition.lowered.set(VExpr::Binary(crate::config::ast::BinOp::And,
-                Box::new(original), Box::new(VExpr::QueryCall(crate::expr::queries::test_query_id(&QUERY),
+                Box::new(original), Box::new(VExpr::QueryCall(crate::semantic::queries::test_query_id(&QUERY), None,
                     Box::new([VExpr::Builtin(crate::expr::Builtin::Node)]))))).unwrap();
         }
         let root = Path::new("/root/catalog-unknown");
@@ -2504,12 +2514,12 @@ mod tests {
         for shaped in [false, true] {
             let mut linter = linter("");
             let matcher = linter.grammar.matcher("paren").unwrap();
-            let query = crate::expr::queries::lookup_function("name_role_classes").unwrap();
+            let query = crate::semantic::queries::lookup_function("name_role_classes").unwrap();
             let attr = 1;
             linter.compiled_mut().attrs = crate::expr::Attributes::new(vec![
                 crate::expr::Attr {
                     name: "classes".into(),
-                    defs: vec![(matcher, crate::expr::CExpr::QueryCall(query, vec![
+                    defs: vec![(matcher, crate::expr::CExpr::QueryCall(query, None, vec![
                         crate::expr::CExpr::Builtin(crate::expr::Builtin::Node), crate::expr::CExpr::Const(Value::from("declaration")),
                     ]).into(), 1)],
                 },
@@ -2539,7 +2549,7 @@ mod tests {
     #[test]
     fn incomplete_root_attributes_are_computed_once() {
         thread_local! { static ATTEMPTS: Cell<u32> = const { Cell::new(0) }; }
-        static QUERY: crate::expr::queries::QueryFunction = crate::expr::queries::QueryFunction {
+        static QUERY: crate::semantic::queries::QueryFunction = crate::semantic::queries::QueryFunction {
             name: "unknowable",
             arity: 1,
             call: |_, _, _| ATTEMPTS.with(|attempts| {
@@ -2554,7 +2564,7 @@ mod tests {
             linter.compiled_mut().attrs = crate::expr::Attributes::new(vec![crate::expr::Attr {
                 name: "answer".into(),
                 defs: vec![(matcher, crate::expr::CExpr::Nullish(
-                    Box::new(crate::expr::CExpr::QueryCall(crate::expr::queries::test_query_id(&QUERY), vec![crate::expr::CExpr::Builtin(crate::expr::Builtin::Node)])),
+                    Box::new(crate::expr::CExpr::QueryCall(crate::semantic::queries::test_query_id(&QUERY), None, vec![crate::expr::CExpr::Builtin(crate::expr::Builtin::Node)])),
                     Box::new(crate::expr::CExpr::Const(Value::Bool(true))),
                 ).into(), 1)],
             }], &[], &linter.grammar);
@@ -2633,8 +2643,8 @@ mod tests {
                 assert_eq!(value.text(), "(leaf)");
             }
             let viewed = linter.names.vocabulary.trait_bit("viewed");
-            assert!(!files.0.query(file, node, &crate::names::Value::Path(vec![]), crate::expr::queries::query(crate::config::ast::Quantifier::Could), viewed));
-            assert_eq!(files.0.asking(&semantic, scoped, || Known::Yes(files.0.query(file, node, &crate::names::Value::Path(vec![]), crate::expr::queries::query(crate::config::ast::Quantifier::Could), viewed))), Known::Yes(true));
+            assert!(!files.0.query(file, node, &crate::names::Value::Path(vec![]), crate::config::ast::Quantifier::Could, viewed));
+            assert_eq!(files.0.asking(&semantic, scoped, || Known::Yes(files.0.query(file, node, &crate::names::Value::Path(vec![]), crate::config::ast::Quantifier::Could, viewed))), Known::Yes(true));
             assert_eq!(files.0.asking(&semantic, scoped, || files.0.semantic_query(file, node, Uncertainty::Strict, |_, nested| Known::Yes(nested))), Known::Yes(scoped));
             let other = tree.root;
             assert_eq!(files.0.asking(&semantic, scoped, || files.0.semantic_query(file, other, Uncertainty::Strict, |_, nested| Known::Yes(nested))), Known::Yes(Leaf { target: Target::Node(NodeRef { file, node: other }), frame }));
@@ -2942,7 +2952,7 @@ mod tests {
     fn module_lookup_loads_a_unit_and_missing_candidates_invalidate_on_creation() {
         use crate::names::modules::compile::{Conditional, Profile};
         use crate::names::modules::resolution::{Search, Settings};
-        static CREATED: crate::expr::queries::QueryFunction = crate::expr::queries::QueryFunction {
+        static CREATED: crate::semantic::queries::QueryFunction = crate::semantic::queries::QueryFunction {
             name: "created",
             arity: 1,
             call: |semantic, at, _| match semantic.world.module(at, "./created-unit", semantic) {
@@ -2959,7 +2969,7 @@ mod tests {
         } });
         compiled.attrs = crate::expr::Attributes::new(vec![
             crate::expr::Attr { name: "created".into(), defs: vec![(matcher, crate::expr::CExpr::QueryCall(
-                crate::expr::queries::test_query_id(&CREATED), vec![crate::expr::CExpr::Builtin(crate::expr::Builtin::Node)],
+                crate::semantic::queries::test_query_id(&CREATED), None, vec![crate::expr::CExpr::Builtin(crate::expr::Builtin::Node)],
             ).into(), 1)] },
             crate::expr::Attr { name: "alias".into(), defs: vec![(matcher, crate::expr::CExpr::Attr(0).into(), 2)] },
         ], &[], &compiled.grammar);

@@ -26,8 +26,9 @@ Rust linter; rules in `.dx` (docs/advanced.md). Binary `dxlint`.
 - `crates/dx-ir`: compiled expression and VM value types (`CExpr`, `VExpr`, `Value`, `V`, record cells, builtin/function metadata); no evaluation
 - `crates/dx-config` (`config`): lexer, token stream (imports + macros splice tokens), parser
 - `crates/dx-grammar` (`grammar`): layers per language, `parse.rs` builds trees; the engine hands it builtin names and constant folding (`BuildEnv`)
-- `crates/dx-names` (`names`): name tables, `Names::build`, per-file resolution, the semantic evaluator (values/calls/effects/narrowing/modules)
-- `crates/dx-runtime` (`expr`, `vm`, `language_options`): rule expressions (`expr/`; functions registry in `expr/functions.rs`), the lowered VM (`vm/`) and file-scoped language settings; reaches the lint world through `expr::TypeWorld`
+- `crates/dx-names` (`names`): name tables, `Names::build`, per-file resolution, and the data those tables and recipes carry
+- `crates/dx-semantic` (`semantic`): the semantic evaluator (values/calls/effects/narrowing/modules) and the query functions the VM dispatches to (`semantic::queries`); a sibling of `dx-runtime`, which reaches it only by query id
+- `crates/dx-runtime` (`expr`, `vm`, `language_options`): rule expressions (`expr/`; functions registry in `expr/functions.rs`), the lowered VM (`vm/`) and file-scoped language settings; reaches the lint world through `expr::TypeWorld` and the semantic layer only through `dx_ir::expr::{QueryId, QuerySpec}`
 - `src/engine`: linter (`Compiled` config shared by equal configs + per-project state), fixes, suppressions, `.dxcache` (`cache.rs`), symbol index; end-to-end tests in `engine/tests.rs`
 - `crates/dx-grammar/src/frontend.rs`: the `Frontend` trait, the engine's only view of a front end (kinds/fields, parse, per-file tokens and names)
 - `crates/dx-grammar/src/syntax`: declared parsers (`parser x in lang`, `extend parser`): compile to a program, run by `run/descend.rs` (valid input) and `run/execute.rs` (diagnosing, deep nesting); `frontend.rs` makes one a language's front end (`native x`). `std/ts/grammar.dx` is TypeScript; parse bench `scratch/tools/zbench.ps1`

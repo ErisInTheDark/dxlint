@@ -3,9 +3,9 @@
 //! handle names one interned value of the linted file's question context;
 //! foreign or stale handles read as unknown.
 
-use crate::expr::Value;
+use dx_ir::value::Value;
 use crate::names::question::{Handle, Known, NodeValue};
-use crate::names::semantic::Semantic;
+use crate::semantic::Semantic;
 use crate::names::values::Key;
 
 use super::values::{lookup_in, member_key, member_parameters_in, project, project_path, project_traits, project_with, source_value, trait_ids};
@@ -114,8 +114,12 @@ static HANDLES: &[HandleFunction] = &[
     } },
 ];
 
-pub fn handle_function(name: &str) -> Option<&'static HandleFunction> {
-    HANDLES.iter().find(|function| function.name == name)
+pub fn handle_id(name: &str) -> Option<crate::queries::HandleId> {
+    HANDLES.iter().position(|function| function.name == name).map(|index| crate::queries::HandleId(index as u16))
+}
+
+pub fn handle_function(id: crate::queries::HandleId) -> Option<&'static HandleFunction> {
+    HANDLES.get(id.0 as usize)
 }
 
 /// The handle a rule value carries, if it is one.
@@ -714,7 +718,7 @@ fn headers_of(semantic: &Semantic<'_>, value: NodeValue, kind: crate::names::cal
     Known::Yes(Value::list(alternatives))
 }
 
-/// See [`crate::names::values::Values::own_member_free`].
+/// See [`crate::values::Values::own_member_free`].
 fn own_member_free(semantic: &Semantic<'_>, at: crate::names::question::Leaf) -> Known<bool> {
     semantic.values().own_member_free(at)
 }

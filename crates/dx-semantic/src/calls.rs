@@ -1,0 +1,412 @@
+//! Calls and signatures: overloads, `expected`, call-site inference.
+
+use super::memo::Memo;
+use super::question::{Known, Leaf, NodeRef, NodeValue, Target};
+use super::semantic::Semantic;
+use super::values::Values;
+use super::{KindNames, Value};
+
+pub use dx_names::calls::compile;
+pub use dx_names::calls::{Conditional, Expected, Invoke, InvokeKind, Path, Signature};
+
+mod accepts;
+mod headers;
+mod expected;
+mod infer;
+mod result;
+mod select;
+mod signature_accepts;
+
+#[cfg(test)]
+mod tests;
+
+fn kind<'a>(leaf: Leaf, values: &'a Values<'_>) -> Option<&'a KindNames> {
+    let node = node(leaf, values)?;
+    let node = values.world.tree(node.file)?.nodes.get(node.node as usize)?;
+    values.tables.kinds.get(node.matcher as usize)
+}
+
+/// Whether a parameter or argument site is a rest/spread: its shape, which
+/// an open (`any`) value does not leave undecided.
+fn rest(at: Leaf, values: &Values<'_>) -> Known<bool> {
+    values.tables.vocabulary.traits.iter().position(|name| name == "rest")
+        .map_or(Known::Yes(false), |id| values.declared_fits(at, id as u16))
+}
+
+fn node(leaf: Leaf, values: &Values<'_>) -> Option<NodeRef> {
+    let Known::Yes(leaf) = values.semantic.leaf(leaf) else { return None };
+    Some(match leaf.target {
+        Target::Node(node) => node,
+        Target::Scope(scope) => {
+            let info = values.world.names(scope.file)?.scopes.get(scope.scope as usize)?;
+            NodeRef { file: scope.file, node: info.node }
+        }
+        _ => return None,
+    })
+}
+
+fn signature<'a>(header: Header, values: &'a Values<'_>) -> Option<(Leaf, &'a Signature)> {
+    let Known::Yes(site) = values.semantic.leaf(header.site) else { return None };
+    Some((site, &kind(site, values)?.calls.signatures.get(header.signature as usize)?.item))
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Match {
+    pub accepted: bool,
+    pub arguments: Vec<Option<NodeValue>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Header {
+    pub site: Leaf,
+    pub signature: u32,
+    /// Reached through `signatures .. returns ..` of this owner and its
+    /// source index: the owner's result replaces the signature's own.
+    pub delegate: Option<(Leaf, u32)>,
+}
+
+#[derive(Clone, Debug)]
+pub struct Chosen {
+    pub header: Header,
+    /// Formal leaves use the selected frame; actual leaves keep caller frames.
+    pub mapping: Vec<(Leaf, Vec<Leaf>)>,
+}
+
+#[derive(Clone, Debug)]
+pub struct Selection {
+    pub choices: Vec<Chosen>,
+    pub uncertain: bool,
+}
+
+/// How many questions' worth of steps one call's candidate selection may
+/// spend: once spent, the selection serves every later question, so it gets
+/// more than any one of them (a single question's worth lost answers
+/// several questions in a row used to finish together).
+const SELECTION_QUESTIONS: u32 = 4;
+
+/// `DXLINT_ATTACHED_SELECTION=1`: candidate selection spends the asking
+/// question's budget, as before (A/B ruler).
+fn attached_selection() -> bool {
+    static ATTACHED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ATTACHED.get_or_init(|| std::env::var_os("DXLINT_ATTACHED_SELECTION").is_some())
+}
+
+/// A value question's answer: `Yes(None)` when there is none to ask about.
+type ValueAnswer = Known<Option<NodeValue>>;
+type HeaderAnswer = Known<Vec<Vec<Header>>>;
+
+#[derive(Default)]
+pub(crate) struct State {
+    pub(super) acceptance: Memo<(NodeValue, NodeValue), Known<bool>>,
+    /// Comparisons in progress, outermost first, without incidental frames
+    /// ([`Calls::accepts`]).
+    accepting: std::cell::RefCell<Vec<(NodeValue, NodeValue)>>,
+    /// The outermost in-progress comparison assumed to hold so far.
+    assumed: std::cell::Cell<Option<usize>>,
+    headers: Memo<(NodeValue, InvokeKind), HeaderAnswer>,
+    candidates: Memo<Leaf, select::Answer>,
+    refined: Memo<Leaf, select::Answer>,
+    values: Memo<(Leaf, ValueQuestion), ValueAnswer>,
+}
+
+impl State {
+    /// Drops what an edit of the linted file may change.
+    pub(crate) fn forget(&self, dirty: &dx_tree::footprint::Dirty) {
+        self.acceptance.forget(dirty);
+        self.headers.forget(dirty);
+        self.candidates.forget(dirty);
+        self.refined.forget(dirty);
+        self.values.forget(dirty);
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum ValueQuestion { Result, Expected }
+
+#[derive(Clone, Copy)]
+pub enum ProfileQuery { Headers, Result, Select, Expected, Accept, Match, Infer }
+
+impl ProfileQuery {
+    pub const ALL: &[Self] = &[
+        Self::Headers, Self::Result, Self::Select, Self::Expected, Self::Accept, Self::Match, Self::Infer,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Headers => "calls.headers",
+            Self::Result => "calls.result",
+            Self::Select => "calls.select",
+            Self::Expected => "calls.expected",
+            Self::Accept => "calls.accept",
+            Self::Match => "calls.match",
+            Self::Infer => "calls.infer",
+        }
+    }
+}
+
+pub struct Calls<'a> {
+    pub(crate) semantic: &'a Semantic<'a>,
+}
+
+impl<'a> std::ops::Deref for Calls<'a> {
+    type Target = Semantic<'a>;
+
+    fn deref(&self) -> &Self::Target {
+        self.semantic
+    }
+}
+
+impl Calls<'_> {
+    fn profile<T>(&self, query: ProfileQuery, run: impl FnOnce() -> T) -> T {
+        match self.world.profile() {
+            Some(profile) => profile.time_semantic_query(query.name(), run),
+            None => run(),
+        }
+    }
+
+    /// One overload set per value alternative; intersections combine headers.
+    pub fn headers(&self, value: &NodeValue, kind: InvokeKind) -> Known<Vec<Vec<Header>>> {
+        self.profile(ProfileQuery::Headers, || {
+            let key = (value.clone(), kind);
+            let memo = &self.semantic.calls.headers;
+            let values = self.semantic.values();
+            values.memoized_with(memo, key, || self.question.budget.nest(), || headers::headers(value, kind, &values))
+        })
+    }
+
+    pub fn selection(&self, call: Leaf) -> Known<Option<Selection>> {
+        let Known::Yes(call) = self.semantic.leaf(call) else { return Known::Unknown };
+        select::selection(call, &self.semantic.values())
+    }
+
+    /// The first inference pass's selection, which types the arguments
+    /// ([`select::refined`]).
+    fn context(&self, call: Leaf) -> Known<Option<Selection>> {
+        let Known::Yes(call) = self.semantic.leaf(call) else { return Known::Unknown };
+        select::context(call, &self.semantic.values())
+    }
+
+    /// Whether a signature's parameter gathers the remaining arguments.
+    pub fn is_rest(&self, parameter: Leaf) -> Known<bool> {
+        rest(parameter, &self.semantic.values())
+    }
+
+    pub fn argument_sites(&self, formal_binding: Leaf) -> Known<Option<Vec<Leaf>>> {
+        let Some(_nest) = self.question.budget.nest() else { return Known::Unknown };
+        let Known::Yes(formal_binding) = self.semantic.leaf(formal_binding) else { return Known::Unknown };
+        select::argument_sites(formal_binding, &self.semantic.values())
+    }
+
+    fn candidates(&self, call: Leaf) -> select::Answer {
+        self.profile(ProfileQuery::Select, || {
+            let Known::Yes(call) = self.semantic.leaf(call) else { return Known::Unknown };
+            let memo = &self.semantic.calls.candidates;
+            let values = self.semantic.values();
+            // Selecting a call's candidates is sized by the call, not its
+            // asker: several questions' worth.
+            values.memoized_with(memo, call, || self.question.budget.step().then(|| self.question.budget.nest()).flatten(),
+                || if attached_selection() { select::candidates(call, &values) } else {
+                    let answer = self.question.budget.sized(SELECTION_QUESTIONS.saturating_mul(super::question::Budget::per_question()), || select::candidates(call, &values));
+                    #[cfg(feature = "work")]
+                    dx_core::work::fact_steps("selection", self.question.budget.last_spent(), || values.census_leaf(call).2);
+                    answer.unwrap_or(Known::Unknown)
+                })
+        })
+    }
+
+    /// Whether the call's candidates are being inferred right now (asking
+    /// for them would be a cycle).
+    fn selecting(&self, call: Leaf) -> bool {
+        let Known::Yes(call) = self.semantic.leaf(call) else { return false };
+        self.semantic.values().computing(&self.semantic.calls.candidates, &call)
+    }
+
+    fn refined(&self, call: Leaf) -> select::Answer {
+        self.profile(ProfileQuery::Select, || {
+            let Known::Yes(call) = self.semantic.leaf(call) else { return Known::Unknown };
+            let memo = &self.semantic.calls.refined;
+            let values = self.semantic.values();
+            values.memoized_with(memo, call, || self.question.budget.step().then(|| self.question.budget.nest()).flatten(),
+                || select::refined(call, &values))
+        })
+    }
+
+    /// Whether every value `actual` may be is one `expected` allows,
+    /// memoised per question. Relations are coinductive (recursive types
+    /// like `class C { next: C }`): a comparison met again while in
+    /// progress is assumed to hold, and answers resting on an outer
+    /// comparison's assumption are kept only once that one is decided.
+    pub fn accepts(&self, expected: &NodeValue, actual: &NodeValue) -> Known<bool> {
+        self.profile(ProfileQuery::Accept, || {
+            let state = &self.semantic.calls;
+            let key = (expected.clone(), actual.clone());
+            // Recursion through members rebinds frames each round; frames of
+            // non-generic declarations bind nothing, so the comparison is
+            // recognised without them. Generic instantiations keep their
+            // frames (`Box<Box<number>>` vs `Box<Box<string>>` is compared).
+            let unbound = (self.without_incidental_frames(expected, false), self.without_incidental_frames(actual, false));
+            let assumed = state.accepting.borrow().iter().position(|pending| *pending == unbound);
+            if let Some(depth) = assumed {
+                state.assumed.set(Some(state.assumed.get().map_or(depth, |outer| outer.min(depth))));
+                return Known::Yes(true);
+            }
+            let tag = super::values::fact_tag(&state.acceptance, &key);
+            if let Some(known) = state.acceptance.get(&key) {
+                self.semantic.values().read_kept(tag);
+                return known;
+            }
+            let Some(_nest) = self.question.budget.nest() else { return Known::Unknown };
+            #[cfg(feature = "work")]
+            let _work = dx_core::work::enter("accepts", || self.semantic.values().census_values(expected, actual));
+            // The same value always accepts itself, whatever its parts.
+            if expected == actual && *expected != NodeValue::Unknown && self.question.budget.step() { return Known::Yes(true) }
+            let depth = state.accepting.borrow().len();
+            state.accepting.borrow_mut().push(unbound);
+            let outer = state.assumed.replace(None);
+            let values = self.semantic.values();
+            let mark = values.cycle_mark();
+            // The outermost comparison is the fact. Comparisons it nests in
+            // are part of its coinductive search: on its allowance, not a
+            // fresh one each (that multiplied work with every level).
+            let mut unpaid = false;
+            let reading = dx_tree::footprint::begin();
+            let answer = if depth == 0 {
+                values.fact(tag, super::question::Budget::per_question(), || values.flag_across_files(
+                    super::question::FactKey::Accepts(expected.clone(), actual.clone()), || accepts::accepts(expected, actual, &values)))
+                    .unwrap_or_else(|cut| {
+                        unpaid = cut == super::question::Cut::Unpaid;
+                        Known::Unknown
+                    })
+            } else {
+                accepts::accepts(expected, actual, &values)
+            };
+            let read = dx_tree::footprint::end(reading);
+            state.accepting.borrow_mut().pop();
+            let rests_on = state.assumed.get().filter(|&at| at < depth);
+            state.assumed.set(match (outer, rests_on) {
+                (Some(outer), Some(inner)) => Some(outer.min(inner)),
+                (outer, inner) => outer.or(inner),
+            });
+            // A nested comparison left unknown may only have shared out its
+            // outer one's allowance: it is decided again when asked alone.
+            let provisional = answer == Known::Yes(true) && rests_on.is_some()
+                || answer == Known::Unknown && (unpaid || depth > 0 || values.cycled_since(mark));
+            if !provisional {
+                state.acceptance.insert_read(key, answer, read);
+            }
+            answer
+        })
+    }
+
+    /// `value` with the frames of non-generic declarations dropped: they
+    /// bind no arguments, so only their identity differs between rounds.
+    /// `views`: a frame selecting view classes keeps them, re-rooted (a value
+    /// that must keep reading the same view, unlike comparison keys).
+    pub fn without_incidental_frames(&self, value: &NodeValue, views: bool) -> NodeValue {
+        let NodeValue::Alternatives(rows) = value else { return value.clone() };
+        // Binding unless this frame and every frame it reads through (its
+        // parents, its reference's frame) belongs to a declaration with no
+        // type parameters and binds no evaluated arguments: a non-generic
+        // class inside a generic function still sees the function's.
+        let owner_generic = |owner: super::question::NodeRef| {
+            let Some(tree) = self.semantic.world.tree(owner.file) else { return true };
+            let Some(node) = tree.nodes.get(owner.node as usize) else { return true };
+            let Some(kind) = self.semantic.tables.kinds.get(node.matcher as usize) else { return true };
+            kind.generics.iter().any(|(path, _)| match path.as_slice() {
+                [label] => tree.children(owner.node).iter().any(|edge| edge.label == *label),
+                _ => true,
+            })
+        };
+        let generic = |start| {
+            let mut pending = vec![start];
+            let mut seen = Vec::new();
+            while let Some(id) = pending.pop() {
+                if id == super::question::FrameId::ROOT || seen.contains(&id) { continue }
+                if seen.len() >= 32 { return true }
+                seen.push(id);
+                let Some(frame) = self.question.get(id) else { return true };
+                if frame.args.is_some_and(|args| !self.question.binds_nothing(args)) || owner_generic(frame.owner) { return true }
+                pending.push(frame.parent);
+                if let Some(through) = frame.through { pending.push(through.frame) }
+            }
+            false
+        };
+        let rooted = |frame| match self.question.get(frame) {
+            Some(frame) if views && frame.classes != 0 => self.question.bind_definition(super::question::FrameId::ROOT, frame.owner, None, None, frame.classes),
+            _ => super::question::FrameId::ROOT,
+        };
+        NodeValue::Alternatives(rows.iter().map(|row| row.iter().map(|&leaf| {
+            if leaf.frame == super::question::FrameId::ROOT || generic(leaf.frame) { leaf } else { Leaf { frame: rooted(leaf.frame), ..leaf } }
+        }).collect()).collect())
+    }
+
+    pub fn match_value(&self, at: Leaf, pattern: &Value, actual: &NodeValue, slots: &[Leaf]) -> Known<Match> {
+        self.profile(ProfileQuery::Match, || {
+            let values = self.semantic.values();
+            let Known::Yes(mut run) = accepts::Run::new(&values, slots, &[]) else { return Known::Unknown };
+            run.match_value(at, pattern, actual, slots)
+        })
+    }
+
+    pub fn constrained_arguments(&self, owner: Leaf, through: Option<Leaf>, formals: &[Leaf], arguments: Vec<Option<NodeValue>>, locked: &[bool]) -> Known<Option<Vec<Option<NodeValue>>>> {
+        infer::constrained_arguments(owner, through, formals, arguments, locked, &Values { semantic: self.semantic })
+    }
+
+    pub fn result(&self, at: Leaf) -> Known<Option<NodeValue>> {
+        self.profile(ProfileQuery::Result, || self.value(at, ValueQuestion::Result))
+    }
+
+    pub fn expected(&self, at: Leaf) -> Known<Option<NodeValue>> {
+        self.profile(ProfileQuery::Expected, || self.value(at, ValueQuestion::Expected))
+    }
+
+    pub fn parameters(&self, header: Header) -> Known<Vec<Leaf>> {
+        let Some(_nest) = self.question.budget.nest() else { return Known::Unknown };
+        let values = self.semantic.values();
+        let Some((site, signature)) = signature(header, &values) else { return Known::Unknown };
+        values.follow(site, &signature.parameters)
+    }
+
+    pub fn receiver(&self, header: Header) -> Known<Option<Leaf>> {
+        let Some(_nest) = self.question.budget.nest() else { return Known::Unknown };
+        let values = self.semantic.values();
+        let Some((site, signature)) = signature(header, &values) else { return Known::Unknown };
+        let Some(path) = &signature.receiver else { return Known::Unknown };
+        match values.follow(site, path) {
+            Known::Yes(receivers) if receivers.is_empty() => Known::Yes(None),
+            Known::Yes(receivers) if receivers.len() == 1 => Known::Yes(Some(receivers[0])),
+            _ => Known::Unknown,
+        }
+    }
+
+    pub fn header_result(&self, header: Header) -> Known<NodeValue> {
+        self.profile(ProfileQuery::Result, || {
+            let Some(_nest) = self.question.budget.nest() else { return Known::Unknown };
+            result::header_result(header, &self.semantic.values())
+        })
+    }
+
+    pub fn header_result_sites(&self, header: Header) -> Known<Vec<Leaf>> {
+        let Some(_nest) = self.question.budget.nest() else { return Known::Unknown };
+        let values = self.semantic.values();
+        let Some((site, signature)) = signature(header, &values) else { return Known::Unknown };
+        values.sites(site, &signature.result)
+    }
+
+    pub fn inferred(&self, at: Leaf) -> Known<Option<NodeValue>> {
+        let Known::Yes(at) = self.semantic.leaf(at) else { return Known::Unknown };
+        self.semantic.values().bound_argument(at)
+    }
+
+    fn value(&self, at: Leaf, question: ValueQuestion) -> Known<Option<NodeValue>> {
+        let Known::Yes(at) = self.semantic.leaf(at) else { return Known::Unknown };
+        let key = (at, question);
+        let memo = &self.semantic.calls.values;
+        let values = self.semantic.values();
+        values.memoized_with(memo, key, || self.question.budget.step().then(|| self.question.budget.nest()).flatten(),
+            || match question {
+            ValueQuestion::Result => result::result(at, &self.semantic.values()),
+            ValueQuestion::Expected => expected::expected(at, &self.semantic.values()),
+        })
+    }
+}

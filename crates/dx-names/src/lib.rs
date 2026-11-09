@@ -9,14 +9,9 @@
 
 pub mod calls;
 pub mod effects;
-pub(crate) mod memo;
-mod name_queries;
 pub mod modules;
-pub mod narrowing;
 pub mod question;
-pub mod semantic;
 pub mod values;
-pub use name_queries::{ClassKind, Kept, Memo};
 
 mod build;
 mod resolve;
@@ -169,8 +164,8 @@ pub struct Condition {
 
 /// An expression one name item evaluates on its layer's nodes (a module
 /// specifier, a literal's identity): compiled with that layer's fields and
-/// lowered to the VM like a [`Condition`]; read through
-/// [`question::World::operand`].
+/// lowered to the VM like a [`Condition`]; read through the semantic
+/// `World::operand`.
 pub struct Operand {
     /// Source item or resolution mode.
     pub of: dx_config::ast::OperandOf,
@@ -295,20 +290,10 @@ use dx_config::error::ConfigError;
 #[cfg(test)]
 use dx_grammar::Grammar;
 
-#[cfg(test)]
-fn no_builtin(_: &str) -> bool {
-    false
-}
-
-#[cfg(test)]
-fn no_constant(_: &Grammar, _: &dx_config::ast::Expr, _: &mut Vec<ConfigError>) -> Result<dx_ir::value::Value<'static>, Option<String>> {
-    Err(Some("no constant evaluator".into()))
-}
-
-/// Builds plain names in tests: no builtin names and no constants.
+/// Builds plain names in tests: no builtin names, no constants, no queries.
 #[cfg(test)]
 pub(crate) fn plain_env() -> dx_grammar::BuildEnv<'static> {
-    dx_grammar::BuildEnv { is_builtin: &no_builtin, constant: &no_constant }
+    dx_grammar::BuildEnv::plain()
 }
 
 /// Builds a grammar and its names in tests, with no builtin names and no

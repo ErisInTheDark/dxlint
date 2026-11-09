@@ -62,8 +62,8 @@ fn census_label(e: &VExpr, h: &impl Host, depth: u32) -> String {
             VExpr::Attr(a) => format!(".{}", h.census_attr(*a)),
             VExpr::ParentAttr(a) => format!("parent.{}", h.census_attr(*a)),
             VExpr::Call(called, list) => format!("{}({})", called.name, args(list)),
-            VExpr::QueryCall(id, list) => format!("?{}({})", crate::expr::queries::query_function(*id).name, args(list)),
-            VExpr::Trait(subject, _, quantifier, _) => format!("?trait {} {}", crate::expr::queries::query(*quantifier).name, of(subject)),
+            VExpr::QueryCall(id, _, list) => format!("?{}({})", h.query_spec(*id).map_or("?", |spec| spec.name), args(list)),
+            VExpr::Trait(subject, _, quantifier, _) => format!("?trait {quantifier:?} {}", of(subject)),
             VExpr::Token(read, ..) => format!("Token.{read:?}"),
             VExpr::Fact { fact, .. } => format!("fact {}", crate::expr::facts::FACTS[*fact].name),
             VExpr::Builtin(builtin) => format!("Builtin.{builtin:?}"),
@@ -420,7 +420,7 @@ fn lower_in<'a>(e: &'a CExpr, g: &Scope<'a, '_>, args: &[Lowered], bound: u16) -
             VExpr::Trait(boxed(subject)?, path, *quantifier, *mask)
         }
         CExpr::Semantic(..) => return Err(e),
-        CExpr::QueryCall(id, call_args) => VExpr::QueryCall(*id, all(call_args)),
+        CExpr::QueryCall(id, handle, call_args) => VExpr::QueryCall(*id, *handle, all(call_args)),
         CExpr::Test(value, _) | CExpr::TestDfa(value, _) => VExpr::Pattern(boxed(value)?, Box::new(e.clone())),
         CExpr::Ancestor(matcher, field) => VExpr::Ancestor(*matcher, *field),
         CExpr::Binary(op @ (BinOp::Eq | BinOp::Ne), a, b) if matches!((&**a, &**b), (CExpr::Field(_), CExpr::Const(Value::Null)) | (CExpr::Const(Value::Null), CExpr::Field(_))) => {
@@ -576,9 +576,11 @@ pub trait Host {
     fn file_vm(&self) -> Option<&FileVm> { None }
     /// A built-in variable on a node.
     fn builtin(&self, _node: u32, _builtin: Builtin) -> Option<Value<'_>> { None }
-    fn query(&self, _node: u32, _subject: &crate::names::Value, _query: &crate::expr::queries::Query, _mask: u64) -> Option<bool> { None }
-    fn query_function(&self, _node: u32, _query: &crate::expr::queries::QueryFunction, _args: &[Value<'static>]) -> Option<Value<'static>> { None }
-    fn query_handle(&self, _handle: crate::names::question::Handle, _query: &crate::expr::queries::HandleFunction, _args: &[Value<'static>]) -> Option<Value<'static>> { None }
+    fn query(&self, _node: u32, _subject: &crate::names::Value, _quantifier: dx_ir::ops::Quantifier, _mask: u64) -> Option<bool> { None }
+    fn query_function(&self, _node: u32, _query: dx_ir::expr::QueryId, _args: &[Value<'static>]) -> Option<Value<'static>> { None }
+    fn query_handle(&self, _handle: crate::names::question::Handle, _query: dx_ir::expr::HandleId, _args: &[Value<'static>]) -> Option<Value<'static>> { None }
+    /// What a query function is, for census labels.
+    fn query_spec(&self, _query: dx_ir::expr::QueryId) -> Option<&'static dx_ir::expr::QuerySpec> { None }
     fn option(&self, _index: usize) -> Option<Value<'_>> { None }
     fn debug(&self, _node: u32, _label: &str, _value: &Value) {}
     /// `position(offset)`.
@@ -599,6 +601,15 @@ pub trait Host {
     fn pattern(&self, _test: &CExpr, _text: &str) -> Option<bool> { None }
     /// `--profile` counters, when collected.
     fn profile(&self) -> Option<&dx_core::profile::Profile> { None }
+}
+
+/// The handle a rule value carries, if it is one: the opaque record the
+/// semantic layer's handle form reads a value subject through.
+fn handle_of(value: &Value<'_>) -> Option<crate::names::question::Handle> {
+    let Value::Record(fields) = value else { return None };
+    let [(key, Value::Num(number))] = &fields[..] else { return None };
+    if &**key != "value_handle" { return None }
+    crate::names::question::Handle::from_number(*number)
 }
 
 /// `DXLINT_VM_STATS`: count delegated runs per site.
@@ -1547,11 +1558,10 @@ fn ev_rare<H: Host>(h: &Runtime<'_, H>, node: u32, e: &VExpr, f: &mut Vec<V>) ->
             h.host.local(node, *local)?
         }
         VExpr::Trait(subject, path, quantifier, mask) => match eval!(node, subject)? {
-            V::Node(target) => V::Bool(h.query(target, path, crate::expr::queries::query(*quantifier), *mask)?),
+            V::Node(target) => V::Bool(h.query(target, path, *quantifier, *mask)?),
             _ => V::Null,
         },
-        VExpr::QueryCall(id, items) => {
-            let query = crate::expr::queries::query_function(*id);
+        VExpr::QueryCall(id, handle, items) => {
             let Some((subject, items)) = items.split_first() else { return Some(V::Null) };
             let subject = eval!(node, subject)?;
             let mut args = Vec::with_capacity(items.len());
@@ -1559,11 +1569,11 @@ fn ev_rare<H: Host>(h: &Runtime<'_, H>, node: u32, e: &VExpr, f: &mut Vec<V>) ->
                 args.push(h.unpack(eval!(node, item)?).into_owned());
             }
             let value = match subject {
-                V::Node(target) => h.query_function(target, query, &args)?,
+                V::Node(target) => h.query_function(target, *id, &args)?,
                 other => {
-                    let Some(function) = crate::expr::queries::handle_function(query.name) else { return Some(V::Null) };
-                    let Some(handle) = crate::expr::queries::handle_of(&h.unpack(other)) else { return Some(V::Null) };
-                    h.query_handle(handle, function, &args)?
+                    let Some(handle_id) = handle else { return Some(V::Null) };
+                    let Some(handle) = handle_of(&h.unpack(other)) else { return Some(V::Null) };
+                    h.query_handle(handle, *handle_id, &args)?
                 }
             };
             match h.file_vm() {

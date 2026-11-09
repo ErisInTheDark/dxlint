@@ -1,7 +1,7 @@
 use crate::names::question::{Known, Leaf};
-use crate::names::semantic::Semantic;
+use crate::semantic::Semantic;
 use crate::config::ast::Quantifier;
-use crate::expr::Value;
+use dx_ir::value::Value;
 
 mod flow;
 mod values;
@@ -11,15 +11,8 @@ mod names;
 mod handles;
 mod commands;
 
-pub use dx_ir::expr::QueryId;
-pub use handles::{handle_function, handle_of, HandleFunction};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Uncertainty {
-    Strict,
-    /// The result propagates unknowns or represents them in its schema.
-    Explicit,
-}
+pub use dx_ir::expr::{HandleId, QueryId, QuerySpec, Uncertainty};
+pub use handles::{handle_function, handle_id, handle_of, HandleFunction};
 
 #[derive(Debug)]
 pub struct Query {
@@ -57,6 +50,27 @@ impl QueryFunction {
         const EXPLICIT: &[&str] = &["call_signatures", "call_parameters", "call_results", "member_call_parameters", "value_constituents", "value_accepts", "value_parts", "value_alternatives", "value_union", "value_expected_handle", "value_children", "value_signatures", "value_constructors", "call_selection"];
         if EXPLICIT.contains(&self.name) { Uncertainty::Explicit } else { Uncertainty::Strict }
     }
+}
+
+/// What the runtime lowers query calls against: every function in id order,
+/// with the handle form it reads a value subject through.
+pub fn specs() -> &'static [QuerySpec] {
+    static SPECS: std::sync::OnceLock<Vec<QuerySpec>> = std::sync::OnceLock::new();
+    SPECS.get_or_init(|| functions().iter().map(|function| QuerySpec {
+        name: function.name,
+        arity: function.arity,
+        uncertainty: function.uncertainty(),
+        handle: handle_id(function.name),
+    }).collect())
+}
+
+pub fn spec(id: QueryId) -> Option<&'static QuerySpec> {
+    specs().get(id.0 as usize)
+}
+
+/// Whether `name` is a query function, so a user `fn` may not take it.
+pub fn is_query(name: &str) -> bool {
+    lookup_function(name).is_some()
 }
 
 pub fn lookup_function(name: &str) -> Option<QueryId> {

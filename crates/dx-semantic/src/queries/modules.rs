@@ -1,7 +1,7 @@
-use crate::expr::Value;
+use dx_ir::value::Value;
 use crate::names::question::{Known, Leaf, Target};
-use crate::names::semantic::Semantic;
-use crate::names::modules::queries::ClassAnswers;
+use crate::semantic::Semantic;
+use crate::modules::queries::ClassAnswers;
 
 use super::QueryFunction;
 

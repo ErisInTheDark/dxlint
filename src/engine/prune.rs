@@ -25,7 +25,7 @@ pub(super) type Names<'a> = FxHashSet<&'a str>;
 /// Runtime compilation keeps only helpers reachable from enabled rules
 /// and explicit grammar items. Tooling still uses [`prune`].
 pub fn prune_for_lint(config: &mut Config, errors: &mut Vec<crate::config::error::ConfigError>) {
-    crate::grammar::function_declarations(config, errors, &crate::expr::is_builtin_call);
+    crate::grammar::function_declarations(config, errors, &crate::expr::is_builtin_call, crate::semantic::queries::specs());
     prune_config(config, true);
 }
 

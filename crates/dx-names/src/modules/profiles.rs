@@ -278,7 +278,7 @@ mod tests {
     }
     fn no_builtin(_: &str) -> bool { false }
     fn env() -> BuildEnv<'static> {
-        BuildEnv { is_builtin: &no_builtin, constant: &literal }
+        BuildEnv { is_builtin: &no_builtin, constant: &literal, queries: &[] }
     }
 
     #[test]

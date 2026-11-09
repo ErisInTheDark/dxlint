@@ -1,0 +1,21 @@
+[package]
+name = "dx-semantic"
+version = "0.1.0"
+edition = "2021"
+description = "Semantic evaluation over the names layer and the query functions the VM dispatches to"
+license = "MIT"
+
+[dependencies]
+dx-config = { path = "../dx-config" }
+dx-core = { path = "../dx-core" }
+dx-tree = { path = "../dx-tree" }
+dx-ir = { path = "../dx-ir" }
+dx-grammar = { path = "../dx-grammar" }
+dx-names = { path = "../dx-names" }
+memchr = "2.7"
+
+[dev-dependencies]
+dx-pattern = { path = "../dx-pattern" }
+
+[features]
+work = ["dx-core/work", "dx-names/work"]

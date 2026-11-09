@@ -228,6 +228,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "dx-semantic"
+version = "0.1.0"
+dependencies = [
+ "dx-config",
+ "dx-core",
+ "dx-grammar",
+ "dx-ir",
+ "dx-names",
+ "dx-pattern",
+ "dx-tree",
+ "memchr",
+]
+
+[[package]]
 name = "dx-tree"
 version = "0.1.0"
 dependencies = [
@@ -250,6 +264,7 @@ dependencies = [
  "dx-names",
  "dx-pattern",
  "dx-runtime",
+ "dx-semantic",
  "dx-tree",
  "globset",
  "ignore",

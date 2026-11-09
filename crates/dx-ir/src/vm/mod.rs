@@ -7,7 +7,7 @@ pub use handle::{Handle, Region, CELL_OFFSET_MASK, SCRATCH_TEXT};
 pub use records::{decode, encode, stored, Cell, BUSY, GAVE_UP, UNSET};
 
 use crate::builtins::Builtin;
-use crate::expr::{CExpr, FactOf, IsTest, NodeSel, QueryId, TokenRead};
+use crate::expr::{CExpr, FactOf, HandleId, IsTest, NodeSel, QueryId, TokenRead};
 use crate::functions::Function;
 use crate::ops::{BinOp, Quantifier};
 use crate::semantic::Value as SemanticValue;
@@ -327,7 +327,7 @@ pub enum VExpr {
     /// `value is a, b.field, layer l, .lang`, every test form.
     IsTests(Box<VExpr>, Box<[IsTest]>),
     Trait(Box<VExpr>, SemanticValue, Quantifier, u64),
-    QueryCall(QueryId, Box<[VExpr]>),
+    QueryCall(QueryId, Option<HandleId>, Box<[VExpr]>),
     /// A pattern test (`x ~ pattern`): the [`CExpr::Test`] or
     /// [`CExpr::TestDfa`] node, its matcher shared.
     Pattern(Box<VExpr>, Box<CExpr>),

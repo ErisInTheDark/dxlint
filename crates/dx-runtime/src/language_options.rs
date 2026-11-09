@@ -27,7 +27,7 @@ pub struct LanguageOptions {
 }
 
 impl LanguageOptions {
-    pub fn compile(config: &Config, grammar: &Grammar, names: &Names, schemas: &Schemas, errors: &mut Vec<ConfigError>) -> Self {
+    pub fn compile(config: &Config, grammar: &Grammar, names: &Names, schemas: &Schemas, queries: &'static [dx_ir::expr::QuerySpec], errors: &mut Vec<ConfigError>) -> Self {
         let mut languages: Vec<Language> = grammar.langs.iter().map(|_| Language::default()).collect();
         let mut declarations: Vec<Vec<&OptionDef>> = grammar.langs.iter().map(|_| Vec::new()).collect();
         for block in &config.language_options {
@@ -65,7 +65,7 @@ impl LanguageOptions {
                     continue;
                 };
                 let owner = format!(".{}", block.language.text);
-                if let Some(value) = option_value(&owner, name, expression, &option.schema, grammar, names, schemas, errors) {
+                if let Some(value) = option_value(&owner, name, expression, &option.schema, grammar, names, schemas, queries, errors) {
                     values.push((name.text.clone(), value));
                 }
             }
@@ -103,6 +103,7 @@ pub fn option_value(
     grammar: &Grammar,
     names: &Names,
     schemas: &Schemas,
+    queries: &'static [dx_ir::expr::QuerySpec],
     errors: &mut Vec<ConfigError>,
 ) -> Option<Value<'static>> {
     // A bare word where enum members go is one, checked like a string:
@@ -118,7 +119,7 @@ pub fn option_value(
     let evaluated = match word {
         Some(word) => Ok(word),
         None => {
-            let compiled = Scope::constants(grammar).with_names(names).compile(value, errors)?;
+            let compiled = Scope::constants(grammar).with_names(names).with_queries(queries).compile(value, errors)?;
             Ctx::eval_static(&compiled, &[]).map(|v| v.into_owned())
         }
     };

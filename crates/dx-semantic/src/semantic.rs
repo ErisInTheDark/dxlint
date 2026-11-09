@@ -20,7 +20,7 @@ pub struct State {
     pub(crate) calls: super::calls::State,
     pub(crate) narrowing_places: super::narrowing::State,
     pub(crate) effects: Rc<super::effects::State>,
-    pub name_queries: Rc<super::Memo>,
+    pub name_queries: Rc<crate::name_queries::Memo>,
     pub(crate) modules: super::modules::queries::State,
     /// Semantic attributes read inside questions, by what their answer can
     /// depend on, and whether the answer read something unknown.

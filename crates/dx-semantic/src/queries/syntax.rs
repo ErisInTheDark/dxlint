@@ -1,6 +1,6 @@
-use crate::expr::Value;
+use dx_ir::value::Value;
 use crate::names::question::{Known, Leaf, Target};
-use crate::names::semantic::Semantic;
+use crate::semantic::Semantic;
 use crate::grammar::syntax::ValueSource;
 
 use super::QueryFunction;

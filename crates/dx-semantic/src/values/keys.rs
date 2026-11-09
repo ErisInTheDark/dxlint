@@ -2,25 +2,6 @@ use super::{Identity, Key, Known, Leaf, NodeValue, Values};
 use crate::question::KeyId;
 use dx_config::ast::values::KeyDomain;
 
-impl Key {
-    pub(super) fn ordinal(&self) -> Option<u32> {
-        match self {
-            Self::Ordinal(index) => Some(*index),
-            Self::Text(text) => text.parse::<u32>().ok().filter(|index| index.to_string() == &**text),
-            _ => None,
-        }
-    }
-
-    pub fn domain(&self) -> KeyDomain {
-        match self {
-            Self::Text(_) => KeyDomain::Text,
-            Self::Ordinal(_) => KeyDomain::Ordinal,
-            Self::Symbol(_) => KeyDomain::Symbol,
-            Self::Domain(domain) => *domain,
-        }
-    }
-}
-
 impl Values<'_> {
     /// A key fits exactly its domain's traits, as a node fits what it
     /// declares, and a literal key the truthiness trait of its identity

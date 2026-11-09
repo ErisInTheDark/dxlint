@@ -12,7 +12,7 @@ use super::diagnostic::Diagnostic;
 use super::reads::{self, Reads};
 use crate::footprint::{Dirty, Edit, Footprint};
 use crate::fx_hash::FxHashMap;
-use crate::names::semantic::State;
+use crate::semantic::semantic::State;
 use crate::names::Resolved;
 use crate::grammar::Tree;
 

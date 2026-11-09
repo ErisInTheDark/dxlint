@@ -534,7 +534,7 @@ type PackageProbe = crate::names::modules::resolution::Probe<std::path::PathBuf>
 /// (revision, settings, package root, subpath, conditions).
 pub(super) type PackageKey = (u64, usize, std::path::PathBuf, Box<str>, Box<[Box<str>]>);
 
-/// A shared module question ([`crate::names::modules::SharedQuestion`])
+/// A shared module question ([`crate::semantic::modules::SharedQuestion`])
 /// with files by path, under one program.
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub(super) struct ModuleKey {

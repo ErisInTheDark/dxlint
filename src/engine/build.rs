@@ -210,7 +210,7 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
     }
     phase("prune");
     let schemas = schemas(&config, &mut errors);
-    let env = crate::expr::build_env();
+    let env = crate::expr::build_env(crate::semantic::queries::specs());
     let grammar = Grammar::build(&config, &mut errors, &env);
     let names = crate::names::Names::build(&config, &grammar, &mut errors, env.constant);
     for schema in &config.schemas {
@@ -230,7 +230,7 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
         // Parameters holding nodes read attributes too (`d.initialised`).
         let layer_reads = RefCell::default();
         let uses_before = uses.borrow().len();
-        let scope = Scope { uses: Some(&uses), attrs: &attr_names, layer_reads: Some(&layer_reads), ..Scope::function_body(&grammar, &def.name.text, params).with_names(&names) };
+        let scope = Scope { uses: Some(&uses), attrs: &attr_names, layer_reads: Some(&layer_reads), ..Scope::function_body(&grammar, &def.name.text, params).with_names(&names).with_queries(crate::semantic::queries::specs()) };
         if let Some(body) = scope.compile(&def.body, &mut errors) {
             let _ = grammar.functions[i].body.set(body);
         }
@@ -257,7 +257,7 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
         let Some(when) = &config.names[condition.item].when else { continue };
         let layers = RefCell::default();
         let before = uses.borrow().len();
-        let scope = Scope { uses: Some(&uses), layer_reads: Some(&layers), fields: target_fields(&grammar, Target::Matcher(condition.matcher)), attrs: &attr_names, ..Scope::new(&grammar).with_names(&names) };
+        let scope = Scope { uses: Some(&uses), layer_reads: Some(&layers), fields: target_fields(&grammar, Target::Matcher(condition.matcher)), attrs: &attr_names, ..Scope::new(&grammar).with_names(&names).with_queries(crate::semantic::queries::specs()) };
         if let Some(e) = scope.compile(when, &mut errors) {
             let _ = condition.expr.set(e);
         }
@@ -271,7 +271,7 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
         let layers = RefCell::default();
         let before = uses.borrow().len();
         let params = config.operand_parameter(operand.of).into_iter().map(str::to_owned).collect();
-        let scope = Scope { params, uses: Some(&uses), layer_reads: Some(&layers), fields: target_fields(&grammar, Target::Matcher(operand.matcher)), attrs: &attr_names, ..Scope::new(&grammar).with_names(&names) };
+        let scope = Scope { params, uses: Some(&uses), layer_reads: Some(&layers), fields: target_fields(&grammar, Target::Matcher(operand.matcher)), attrs: &attr_names, ..Scope::new(&grammar).with_names(&names).with_queries(crate::semantic::queries::specs()) };
         if let Some(e) = scope.compile(source, &mut errors) {
             let _ = operand.expr.set(e);
         }
@@ -328,7 +328,7 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
             || grammar.native_hosts[layer as usize].iter().any(|&host| grammar.native_kind(host).is_some_and(|kind| kind.is_token())))
             .map(|&layer| format!("layer {}", grammar.matchers[layer as usize].name)))
         .collect();
-    let language_options = super::language_options::LanguageOptions::compile(&config, &grammar, &names, &schemas, &mut errors);
+    let language_options = super::language_options::LanguageOptions::compile(&config, &grammar, &names, &schemas, crate::semantic::queries::specs(), &mut errors);
     phase("unit demand");
 
     let mut rules: Vec<Rule> = Vec::new();
@@ -387,7 +387,7 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
                 for &(ci, oi) in def_settings.iter().flat_map(|s| &s.options) {
                     let (name, value) = &config.configs[ci].options[oi];
                     if let Some(option) = def.options.iter().find(|o| o.name.text == name.text) {
-                        option_value(&def.name.text, name, value, &option.schema, &grammar, &names, &schemas, &mut errors);
+                        option_value(&def.name.text, name, value, &option.schema, &grammar, &names, &schemas, crate::semantic::queries::specs(), &mut errors);
                     }
                 }
             }
@@ -407,7 +407,7 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
                     errors.push(err);
                     continue;
                 };
-                if let Some(value) = option_value(&f.name, name, value, &f.options[slot].schema, &grammar, &names, &schemas, &mut errors) {
+                if let Some(value) = option_value(&f.name, name, value, &f.options[slot].schema, &grammar, &names, &schemas, crate::semantic::queries::specs(), &mut errors) {
                     if setting.scope.is_none() {
                         f.options[slot].value = value.clone();
                     }
@@ -1019,7 +1019,7 @@ fn attributes(
                     }
                     None => {
                         let layer_reads = RefCell::default();
-                        let scope = Scope { fields: fields.clone(), attrs: names, uses: Some(uses), layer_reads: Some(&layer_reads), ..Scope::new(g).with_names(tables) };
+                        let scope = Scope { fields: fields.clone(), attrs: names, uses: Some(uses), layer_reads: Some(&layer_reads), ..Scope::new(g).with_names(tables).with_queries(crate::semantic::queries::specs()) };
                         let (uses_before, errors_before) = (uses.borrow().len(), errors.len());
                         let compiled = scope.compile(&def.expr, errors).map(|e| {
                             next_body += 1;
@@ -1171,7 +1171,7 @@ fn rule(def: &RuleDef, g: &Grammar, schemas: &Schemas, attrs: &AttrNames, tables
     }
     let layer_reads: RefCell<Vec<u32>> = RefCell::default();
     let item_read = std::cell::Cell::new(false);
-    let mut scope = Scope { fields, options: option_names, attrs, rule: Some(&def.name.text), uses: Some(uses), layer_reads: Some(&layer_reads), ..Scope::new(g).with_names(tables) };
+    let mut scope = Scope { fields, options: option_names, attrs, rule: Some(&def.name.text), uses: Some(uses), layer_reads: Some(&layer_reads), ..Scope::new(g).with_names(tables).with_queries(crate::semantic::queries::specs()) };
     let uses_before = uses.borrow().len();
     // Each `let` sees the ones before it.
     let mut locals = Vec::new();
@@ -1188,7 +1188,7 @@ fn rule(def: &RuleDef, g: &Grammar, schemas: &Schemas, attrs: &AttrNames, tables
     // `@each`: the list may read the rule's options and nothing of a node.
     let each = def.each.as_ref().and_then(|(_, list)| {
         if def.each_options {
-            Scope { options: scope.options.clone(), uses: Some(uses), ..Scope::constants(g).with_names(tables) }.compile(list, errors)
+            Scope { options: scope.options.clone(), uses: Some(uses), ..Scope::constants(g).with_names(tables).with_queries(crate::semantic::queries::specs()) }.compile(list, errors)
         } else {
             scope.compile(list, errors)
         }
@@ -1264,7 +1264,7 @@ fn rule(def: &RuleDef, g: &Grammar, schemas: &Schemas, attrs: &AttrNames, tables
                 attrs,
                 uses: Some(uses),
                 layer_reads: Some(&layer_reads),
-                ..Scope::new(g).with_names(tables)
+                ..Scope::new(g).with_names(tables).with_queries(crate::semantic::queries::specs())
             };
             let by = decl.by.as_ref().and_then(|e| on_target.compile(e, errors));
             let from = decl.from.as_ref().and_then(|e| on_target.compile(e, errors));
@@ -1277,7 +1277,7 @@ fn rule(def: &RuleDef, g: &Grammar, schemas: &Schemas, attrs: &AttrNames, tables
         attrs,
         uses: Some(uses),
         layer_reads: Some(&layer_reads),
-        ..Scope::new(g).with_names(tables)
+        ..Scope::new(g).with_names(tables).with_queries(crate::semantic::queries::specs())
     };
     let indent_reset = def.indent_reset.as_ref().and_then(|e| reset_scope.compile(e, errors));
 

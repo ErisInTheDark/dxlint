@@ -443,16 +443,20 @@ impl<'e> Needs<'e> {
 }
 
 impl vm::Host for Ctx<'_> {
-    fn query(&self, node: u32, subject: &crate::names::Value, query: &super::queries::Query, mask: u64) -> Option<bool> {
-        Some(self.world?.query(self.file_id, node, subject, query, mask))
+    fn query(&self, node: u32, subject: &crate::names::Value, quantifier: dx_ir::ops::Quantifier, mask: u64) -> Option<bool> {
+        Some(self.world?.query(self.file_id, node, subject, quantifier, mask))
     }
 
-    fn query_function(&self, node: u32, query: &super::queries::QueryFunction, args: &[Value<'static>]) -> Option<Value<'static>> {
+    fn query_function(&self, node: u32, query: dx_ir::expr::QueryId, args: &[Value<'static>]) -> Option<Value<'static>> {
         Some(self.world?.query_function(self.file_id, node, query, args))
     }
 
-    fn query_handle(&self, handle: crate::names::question::Handle, query: &super::queries::HandleFunction, args: &[Value<'static>]) -> Option<Value<'static>> {
+    fn query_handle(&self, handle: crate::names::question::Handle, query: dx_ir::expr::HandleId, args: &[Value<'static>]) -> Option<Value<'static>> {
         Some(self.world?.query_handle(self.file_id, handle, query, args))
+    }
+
+    fn query_spec(&self, query: dx_ir::expr::QueryId) -> Option<&'static dx_ir::expr::QuerySpec> {
+        self.world?.query_spec(query)
     }
 
     fn values(&self) -> &vm::Values {
@@ -700,7 +704,7 @@ mod tests {
         "#, &Disk);
         assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
         let mut errors = Vec::new();
-        let grammar = Grammar::build(&loaded.config, &mut errors, &crate::expr::build_env());
+        let grammar = Grammar::build(&loaded.config, &mut errors, &crate::expr::build_env(&[]));
         assert!(errors.is_empty(), "{errors:?}");
         grammar
     }

@@ -14,6 +14,7 @@ pub mod engine;
 pub use dx_runtime::expr;
 pub use dx_grammar as grammar;
 pub use dx_names as names;
+pub use dx_semantic as semantic;
 #[cfg(test)]
 mod grammar_tests;
 #[cfg(test)]
