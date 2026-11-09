@@ -38,7 +38,7 @@ pub struct Built {
 type Uses = RefCell<Vec<(crate::config::source::Span, crate::expr::Resolved)>>;
 
 /// Compile-time prerequisites of a helper, flattened into its consuming rules.
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct ReadDependencies {
     layers: Vec<u32>,
     helpers: Vec<usize>,
@@ -997,6 +997,8 @@ fn attributes(
     // Per attribute: layers whose definition came through a group.
     let mut group_defined: Vec<Vec<u32>> = names.iter().map(|_| Vec::new()).collect();
     let mut native_layers: Vec<Option<bool>> = vec![None; g.matchers.len()];
+    // A group's definitions reach every member: each layer's fields once.
+    let mut fields_of: crate::fx_hash::FxHashMap<u32, Vec<(String, u16)>> = Default::default();
     // Identifies each compiled body: definitions sharing one were compiled once.
     let mut next_body = 0u32;
     let functions: HashMap<&str, &crate::config::ast::FnDef> = config.functions.iter().map(|f| (f.name.text.as_str(), f)).collect();
@@ -1011,7 +1013,9 @@ fn attributes(
         // compiles alike on every layer agreeing on the labels the body (or a
         // function it calls) names: compile once per such agreement.
         let mentioned = mentioned_labels(g, &def.expr, &functions);
-        let mut shared: Vec<(Vec<u16>, std::sync::Arc<CExpr>, u32, Vec<(crate::config::source::Span, crate::expr::Resolved)>, Vec<u32>)> = Vec::new();
+        // Per agreement: the body, its id, and its read dependencies (with
+        // and without neighbour tokens, as layers ask).
+        let mut shared: Vec<(Vec<u16>, std::sync::Arc<CExpr>, u32, [Option<ReadDependencies>; 2])> = Vec::new();
         for target in &def.targets {
             let Some((resolved, _)) = resolve_target(&AstTarget::Matcher(target.clone()), g, None, errors) else { continue };
             // Through a group: a default its members' own definitions refine.
@@ -1044,10 +1048,14 @@ fn attributes(
                 if through_group {
                     group_defined[id].push(m);
                 }
-                let fields = target_fields(g, t);
+                let fields = fields_of.entry(m).or_insert_with(|| target_fields(g, t));
                 let agreement: Vec<u16> = fields.iter().map(|&(_, label)| label).filter(|label| mentioned.contains(label)).collect();
-                let (compiled, attribute_uses, reads) = match shared.iter().find(|(known, ..)| *known == agreement) {
-                    Some((_, e, body, attribute_uses, reads)) => (Some((e.clone(), *body)), attribute_uses.clone(), reads.clone()),
+                let tokens = is_token_layer(g, m);
+                let read_dependencies = match shared.iter_mut().find(|(known, ..)| *known == agreement) {
+                    Some((_, e, body, collected)) => {
+                        attrs[id].defs.push((m, e.clone(), *body));
+                        collected[usize::from(tokens)].clone().expect("collected with the body")
+                    }
                     None => {
                         let layer_reads = RefCell::default();
                         let scope = Scope { fields: fields.clone(), attrs: names, uses: Some(uses), layer_reads: Some(&layer_reads), ..Scope::new(g) };
@@ -1058,17 +1066,20 @@ fn attributes(
                         });
                         let attribute_uses = uses.borrow()[uses_before..].to_vec();
                         let reads = layer_reads.into_inner();
-                        if let Some((e, body)) = compiled.as_ref().filter(|_| errors.len() == errors_before) {
-                            shared.push((agreement, e.clone(), *body, attribute_uses.clone(), reads.clone()));
+                        let (children, siblings) = reads_neighbours(&attribute_uses);
+                        let collect = |tokens: bool| ReadDependencies::collect(g, names, &attribute_uses, reads.clone(), children || tokens && siblings);
+                        let collected = [Some(collect(false)), Some(collect(true))];
+                        let read_dependencies = collected[usize::from(tokens)].clone().expect("collected");
+                        if let Some((e, body)) = compiled {
+                            attrs[id].defs.push((m, e.clone(), body));
+                            if errors.len() == errors_before {
+                                shared.push((agreement, e, body, collected));
+                            }
                         }
-                        (compiled, attribute_uses, reads)
+                        read_dependencies
                     }
                 };
-                if let Some((e, body)) = compiled {
-                    attrs[id].defs.push((m, e, body));
-                }
-                let (children, siblings) = reads_neighbours(&attribute_uses);
-                dependencies[id].extend(ReadDependencies::collect(g, names, &attribute_uses, reads, children || is_token_layer(g, m) && siblings));
+                dependencies[id].extend(read_dependencies);
                 dependencies[id].requires_native |= *native_layers[m as usize].get_or_insert_with(|| is_native_layer(g, m));
             }
         }
@@ -1078,8 +1089,11 @@ fn attributes(
     // `in ts_node let x ...` gives a default that `in ts_binary let x ...`
     // refines. Otherwise definition order.
     for attr in &mut attrs {
-        let targets: Vec<u32> = attr.defs.iter().map(|(m, ..)| *m).collect();
-        let broader = |m: u32| targets.iter().filter(|&&t| t != m && g.is_a(m, t)).count();
+        let targets: crate::fx_hash::FxHashSet<u32> = attr.defs.iter().map(|(m, ..)| *m).collect();
+        // How many of the definitions' layers `m` specialises: its `like`
+        // chain's members among them.
+        let broader = |m: u32| std::iter::successors(g.matchers[m as usize].like, |&base| g.matchers[base as usize].like)
+            .filter(|base| targets.contains(base)).count();
         attr.defs.sort_by_cached_key(|(m, ..)| std::cmp::Reverse(broader(*m)));
     }
     (attrs, dependencies)
