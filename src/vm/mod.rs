@@ -14,7 +14,7 @@ pub(crate) use records::wall_atom;
 pub use values::Config as Values;
 
 pub use dx_ir::vm::{
-    intern, Binder, EachKind, Handle, Packed, PositionRead, Region, Seq, SeqStage, V, VExpr,
+    intern, Binder, EachKind, Handle, PositionRead, Region, Seq, SeqStage, V, VExpr,
     CELL_OFFSET_MASK, SCRATCH_TEXT,
 };
 pub(crate) use dx_ir::vm::text_fingerprint;

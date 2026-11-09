@@ -702,7 +702,7 @@ mod tests {
         "#, &Disk);
         assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
         let mut errors = Vec::new();
-        let grammar = Grammar::build(&loaded.config, &mut errors);
+        let grammar = Grammar::build(&loaded.config, &mut errors, &crate::expr::build_env());
         assert!(errors.is_empty(), "{errors:?}");
         grammar
     }

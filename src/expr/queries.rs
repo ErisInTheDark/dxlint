@@ -11,7 +11,6 @@ mod names;
 mod handles;
 mod commands;
 
-pub(crate) use names::Memo as NamesMemo;
 pub use dx_ir::expr::QueryId;
 pub use handles::{handle_function, handle_of, HandleFunction};
 

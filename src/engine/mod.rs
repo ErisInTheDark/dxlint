@@ -9,7 +9,7 @@ mod units;
 pub mod cache;
 pub mod diagnostic;
 mod fix;
-pub mod frontend;
+pub use dx_grammar::frontend;
 mod inspect;
 pub(crate) mod language_options;
 pub mod transform;
@@ -35,7 +35,7 @@ pub use diagnostic::{Diagnostic, Edit, Fix, Suggestion, ENGINE_RULE};
 pub use fix::{apply_fixes, placeholder, Fixed};
 use fix::{FixPlan, Region};
 pub use profile::{EffectBuild, Profile, Query, StepSite};
-pub(crate) use profile::{new_profile, ValueEvaluation};
+pub(crate) use profile::new_profile;
 
 use crate::config::ast::{FixTarget, Report, Severity};
 use crate::config::source::{FileId, SourceMap, Span};

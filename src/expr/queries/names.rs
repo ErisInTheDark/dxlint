@@ -1,28 +1,9 @@
 use crate::expr::Value;
-use crate::grammar::names::{ReferenceLookup, Resolved, ScopeInfo};
+use crate::grammar::names::{ClassKind, Kept, ReferenceLookup, Resolved, ScopeInfo};
 use crate::grammar::names::question::{Known, Leaf, NodeRef, ScopeRef, Target};
 use crate::grammar::names::semantic::Semantic;
 
 use super::QueryFunction;
-
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-enum ClassKind {
-    Scope,
-    Declaration,
-}
-
-/// Answers kept for the lint, each with what working it out read of the
-/// editor's file ([`crate::footprint`]), handed to every later reader.
-#[derive(Default)]
-pub(crate) struct Memo {
-    classes: std::cell::RefCell<crate::fx_hash::FxHashMap<(u32, ClassKind, u64), Value<'static>>>,
-    scopes: Kept<ScopeRef>,
-    ancestors: Kept<(ScopeRef, Option<u32>)>,
-    bindings: Kept<NodeRef>,
-    references: Kept<NodeRef>,
-}
-
-type Kept<K> = std::cell::RefCell<crate::fx_hash::FxHashMap<K, (Value<'static>, crate::footprint::Footprint)>>;
 
 /// `key`'s kept answer in `memo`, or `compute`'s (kept when it has one).
 fn kept<K: Eq + std::hash::Hash>(memo: &Kept<K>, key: K, compute: impl FnOnce() -> Option<Value<'static>>) -> Option<Value<'static>> {
@@ -352,7 +333,7 @@ mod tests {
     #[test]
     fn reference_scope_queries_keep_nested_scopes_and_distinct_lookup_policies() {
         let mut world = ScopeWorld {
-            grammar: Grammar::build(&crate::config::ast::Config::default(), &mut Vec::new()),
+            grammar: Grammar::build(&crate::config::ast::Config::default(), &mut Vec::new(), &crate::expr::build_env()),
             tree: Tree::from_native(vec![Node { matcher: 0, start: 0, end: 0, children: Vec::new() }; 3], 0),
             names: Resolved::default(),
             available: std::cell::Cell::new(true),
@@ -386,7 +367,7 @@ mod tests {
     #[test]
     fn lexical_name_queries_do_not_lose_answers_in_bound_frames() {
         let mut world = ScopeWorld {
-            grammar: Grammar::build(&crate::config::ast::Config::default(), &mut Vec::new()),
+            grammar: Grammar::build(&crate::config::ast::Config::default(), &mut Vec::new(), &crate::expr::build_env()),
             tree: Tree::from_native(vec![Node { matcher: 0, start: 0, end: 0, children: Vec::new() }; 2], 0),
             names: Resolved::default(),
             available: std::cell::Cell::new(true),
@@ -496,7 +477,7 @@ mod tests {
     #[test]
     fn binding_queries_join_class_specific_reference_buckets() {
         let mut world = ScopeWorld {
-            grammar: Grammar::build(&crate::config::ast::Config::default(), &mut Vec::new()),
+            grammar: Grammar::build(&crate::config::ast::Config::default(), &mut Vec::new(), &crate::expr::build_env()),
             tree: Tree::from_native((0..5).map(|start| Node {
                 matcher: 0, start, end: start + 1, children: Vec::new(),
             }).collect(), 0),

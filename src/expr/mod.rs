@@ -75,6 +75,16 @@ pub fn is_builtin_call(name: &str) -> bool {
     functions::lookup(name).is_some() || queries::lookup_function(name).is_some() || Each::named(name).is_some() || matches!(name, "reduce" | "dbg" | "position" | "walk" | "descendants" | "overlapping" | "containing" | "kind_name" | "node_at" | "token" | "token_list" | "token_pair") || facts::fact(name).is_some()
 }
 
+/// What [`Grammar::build`] needs from this module: builtin names and
+/// constant folding of `.dx` settings.
+pub(crate) fn build_env() -> crate::grammar::BuildEnv<'static> {
+    fn constant(grammar: &Grammar, expr: &Expr, errors: &mut Vec<ConfigError>) -> Result<Value<'static>, Option<String>> {
+        let compiled = Scope::constants(grammar).compile(expr, errors).ok_or(None)?;
+        Ctx::eval_static(&compiled, &[]).map(|value| value.into_owned()).map_err(Some)
+    }
+    crate::grammar::BuildEnv { is_builtin: &is_builtin_call, constant: &constant }
+}
+
 /// A value as `dbg` prints it: strings quoted, lists bracketed.
 pub fn show(v: &Value) -> String {
     v.literal()

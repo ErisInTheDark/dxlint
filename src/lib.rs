@@ -12,7 +12,9 @@ pub mod cli;
 pub use dx_config as config;
 pub mod engine;
 pub mod expr;
-pub mod grammar;
+pub use dx_grammar as grammar;
+#[cfg(test)]
+mod grammar_tests;
 pub mod lsp;
 pub use dx_core::{alloc, fx_hash, levers, parts, path_globs, reads, sampler};
 pub use dx_tree::{footprint, line_index};

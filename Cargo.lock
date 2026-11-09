@@ -164,6 +164,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "dx-grammar"
+version = "0.1.0"
+dependencies = [
+ "dx-config",
+ "dx-core",
+ "dx-ir",
+ "dx-pattern",
+ "dx-tree",
+ "memchr",
+ "regex-automata",
+ "regex-syntax",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "dx-ir"
 version = "0.1.0"
 dependencies = [
@@ -200,6 +216,7 @@ dependencies = [
  "clap",
  "dx-config",
  "dx-core",
+ "dx-grammar",
  "dx-ir",
  "dx-pattern",
  "dx-tree",

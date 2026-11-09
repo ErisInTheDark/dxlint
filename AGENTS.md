@@ -25,11 +25,11 @@ Rust linter; rules in `.dx` (docs/advanced.md). Binary `dxlint`.
 - `crates/dx-core`: hashing, path globs, allocator, levers, sampler, work counts, file parts, `reads` (also `engine::reads`)
 - `crates/dx-tree`: `Tree`, node types and path steps, `footprint` (recorded reads), `line_index`
 - `crates/dx-ir`: compiled expression and VM value types (`CExpr`, `VExpr`, `Value`, `V`, record cells, builtin/function metadata); no evaluation
-- `src/grammar`: layers per language, `parse.rs` builds trees
+- `crates/dx-grammar`: layers per language, `parse.rs` builds trees
 - `src/expr`: rule expressions; functions registry in `functions.rs`
 - `src/engine`: linter, fixes, suppressions, `.dxcache` (`cache.rs`), symbol index; end-to-end tests in `engine/tests.rs`
-- `src/engine/frontend.rs`: the `Frontend` trait, the engine's only view of a front end (kinds/fields, parse, per-file tokens and names)
-- `src/grammar/syntax`: declared parsers (`parser x in lang`, `extend parser`): compile to a program, run by `run/descend.rs` (valid input) and `run/execute.rs` (diagnosing, deep nesting); `frontend.rs` makes one a language's front end (`native x`). `std/ts/grammar.dx` is TypeScript; parse bench `scratch/tools/zbench.ps1`
+- `crates/dx-grammar/src/frontend.rs`: the `Frontend` trait, the engine's only view of a front end (kinds/fields, parse, per-file tokens and names)
+- `crates/dx-grammar/src/syntax`: declared parsers (`parser x in lang`, `extend parser`): compile to a program, run by `run/descend.rs` (valid input) and `run/execute.rs` (diagnosing, deep nesting); `frontend.rs` makes one a language's front end (`native x`). `std/ts/grammar.dx` is TypeScript; parse bench `scratch/tools/zbench.ps1`
 - `src/engine/transform.rs`, `src/cli/map.rs`: `transform`s applied strictly once, served by `dxlint map` (TS content mapper protocol, `package/esbuild.mjs`); output depends only on the file's text and config (TS keys its cache that way); worked example `fixtures/engine/transform-state`
 - `std/`: built-in languages (`import .ts`); matchers, plus rule definitions in `define { }` (off until `rule name`), topic files under `std/<lang>/`
 - `rules/`: built-in rulesets (`import rules:x`): only `rule name` lines

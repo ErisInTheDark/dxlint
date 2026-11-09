@@ -209,7 +209,7 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
     }
     phase("prune");
     let schemas = schemas(&config, &mut errors);
-    let grammar = Grammar::build(&config, &mut errors);
+    let grammar = Grammar::build(&config, &mut errors, &crate::expr::build_env());
     for schema in &config.schemas {
         if let Schema::Checked(_, check) = &schema.schema {
             if grammar.function(&check.text).is_none() {
