@@ -6,7 +6,10 @@
 //!
 //! Output protocol: leading `dxlint-input <path>` lines name what the run
 //! read (relative to the root); the rest of stdout is the payload. A
-//! non-zero exit, output that is not UTF-8, or the time limit is an error.
+//! non-zero exit, output that is not UTF-8, or going [`QUIET_LIMIT`] without
+//! printing one of those lines is an error.
+//! A program that could not start or went quiet is this machine's failure,
+//! not the program's answer: the next process runs it again.
 //! A `batch` command runs once, without arguments, for every argument list:
 //! its payload holds a section per list, each starting with a
 //! `dxlint-payload <args>` (or `dxlint-error <args>`, the rest being why)
@@ -24,7 +27,9 @@ use crate::fx_hash::FxHashMap;
 
 use super::reads;
 
-const TIME_LIMIT: Duration = Duration::from_secs(60);
+/// How long a run may go without progress ([`is_progress`]) before it
+/// counts as hung: a batch gets this long per section, however many.
+const QUIET_LIMIT: Duration = Duration::from_secs(60);
 const INPUT_PREFIX: &str = "dxlint-input ";
 const PAYLOAD_PREFIX: &str = "dxlint-payload ";
 const ERROR_PREFIX: &str = "dxlint-error ";
@@ -50,6 +55,26 @@ type Key = (String, Vec<String>);
 struct Run {
     result: Result<Arc<str>, Arc<str>>,
     inputs: Vec<(PathBuf, u64)>,
+    /// The error came from this machine, not the program's answer: it could
+    /// not start, or went quiet too long (a busy machine slows it).
+    transient: bool,
+}
+
+/// Why a run failed, and whether it was this machine's doing
+/// ([`Run::transient`]).
+struct Failure {
+    why: String,
+    transient: bool,
+}
+
+impl Failure {
+    fn answer(why: String) -> Failure {
+        Failure { why, transient: false }
+    }
+
+    fn transient(why: String) -> Failure {
+        Failure { why, transient: true }
+    }
 }
 
 enum Slot {
@@ -242,7 +267,7 @@ impl Commands {
         for run in kept {
             if self.declared.get(&run.name).is_none_or(|declared| declared.argv != run.argv) { continue }
             let inputs = run.inputs.into_iter().map(|(path, hash)| (crate::config::source::normalize_path(&self.root.join(path)), hash)).collect();
-            runs.entry((run.name, run.args)).or_insert_with(|| Slot::Done(Arc::new(Run { result: Ok(run.payload), inputs })));
+            runs.entry((run.name, run.args)).or_insert_with(|| Slot::Done(Arc::new(Run { result: Ok(run.payload), inputs, transient: false })));
         }
     }
 
@@ -251,17 +276,17 @@ impl Commands {
         let Some(declared) = self.declared.get(name) else {
             return Answer::Failed(format!("no command `{name}` in the root config").into());
         };
-        if !declared.batch { return self.run_answer(name, &declared.argv, args) }
-        match self.run_answer(name, &declared.argv, &[]) {
+        if !declared.batch { return self.run_answer(name, declared, args) }
+        match self.run_answer(name, declared, &[]) {
             Answer::Ready(payload) => section(&payload, &args.join(" "))
                 .unwrap_or_else(|| Answer::Failed(format!("`{name}` printed no section for `{}`", args.join(" ")).into())),
             other => other,
         }
     }
 
-    /// The run of `argv` plus `args` (named `name`), recording what it
+    /// The run of `declared` plus `args` (named `name`), recording what it
     /// depends on.
-    fn run_answer(self: &Arc<Self>, name: &str, argv: &[String], args: &[String]) -> Answer {
+    fn run_answer(self: &Arc<Self>, name: &str, declared: &Declared, args: &[String]) -> Answer {
         let key: Key = (name.to_owned(), args.to_vec());
         let marker = self.marker(&key);
         let mode = match &*self.mode.lock().expect("command mode") {
@@ -275,7 +300,7 @@ impl Commands {
                 Some(Slot::Done(run)) if run.inputs.iter().all(|(path, hash)| reads::disk_hash(path) == *hash) => {
                     let run = run.clone();
                     drop(runs);
-                    return self.recorded(&run, &marker);
+                    return self.recorded(&run, &marker, mode.is_none());
                 }
                 Some(Slot::Running) if mode.is_none() => {
                     let _blocked = self.lanes.block();
@@ -291,18 +316,18 @@ impl Commands {
                 let claim = Claim { commands: self, key: &key };
                 let run = {
                     let _blocked = self.lanes.block();
-                    Arc::new(self.run(argv, args))
+                    Arc::new(self.run(&declared.argv, args))
                 };
                 self.runs.lock().expect("command runs").insert(key.clone(), Slot::Done(run.clone()));
                 drop(claim);
-                self.recorded(&run, &marker)
+                self.recorded(&run, &marker, true)
             }
             Some(finished) => {
                 // The lint reads the marker as it is now; the run changes it.
                 reads::read(&marker);
                 if !matches!(runs.get(&key), Some(Slot::Running)) {
                     runs.insert(key.clone(), Slot::Running);
-                    let (commands, argv) = (self.clone(), argv.to_vec());
+                    let (commands, argv) = (self.clone(), declared.argv.clone());
                     std::thread::spawn(move || {
                         let run = Arc::new(commands.run(&argv, &key.1));
                         let done = format!("{:?}", run.result.as_ref().map(|payload| reads::hash_bytes(payload.as_bytes())));
@@ -325,9 +350,14 @@ impl Commands {
     }
 
     /// `run`'s answer, after recording its inputs (and the marker) as reads.
-    fn recorded(&self, run: &Run, marker: &Path) -> Answer {
+    /// A transient failure, inline (where nothing changes the marker), adds a
+    /// read that never holds again: the next process runs the command afresh.
+    fn recorded(&self, run: &Run, marker: &Path, inline: bool) -> Answer {
         reads::read(marker);
         for (path, _) in &run.inputs { reads::read(path); }
+        if let (Err(error), true) = (&run.result, inline && run.transient) {
+            reads::note(reads::Dep::Text(reads::dep_path(marker), reads::hash_bytes(error.as_bytes())));
+        }
         match &run.result {
             Ok(payload) => Answer::Ready(payload.clone()),
             Err(error) => Answer::Failed(error.clone()),
@@ -343,9 +373,9 @@ impl Commands {
                     let hash = reads::disk_hash(&path);
                     (path, hash)
                 }).collect();
-                Run { result: Ok(payload.into()), inputs }
+                Run { result: Ok(payload.into()), inputs, transient: false }
             }
-            Err(error) => Run { result: Err(error.into()), inputs: Vec::new() },
+            Err(failure) => Run { result: Err(failure.why.into()), inputs: Vec::new(), transient: failure.transient },
         }
     }
 }
@@ -379,37 +409,64 @@ fn split_output(stdout: &str) -> (Vec<&str>, &str) {
     (inputs, rest)
 }
 
-/// Runs `argv` plus `args` in `root` with no stdin, within the time limit;
-/// stdout, or why it failed.
-fn execute(root: &Path, argv: &[String], args: &[String]) -> Result<String, String> {
+/// Whether a stdout line shows a run moving on: it names an input or starts
+/// a section.
+fn is_progress(line: &[u8]) -> bool {
+    [INPUT_PREFIX, PAYLOAD_PREFIX, ERROR_PREFIX].iter().any(|prefix| line.starts_with(prefix.as_bytes()))
+}
+
+/// All of `stdout`, calling `progress` as each progress line arrives.
+fn read_output(stdout: impl std::io::Read, mut progress: impl FnMut()) -> std::io::Result<Vec<u8>> {
+    use std::io::BufRead;
+    let mut stdout = std::io::BufReader::new(stdout);
+    let mut bytes = Vec::new();
+    loop {
+        let start = bytes.len();
+        if stdout.read_until(b'\n', &mut bytes)? == 0 { return Ok(bytes) }
+        if is_progress(&bytes[start..]) { progress() }
+    }
+}
+
+fn elapsed_ms(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
+
+/// Runs `argv` plus `args` in `root` with no stdin, killed after
+/// [`QUIET_LIMIT`] without progress; stdout, or why it failed.
+fn execute(root: &Path, argv: &[String], args: &[String]) -> Result<String, Failure> {
     use std::io::Read;
-    let (program, fixed) = argv.split_first().ok_or("empty command")?;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    let (program, fixed) = argv.split_first().ok_or_else(|| Failure::answer("empty command".to_owned()))?;
     let mut child = std::process::Command::new(program)
         .args(fixed).args(args).current_dir(root)
         .stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped())
-        .spawn().map_err(|e| format!("cannot run `{program}`: {e}"))?;
-    let mut stdout = child.stdout.take().expect("piped");
+        .spawn().map_err(|e| Failure::transient(format!("cannot run `{program}`: {e}")))?;
+    let stdout = child.stdout.take().expect("piped");
     let mut stderr = child.stderr.take().expect("piped");
-    let out = std::thread::spawn(move || { let mut bytes = Vec::new(); stdout.read_to_end(&mut bytes).map(|_| bytes) });
-    let err = std::thread::spawn(move || { let mut text = String::new(); let _ = stderr.read_to_string(&mut text); text });
     let started = Instant::now();
+    let moved_ms = Arc::new(AtomicU64::new(0));
+    let out = {
+        let moved_ms = moved_ms.clone();
+        std::thread::spawn(move || read_output(stdout, || moved_ms.store(elapsed_ms(started), Ordering::Relaxed)))
+    };
+    let err = std::thread::spawn(move || { let mut text = String::new(); let _ = stderr.read_to_string(&mut text); text });
     let status = loop {
-        if let Some(status) = child.try_wait().map_err(|e| e.to_string())? { break status }
-        if started.elapsed() > TIME_LIMIT {
+        if let Some(status) = child.try_wait().map_err(|e| Failure::transient(e.to_string()))? { break status }
+        if Duration::from_millis(elapsed_ms(started).saturating_sub(moved_ms.load(Ordering::Relaxed))) > QUIET_LIMIT {
             let _ = child.kill();
             let _ = child.wait();
-            return Err(format!("`{program}` ran longer than {} s", TIME_LIMIT.as_secs()));
+            return Err(Failure::transient(format!("`{program}` went {} s without progress (a `dxlint-input`, `dxlint-payload` or `dxlint-error` line)", QUIET_LIMIT.as_secs())));
         }
         std::thread::sleep(Duration::from_millis(20));
     };
-    let stdout = out.join().map_err(|_| "stdout reader panicked")?.map_err(|e| e.to_string())?;
+    let stdout = out.join().map_err(|_| Failure::transient("stdout reader panicked".to_owned()))?.map_err(|e| Failure::transient(e.to_string()))?;
     let stderr = err.join().unwrap_or_default();
     if !status.success() {
         let lines: Vec<&str> = stderr.lines().collect();
         let tail = lines[lines.len().saturating_sub(STDERR_TAIL)..].join("\n");
-        return Err(format!("`{program}` failed ({status}){}{tail}", if tail.is_empty() { "" } else { ":\n" }));
+        return Err(Failure::answer(format!("`{program}` failed ({status}){}{tail}", if tail.is_empty() { "" } else { ":\n" })));
     }
-    String::from_utf8(stdout).map_err(|_| format!("`{program}` printed output that is not UTF-8"))
+    String::from_utf8(stdout).map_err(|_| Failure::answer(format!("`{program}` printed output that is not UTF-8")))
 }
 
 #[cfg(test)]
@@ -495,5 +552,35 @@ mod tests {
         assert!(matches!(commands.answer("fail", &[]), Answer::Failed(why) if why.contains("boom")));
         assert!(matches!(commands.answer("nope", &[]), Answer::Failed(why) if why.contains("no command `nope`")));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn what_saw_this_machine_fail_a_run_never_holds_in_a_later_process() {
+        let dir = crate::config::source::normalize_path(&std::env::temp_dir().join("dxlint-commands-failure-test"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("dir");
+        std::fs::write(dir.join("input.txt"), "a").expect("input");
+        let declared = |argv: &[&str]| Declared { argv: argv.iter().map(|&word| word.to_owned()).collect(), batch: false };
+        let commands = Arc::new(Commands::new(dir.clone(), [
+            ("read".to_owned(), declared(&["node", "-e", "process.stdout.write('dxlint-input input.txt\\nok')"])),
+            ("refuses".to_owned(), declared(&["node", "-e", "process.exit(3)"])),
+            ("missing".to_owned(), declared(&["dxlint-test-no-such-program"])),
+        ]));
+        let answer = |name: &str| {
+            let (answer, reads) = reads::track(|| commands.answer(name, &[]));
+            (answer, reads.holds(&mut |dep| dep.holds(), &mut |_| true))
+        };
+        assert_eq!(answer("read"), (Answer::Ready("ok".into()), true));
+        assert!(matches!(answer("refuses"), (Answer::Failed(_), true)), "the program's own answer holds");
+        assert!(matches!(answer("missing"), (Answer::Failed(why), false) if why.contains("cannot run")), "a later process tries again");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn inputs_and_sections_are_progress_and_output_stays_whole() {
+        let stdout = "dxlint-input a.ts\r\ndxlint-payload 1\nline\ndxlint-error 2\nwhy\ndxlint-payload 3";
+        let mut progress = 0;
+        let bytes = read_output(stdout.as_bytes(), || progress += 1).expect("read");
+        assert_eq!((progress, bytes.as_slice()), (4, stdout.as_bytes()));
     }
 }

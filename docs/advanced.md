@@ -724,7 +724,9 @@ command snapshot "node scripts/snapshot.mjs"
 in the root's directory (no shell: words split on spaces, double quotes keep
 one together) and gives `{ state, output, message }`. `state` is `ready`
 (`output` holds the payload), `failed` (`message` says why: exit code and the
-end of stderr, output not UTF-8, or 60 s passed), `pending` or `disabled`.
+end of stderr, output not UTF-8, or 60 s without progress), `pending` or
+`disabled`. A program that could not start or went quiet too long failed
+because of this machine, so caches never keep it: the next lint runs it again.
 
 The program first prints a `dxlint-input <path>` line per file it read
 (relative to the root); everything after is the payload. dxlint keeps each
@@ -734,6 +736,9 @@ lints record them as reads, so caches and the language server follow them.
 list: after its `dxlint-input` lines it prints a section per list, starting
 with a `dxlint-payload <args joined by spaces>` line, or `dxlint-error <args>`
 followed by why that one failed. Each `command_output` call gets its section.
+Every `dxlint-input`, `dxlint-payload` or `dxlint-error` line is progress and
+restarts the 60 s clock, so a long batch that prints its inputs early and each
+section as it finishes gets 60 s per section.
 The language server runs commands in the background: until a run finishes the
 answer is `pending`, and the files that asked are linted again once it does.
 Editors show each `command` line as information, and VS Code runs none in
