@@ -1,0 +1,11 @@
+[package]
+name = "dx-tree"
+version = "0.1.0"
+edition = "2021"
+description = "Syntax trees of one file: nodes, spans, positions and recorded reads"
+license = "MIT"
+
+[dependencies]
+dx-core = { path = "../dx-core" }
+dx-pattern = { path = "../dx-pattern" }
+memchr = "2.7"

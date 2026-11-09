@@ -1,6 +1,5 @@
-use super::Tree;
-use crate::fx_hash::FxHashMap;
-use crate::grammar::{ROOT, TEXT};
+use super::{Tree, ROOT, TEXT};
+use dx_core::fx_hash::FxHashMap;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 

@@ -7,10 +7,10 @@ mod shapes;
 mod states;
 pub mod syntax;
 mod text;
-mod tree;
 
-pub use parse::{full_match, probe, Edge, Node, Parser, Probe, Syntax, ROOT, TEXT};
-pub use tree::{FieldOne, Tree};
+pub use dx_tree::tree::{self, FieldOne, Tree};
+pub use dx_tree::{Edge, Node, Syntax, ROOT, TEXT};
+pub use parse::{full_match, probe, Parser, Probe};
 pub use shapes::FieldTargets;
 
 use std::collections::HashMap;
@@ -205,6 +205,54 @@ pub struct UserFn {
     pub name: String,
     pub arity: usize,
     pub body: std::sync::OnceLock<crate::expr::CExpr>,
+}
+
+impl dx_tree::Matchers for Grammar {
+    fn in_layer(&self, matcher: u32) -> bool {
+        self.matchers[matcher as usize].layer.is_some()
+    }
+
+    fn is_a(&self, matcher: u32, of: u32) -> bool {
+        Grammar::is_a(self, matcher, of)
+    }
+}
+
+impl Grammar {
+    /// Parses `text` of language `lang` into its layer tree.
+    pub fn parse_tree(&self, lang: usize, text: &str) -> Tree {
+        self.parse_tree_with(lang, text, None, None)
+    }
+
+    /// Like [`Grammar::parse_tree`], searching only overlays flagged in `overlays`.
+    pub fn parse_tree_with(&self, lang: usize, text: &str, overlays: Option<&[bool]>, profile: Option<&crate::engine::Profile>) -> Tree {
+        let mut p = Parser::new(self, lang, text);
+        p.enabled_overlays = overlays;
+        p.profile = profile;
+        let root = p.parse();
+        let too_deep = p.too_deep;
+        let mut tree = Tree::from_nodes(std::mem::take(&mut p.nodes), std::mem::take(&mut p.holes), root, too_deep);
+        tree.layer_roots = std::mem::take(&mut p.layer_roots);
+        tree
+    }
+
+    /// A front end's tree (in this grammar's ids) with the pattern layers
+    /// that live inside it: one tree per file. `layers` (by matcher) limits
+    /// which overlays are searched and, under each node, whether its child
+    /// layers are built at all (all of them when any is wanted, since they
+    /// compete for the same text).
+    pub fn graft_tree(&self, lang: usize, text: &str, mut nodes: Vec<Node>, root: u32, layers: Option<&[bool]>, child_layers: bool, profile: Option<&crate::engine::Profile>) -> Tree {
+        let mut p = Parser::new(self, lang, text);
+        p.enabled_overlays = layers;
+        p.masked_children = child_layers;
+        p.profile = profile;
+        let holes = p.graft(&mut nodes, root);
+        let too_deep = p.too_deep;
+        let layer_roots = std::mem::take(&mut p.layer_roots);
+        drop(p);
+        let mut tree = Tree::from_nodes(nodes, holes, root, too_deep);
+        tree.layer_roots = layer_roots;
+        tree
+    }
 }
 
 impl Grammar {
@@ -1031,8 +1079,8 @@ match branch "a" branch or "b"
 in .t layer candidate match candidate prefix branch "suffix"
 "#);
         let deep = format!("prefix{}b", "a".repeat(4096));
-        assert!(!Tree::parse(&grammar, 0, &deep).too_deep);
-        assert!(Tree::parse(&grammar, 0, &(deep + "suffix")).too_deep);
+        assert!(!grammar.parse_tree(0, &deep).too_deep);
+        assert!(grammar.parse_tree(0, &(deep + "suffix")).too_deep);
     }
 
     #[test]
@@ -1042,7 +1090,7 @@ in .t layer candidate match candidate prefix branch "suffix"
         let id = grammar.matcher("attributes").unwrap();
         for source in [r#""module""#, r#""module" /* irrelevant */"#] {
             let profile = crate::engine::Profile::new(grammar.matchers.len(), 0);
-            Tree::parse_with(&grammar, 0, source, None, Some(&profile));
+            grammar.parse_tree_with(0, source, None, Some(&profile));
             assert_eq!(profile.matcher_runs[id as usize].load(Ordering::Relaxed), 0, "{source}");
         }
     }
@@ -1073,12 +1121,12 @@ in .t layer candidate match candidate prefix branch "suffix"
                 }).collect::<Vec<_>>();
                 (tree.too_deep, signature)
             };
-            let filtered = observed(Tree::parse(&grammar, 0, source));
+            let filtered = observed(grammar.parse_tree(0, source));
             for matcher in &mut grammar.matchers {
                 matcher.guard = None;
                 matcher.required = None;
             }
-            assert_eq!(filtered, observed(Tree::parse(&grammar, 0, source)), "{source}");
+            assert_eq!(filtered, observed(grammar.parse_tree(0, source)), "{source}");
         }
     }
 }

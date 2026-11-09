@@ -11,11 +11,12 @@ name = "dxlint"
 path = "src/main.rs"
 
 [workspace]
-members = ["crates/dx-pattern", "crates/dx-core"]
+members = ["crates/dx-pattern", "crates/dx-core", "crates/dx-tree"]
 
 [dependencies]
 dx-pattern = { path = "crates/dx-pattern" }
 dx-core = { path = "crates/dx-core" }
+dx-tree = { path = "crates/dx-tree" }
 memchr = "2.7"
 regex-automata = "0.4"
 regex-syntax = "0.8"
@@ -36,6 +37,8 @@ opt-level = 1
 debug = 1
 debug-assertions = true
 overflow-checks = true
+# Local ThinLTO is most of every incremental rebuild; release still links with LTO.
+lto = "off"
 
 [profile.dev.package."*"]
 opt-level = 3

@@ -22,7 +22,7 @@ impl Linter {
         let mut out = String::new();
         // Every overlay: the point is to see everything.
         let overlays = vec![true; self.grammar.matchers.len()];
-        let tree = Tree::parse_with(&self.grammar, lang, text, Some(&overlays), None);
+        let tree = self.grammar.parse_tree_with(lang, text, Some(&overlays), None);
         self.layers_at(&tree, text, offset, &mut out);
         let accepting = self.grammar.native_for(lang);
         if let Some(index) = accepting {

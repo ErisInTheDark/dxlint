@@ -42,6 +42,28 @@ pub struct Plan {
     pub item: Conditional,
 }
 
+/// The tree's module index, built once and kept for the tree's life.
+pub fn module_index<'t>(
+    tree: &'t Tree,
+    tables: &Names,
+    text: &str,
+    key: &NameKey<'_>,
+    profile: Option<&crate::engine::Profile>,
+) -> &'t Index {
+    if tree.regions().is_some() {
+        crate::footprint::enter_atom(crate::footprint::Atom::whole(crate::footprint::tables::MODULE))
+    }
+    tree.cached(|| crate::footprint::quiet(|| {
+        let build = || Index::build(tables, tree, text, key);
+        let mut index = match profile {
+            Some(profile) => profile.time_module_index(build),
+            None => build(),
+        };
+        index.owner = tree.owner.clone();
+        index
+    }))
+}
+
 impl Index {
     pub fn build(tables: &Names, tree: &Tree, text: &str, key: &NameKey<'_>) -> Self {
         let mut index = Self::default();

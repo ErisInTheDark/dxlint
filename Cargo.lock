@@ -160,6 +160,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "dx-tree"
+version = "0.1.0"
+dependencies = [
+ "dx-core",
+ "dx-pattern",
+ "memchr",
+]
+
+[[package]]
 name = "dxlint"
 version = "0.1.0"
 dependencies = [
@@ -168,6 +177,7 @@ dependencies = [
  "clap",
  "dx-core",
  "dx-pattern",
+ "dx-tree",
  "globset",
  "ignore",
  "memchr",

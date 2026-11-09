@@ -104,14 +104,14 @@ impl Linter {
                 let tokens_done = std::time::Instant::now();
                 let nodes = front.remap(parsed.nodes);
                 let tree = if plan.layers {
-                    Tree::graft(&self.grammar, plan.lang, text, nodes, parsed.root, Some(plan.overlays), plan.child_layers, self.profile.as_ref())
+                    self.grammar.graft_tree(plan.lang, text, nodes, parsed.root, Some(plan.overlays), plan.child_layers, self.profile.as_ref())
                 } else {
                     Tree::from_native(nodes, parsed.root)
                 };
                 (tree, parsed.state, native_done, tokens_done)
             }
             None => {
-                let tree = Tree::parse_with(&self.grammar, plan.lang, text, Some(plan.overlays), self.profile.as_ref());
+                let tree = self.grammar.parse_tree_with(plan.lang, text, Some(plan.overlays), self.profile.as_ref());
                 (tree, None, started, started)
             }
         };

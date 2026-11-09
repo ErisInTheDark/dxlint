@@ -586,7 +586,7 @@ pub trait World {
     /// The file's declarations by scope and name, keyed by its front end.
     fn index(&self, file: u32) -> Option<&super::ScopeIndex>;
     fn module_index(&self, file: u32, tables: &super::Names) -> Option<&super::modules::index::Index> {
-        Some(self.tree(file)?.module_index(tables, self.text(file)?, &|text| self.name_key(file, text), self.profile()))
+        Some(super::modules::index::module_index(self.tree(file)?, tables, self.text(file)?, &|text| self.name_key(file, text), self.profile()))
     }
     /// Records that the answer being worked out depends on `file`'s whole
     /// text: for files a scan reached that turn out to matter.

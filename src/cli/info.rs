@@ -242,7 +242,7 @@ pub fn explain(output: &mut Output<'_>, linter: &Linter, file: &Path, at: &str) 
         return 2;
     };
     let g = &linter.grammar;
-    let tree = Tree::parse(g, lang, &text);
+    let tree = g.parse_tree(lang, &text);
 
     output.out(format_args!("{BOLD}layers at {line}:{col}{BOLD:#}"));
     let inner = tree.innermost_at(g, pos as u32, u32::MAX).unwrap_or(tree.root);
@@ -314,7 +314,7 @@ pub fn tree(output: &mut Output<'_>, linter: &Linter, file: &Path, all: bool) ->
         Err(code) => return code,
     };
     let g = &linter.grammar;
-    let tree = Tree::parse(g, lang, &text);
+    let tree = g.parse_tree(lang, &text);
     let lines = crate::line_index::LineIndex::new(&text);
     for &id in &tree.order {
         let mut depth = 0;

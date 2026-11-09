@@ -20,40 +20,12 @@ use super::{DfaCaches, Grammar, View};
 use crate::pattern::compile::{Inst, Program, NO_LABEL};
 use crate::pattern::dfa::Dfa;
 use crate::pattern::prefilter::ByteSet;
-
-/// `Node::matcher` of the file's root node.
-pub const ROOT: u32 = u32::MAX;
-/// `Node::matcher` of plain text captures (`name:/\w+/`).
-pub const TEXT: u32 = u32::MAX - 1;
+pub use dx_tree::{Edge, Node, ROOT, TEXT};
 
 const FAIL: u32 = u32::MAX;
 const BUSY: u32 = u32::MAX - 1;
 /// Deeper nesting than this is reported, not followed (protects the stack).
 const MAX_DEPTH: u32 = 400;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Edge {
-    pub label: u16,
-    pub node: u32,
-}
-
-/// A node while a tree is being built; [`crate::grammar::Tree`] packs it
-/// into a [`Syntax`] plus its slice of the tree's edges.
-#[derive(Debug, Clone)]
-pub struct Node {
-    pub matcher: u32,
-    pub start: u32,
-    pub end: u32,
-    pub children: Vec<Edge>,
-}
-
-/// A finished tree's node; its children are [`crate::grammar::Tree::children`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Syntax {
-    pub matcher: u32,
-    pub start: u32,
-    pub end: u32,
-}
 
 #[derive(Clone, Copy)]
 enum Event {

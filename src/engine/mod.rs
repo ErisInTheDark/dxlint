@@ -855,7 +855,7 @@ impl Linter {
         let Some(front) = unit.parsed.front else { return true };
         let run = Run { path: &unit.path, lang: unit.lang, text: &unit.text, lines: unit.lines(), file: &unit.rel, active: &[], settings: None };
         let native = self.native_facts(front, &unit.parsed.tree, &run, (&*unit.path, Path::new(&unit.rel)), unit.parsed.state.clone());
-        let index = unit.parsed.tree.module_index(&self.grammar.names, &unit.text, &|text| native.name_key(text), None);
+        let index = crate::grammar::names::modules::index::module_index(&unit.parsed.tree, &self.grammar.names, &unit.text, &|text| native.name_key(text), None);
         let links = index.links(unit.parsed.tree.root);
         if links.is_empty() && !index.mentions(name, u64::MAX, PublicationKind::Globals) { return false }
         let plans: Vec<_> = index.plans(unit.parsed.tree.root, Some((name, u64::MAX)), PublicationKind::Globals)

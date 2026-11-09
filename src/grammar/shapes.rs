@@ -243,7 +243,7 @@ in .t match list contents:("[" until "]")
 in list match ident
 "#);
         for source in ["abc:12", "12:abc", "[abc def]"] {
-            validate(&grammar, &Tree::parse(&grammar, 0, source));
+            validate(&grammar, &grammar.parse_tree(0, source));
         }
     }
 
@@ -258,7 +258,7 @@ in .t match boundary "[" opaque "]"
 in .t match repeated "(" (item:ident or item:/\d+/)+ ")"
 "#);
         for source in ["abc:def", "[abc]", "(abc12def)"] {
-            validate(&grammar, &Tree::parse(&grammar, 0, source));
+            validate(&grammar, &grammar.parse_tree(0, source));
         }
         let shadow = grammar.matcher("shadow").unwrap();
         let value = grammar.labels.get("value").unwrap();
@@ -291,7 +291,7 @@ in ts_call layer calls match call_text /f/
             front.frontend.attach_tokens(source, &mut parsed, &every);
             let nodes = front.remap(parsed.nodes);
             validate(&grammar, &Tree::from_native(nodes.clone(), parsed.root));
-            validate(&grammar, &Tree::graft(&grammar, grammar.lang("js").unwrap(), source, nodes, parsed.root, None, false, None));
+            validate(&grammar, &grammar.graft_tree(grammar.lang("js").unwrap(), source, nodes, parsed.root, None, false, None));
         }
         let specialised = grammar.matcher("specialised").unwrap();
         let name = grammar.labels.get("name").unwrap();
@@ -309,7 +309,7 @@ in ts_call layer calls match call_text /f/
             ("markdown", "# Heading\n\n[text](url) and `code`\n\n```ts\nconst x = 1;\n```\n"),
         ] {
             let grammar = grammar(&format!("import .{language}\n"));
-            validate(&grammar, &Tree::parse(&grammar, grammar.lang(language).unwrap(), source));
+            validate(&grammar, &grammar.parse_tree(grammar.lang(language).unwrap(), source));
             println!("{language}: {} matchers, {} fields, {} any", grammar.matchers.len(), grammar.shapes.fields.len(), grammar.shapes.fields.values().filter(|shape| shape.any).count());
         }
     }

@@ -508,7 +508,7 @@ mod tests {
     #[test]
     fn root_sessions_reuse_answers_without_mixing_frames_or_retaining_limit_cuts() {
         let linter = crate::engine::tests::linter("in paren fits marked when text == \"()\"");
-        let tree = crate::grammar::Tree::parse_with(&linter.grammar, 0, "()", None, None);
+        let tree = linter.grammar.parse_tree_with(0, "()", None, None);
         let matcher = linter.grammar.matcher("paren").unwrap();
         let node = tree.order.iter().copied().find(|&node| tree.node(node).matcher == matcher).unwrap();
         let profile = crate::engine::Profile::default();
@@ -577,7 +577,7 @@ mod tests {
     #[test]
     fn a_fact_answers_the_same_whichever_root_reaches_it_first() {
         let linter = crate::engine::tests::linter("in paren fits marked when text == \"()\"");
-        let tree = crate::grammar::Tree::parse_with(&linter.grammar, 0, "()", None, None);
+        let tree = linter.grammar.parse_tree_with(0, "()", None, None);
         let matcher = linter.grammar.matcher("paren").unwrap();
         let node = tree.order.iter().copied().find(|&node| tree.node(node).matcher == matcher).unwrap();
         let world = CountingWorld { grammar: &linter.grammar, tree: &tree, conditions: Cell::new(0), cut: Cell::new(3), revision: Cell::new(0), profile: None };
@@ -600,7 +600,7 @@ mod tests {
     #[test]
     fn an_unknown_resting_on_an_unfinished_cycle_expires_with_the_fact_computing_it() {
         let linter = crate::engine::tests::linter("in paren fits marked when text == \"()\"");
-        let tree = crate::grammar::Tree::parse_with(&linter.grammar, 0, "()", None, None);
+        let tree = linter.grammar.parse_tree_with(0, "()", None, None);
         let matcher = linter.grammar.matcher("paren").unwrap();
         let node = tree.order.iter().copied().find(|&node| tree.node(node).matcher == matcher).unwrap();
         let world = CountingWorld { grammar: &linter.grammar, tree: &tree, conditions: Cell::new(0), cut: Cell::new(4), revision: Cell::new(0), profile: None };
@@ -621,7 +621,7 @@ mod tests {
     #[test]
     fn root_questions_cut_short_answer_unknown_whatever_they_built() {
         let linter = crate::engine::tests::linter("");
-        let tree = crate::grammar::Tree::parse_with(&linter.grammar, 0, "()", None, None);
+        let tree = linter.grammar.parse_tree_with(0, "()", None, None);
         let world = CountingWorld { grammar: &linter.grammar, tree: &tree, conditions: Cell::new(0), cut: Cell::new(0), revision: Cell::new(0), profile: None };
         let session = Session::default();
         assert_eq!(session.run(&world, &linter.grammar.names, |semantic| {
@@ -645,7 +645,7 @@ mod tests {
         use super::super::question::Budget;
         use std::sync::atomic::Ordering;
         let linter = crate::engine::tests::linter("");
-        let tree = crate::grammar::Tree::parse_with(&linter.grammar, 0, "()", None, None);
+        let tree = linter.grammar.parse_tree_with(0, "()", None, None);
         let profile = crate::engine::Profile::default();
         let world = CountingWorld {
             grammar: &linter.grammar, tree: &tree, conditions: Cell::new(0),

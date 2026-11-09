@@ -353,7 +353,7 @@ pub mod tables {
 /// The editor's file this thread tracks: its tree (with regions) and text.
 #[derive(Clone, Copy)]
 struct Tracked {
-    tree: *const crate::grammar::Tree,
+    tree: *const crate::tree::Tree,
     text: *const u8,
     len: usize,
 }
@@ -469,8 +469,8 @@ pub fn quiet<T>(run: impl FnOnce() -> T) -> T {
 }
 
 /// Runs `run` tracking reads of `tree` (an editor's file, see
-/// [`crate::grammar::Tree::track`]) whose text is `text`, on this thread.
-pub fn tracking<T>(tree: &crate::grammar::Tree, text: &str, run: impl FnOnce() -> T) -> T {
+/// [`crate::tree::Tree::track`]) whose text is `text`, on this thread.
+pub fn tracking<T>(tree: &crate::tree::Tree, text: &str, run: impl FnOnce() -> T) -> T {
     if tree.regions().is_none() { return run() }
     let outer = TRACKED.with(|tracked| tracked.replace(Tracked { tree, text: text.as_ptr(), len: text.len() }));
     let answer = run();
@@ -479,7 +479,7 @@ pub fn tracking<T>(tree: &crate::grammar::Tree, text: &str, run: impl FnOnce() -
 }
 
 #[inline]
-fn tracked<T>(read: impl FnOnce(&crate::grammar::Tree, &str) -> T) -> Option<T> {
+fn tracked<T>(read: impl FnOnce(&crate::tree::Tree, &str) -> T) -> Option<T> {
     let tracked = TRACKED.with(Cell::get);
     if tracked.tree.is_null() { return None }
     // SAFETY: set only while `tracking` borrows the tree and its text.

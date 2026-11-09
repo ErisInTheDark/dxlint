@@ -1674,7 +1674,7 @@ impl World for Files<'_> {
 
     fn module_index(&self, file: u32, tables: &crate::grammar::names::Names) -> Option<&crate::grammar::names::modules::index::Index> {
         if file != 0 { self.0.settle_parts(file); }
-        Some(World::tree(self, file)?.module_index(tables, World::text(self, file)?, &|text| self.name_key(file, text), self.profile()))
+        Some(crate::grammar::names::modules::index::module_index(World::tree(self, file)?, tables, World::text(self, file)?, &|text| self.name_key(file, text), self.profile()))
     }
 
     fn name_key<'s>(&self, file: u32, text: &'s str) -> Cow<'s, str> {
@@ -2233,7 +2233,7 @@ mod tests {
     }
 
     fn with_snapshot_world<T>(linter: &super::super::Linter, path: &Path, source: &str, snapshot: Option<&super::super::program::Snapshot>, f: impl FnOnce(Files<'_>) -> T) -> T {
-        let tree = Tree::parse_with(&linter.grammar, 0, source, None, None);
+        let tree = linter.grammar.parse_tree_with(0, source, None, None);
         let lines = crate::line_index::LineIndex::new(source);
         let memo = Default::default();
         let reindented = Default::default();

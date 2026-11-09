@@ -1,15 +1,51 @@
 //! The finished layer tree of one file: nodes reachable from the root, with
 //! parents and field labels resolved.
 
-use super::parse::{Edge, Node, Parser, Syntax, ROOT, TEXT};
-use super::Grammar;
-use crate::pattern::compile::NO_LABEL;
-use crate::fx_hash::FxHashMap;
+use crate::steps::{ATTR_STEP, IT, PARENT};
+use dx_core::fx_hash::FxHashMap;
+use dx_pattern::compile::NO_LABEL;
+use std::any::Any;
 use std::sync::OnceLock;
 
 mod descendants;
 
 const NONE: u32 = u32::MAX;
+
+/// `Node::matcher` of the file's root node.
+pub const ROOT: u32 = u32::MAX;
+/// `Node::matcher` of plain text captures (`name:/\w+/`).
+pub const TEXT: u32 = u32::MAX - 1;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Edge {
+    pub label: u16,
+    pub node: u32,
+}
+
+/// A node while a tree is being built; [`Tree`] packs it into a [`Syntax`]
+/// plus its slice of the tree's edges.
+#[derive(Debug, Clone)]
+pub struct Node {
+    pub matcher: u32,
+    pub start: u32,
+    pub end: u32,
+    pub children: Vec<Edge>,
+}
+
+/// A finished tree's node; its children are [`Tree::children`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Syntax {
+    pub matcher: u32,
+    pub start: u32,
+    pub end: u32,
+}
+
+/// The grammar questions a tree asks: which matchers are in named layers,
+/// and which matcher specialises another.
+pub trait Matchers {
+    fn in_layer(&self, matcher: u32) -> bool;
+    fn is_a(&self, matcher: u32, of: u32) -> bool;
+}
 
 /// [`Tree::field_one`]: how many nodes a field holds, the node when one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -28,7 +64,7 @@ pub struct Tree {
     label: Vec<u16>,
     field_indices: OnceLock<Vec<usize>>,
     descendants: OnceLock<descendants::Index>,
-    module_index: OnceLock<super::names::modules::index::Index>,
+    cache: OnceLock<Box<dyn Any + Send + Sync>>,
     /// Reachable nodes in document order (pre-order).
     pub order: Vec<u32>,
     pub root: u32,
@@ -47,53 +83,18 @@ pub struct Tree {
     /// a node keeps its id across edits only while those stay the same.
     regions: Option<Box<crate::footprint::Regions>>,
     /// Another file's tree, as other files' reads of it are recorded
-    /// ([`crate::parts`]); `None` for the file being linted.
-    pub owner: Option<std::sync::Arc<crate::parts::Owner>>,
+    /// ([`dx_core::parts`]); `None` for the file being linted.
+    pub owner: Option<std::sync::Arc<dx_core::parts::Owner>>,
 }
 
 impl Tree {
-    pub fn parse(g: &Grammar, lang: usize, text: &str) -> Tree {
-        Tree::parse_with(g, lang, text, None, None)
-    }
-
-    /// Like [`Tree::parse`], searching only overlays flagged in `overlays`.
-    pub fn parse_with(g: &Grammar, lang: usize, text: &str, overlays: Option<&[bool]>, profile: Option<&crate::engine::Profile>) -> Tree {
-        let mut p = Parser::new(g, lang, text);
-        p.enabled_overlays = overlays;
-        p.profile = profile;
-        let root = p.parse();
-        let too_deep = p.too_deep;
-        let mut tree = Tree::from_nodes(std::mem::take(&mut p.nodes), std::mem::take(&mut p.holes), root, too_deep);
-        tree.layer_roots = std::mem::take(&mut p.layer_roots);
-        tree
-    }
-
     /// A tree from a native front end's nodes (already using this grammar's
     /// matcher and label ids).
     pub fn from_native(nodes: Vec<Node>, root: u32) -> Tree {
         Tree::from_nodes(nodes, Vec::new(), root, false)
     }
 
-    /// A front end's tree (in this grammar's ids) with the pattern layers
-    /// that live inside it: one tree per file. `layers` (by matcher) limits
-    /// which overlays are searched and, under each node, whether its child
-    /// layers are built at all (all of them when any is wanted, since they
-    /// compete for the same text).
-    pub fn graft(g: &Grammar, lang: usize, text: &str, mut nodes: Vec<Node>, root: u32, layers: Option<&[bool]>, child_layers: bool, profile: Option<&crate::engine::Profile>) -> Tree {
-        let mut p = Parser::new(g, lang, text);
-        p.enabled_overlays = layers;
-        p.masked_children = child_layers;
-        p.profile = profile;
-        let holes = p.graft(&mut nodes, root);
-        let too_deep = p.too_deep;
-        let layer_roots = std::mem::take(&mut p.layer_roots);
-        drop(p);
-        let mut tree = Tree::from_nodes(nodes, holes, root, too_deep);
-        tree.layer_roots = layer_roots;
-        tree
-    }
-
-    /// The named layer (index into [`Grammar::layers`]) a node is in, or
+    /// The named layer (index into the grammar's layers) a node is in, or
     /// `None` for the default layer.
     pub fn layer_of(&self, mut id: u32) -> Option<u16> {
         if self.layer_roots.is_empty() {
@@ -112,7 +113,8 @@ impl Tree {
         self.layer_roots.iter().find(|&&(_, x)| x == l).map(|&(r, _)| r)
     }
 
-    fn from_nodes(built: Vec<Node>, holes: Vec<(u32, u32, u32)>, root: u32, too_deep: bool) -> Tree {
+    /// Packs a front end's building nodes and their insides into a tree.
+    pub fn from_nodes(built: Vec<Node>, holes: Vec<(u32, u32, u32)>, root: u32, too_deep: bool) -> Tree {
         let nodes: Vec<Syntax> = built.iter().map(|n| Syntax { matcher: n.matcher, start: n.start, end: n.end }).collect();
         let mut first = Vec::with_capacity(built.len() + 1);
         let mut edges = Vec::with_capacity(built.iter().map(|n| n.children.len()).sum());
@@ -157,7 +159,7 @@ impl Tree {
             }
         }
         parent[root as usize] = NONE;
-        Tree { nodes, first, edges, parent, label, field_indices: OnceLock::new(), descendants: OnceLock::new(), module_index: OnceLock::new(), order, root, holes, too_deep, layer_roots: Vec::new(), overlapping, regions: None, owner: None }
+        Tree { nodes, first, edges, parent, label, field_indices: OnceLock::new(), descendants: OnceLock::new(), cache: OnceLock::new(), order, root, holes, too_deep, layer_roots: Vec::new(), overlapping, regions: None, owner: None }
     }
 
     /// Records reads of this tree from now on: it is an editor's file.
@@ -206,9 +208,11 @@ impl Tree {
         Some(self.parent[id as usize]).filter(|&p| p != NONE)
     }
 
-    /// Rebuilds the tree after `change` edits its nodes (tests shape trees by hand).
-    #[cfg(test)]
-    pub(crate) fn edit(&mut self, change: impl FnOnce(&mut Vec<Node>)) {
+    /// Rebuilds the tree after `change` edits its nodes.
+    ///
+    /// For tests that shape trees by hand.
+    #[doc(hidden)]
+    pub fn edit(&mut self, change: impl FnOnce(&mut Vec<Node>)) {
         let mut nodes = self.built();
         change(&mut nodes);
         let layer_roots = std::mem::take(&mut self.layer_roots);
@@ -289,7 +293,7 @@ impl Tree {
         holes.sort_unstable();
         Tree {
             nodes, first, edges, parent, label,
-            field_indices: OnceLock::new(), descendants: OnceLock::new(), module_index: OnceLock::new(),
+            field_indices: OnceLock::new(), descendants: OnceLock::new(), cache: OnceLock::new(),
             order: self.order.iter().map(|&id| to[id as usize]).collect(),
             root: to[self.root as usize], holes, too_deep: self.too_deep,
             layer_roots: self.layer_roots.iter().map(|&(root, layer)| (to[root as usize], layer)).collect(),
@@ -336,7 +340,7 @@ impl Tree {
         let mapped = |ids: &[u32]| -> Vec<u32> { ids.iter().filter(|&&id| survives(id)).map(|&id| to[id as usize]).collect() };
         Tree {
             nodes, first, edges, parent, label,
-            field_indices: OnceLock::new(), descendants: OnceLock::new(), module_index: OnceLock::new(),
+            field_indices: OnceLock::new(), descendants: OnceLock::new(), cache: OnceLock::new(),
             order: mapped(&self.order),
             root: to[self.root as usize],
             holes: self.holes.iter().filter(|hole| survives(hole.0)).map(|&(node, start, end)| (to[node as usize], start, end)).collect(),
@@ -411,16 +415,18 @@ impl Tree {
         self.nodes.len() - self.order.len()
     }
 
-    /// The tree's nodes as building nodes, for tests that derive trees from it.
-    #[cfg(test)]
-    pub(crate) fn built(&self) -> Vec<Node> {
+    /// The tree's nodes as building nodes.
+    ///
+    /// For tests that derive trees from it.
+    #[doc(hidden)]
+    pub fn built(&self) -> Vec<Node> {
         (0..self.nodes.len() as u32).map(|id| {
             let Syntax { matcher, start, end } = self.nodes[id as usize];
             Node { matcher, start, end, children: self.children(id).to_vec() }
         }).collect()
     }
 
-    pub(crate) fn descendant_nodes(&self, node: u32, kinds: &[u32], field: Option<u16>) -> Option<impl Iterator<Item = u32> + '_> {
+    pub fn descendant_nodes(&self, node: u32, kinds: &[u32], field: Option<u16>) -> Option<impl Iterator<Item = u32> + '_> {
         // Nodes of these kinds: kept ones keep their kind and place, so only
         // an edit adding, removing or moving one changes the answer.
         match (field, &self.regions) {
@@ -430,24 +436,17 @@ impl Tree {
         self.descendants.get_or_init(|| crate::footprint::quiet(|| descendants::Index::new(self))).iter(self, node, kinds, field)
     }
 
-    pub fn module_index(&self, tables: &super::names::Names, text: &str, key: &super::names::NameKey<'_>, profile: Option<&crate::engine::Profile>) -> &super::names::modules::index::Index {
-        if self.regions.is_some() { crate::footprint::enter_atom(crate::footprint::Atom::whole(crate::footprint::tables::MODULE)) }
-        self.module_index.get_or_init(|| crate::footprint::quiet(|| {
-            let build = || super::names::modules::index::Index::build(tables, self, text, key);
-            let mut index = match profile {
-                Some(profile) => profile.time_module_index(build),
-                None => build(),
-            };
-            index.owner = self.owner.clone();
-            index
-        }))
+    /// Caches one derived table for this tree's whole life. A tree holds
+    /// one: asking for a second type panics.
+    pub fn cached<T: Any + Send + Sync>(&self, build: impl FnOnce() -> T) -> &T {
+        self.cache.get_or_init(|| Box::new(build())).downcast_ref::<T>().expect("a tree caches one table")
     }
 
     pub fn semantic_node(&self, node: u32) -> Option<u32> {
         self.semantic_node_with(node, &mut || true)
     }
 
-    pub(crate) fn semantic_node_with(&self, mut node: u32, step: &mut impl FnMut() -> bool) -> Option<u32> {
+    pub fn semantic_node_with(&self, mut node: u32, step: &mut impl FnMut() -> bool) -> Option<u32> {
         for _ in 0..=self.nodes.len() {
             self.nodes.get(node as usize)?;
             let Some(child) = self.capture_child(node) else { return Some(node) };
@@ -457,7 +456,7 @@ impl Tree {
         None
     }
 
-    pub(crate) fn capture_child(&self, node: u32) -> Option<u32> {
+    pub fn capture_child(&self, node: u32) -> Option<u32> {
         // Only text captures: other nodes' children are not read.
         if self.nodes.get(node as usize)?.matcher != TEXT { return None }
         match self.children(node) {
@@ -466,7 +465,7 @@ impl Tree {
         }
     }
 
-    pub(crate) fn capture_owner_with(&self, node: u32, step: &mut impl FnMut() -> bool) -> Option<u32> {
+    pub fn capture_owner_with(&self, node: u32, step: &mut impl FnMut() -> bool) -> Option<u32> {
         let mut node = self.semantic_node_with(node, step)?;
         for _ in 0..=self.nodes.len() {
             let Some(parent) = self.parent(node) else { return Some(node) };
@@ -481,18 +480,18 @@ impl Tree {
         self.semantic_follow_with(node, path, &mut || true)
     }
 
-    pub(crate) fn semantic_follow_with(&self, node: u32, path: &[u16], step: &mut impl FnMut() -> bool) -> Option<Vec<u32>> {
+    pub fn semantic_follow_with(&self, node: u32, path: &[u16], step: &mut impl FnMut() -> bool) -> Option<Vec<u32>> {
         let mut nodes = vec![self.semantic_node_with(node, step)?];
         for &label in path {
-            if label == super::names::IT { continue }
+            if label == IT { continue }
             let mut next = Vec::new();
             for node in nodes {
-                if label == super::names::PARENT {
+                if label == PARENT {
                     let owner = self.capture_owner_with(node, step)?;
                     if let Some(parent) = self.parent(owner) {
                         next.push(self.semantic_node_with(parent, step)?);
                     }
-                } else if label < super::names::ATTR_STEP {
+                } else if label < ATTR_STEP {
                     for child in self.fields(node, label) {
                         next.push(self.semantic_node_with(child, step)?);
                     }
@@ -639,7 +638,7 @@ impl Tree {
     /// The deepest layer node (not labelled text) whose span contains `pos`,
     /// ignoring `skip` (the node asking) and its descendants, in the default
     /// layer.
-    pub fn innermost_at(&self, g: &Grammar, pos: u32, skip: u32) -> Option<u32> {
+    pub fn innermost_at(&self, g: &dyn Matchers, pos: u32, skip: u32) -> Option<u32> {
         let mut id = self.innermost_with_text(g, pos, skip);
         // Labelled text inside a layer belongs to that layer.
         while self.nodes[id as usize].matcher == TEXT {
@@ -654,7 +653,7 @@ impl Tree {
     /// Reads (for an editor's file) the found node's span and each node's
     /// parent on the way: a node newly holding `pos` either lies inside
     /// that span or now parents a node on the way.
-    pub fn innermost_with_text(&self, g: &Grammar, pos: u32, skip: u32) -> u32 {
+    pub fn innermost_with_text(&self, g: &dyn Matchers, pos: u32, skip: u32) -> u32 {
         let mut id = self.root;
         'descend: loop {
             self.read(crate::footprint::Read::Link, id);
@@ -672,7 +671,7 @@ impl Tree {
             for e in children[..upto].iter().rev() {
                 let n = &self.nodes[e.node as usize];
                 // Named layers (their roots, their nodes) are other trees.
-                let other = n.matcher == ROOT || n.matcher != TEXT && g.matchers[n.matcher as usize].layer.is_some();
+                let other = n.matcher == ROOT || n.matcher != TEXT && g.in_layer(n.matcher);
                 if e.node == skip || other {
                     continue;
                 }
@@ -695,7 +694,7 @@ impl Tree {
 
     /// The closest node of matcher `m` (or a specialisation of it), starting
     /// at `id` itself.
-    pub fn ancestor(&self, g: &Grammar, mut id: u32, m: u32) -> Option<u32> {
+    pub fn ancestor(&self, g: &dyn Matchers, mut id: u32, m: u32) -> Option<u32> {
         loop {
             let here = self.nodes[id as usize].matcher;
             if here != ROOT && here != TEXT && g.is_a(here, m) {
@@ -709,7 +708,6 @@ impl Tree {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::grammar::Edge;
 
     #[test]
     fn shared_nodes_keep_first_parent_labels_and_stable_document_order() {
