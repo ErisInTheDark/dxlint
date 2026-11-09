@@ -43,7 +43,7 @@ impl Parser<'_> {
             if let Err(message) = resolve::resolve(&mut declaration.definition) {
                 self.errors.push(ConfigError::new(name.span, message));
             } else {
-                self.config.parsers.push(declaration);
+                self.config.parsers.push(declaration.into());
             }
         }
     }
@@ -64,7 +64,7 @@ impl Parser<'_> {
             self.recover();
             return;
         };
-        let mut declaration = self.config.parsers[index].clone();
+        let mut declaration = (*self.config.parsers[index]).clone();
         let known = declaration.definition.nodes.len();
         let before = self.errors.len();
         self.syntax_items(&mut declaration, true);
@@ -84,7 +84,7 @@ impl Parser<'_> {
                 }
             }
         }
-        self.config.parsers[index] = declaration;
+        self.config.parsers[index] = declaration.into();
     }
 
     fn syntax_items(&mut self, declaration: &mut ParserDecl, extending: bool) {

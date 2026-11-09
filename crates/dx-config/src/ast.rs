@@ -63,10 +63,11 @@ pub struct Config {
     pub natives: Vec<Name>,
     pub attrs: Vec<AttrDef>,
     pub forwards: Vec<ForwardDef>,
-    /// Name and type-layer items (`scope`, `declares`, `unwraps`, ...).
-    pub names: Vec<NameDef>,
-    /// `parser name in lang { ... }`: structured grammars.
-    pub parsers: Vec<ParserDecl>,
+    /// Name and type-layer items (`scope`, `declares`, `unwraps`, ...);
+    /// shared like `rules`.
+    pub names: Vec<std::sync::Arc<NameDef>>,
+    /// `parser name in lang { ... }`: structured grammars; shared like `rules`.
+    pub parsers: Vec<std::sync::Arc<ParserDecl>>,
     /// `protocol name { method m (params) = expr }`: protocols `dxlint map`
     /// serves; each method is a `fn` of `params`.
     pub protocols: Vec<Protocol>,

@@ -1361,7 +1361,7 @@ fn instance_classes_must_have_real_declarations_not_only_queries() {
                     arguments: Vec::new(),
                 }),
             },
-        });
+        }.into());
         Grammar::build(&config, &mut errors);
         assert_eq!(errors.is_empty(), valid, "{errors:?}");
     }

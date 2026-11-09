@@ -1238,7 +1238,7 @@ impl<'a> Parser<'a> {
             return;
         }
         let when = self.condition();
-        self.config.names.push(NameDef { targets, item, when });
+        self.config.names.push(NameDef { targets, item, when }.into());
     }
 
     /// `when cond { items }` in a layer block: the name items inside apply

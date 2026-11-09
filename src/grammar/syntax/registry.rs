@@ -46,7 +46,7 @@ pub struct Parsers {
 }
 
 impl Parsers {
-    pub fn build(declarations: &[ParserDecl], errors: &mut Vec<ConfigError>) -> Self {
+    pub fn build(declarations: &[std::sync::Arc<ParserDecl>], errors: &mut Vec<ConfigError>) -> Self {
         let mut entries = HashMap::new();
         let mut names = HashMap::new();
         for declaration in declarations {
@@ -74,7 +74,7 @@ mod tests {
     use super::Parsers;
     use crate::config::source::Disk;
 
-    fn declarations() -> Vec<crate::config::ast::ParserDecl> {
+    fn declarations() -> Vec<std::sync::Arc<crate::config::ast::ParserDecl>> {
         let loaded = crate::config::load_text("value grammar", r#"
             parser toy in js {
                 flag uppercase
@@ -114,7 +114,7 @@ mod tests {
         assert!(!errors.is_empty());
         errors.clear();
         declarations.truncate(1);
-        declarations[0].definition.root = "missing".into();
+        std::sync::Arc::make_mut(&mut declarations[0]).definition.root = "missing".into();
         Parsers::build(&declarations, &mut errors);
         assert!(!errors.is_empty());
     }
