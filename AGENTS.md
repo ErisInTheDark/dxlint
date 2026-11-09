@@ -5,9 +5,9 @@ Rust linter; rules in `.dx` (docs/advanced.md). Binary `dxlint`.
 ## Commands
 
 - check a change: `npm run check [-- fixture paths...]` (one compile: builds every crate's test binary, runs their tests, then fixtures and self-lint from dxlint's; never build twice to validate)
-- test: `cargo test --lib` (plain `cargo test` compiles the crate a second time for a bin with no tests; stable Rust owners only: VM, parser, patterns/DFA, cache/reads, type APIs, CLI/LSP; rule behaviour lives in fixtures)
+- test: `cargo test --workspace --lib` (plain `cargo test` compiles the top crate a second time for a bin with no tests; stable Rust owners only: VM, parser, patterns/DFA, cache/reads, type APIs, CLI/LSP; rule behaviour lives in fixtures)
 - rule fixtures: `dxlint fixtures [paths...] [--bless]` (default `fixtures/`)
-- package binaries: `npm run build:binaries` (Windows, Linux, macOS; setup in its header); any change to `src/` or Cargo files ships with it in the same batch (publishing refuses binaries whose `package/source.sha256` stamp is stale)
+- package binaries: `npm run build:binaries` (Windows, Linux, macOS; setup in its header); any change to `src/`, `crates/` or Cargo files ships with it in the same batch (publishing refuses binaries whose `package/source.sha256` stamp is stale)
 - Windows binary's PGO profile: `npm run build:profile <project>...` (needs `rustup component add llvm-tools-preview`; lints real projects on an instrumented build), commit `scripts/dxlint-win32-x64.profdata`, then `build:binaries`; refresh when big engine changes landed, a stale one only gains less
 - self-lint: `cargo run --release --` (uses `.dx`); must stay clean
 - perf check: `dxlint --stats --no-cache <big file>`; compare before/after engine changes
@@ -19,15 +19,15 @@ Rust linter; rules in `.dx` (docs/advanced.md). Binary `dxlint`.
 
 ## Layout
 
-- `crates/dx-config` (`config`): lexer, token stream (imports + macros splice tokens), parser
-- workspace: lower layers are crates under `crates/`, re-exported in `src/lib.rs` under their old module names (`crate::pattern::...` still works); a crate never depends upward
+- workspace, bottom-up: lower layers are crates under `crates/`, re-exported in `src/lib.rs` under their old module names (`crate::pattern::...` still works); a crate never depends upward; tests needing the engine live in the top crate (`src/grammar_tests`, `src/runtime_tests`)
 - `crates/dx-pattern` (`pattern`): `Pat`, regex subset parser, compiler, DFA bridge, prefilters
-- `crates/dx-core`: hashing, path globs, allocator, levers, sampler, work counts, file parts, `reads` (also `engine::reads`)
+- `crates/dx-core`: hashing, path globs, allocator, levers, sampler, work counts, profile counters, file parts, `reads` (also `engine::reads`)
 - `crates/dx-tree`: `Tree`, node types and path steps, `footprint` (recorded reads), `line_index`
 - `crates/dx-ir`: compiled expression and VM value types (`CExpr`, `VExpr`, `Value`, `V`, record cells, builtin/function metadata); no evaluation
-- `crates/dx-grammar`: layers per language, `parse.rs` builds trees
-- `crates/dx-runtime` (`expr`, `vm`, `language_options`): rule expressions (`expr/`; functions registry in `expr/functions.rs`), the lowered VM (`vm/`) and file-scoped language settings; owns transform piece marks and fix placeholders
-- `src/engine`: linter, fixes, suppressions, `.dxcache` (`cache.rs`), symbol index; end-to-end tests in `engine/tests.rs`
+- `crates/dx-config` (`config`): lexer, token stream (imports + macros splice tokens), parser
+- `crates/dx-grammar` (`grammar`): layers per language, `parse.rs` builds trees, name resolution (`names/`); the engine hands it builtin names and constant folding (`BuildEnv`)
+- `crates/dx-runtime` (`expr`, `vm`, `language_options`): rule expressions (`expr/`; functions registry in `expr/functions.rs`), the lowered VM (`vm/`) and file-scoped language settings; reaches the lint world through `expr::TypeWorld`
+- `src/engine`: linter (`Compiled` config shared by equal configs + per-project state), fixes, suppressions, `.dxcache` (`cache.rs`), symbol index; end-to-end tests in `engine/tests.rs`
 - `crates/dx-grammar/src/frontend.rs`: the `Frontend` trait, the engine's only view of a front end (kinds/fields, parse, per-file tokens and names)
 - `crates/dx-grammar/src/syntax`: declared parsers (`parser x in lang`, `extend parser`): compile to a program, run by `run/descend.rs` (valid input) and `run/execute.rs` (diagnosing, deep nesting); `frontend.rs` makes one a language's front end (`native x`). `std/ts/grammar.dx` is TypeScript; parse bench `scratch/tools/zbench.ps1`
 - `src/engine/transform.rs`, `src/cli/map.rs`: `transform`s applied strictly once, served by `dxlint map` (TS content mapper protocol, `package/esbuild.mjs`); output depends only on the file's text and config (TS keys its cache that way); worked example `fixtures/engine/transform-state`
