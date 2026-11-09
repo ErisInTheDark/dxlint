@@ -9,8 +9,9 @@ use crate::vm::{self, Begin, KindSet, VExpr, V};
 pub struct Attr {
     pub name: String,
     /// `(layer, body, body id)` in specificity order, resolved by the config
-    /// compiler; definitions with one body id hold the same compiled body.
-    pub defs: Vec<(u32, CExpr, u32)>,
+    /// compiler; definitions with one body id share one compiled body (a
+    /// group's definition reaches hundreds of layers).
+    pub defs: Vec<(u32, std::sync::Arc<CExpr>, u32)>,
 }
 
 pub struct Attributes {
@@ -25,7 +26,7 @@ pub struct Attributes {
 
 struct CompiledAttr {
     name: String,
-    defs: Vec<CExpr>,
+    defs: Vec<std::sync::Arc<CExpr>>,
     /// Each definition's typed form ([`vm::lower`] is total).
     lowered: Vec<Lowered>,
     routes: Vec<Route>,
@@ -52,7 +53,7 @@ enum Route {
 
 impl Attributes {
     /// An attribute's name and its definitions' expressions.
-    pub fn definition(&self, id: u16) -> Option<(&str, &[CExpr])> {
+    pub fn definition(&self, id: u16) -> Option<(&str, &[std::sync::Arc<CExpr>])> {
         self.attrs.get(usize::from(id)).map(|attr| (attr.name.as_str(), attr.defs.as_slice()))
     }
 
@@ -382,7 +383,7 @@ impl<'e> Needs<'e> {
             }
         }
         for (def, set) in by_def {
-            self.pending.push((set, &compiled.defs[def as usize]));
+            self.pending.push((set, &*compiled.defs[def as usize]));
         }
     }
 
@@ -716,11 +717,11 @@ mod tests {
         let leaf = g.matcher("leaf").unwrap();
         let other = g.matcher("other").unwrap();
         let plan = Attributes::new(vec![
-            Attr { name: "specific".into(), defs: vec![(member, number(2.0), 1), (base, number(1.0), 2)] },
-            Attr { name: "fallback".into(), defs: vec![(base, number(3.0), 3)] },
+            Attr { name: "specific".into(), defs: vec![(member, number(2.0).into(), 1), (base, number(1.0).into(), 2)] },
+            Attr { name: "fallback".into(), defs: vec![(base, number(3.0).into(), 3)] },
         ], &[(leaf, 0, 0), (leaf, 1, 0)], &g);
         let read = |attr| match plan.route(leaf, attr) {
-            Route::Defined(index, _) => match &plan.attrs[attr as usize].defs[index as usize] {
+            Route::Defined(index, _) => match &*plan.attrs[attr as usize].defs[index as usize] {
                 CExpr::Const(Value::Num(n)) => *n,
                 _ => panic!("number"),
             },
@@ -741,9 +742,9 @@ mod tests {
         let leaf = g.matcher("leaf").unwrap();
         let other = g.matcher("other").unwrap();
         let mut plan = Attributes::new(vec![
-            Attr { name: "read".into(), defs: vec![(base, number(1.0), 1)] },
-            Attr { name: "unread".into(), defs: vec![(base, number(2.0), 2)] },
-            Attr { name: "chained".into(), defs: vec![(base, CExpr::Attr(0), 3)] },
+            Attr { name: "read".into(), defs: vec![(base, number(1.0).into(), 1)] },
+            Attr { name: "unread".into(), defs: vec![(base, number(2.0).into(), 2)] },
+            Attr { name: "chained".into(), defs: vec![(base, CExpr::Attr(0).into(), 3)] },
         ], &[], &g);
         let mut on_leaf = KindSet::empty(g.matchers.len());
         on_leaf.insert(leaf);

@@ -1013,7 +1013,7 @@ fn attributes(
         // compiles alike on every layer agreeing on the labels the body (or a
         // function it calls) names: compile once per such agreement.
         let mentioned = mentioned_labels(g, &def.expr, &functions);
-        let mut shared: Vec<(Vec<u16>, CExpr, u32, Vec<(crate::config::source::Span, crate::expr::Resolved)>, Vec<u32>)> = Vec::new();
+        let mut shared: Vec<(Vec<u16>, std::sync::Arc<CExpr>, u32, Vec<(crate::config::source::Span, crate::expr::Resolved)>, Vec<u32>)> = Vec::new();
         for target in &def.targets {
             let Some((resolved, _)) = resolve_target(&AstTarget::Matcher(target.clone()), g, None, errors) else { continue };
             // Through a group: a default its members' own definitions refine.
@@ -1056,7 +1056,7 @@ fn attributes(
                         let (uses_before, errors_before) = (uses.borrow().len(), errors.len());
                         let compiled = scope.compile(&def.expr, errors).map(|e| {
                             next_body += 1;
-                            (e, next_body)
+                            (std::sync::Arc::new(e), next_body)
                         });
                         let attribute_uses = uses.borrow()[uses_before..].to_vec();
                         let reads = layer_reads.into_inner();

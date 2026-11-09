@@ -109,7 +109,7 @@ pub fn rule_dependencies(output: &mut Output<'_>, linter: &Linter, symbols: &Sym
                 CExpr::Attr(id) | CExpr::FieldAttr(_, id) | CExpr::ParentAttr(id) if attrs.insert(*id) => {
                     if let Some((name, defs)) = linter.attrs.definition(*id) {
                         files_of(Kind::Attr, name, &mut depends);
-                        pending.extend(defs);
+                        pending.extend(defs.iter().map(|def| &**def));
                     }
                 }
                 CExpr::UserCall(id, _) if functions.insert(*id) => {
