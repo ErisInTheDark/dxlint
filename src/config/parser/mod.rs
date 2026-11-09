@@ -2105,7 +2105,7 @@ impl<'a> Parser<'a> {
             (Some(i), Some(_)) => {
                 // Configuration above went to the old rule.
                 self.forget_configs(&def.name.text);
-                self.config.rules[i] = def;
+                self.config.rules[i] = def.into();
             }
             (Some(i), None) => {
                 let first = self.config.rules[i].name.span;
@@ -2123,9 +2123,9 @@ impl<'a> Parser<'a> {
                     ConfigError::new(def.name.span, format!("nothing to override: no rule `{}`", def.name.text))
                         .suggest(&def.name.text, self.config.rules.iter().map(|r| r.name.text.as_str())),
                 );
-                self.config.rules.push(def);
+                self.config.rules.push(def.into());
             }
-            (None, None) => self.config.rules.push(def),
+            (None, None) => self.config.rules.push(def.into()),
         }
     }
 

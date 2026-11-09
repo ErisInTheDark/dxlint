@@ -345,7 +345,8 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
     // Each definition's compiled copy for files outside every `files` block.
     let mut base: Vec<Option<usize>> = vec![None; config.rules.len()];
     for (d, def) in config.rules.iter().enumerate() {
-        if def.inert {
+        // Runtime builds compile only rules that are on.
+        if def.inert || !tooling && !def.live() {
             inert.push(as_inert(def));
             continue;
         }
@@ -772,8 +773,9 @@ fn extend_rules(config: &mut crate::config::ast::Config, errors: &mut Vec<Config
             continue;
         }
         for mut copy in copies {
-            copy.name = crate::config::ast::Name { text: format!("{}{}", name.text, &copy.name.text[base.text.len()..]), span: name.span };
-            copy.defined_only = true;
+            let def = std::sync::Arc::make_mut(&mut copy);
+            def.name = crate::config::ast::Name { text: format!("{}{}", name.text, &def.name.text[base.text.len()..]), span: name.span };
+            def.defined_only = true;
             config.rules.push(copy);
         }
     }
@@ -840,7 +842,7 @@ fn configure(config: &mut crate::config::ast::Config, errors: &mut Vec<ConfigErr
             if c.scope.is_none() {
                 matching.retain(|&i| config.rules[i].enabled());
                 for &i in &matching {
-                    config.rules[i].configured = c.patch.severity;
+                    std::sync::Arc::make_mut(&mut config.rules[i]).configured = c.patch.severity;
                 }
             }
             continue;
@@ -900,15 +902,15 @@ fn configure(config: &mut crate::config::ast::Config, errors: &mut Vec<ConfigErr
         };
         for (&i, options) in matching.iter().zip(owned) {
             settings[i].push(Setting { scope: c.scope, change, options });
-            if c.scope.is_some() {
-                config.rules[i].scoped_on |= !matches!(change, Change::Set(Severity::Off));
+            if c.scope.is_some() && !matches!(change, Change::Set(Severity::Off)) && !config.rules[i].scoped_on {
+                std::sync::Arc::make_mut(&mut config.rules[i]).scoped_on = true;
             }
         }
         if c.scope.is_some() {
             continue;
         }
         for &i in &matching {
-            let def = &mut config.rules[i];
+            let def = std::sync::Arc::make_mut(&mut config.rules[i]);
             match patch.severity {
                 Some(s) => def.configured = Some(s),
                 // `rule x`: on at its default, unless it already is on.

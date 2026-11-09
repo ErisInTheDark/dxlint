@@ -366,11 +366,10 @@ fn prune_config(config: &mut Config, runtime: bool) {
         }
     }
 
+    // Runtime builds skip every rule that is off ([`super::build`]); tooling
+    // lists those reading what was pruned as inert.
+    if runtime { return }
     for r in config.rules.iter_mut().filter(|r| !r.live()) {
-        if runtime {
-            r.inert = true;
-            continue;
-        }
         let inert = {
             let mut names = Names::default();
             for t in &r.targets {
@@ -381,7 +380,7 @@ fn prune_config(config: &mut Config, runtime: bool) {
             rule_names(r, &mut names);
             names.iter().any(|n| gone(n) || dropped_attrs.contains(*n))
         };
-        r.inert = inert;
+        if inert != r.inert { std::sync::Arc::make_mut(r).inert = inert }
     }
 }
 

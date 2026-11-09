@@ -36,7 +36,9 @@ pub struct Config {
     pub langs: Vec<LangDef>,
     pub language_options: Vec<LanguageOptions>,
     pub matchers: Vec<MatcherDef>,
-    pub rules: Vec<RuleDef>,
+    /// Shared: every configuration replaying a library import copies the
+    /// list, and only rules its own lines touch get their own copy.
+    pub rules: Vec<std::sync::Arc<RuleDef>>,
     /// `rule name ...` without a context, in source order.
     pub configs: Vec<RuleConfig>,
     /// `rule name extends base`: `name` starts as a copy of `base`'s
