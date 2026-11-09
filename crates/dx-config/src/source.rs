@@ -36,7 +36,14 @@ pub struct SourceFile {
     pub name: String,
     pub path: Option<PathBuf>,
     pub text: Arc<str>,
-    pub lines: LineIndex,
+    /// Built when a span is first shown: most library files never are.
+    lines: std::sync::OnceLock<LineIndex>,
+}
+
+impl SourceFile {
+    pub fn lines(&self) -> &LineIndex {
+        self.lines.get_or_init(|| LineIndex::new(&self.text))
+    }
 }
 
 #[derive(Default)]
@@ -46,8 +53,7 @@ pub struct SourceMap {
 
 impl SourceMap {
     pub fn add(&mut self, name: String, path: Option<PathBuf>, text: Arc<str>) -> FileId {
-        let lines = LineIndex::new(&text);
-        self.files.push(SourceFile { name, path, text, lines });
+        self.files.push(SourceFile { name, path, text, lines: std::sync::OnceLock::new() });
         FileId(self.files.len() as u32 - 1)
     }
 

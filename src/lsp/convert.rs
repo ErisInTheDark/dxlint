@@ -113,7 +113,7 @@ fn rule_link(linter: &Linter, rule: &str) -> Option<String> {
     let r = linter.rules.iter().find(|r| r.name == rule)?;
     let f = linter.sources.get(r.span.file);
     let path = super::config_docs::source_path(f)?;
-    Some(format!("{}#L{}", super::uri::from_path(&path), f.lines.line_of(r.span.start as usize) + 1))
+    Some(format!("{}#L{}", super::uri::from_path(&path), f.lines().line_of(r.span.start as usize) + 1))
 }
 
 /// LSP diagnostic severities.
@@ -125,7 +125,7 @@ pub const INFORMATION: u8 = 3;
 pub fn config_error(sources: &SourceMap, e: &ConfigError, severity: u8, uri_of: &dyn Fn(crate::config::source::FileId) -> Option<String>) -> Value {
     let span_range = |span: crate::config::source::Span| {
         let f = sources.get(span.file);
-        range(&f.text, &f.lines, span.start as usize, span.end as usize)
+        range(&f.text, f.lines(), span.start as usize, span.end as usize)
     };
     let range = match e.span {
         Some(span) => span_range(span),

@@ -29,7 +29,7 @@ impl ConfigFile<'_> {
         let pos = &params["position"];
         let line = pos["line"].as_u64().unwrap_or(0) as u32;
         let character = pos["character"].as_u64().unwrap_or(0) as u32;
-        f.lines.from_utf16(&f.text, line, character) as u32
+        f.lines().from_utf16(&f.text, line, character) as u32
     }
 
     /// The word around `offset` (`[A-Za-z0-9_]`, plus `-`/`:` inside rule
@@ -80,7 +80,7 @@ impl ConfigFile<'_> {
         for sym in &self.symbols.symbols {
             let Some(kind) = symbol_kind(sym.kind) else { continue };
             for d in sym.defs.iter().filter(|d| d.file == self.file) {
-                let range = convert::range(&f.text, &f.lines, d.start as usize, d.end as usize);
+                let range = convert::range(&f.text, f.lines(), d.start as usize, d.end as usize);
                 out.push(json!({
                     "name": sym.name,
                     "detail": sym.summary.chars().take(80).collect::<String>(),
@@ -262,7 +262,7 @@ fn symbol_kind(k: Kind) -> Option<u8> {
 pub fn location(symbols: &Symbols, span: Span) -> Option<Value> {
     let f = symbols.sources.get(span.file);
     let path = source_path(f)?;
-    let range = convert::range(&f.text, &f.lines, span.start as usize, span.end as usize);
+    let range = convert::range(&f.text, f.lines(), span.start as usize, span.end as usize);
     Some(json!({ "uri": uri::from_path(&path), "range": range }))
 }
 

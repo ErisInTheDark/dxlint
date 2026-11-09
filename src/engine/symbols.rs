@@ -224,7 +224,7 @@ impl Symbols {
     /// `file:line:col` of a span.
     pub fn location(&self, span: Span) -> String {
         let f = self.sources.get(span.file);
-        let (line, col) = f.lines.line_col(&f.text, span.start as usize);
+        let (line, col) = f.lines().line_col(&f.text, span.start as usize);
         format!("{}:{}:{}", f.name, line + 1, col + 1)
     }
 
@@ -252,11 +252,11 @@ impl Symbols {
     /// The `#` comment lines right above a definition's line.
     fn doc_comment(&self, span: Span) -> Option<String> {
         let f = self.sources.get(span.file);
-        let mut line = f.lines.line_of(span.start as usize);
+        let mut line = f.lines().line_of(span.start as usize);
         let mut lines = Vec::new();
         while line > 0 {
             line -= 1;
-            let text = f.lines.line_text(&f.text, line).trim();
+            let text = f.lines().line_text(&f.text, line).trim();
             match text.strip_prefix('#') {
                 Some(rest) if !rest.trim_start().starts_with("---") => lines.push(rest.strip_prefix(' ').unwrap_or(rest).to_string()),
                 _ => break,

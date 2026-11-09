@@ -55,18 +55,18 @@ pub fn config_errors(output: &mut Output<'_>, errors: &[ConfigError], sources: &
         let mut out = format!("{red}error{red:#}{BOLD}: {}{BOLD:#}\n", e.message);
         if let Some(span) = e.span {
             let file = sources.get(span.file);
-            let (line, col) = file.lines.line_col(&file.text, span.start as usize);
+            let (line, col) = file.lines().line_col(&file.text, span.start as usize);
             out.push_str(&format!("  {DIM}-->{DIM:#} {}:{}:{}\n", file.name, line + 1, col + 1));
-            snippet(&mut out, &file.text, &file.lines, span.start as usize, span.end as usize, red);
+            snippet(&mut out, &file.text, file.lines(), span.start as usize, span.end as usize, red);
         }
         for note in &e.notes {
             out.push_str(&format!("  {BOLD}= note:{BOLD:#} {note}\n"));
         }
         for (span, label) in &e.related {
             let file = sources.get(span.file);
-            let (line, col) = file.lines.line_col(&file.text, span.start as usize);
+            let (line, col) = file.lines().line_col(&file.text, span.start as usize);
             out.push_str(&format!("  {DIM}-->{DIM:#} {}:{}:{} {label}\n", file.name, line + 1, col + 1));
-            snippet(&mut out, &file.text, &file.lines, span.start as usize, span.end as usize, DIM);
+            snippet(&mut out, &file.text, file.lines(), span.start as usize, span.end as usize, DIM);
         }
         output.err(format_args!("{out}"));
     }
