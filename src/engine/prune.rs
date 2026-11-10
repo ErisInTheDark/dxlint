@@ -328,9 +328,10 @@ fn prune_config(config: &mut Config, runtime: bool) {
     }
     let mut dropped_attrs: HashSet<String> = HashSet::new();
     for a in &mut config.attrs {
-        if a.library && decision.unneeded_attrs.contains(&a.name.text) {
-            a.targets.clear();
-        }
+        let unneeded = a.library && decision.unneeded_attrs.contains(&a.name.text);
+        if !unneeded && !a.targets.iter().any(|t| gone(&t.text)) { continue }
+        let a = std::sync::Arc::make_mut(a);
+        if unneeded { a.targets.clear() }
         a.targets.retain(|t| !gone(&t.text));
     }
     for a in &config.attrs {

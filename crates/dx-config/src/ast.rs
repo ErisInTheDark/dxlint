@@ -61,7 +61,8 @@ pub struct Config {
     pub groups: Vec<GroupDef>,
     /// `native ts`: native front ends whose node kinds become layers.
     pub natives: Vec<Name>,
-    pub attrs: Vec<AttrDef>,
+    /// Shared like `rules`.
+    pub attrs: Vec<std::sync::Arc<AttrDef>>,
     pub forwards: Vec<ForwardDef>,
     /// Name and type-layer items (`scope`, `declares`, `unwraps`, ...);
     /// shared like `rules`.
@@ -95,8 +96,8 @@ pub struct Config {
     pub dropped: Vec<Dropped>,
     /// Every macro definition, overridden ones included (for tooling).
     pub macros: Vec<MacroInfo>,
-    /// `fn name(params) = body`: pure functions rules call.
-    pub functions: Vec<FnDef>,
+    /// `fn name(params) = body`: pure functions rules call; shared like `rules`.
+    pub functions: Vec<std::sync::Arc<FnDef>>,
     /// Uses only the parser sees (for tooling).
     pub uses: Vec<Use>,
 }
@@ -675,7 +676,8 @@ pub struct RuleItem {
     pub names: Vec<String>,
     /// Its tokens' hash and words ([`crate::stream::word_hash`]).
     pub hash: u64,
-    pub words: dx_core::fx_hash::FxHashSet<u64>,
+    /// Shared: every configuration replaying a library import copies it.
+    pub words: std::sync::Arc<dx_core::fx_hash::FxHashSet<u64>>,
 }
 
 #[derive(Clone, Debug)]
@@ -683,7 +685,8 @@ pub struct RuleHelper {
     /// [`crate::stream::word_hash`] of its name.
     pub name: u64,
     pub hash: u64,
-    pub words: dx_core::fx_hash::FxHashSet<u64>,
+    /// Shared: every configuration replaying a library import copies it.
+    pub words: std::sync::Arc<dx_core::fx_hash::FxHashSet<u64>>,
 }
 
 /// `rule name [severity [message]] [{ set option value; clauses }]`

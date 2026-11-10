@@ -758,7 +758,7 @@ fn rule_state(name: &str, config: &crate::config::ast::Config) -> u64 {
         let of_base = |pattern: &String| base.is_some_and(|base| touches(base, pattern) || touches(&name.replacen(plain, base, 1), pattern));
         if item.names.iter().any(|pattern| touches(name, pattern) || of_base(pattern)) {
             hash.write_u64(item.hash);
-            reached.extend(&item.words);
+            reached.extend(item.words.iter());
         }
     }
     // The helpers its items reach, and theirs. Any word naming one counts.
@@ -770,7 +770,7 @@ fn rule_state(name: &str, config: &crate::config::ast::Config) -> u64 {
         if now.is_empty() { break }
         for helper in now {
             found.push(helper.hash);
-            reached.extend(&helper.words);
+            reached.extend(helper.words.iter());
         }
     }
     found.sort_unstable();
@@ -962,7 +962,7 @@ fn attributes(
     let mut fields_of: crate::fx_hash::FxHashMap<u32, Vec<(String, u16)>> = Default::default();
     // Identifies each compiled body: definitions sharing one were compiled once.
     let mut next_body = 0u32;
-    let functions: HashMap<&str, &crate::config::ast::FnDef> = config.functions.iter().map(|f| (f.name.text.as_str(), f)).collect();
+    let functions: HashMap<&str, &crate::config::ast::FnDef> = config.functions.iter().map(|f| (f.name.text.as_str(), &**f)).collect();
     for def in &config.attrs {
         if crate::expr::is_builtin(&def.name.text) {
             errors.push(ConfigError::new(def.name.span, format!("`{}` is a built-in variable and cannot name an attribute", def.name.text)));

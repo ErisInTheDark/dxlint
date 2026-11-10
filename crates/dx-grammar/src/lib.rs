@@ -792,7 +792,7 @@ pub fn function_declarations<'a>(config: &'a Config, errors: &mut Vec<ConfigErro
         } else if !names.insert(name.as_str()) {
             errors.push(ConfigError::new(def.name.span, format!("function `{name}` is defined twice")));
         } else {
-            out.push(def);
+            out.push(&**def);
         }
     }
     out

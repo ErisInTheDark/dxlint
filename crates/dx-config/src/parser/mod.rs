@@ -390,7 +390,7 @@ impl<'a> Parser<'a> {
             let outer = self.ts.apart();
             self.any_item(ctx);
             let (hash, words) = self.ts.rejoin(outer, false);
-            self.config.helpers.push(RuleHelper { name: super::stream::word_hash(&name), hash, words });
+            self.config.helpers.push(RuleHelper { name: super::stream::word_hash(&name), hash, words: words.into() });
             return;
         }
         // A macro counts where it expands, in the tokens it gives each use.
@@ -411,7 +411,7 @@ impl<'a> Parser<'a> {
             .chain(self.config.extensions.get(extensions..).unwrap_or_default().iter().map(|(name, _)| name.text.clone()))
             .collect();
         let (hash, words) = self.ts.rejoin(outer, names.is_empty());
-        if !names.is_empty() { self.config.rule_items.push(RuleItem { names, hash, words }) }
+        if !names.is_empty() { self.config.rule_items.push(RuleItem { names, hash, words: words.into() }) }
     }
 
     /// The name of the top-level `fn` or `in <selectors> let` coming next.
@@ -443,7 +443,7 @@ impl<'a> Parser<'a> {
             let mut hashes: Vec<u64> = shared.iter().map(|helper| helper.hash).collect();
             hashes.sort_unstable();
             for item in hashes { hash.write_u64(item) }
-            for helper in shared { reached.extend(helper.words) }
+            for helper in shared { reached.extend(helper.words.iter().copied()) }
         }
         self.config.helpers = helpers;
         hash.finish()
@@ -652,16 +652,18 @@ impl<'a> Parser<'a> {
         if overriding.is_some() && self.remove_attr_targets(&name.text, &targets) == 0 && !defined {
             self.errors.push(ConfigError::new(name.span, format!("nothing to override: no attribute `{}`", name.text)));
         }
-        self.config.attrs.push(AttrDef { name, targets, expr: expr.into(), library: self.defining > 0, mentions: Default::default() });
+        self.config.attrs.push(AttrDef { name, targets, expr: expr.into(), library: self.defining > 0, mentions: Default::default() }.into());
     }
 
     /// Removes these layers from every definition of attribute `name`;
     /// returns how many it removed.
     fn remove_attr_targets(&mut self, name: &str, targets: &[Name]) -> usize {
         let mut removed = 0;
-        for def in self.config.attrs.iter_mut().filter(|d| d.name.text == name) {
+        let removes = |t: &Name| targets.iter().any(|x| x.text == t.text);
+        for def in self.config.attrs.iter_mut().filter(|d| d.name.text == name && d.targets.iter().any(removes)) {
+            let def = std::sync::Arc::make_mut(def);
             let before = def.targets.len();
-            def.targets.retain(|t| !targets.iter().any(|x| x.text == t.text));
+            def.targets.retain(|t| !removes(t));
             removed += before - def.targets.len();
         }
         self.config.attrs.retain(|d| !d.targets.is_empty());
@@ -1726,7 +1728,7 @@ impl<'a> Parser<'a> {
             return;
         }
         let Some(body) = self.expr() else { return };
-        self.config.functions.push(FnDef { name, params, body: body.into(), mentions: Default::default() });
+        self.config.functions.push(FnDef { name, params, body: body.into(), mentions: Default::default() }.into());
         self.end_of_item();
     }
 
@@ -1763,7 +1765,7 @@ impl<'a> Parser<'a> {
                             self.errors.push(ConfigError::new(method.span, format!("method `{}` is answered twice", method.text)));
                         }
                         let function = Protocol::function_name(&name.text, &method.text);
-                        self.config.functions.push(FnDef { name: Name { text: function.clone(), span: method.span }, params: vec![param], body: body.into(), mentions: Default::default() });
+                        self.config.functions.push(FnDef { name: Name { text: function.clone(), span: method.span }, params: vec![param], body: body.into(), mentions: Default::default() }.into());
                         methods.push((method, function));
                     }
                 }
