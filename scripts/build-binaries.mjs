@@ -1,5 +1,9 @@
 // Builds the release binaries the npm package ships into package/bin.
 //   node scripts/build-binaries.mjs [win32-x64|linux-x64|darwin-arm64 ...]   (default: all)
+//   node scripts/build-binaries.mjs --local   (npm run build:local)
+// --local builds this host's binary only, with the incremental `local`
+// profile (Cargo.toml): minutes after the first build, so checkouts linking
+// package/ get engine changes between releases. It never stamps.
 // linux-x64 is a static musl build linked with rust-lld (.cargo/config.toml),
 // so it builds on Windows too: `rustup target add x86_64-unknown-linux-musl`.
 // The macOS build links with the toolchain's rust-lld (scripts/darwin-link.cmd,
@@ -61,17 +65,22 @@ function ship(binary, destination) {
   fs.copyFileSync(binary, destination);
 }
 
-const wanted = process.argv.slice(2);
+const args = process.argv.slice(2);
+const local = args.includes("--local");
+const host = `${process.platform}-${process.arch}`;
+if (local && !platforms[host]) throw new Error(`no local build for ${host}; known: ${Object.keys(platforms).join(", ")}`);
+const wanted = local ? [host] : args;
 for (const name of wanted) if (!platforms[name]) throw new Error(`unknown platform ${name}; known: ${Object.keys(platforms).join(", ")}`);
 const building = (wanted.length ? [...new Set(wanted)] : Object.keys(platforms)).map(name => ({ name, ...platforms[name] }));
 const env = Object.assign({ ...process.env }, ...building.map(platform => platform.env?.() ?? {}));
+const profile = local ? "local" : "release";
 const hash = sourceHash();
 removeStamp();
-const result = spawnSync("cargo", ["build", "--release", "--locked", "--bin", "dxlint", "-j", String(building.length), ...building.flatMap(platform => ["--target", platform.target])],
+const result = spawnSync("cargo", ["build", "--profile", profile, "--locked", "--bin", "dxlint", "-j", String(building.length), ...building.flatMap(platform => ["--target", platform.target])],
   { cwd: root, stdio: "inherit", env });
 if (result.status !== 0) process.exit(result.status ?? 1);
 for (const { name, target, built, shipped, refresh } of building) {
-  const binary = path.join(root, "target", target, "release", built);
+  const binary = path.join(root, "target", target, profile, built);
   const destination = path.join(root, "package", "bin", shipped);
   ship(binary, destination);
   fs.chmodSync(destination, 0o755);

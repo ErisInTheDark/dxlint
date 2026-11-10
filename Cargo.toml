@@ -54,3 +54,12 @@ debug = 0
 lto = "thin"
 codegen-units = 1
 panic = "abort"
+
+# The host binary checkouts linking package/ run between releases
+# (`npm run build:local`): incremental, so an engine change reaches them in
+# minutes; releases still ship `release` builds.
+[profile.local]
+inherits = "release"
+lto = "off"
+codegen-units = 16
+incremental = true
