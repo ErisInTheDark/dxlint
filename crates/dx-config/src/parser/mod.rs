@@ -124,18 +124,16 @@ struct LibraryParse {
 }
 
 thread_local! {
-    /// By import key and the stream position before it.
-    static LIBRARY_PARSES: std::cell::RefCell<std::collections::HashMap<(String, (u64, bool)), Rc<LibraryParse>>> = Default::default();
-    /// Whether library parses are kept for later configurations: on unless
-    /// this thread builds one configuration only ([`build_one_config`]),
-    /// where the kept copy of the whole library's syntax only costs memory.
-    static KEEP_LIBRARY_PARSES: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+    /// By import key and the stream position before it. Kept unless this
+    /// thread builds one configuration only ([`build_one_config`]), where
+    /// the kept copy of the whole library's syntax only costs memory.
+    static LIBRARY_PARSES: dx_core::recent::Recent<(String, (u64, bool)), Rc<LibraryParse>> = const { dx_core::recent::Recent::new(64) };
 }
 
 /// Declares that this thread builds a single configuration (a lint run):
 /// library imports parse in place instead of keeping a copy for reuse.
 pub fn build_one_config() {
-    KEEP_LIBRARY_PARSES.with(|keep| keep.set(false));
+    LIBRARY_PARSES.with(|parses| parses.set_capacity(0));
 }
 
 impl<'a> Parser<'a> {
@@ -1619,7 +1617,7 @@ impl<'a> Parser<'a> {
     /// thread, then replayed ([`LibraryParse`]).
     fn library_import(&mut self, key: String, text: &str, span: Span) {
         let at = (key.clone(), self.ts.position());
-        let parsed = match LIBRARY_PARSES.with(|parses| parses.borrow().get(&at).cloned()) {
+        let parsed = match LIBRARY_PARSES.with(|parses| parses.get(&at)) {
             Some(parsed) => parsed,
             None => {
                 let (first, imported, depth) = (self.sources.files().count(), self.imported.clone(), self.ts.depth());
@@ -1627,7 +1625,7 @@ impl<'a> Parser<'a> {
                 while self.ts.more_above(depth) {
                     self.item(None);
                 }
-                if !KEEP_LIBRARY_PARSES.with(std::cell::Cell::get) {
+                if LIBRARY_PARSES.with(|parses| parses.capacity() == 0) {
                     self.config.uses.push(Use::Import(span, id));
                     return;
                 }
@@ -1639,7 +1637,7 @@ impl<'a> Parser<'a> {
                     files: self.sources.files().skip(first).map(|(_, file)| (file.name.clone(), file.path.clone(), file.text.clone())).collect(),
                     id,
                 });
-                LIBRARY_PARSES.with(|parses| parses.borrow_mut().insert(at, parsed));
+                LIBRARY_PARSES.with(|parses| parses.insert(at, parsed));
                 self.config.uses.push(Use::Import(span, id));
                 return;
             }
@@ -2931,7 +2929,7 @@ mod tests {
             let names: Vec<_> = sources.files().map(|(_, file)| file.name.clone()).collect();
             (format!("{:?}", (&config.matchers, &config.rules, &config.functions, &config.attrs, &config.names, &config.macros)), names)
         };
-        LIBRARY_PARSES.with(|parses| parses.borrow_mut().clear());
+        LIBRARY_PARSES.with(|parses| parses.clear());
         // Parsed where it stands (an item before it), then parsed for the
         // cache, then replayed from it.
         let in_place = library("ignore \"x\"\nimport .core\n");

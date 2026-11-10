@@ -206,6 +206,7 @@ dependencies = [
 name = "dx-pattern"
 version = "0.1.0"
 dependencies = [
+ "dx-core",
  "memchr",
  "regex-automata",
  "regex-syntax",

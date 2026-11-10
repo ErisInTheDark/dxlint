@@ -138,16 +138,7 @@ pub fn build(loaded: Loaded, root: PathBuf) -> Built {
 /// configs from many directories.
 pub fn build_for_lint(loaded: Loaded, root: PathBuf) -> Built {
     let key = ReuseKey::of(&loaded.sources, &root);
-    let reused = {
-        let mut recent = RECENT.lock().expect("recent builds");
-        recent.iter().position(|(seen, _)| *seen == key).map(|at| {
-            let entry = recent.remove(at);
-            let reuse = entry.1.clone();
-            recent.push(entry);
-            reuse
-        })
-    };
-    if let Some(Reuse { compiled, errors, notices }) = reused {
+    if let Some(Reuse { compiled, errors, notices }) = RECENT.get(&key) {
         let started = std::time::Instant::now();
         let commands = commands(&loaded.config, root.clone());
         let sources = std::sync::Arc::new(loaded.sources);
@@ -156,18 +147,13 @@ pub fn build_for_lint(loaded: Loaded, root: PathBuf) -> Built {
     }
     let built = compile(loaded, root, false);
     if let Some(linter) = &built.linter {
-        let mut recent = RECENT.lock().expect("recent builds");
-        if recent.len() == KEPT_BUILDS { recent.remove(0); }
-        recent.push((key, Reuse { compiled: linter.compiled.clone(), errors: built.errors.clone(), notices: built.notices.clone() }));
+        RECENT.insert(key, Reuse { compiled: linter.compiled.clone(), errors: built.errors.clone(), notices: built.notices.clone() });
     }
     built
 }
 
-/// How many recent runtime builds [`build_for_lint`] keeps.
-const KEPT_BUILDS: usize = 4;
-
-/// Recent runtime builds, least recently used first.
-static RECENT: std::sync::Mutex<Vec<(ReuseKey, Reuse)>> = std::sync::Mutex::new(Vec::new());
+/// Recent runtime builds.
+static RECENT: dx_core::recent::Recent<ReuseKey, Reuse> = dx_core::recent::Recent::new(4);
 
 #[derive(Clone)]
 struct Reuse {
@@ -178,7 +164,7 @@ struct Reuse {
 
 /// A config's files as a build sees them: each one's text, and its path
 /// relative to the root when it lies under it.
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq, Eq, Hash)]
 struct ReuseKey(Vec<(String, Option<PathBuf>, std::sync::Arc<str>)>);
 
 impl ReuseKey {

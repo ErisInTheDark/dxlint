@@ -21,7 +21,7 @@ Rust linter; rules in `.dx` (docs/advanced.md). Binary `dxlint`.
 
 - workspace, bottom-up: lower layers are crates under `crates/`, re-exported in `src/lib.rs` under their old module names (`crate::pattern::...` still works); a crate never depends upward; tests needing the engine live in the top crate (`src/grammar_tests`, `src/runtime_tests`)
 - `crates/dx-pattern` (`pattern`): `Pat`, regex subset parser, compiler, DFA bridge, prefilters
-- `crates/dx-core`: hashing, path globs, allocator, levers, sampler, work counts, profile counters, file parts, `reads` (also `engine::reads`)
+- `crates/dx-core`: hashing, path globs, allocator, levers, sampler, work counts, profile counters, file parts, `reads` (also `engine::reads`), `recent` (every in-process build cache: DFAs, declared parsers, library parses, compiled configs)
 - `crates/dx-tree`: `Tree`, node types and path steps, `footprint` (recorded reads), `line_index`
 - `crates/dx-ir`: compiled expression and VM value types (`CExpr`, `VExpr`, `Value`, `V`, record cells, builtin/function metadata); no evaluation
 - `crates/dx-config` (`config`): lexer, token stream (imports + macros splice tokens), parser

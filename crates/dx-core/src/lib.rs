@@ -1,5 +1,5 @@
-//! Shared low-level helpers: hashing, path globs, allocation, file parts and
-//! the one door to the filesystem.
+//! Shared low-level helpers: hashing, path globs, allocation, file parts,
+//! build caches ([`recent`]) and the one door to the filesystem.
 
 pub mod alloc;
 pub mod fx_hash;
@@ -8,6 +8,7 @@ pub mod parts;
 pub mod path_globs;
 pub mod profile;
 pub mod reads;
+pub mod recent;
 pub mod sampler;
 #[cfg(feature = "work")]
 pub mod work;

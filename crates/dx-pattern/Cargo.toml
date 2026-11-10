@@ -6,6 +6,7 @@ description = "Matcher patterns: a linear-time regex subset with layer-aware ite
 license = "MIT"
 
 [dependencies]
+dx-core = { path = "../dx-core" }
 memchr = "2.7"
 regex-automata = "0.4"
 regex-syntax = "0.8"

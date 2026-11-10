@@ -14,7 +14,7 @@ pub use phases::{set_phase_profiling, take_phase_totals, PhaseTotal};
 pub use values::ValueSource;
 pub use registry::Parsers;
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use dx_pattern::syntax::{Definition, Node as NodeSchema, Token};
 use super::Node;
@@ -66,11 +66,10 @@ pub struct CompiledParser {
     caches: run::Pool,
 }
 
-/// Definitions compiled lately in this process, newest last: configurations
-/// built one after another (fixtures, tests, a language server's rebuilds,
-/// nested configs) mostly declare the same parsers.
-static COMPILED: Mutex<Vec<(Definition, Arc<CompiledParser>)>> = Mutex::new(Vec::new());
-const KEPT_COMPILED: usize = 4;
+/// Definitions compiled lately in this process: configurations built one
+/// after another (fixtures, tests, a language server's rebuilds, nested
+/// configs) mostly declare the same parsers.
+static COMPILED: dx_core::recent::Recent<Definition, Arc<CompiledParser>> = dx_core::recent::Recent::new(4);
 
 impl CompiledParser {
     pub fn compile(definition: &Definition) -> Result<Self, String> {
@@ -81,20 +80,9 @@ impl CompiledParser {
 
     /// `definition` compiled, shared with whoever compiled it lately.
     pub fn shared(definition: &Definition) -> Result<Arc<Self>, String> {
-        let kept = |compiled: &mut Vec<(Definition, Arc<Self>)>| {
-            let at = compiled.iter().position(|(known, _)| known == definition)?;
-            let entry = compiled.remove(at);
-            let parser = entry.1.clone();
-            compiled.push(entry);
-            Some(parser)
-        };
-        if let Some(parser) = kept(&mut COMPILED.lock().expect("compiled parsers")) { return Ok(parser) }
+        if let Some(parser) = COMPILED.get(definition) { return Ok(parser) }
         let parser = Arc::new(Self::compile(definition)?);
-        let mut compiled = COMPILED.lock().expect("compiled parsers");
-        if let Some(raced) = kept(&mut compiled) { return Ok(raced) }
-        if compiled.len() == KEPT_COMPILED { compiled.remove(0); }
-        compiled.push((definition.clone(), parser.clone()));
-        Ok(parser)
+        Ok(COMPILED.insert(definition.clone(), parser))
     }
 
     pub fn nodes(&self) -> &[NodeSchema] {
