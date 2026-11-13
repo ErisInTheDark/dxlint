@@ -56,7 +56,7 @@ impl Linter {
 
     /// `path`'s parts as its text (hashing `hash`) reads now; `None` when
     /// it does not parse.
-    fn parts_now(&self, path: &DepPath, hash: u64) -> Option<Arc<FileParts>> {
+    pub(super) fn parts_now(&self, path: &DepPath, hash: u64) -> Option<Arc<FileParts>> {
         if let Some(found) = self.parts.now.lock().expect("parts now").get(path).filter(|parts| parts.hash == hash) {
             return Some(found.clone());
         }

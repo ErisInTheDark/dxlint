@@ -215,7 +215,13 @@ impl Cache {
         let entry = self.saved.entries.get(rel)?;
         let content = hash_bytes(text.as_bytes());
         self.texts.write().expect("cache texts").insert(self.root.join(rel), content);
-        if entry.content != content || !self.holds(linter, &entry.refs) {
+        if entry.content != content {
+            return None;
+        }
+        if !self.holds(linter, &entry.refs) {
+            if std::env::var_os("DXLINT_RELINT_WHY").is_some() {
+                eprintln!("relint {rel}: {}", self.broken(linter, &entry.refs).unwrap_or_else(|| "?".into()));
+            }
             return None;
         }
         let then = self.saved.rule_states.get(entry.state as usize)?;
@@ -263,6 +269,42 @@ impl Cache {
                 })
             }))
             && refs.groups.iter().all(|&i| *self.group_holds[i as usize].get_or_init(|| self.holds(linter, &self.saved.groups[i as usize])))
+    }
+
+    /// The first read of `refs` that no longer holds, described (env
+    /// `DXLINT_RELINT_WHY`).
+    fn broken(&self, linter: &Linter, refs: &Refs) -> Option<String> {
+        for &i in &refs.deps {
+            if self.dep_holds(linter, i) { continue }
+            let dep = &self.saved.deps[i as usize];
+            return Some(match dep {
+                Dep::Part(parts, read) => {
+                    let failing: Vec<String> = read.iter()
+                        .filter(|&one| !linter.holds(&Dep::Part(parts.clone(), Arc::new(crate::parts::PartReads::new([one])))))
+                        .map(|one| match one {
+                            crate::parts::Read::Statement(at) => format!("statement {at} at byte {}", parts.statements.get(at as usize).map_or(0, |part| part.start)),
+                            one => format!("{one:?}"),
+                        }).take(4).collect();
+                    let now = linter.parts_now(&parts.path, self.text_hash(&parts.path));
+                    let named = |parts: Option<&crate::parts::FileParts>| parts.map_or("unparsed", |parts| if parts.failed { "failed" } else if parts.precise { "named" } else { "unnamed" });
+                    format!("parts of {} ({}; was {}, now {})", parts.path.display(), failing.join(", "), named(Some(parts)), named(now.as_deref()))
+                }
+                dep => format!("{} of {}", match dep {
+                    Dep::Text(..) => "text", Dep::IsFile(..) => "file probe", Dep::IsDir(..) => "dir probe", Dep::List(..) => "listing",
+                    Dep::Discovered(..) => "discovery", Dep::Requested(..) => "requested files", Dep::Outside(..) => "outside bodies",
+                    Dep::Module(..) => "module answer", Dep::Part(..) => "parts",
+                }, dep.path().display()),
+            });
+        }
+        for &i in &refs.scans {
+            if *self.scan_holds[i as usize].get().unwrap_or(&true) { continue }
+            let scan = &self.saved.scans[i as usize];
+            let file = self.saved.groups[scan.files as usize].deps.iter().filter(|&&dep| !self.dep_holds(linter, dep)).map(|&dep| &self.saved.deps[dep as usize])
+                .find(|saved| !saved.reads_text() || !linter.passes(saved.path(), self.current_text(saved.path()).as_deref(), &scan.test));
+            let kind = match &scan.test { ScanTest::Global { name, .. } => format!("global {name}"), ScanTest::Ambient { .. } => "ambient".into(), ScanTest::Pulls { .. } => "program pulls".into() };
+            return Some(format!("scan for {kind}: {}", file.map_or_else(|| "?".into(), |dep| dep.path().display().to_string())));
+        }
+        refs.groups.iter().find_map(|&i| self.broken(linter, &self.saved.groups[i as usize]))
     }
 
     /// A changed file's text, read once however many scans test it.
