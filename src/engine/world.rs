@@ -43,7 +43,7 @@ type ModuleAnswers = crate::fx_hash::FxHashMap<Box<str>, ModuleAnswer>;
 /// every input records those in its [`super::reads::Scan`], so a new file
 /// breaks only lookups it could change), and the program's identity: its
 /// configuration, which outlives any one list.
-type Inputs = (Arc<Vec<PathBuf>>, Arc<[super::reads::Dep]>, u64);
+type Inputs = (Arc<Vec<PathBuf>>, Arc<super::reads::Reads>, u64);
 
 #[derive(Default)]
 struct ProgramMemo<'a> {
@@ -927,15 +927,14 @@ impl<'a> Files<'a> {
     /// The program's input paths whose text passes `keep` (all when the
     /// profile gives no hints), read but not parsed, and their text reads
     /// with the `listing` that chose them.
-    fn candidate_inputs(self, paths: &[PathBuf], listing: &[super::reads::Dep], hinted: bool, keep: impl Fn(&str) -> bool) -> (Vec<PathBuf>, Arc<super::reads::Reads>) {
-        let mut deps = Vec::with_capacity(paths.len() + listing.len());
+    fn candidate_inputs(self, paths: &[PathBuf], listing: &Arc<super::reads::Reads>, hinted: bool, keep: impl Fn(&str) -> bool) -> (Vec<PathBuf>, Arc<super::reads::Reads>) {
+        let mut deps = Vec::with_capacity(paths.len());
         let candidates = paths.iter().filter(|path| {
             let (text, hash) = self.source_text(path);
             deps.push(super::reads::Dep::Text(super::reads::dep_path(path), hash));
             !hinted || text.is_none_or(|text| keep(&text))
         }).cloned().collect();
-        deps.extend(listing.iter().cloned());
-        (candidates, Arc::new(super::reads::Reads { deps, ..Default::default() }))
+        (candidates, super::reads::Scan::files(deps, listing))
     }
 
     fn roots(self, selected: &Settings, name: &str) -> Known<Vec<ScopeRef>> {
@@ -963,8 +962,7 @@ impl<'a> Files<'a> {
                                 let hinted = super::program::holds_hint(text.as_deref(), &hints);
                                 (path.clone(), text, hinted)
                             }).collect();
-                            deps.extend(listing.iter().cloned());
-                            super::program::Surveyed { sources, reads: Arc::new(super::reads::Reads { deps, ..Default::default() }), hints }
+                            super::program::Surveyed { sources, reads: super::reads::Scan::files(deps, &listing), hints }
                         }));
                         let super::program::Surveyed { sources, reads: files, .. } = survey.get();
                         // Kept as survey positions: a run asks thousands of
@@ -1529,7 +1527,7 @@ impl<'a> Files<'a> {
             let linted_differs = |dep: &super::reads::Dep| matches!(dep, super::reads::Dep::Text(path, hash) if **path == *self.0.path && *hash != current_hash);
             let load = || self.0.linter.programs.catalog(key.clone(), self.0.ctx.profile, |reads| reads.holds(
                 &mut |dep| !linted_differs(dep) && dep.holds(),
-                &mut |scan| !scan.files.deps.iter().any(linted_differs) && self.0.linter.scan_holds(scan),
+                &mut |scan| !scan.files.any(&mut |dep| linted_differs(dep)) && self.0.linter.scan_holds(scan),
             ), || match self.0.complete_attribute(|| {
                 let Known::Yes((paths, listing, _)) = self.input_paths(selected) else { return Known::Unknown };
                 let Known::Yes((declarations, texts)) = self.catalog_declarations(selected, classes, &paths, &listing, semantic) else { return Known::Unknown };
@@ -1545,7 +1543,7 @@ impl<'a> Files<'a> {
                 None => load(),
             }) else { return Known::Unknown };
             let Some(outside) = outside else { return Known::Yes(base) };
-            let Known::Yes(Known::Yes((declarations, texts))) = self.0.complete_attribute(|| self.catalog_declarations(selected, classes, std::slice::from_ref(&outside), &[], semantic))
+            let Known::Yes(Known::Yes((declarations, texts))) = self.0.complete_attribute(|| self.catalog_declarations(selected, classes, std::slice::from_ref(&outside), &Arc::default(), semantic))
                 else { return Known::Unknown };
             Known::Yes(Arc::new(super::program::Catalog::over(base, declarations, texts)))
         });
@@ -1560,7 +1558,7 @@ impl<'a> Files<'a> {
 
     /// The ambient declarations of these classes in `paths` (chosen by
     /// `listing`), with each path's text hash.
-    fn catalog_declarations(self, selected: &Settings, classes: u64, paths: &[PathBuf], listing: &[super::reads::Dep], semantic: &Semantic<'_>)
+    fn catalog_declarations(self, selected: &Settings, classes: u64, paths: &[PathBuf], listing: &Arc<super::reads::Reads>, semantic: &Semantic<'_>)
         -> Known<(Vec<super::program::Declaration>, crate::fx_hash::FxHashMap<super::reads::DepPath, u64>)> {
         let mut declarations = Vec::new();
         let mut texts = crate::fx_hash::FxHashMap::default();
@@ -1575,10 +1573,9 @@ impl<'a> Files<'a> {
             scanned.push(super::reads::Dep::Text(path_read, hash));
             if selected.globals.may_declare_ambient(&text) { candidates.push(path.clone()) }
         }
-        scanned.extend(listing.iter().cloned());
         let hints = selected.globals.ambient_hints.clone().into_boxed_slice();
         super::reads::note_scan(&Arc::new(super::reads::Scan {
-            files: Arc::new(super::reads::Reads { deps: scanned, ..Default::default() }),
+            files: super::reads::Scan::files(scanned, listing),
             test: super::reads::ScanTest::Ambient { hints, classes },
         }));
         self.prefetch_inputs(selected, || candidates.clone());

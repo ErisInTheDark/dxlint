@@ -388,7 +388,7 @@ pub(super) struct Snapshot {
     mentions: RwLock<FxHashMap<u64, Vec<(Box<str>, bool)>>>,
     pub(super) text_holds: TextHolds,
     /// [`Snapshot::listed_inputs`] by (revision, program).
-    listed: Mutex<FxHashMap<(u64, u64), (Arc<Vec<PathBuf>>, Arc<Reads>, Arc<[reads::Dep]>)>>,
+    listed: Mutex<FxHashMap<(u64, u64), (Arc<Vec<PathBuf>>, Arc<Reads>, Arc<Reads>)>>,
     /// Module resolution's file probes and reads, once per path and revision.
     probes: RwLock<FxHashMap<reads::DepPath, (u64, bool)>>,
     /// Directory listings behind those probes (`None`: unreadable).
@@ -590,10 +590,11 @@ pub(super) type Survey = Arc<[(PathBuf, Option<Arc<str>>, bool)]>;
 
 /// A program's input list (when known), its reads other than which files
 /// exist, and those listing reads ([`reads::track_listing`]).
-pub(super) type ListedInputs = (Known<Arc<Vec<PathBuf>>>, Arc<Reads>, Arc<[reads::Dep]>);
+pub(super) type ListedInputs = (Known<Arc<Vec<PathBuf>>>, Arc<Reads>, Arc<Reads>);
 
 /// A survey, with what it read for the scans of lookups over it: the
-/// inputs' [`reads::Dep::Text`] reads, in survey order, then the listing's.
+/// inputs' [`reads::Dep::Text`] reads, in survey order, and the listing's
+/// as a group ([`reads::Scan::files`]).
 #[derive(Clone)]
 pub(super) struct Surveyed {
     pub sources: Survey,
@@ -624,7 +625,7 @@ impl Surveyed {
             *text = now;
             if let Some(reads::Dep::Text(_, read)) = deps.get_mut(at) { *read = hash }
         }
-        Surveyed { sources: sources.into(), reads: Arc::new(Reads { deps, ..Default::default() }), hints: self.hints.clone() }
+        Surveyed { sources: sources.into(), reads: Arc::new(Reads { deps, groups: self.reads.groups.clone(), ..Default::default() }), hints: self.hints.clone() }
     }
 
     /// Whether input `at`'s text may publish global `name` (`text`: its
@@ -803,7 +804,7 @@ impl Snapshot {
         let mut patched: FxHashMap<(usize, u64), Vec<usize>> = FxHashMap::default();
         let surveys: FxHashMap<_, _> = surveys.into_inner().expect("run slots").into_iter().filter_map(|(key, slot)| {
             let survey = slot.get()?;
-            let listing = Reads { deps: survey.value.reads.deps.iter().filter(|dep| !dep.reads_text()).cloned().collect(), ..Default::default() };
+            let listing = Reads { groups: survey.value.reads.groups.clone(), ..Default::default() };
             if !keep(revision, Some(&listing), None) { return None }
             let changed = survey.value.changed(revision, keep);
             if changed.is_empty() { return Some((key, slot)) }

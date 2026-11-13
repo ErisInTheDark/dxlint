@@ -339,9 +339,9 @@ pub struct Stale {
     /// Per group of reads (kept, so its address stays its key): whether it
     /// holds.
     groups: RefCell<crate::fx_hash::FxHashMap<*const Reads, (std::sync::Arc<Reads>, bool)>>,
-    /// Per scanned file list (kept likewise): the indices of its changed
-    /// files.
-    touched: RefCell<crate::fx_hash::FxHashMap<*const Reads, (std::sync::Arc<Reads>, Box<[usize]>)>>,
+    /// Per scanned file list (kept likewise): its reads of changed files,
+    /// its listing's included.
+    touched: RefCell<crate::fx_hash::FxHashMap<*const Reads, (std::sync::Arc<Reads>, std::sync::Arc<[Dep]>)>>,
     verdicts: RefCell<crate::fx_hash::FxHashMap<(*const Reads, reads::ScanTest), bool>>,
     /// Per changed file and scan test: whether the file passes.
     passed: RefCell<crate::fx_hash::FxHashMap<(PathBuf, reads::ScanTest), bool>>,
@@ -437,10 +437,12 @@ impl Stale {
         let key = (files, scan.test.clone());
         if let Some(&holds) = self.verdicts.borrow().get(&key) { return holds }
         let touched = self.touched.borrow_mut().entry(files).or_insert_with(|| {
-            let touched = scan.files.deps.iter().enumerate()
-                .filter(|(_, dep)| self.touches(dep))
-                .map(|(i, _)| i).collect();
-            (scan.files.clone(), touched)
+            let mut touched = Vec::new();
+            scan.files.any(&mut |dep| {
+                if self.touches(dep) { touched.push(dep.clone()) }
+                false
+            });
+            (scan.files.clone(), touched.into())
         }).1.clone();
         // A listing holds when the files it gained or lost pass too (lost
         // ones read as absent, and pass).
@@ -451,8 +453,7 @@ impl Stale {
             self.passed.borrow_mut().insert(key, passed);
             passed
         };
-        let holds = touched.iter().all(|&i| {
-            let dep = &scan.files.deps[i];
+        let holds = touched.iter().all(|dep| {
             self.dep_holds(dep, held) || if dep.reads_text() { passes(dep.path()) } else {
                 self.listed.iter().filter(|path| dep.touches(path) && dep.admits(path)).all(|path| passes(path))
             }

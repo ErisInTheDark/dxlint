@@ -378,8 +378,9 @@ impl Names {
 /// changes can tell which were added: see the engine's `Stale`).
 #[derive(Debug)]
 pub struct Scan {
-    /// The scanned files' [`Dep::Text`] reads, and the listing's reads that
-    /// chose them (nothing else).
+    /// The scanned files' [`Dep::Text`] reads, and as groups the listing's
+    /// reads that chose them (nothing else): one listing chooses the files
+    /// of many scans, so they share it ([`Scan::files`]).
     pub files: Arc<Reads>,
     pub test: ScanTest,
 }
@@ -402,10 +403,16 @@ pub enum ScanTest {
 }
 
 impl Scan {
+    /// Scanned files: their `texts` reads and the `listing` that chose them.
+    pub fn files(texts: Vec<Dep>, listing: &Arc<Reads>) -> Arc<Reads> {
+        let groups = if listing.is_empty() { Vec::new() } else { vec![listing.clone()] };
+        Arc::new(Reads { deps: texts, groups, ..Default::default() })
+    }
+
     /// Whether every scanned file reads the same or passes the test now;
     /// `passes(path)` answers for a changed file.
     pub fn holds(&self, passes: impl Fn(&Path) -> bool) -> bool {
-        self.files.deps.iter().all(|dep| dep.holds() || dep.reads_text() && passes(dep.path()))
+        !self.files.any(&mut |dep| !(dep.holds() || dep.reads_text() && passes(dep.path())))
     }
 }
 
@@ -555,7 +562,7 @@ pub fn note_group(group: &Arc<Reads>) {
 /// Runs `f`, splitting what it read: which files exist (listing reads, for
 /// a [`Scan`] over the listed files to hold: a new file then breaks only
 /// lookups it could change), and the rest, for the caller to note.
-pub fn track_listing<R>(f: impl FnOnce() -> R) -> (R, Arc<Reads>, Arc<[Dep]>) {
+pub fn track_listing<R>(f: impl FnOnce() -> R) -> (R, Arc<Reads>, Arc<Reads>) {
     let (r, reads) = track(f);
     let mut kept = Reads::default();
     let mut listing = Vec::new();
@@ -573,7 +580,7 @@ pub fn track_listing<R>(f: impl FnOnce() -> R) -> (R, Arc<Reads>, Arc<[Dep]>) {
         kept.scans.extend(next.scans.iter().cloned());
         stack.extend(next.groups.iter().filter(|group| seen.insert(Arc::as_ptr(group))).map(|group| &**group));
     }
-    (r, Arc::new(kept), listing.into())
+    (r, Arc::new(kept), Arc::new(Reads { deps: listing, ..Default::default() }))
 }
 
 /// `reads` sharing every group and scan with equal ones already kept: a

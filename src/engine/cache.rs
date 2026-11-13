@@ -261,7 +261,7 @@ impl Cache {
                 let scan = &self.saved.scans[i as usize];
                 // Only files read otherwise than saved are tested again; a
                 // changed listing could have added any file.
-                self.saved.groups[scan.files as usize].deps.iter().all(|&dep| {
+                self.scanned(scan.files).into_iter().all(|dep| {
                     self.dep_holds(linter, dep) || {
                         let saved = &self.saved.deps[dep as usize];
                         saved.reads_text() && linter.passes(saved.path(), self.current_text(saved.path()).as_deref(), &scan.test)
@@ -300,12 +300,24 @@ impl Cache {
         for &i in &refs.scans {
             if *self.scan_holds[i as usize].get().unwrap_or(&true) { continue }
             let scan = &self.saved.scans[i as usize];
-            let file = self.saved.groups[scan.files as usize].deps.iter().filter(|&&dep| !self.dep_holds(linter, dep)).map(|&dep| &self.saved.deps[dep as usize])
+            let file = self.scanned(scan.files).into_iter().filter(|&dep| !self.dep_holds(linter, dep)).map(|dep| &self.saved.deps[dep as usize])
                 .find(|saved| !saved.reads_text() || !linter.passes(saved.path(), self.current_text(saved.path()).as_deref(), &scan.test));
             let kind = match &scan.test { ScanTest::Global { name, .. } => format!("global {name}"), ScanTest::Ambient { .. } => "ambient".into(), ScanTest::Pulls { .. } => "program pulls".into() };
             return Some(format!("scan for {kind}: {}", file.map_or_else(|| "?".into(), |dep| dep.path().display().to_string())));
         }
         refs.groups.iter().find_map(|&i| self.broken(linter, &self.saved.groups[i as usize]))
+    }
+
+    /// A scan's files group's deps, its nested listing groups' included.
+    fn scanned(&self, files: u32) -> Vec<u32> {
+        let (mut deps, mut seen, mut stack) = (Vec::new(), crate::fx_hash::FxHashSet::default(), vec![files]);
+        while let Some(group) = stack.pop() {
+            if !seen.insert(group) { continue }
+            let refs = &self.saved.groups[group as usize];
+            deps.extend_from_slice(&refs.deps);
+            stack.extend_from_slice(&refs.groups);
+        }
+        deps
     }
 
     /// A changed file's text, read once however many scans test it.
@@ -1092,11 +1104,10 @@ impl<'a> Reader<'a> {
         Some(Refs { deps: self.ids(deps)?, groups: self.ids(groups)?, scans: self.ids(scans)? })
     }
 
-    /// A scan, whose files group holds only deps.
+    /// A scan, whose files group holds deps and listing groups, no scans.
     fn scan(&mut self, groups: &[Refs]) -> Option<SavedScan> {
         let files = u32::try_from(self.var()?).ok()?;
-        let only_deps = groups.get(files as usize)?;
-        if !only_deps.groups.is_empty() || !only_deps.scans.is_empty() { return None }
+        if !groups.get(files as usize)?.scans.is_empty() { return None }
         enum Head { Ambient(u64), Global(Box<str>) }
         let head = match self.u8()? {
             0 => Head::Ambient(self.var()?),
@@ -1352,6 +1363,27 @@ mod tests {
             assert_eq!(reads.groups.len(), 1, "{rel}");
             assert_eq!(reads.groups[0].deps, vec![read(rel)], "{rel}");
         }
+    }
+
+    #[test]
+    fn saved_scans_break_when_the_listing_that_chose_their_files_does() {
+        let root = project("scan-listing");
+        let (user, added) = (root.join("user.ts"), root.join("added.ts"));
+        std::fs::write(&user, "g();").expect("user");
+        let linter = crate::engine::tests::linter_at(&root, "");
+        let path = |path: &Path| super::super::reads::dep_path(path);
+        // Scans of one program share the listing that chose their files.
+        let listing = Arc::new(Reads { deps: vec![Dep::IsFile(path(&added), false)], ..Default::default() });
+        let scan = Arc::new(Scan {
+            files: Scan::files(vec![Dep::Text(path(&user), hash_bytes(b"g();"))], &listing),
+            test: ScanTest::Global { name: "g".into(), hints: Box::default() },
+        });
+        let first = Cache::open(&linter);
+        first.store("user.ts", "g();", &[], Arc::new(Reads { scans: vec![scan], ..Default::default() }));
+        first.save(false).expect("save");
+        assert!(Cache::open(&linter).lookup(&linter, "user.ts", "g();").is_some());
+        std::fs::write(&added, "declare function g(): void;").expect("added");
+        assert!(Cache::open(&linter).lookup(&linter, "user.ts", "g();").is_none());
     }
 
     #[test]
