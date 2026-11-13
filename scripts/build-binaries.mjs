@@ -72,7 +72,10 @@ if (local && !platforms[host]) throw new Error(`no local build for ${host}; know
 const wanted = local ? [host] : args;
 for (const name of wanted) if (!platforms[name]) throw new Error(`unknown platform ${name}; known: ${Object.keys(platforms).join(", ")}`);
 const building = (wanted.length ? [...new Set(wanted)] : Object.keys(platforms)).map(name => ({ name, ...platforms[name] }));
-const env = Object.assign({ ...process.env }, ...building.map(platform => platform.env?.() ?? {}));
+// The linker's temporary files stay in the workspace, like check.mjs's.
+const tmp = path.join(root, "target", "tmp");
+fs.mkdirSync(tmp, { recursive: true });
+const env = Object.assign({ ...process.env, TMP: tmp, TEMP: tmp }, ...building.map(platform => platform.env?.() ?? {}));
 const profile = local ? "local" : "release";
 const hash = sourceHash();
 removeStamp();

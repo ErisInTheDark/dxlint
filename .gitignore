@@ -1,4 +1,5 @@
 /target
+/published
 .dxcache
 !fixtures/**/.dxcache
 fixtures/**/actual/

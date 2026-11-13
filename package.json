@@ -5,6 +5,7 @@
   "scripts": {
     "build:binaries": "node scripts/build-binaries.mjs",
     "build:local": "node scripts/build-binaries.mjs --local",
+    "publish:link": "node scripts/publish-package.mjs --link",
     "build:profile": "node scripts/build-profile.mjs",
     "check": "node scripts/check.mjs",
     "docs:rules": "node scripts/rules-index.mjs",

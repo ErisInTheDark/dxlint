@@ -2,6 +2,9 @@
 //   --prepare-version [--version <x.y.z>]  bump (or set) package/package.json's version; prints it
 //   --pack                                 npm pack into package/
 //   --publish --version <x.y.z>            pack, then npm publish that tarball, after checking the committed version
+//   --link                                 copy the package as npm would ship it into published/ (gitignored), the
+//                                          folder local checkouts link: nothing in the working tree is live until this runs
+//                                          (needs this host's binary from build:binaries or build:local)
 // The library (std/, rules/), README.md and LICENSE are copied in from the
 // repository root for the pack and removed afterwards; the binaries in
 // package/bin are committed (scripts/build-binaries.mjs) and must match
@@ -101,6 +104,25 @@ function pack() {
   return file;
 }
 
+// The package's shipped files (its manifest's `files`, from package/ or
+// the repository root) and manifest, copied over published/.
+function link() {
+  const host = `dxlint-${process.platform}-${process.arch}${process.platform === "win32" ? ".exe" : ""}`;
+  if (!fs.existsSync(path.join(packageDir, "bin", host))) throw new Error(`package/bin/${host} is missing; run npm run build:local.`);
+  // build:local leaves no stamp; a stamp present must be current.
+  if (fs.existsSync(path.join(packageDir, "source.sha256"))) checkStamp();
+  const published = path.join(root, "published");
+  fs.mkdirSync(published, { recursive: true });
+  for (const name of [...readManifest().files, "package.json"]) {
+    const from = [path.join(packageDir, name), path.join(root, name)].find(candidate => fs.existsSync(candidate));
+    if (!from) throw new Error(`no ${name} in package/ or the repository root`);
+    const to = path.join(published, name);
+    fs.rmSync(to, { recursive: true, force: true });
+    fs.cpSync(from, to, { recursive: true });
+  }
+  console.log(`published ${path.relative(root, published)}`);
+}
+
 function npm(args) {
   // npm is a .cmd shim on Windows, which only a shell runs.
   const result = process.platform === "win32"
@@ -116,6 +138,8 @@ function main(args) {
     process.stdout.write(`${prepareVersion(value)}\n`);
   } else if (mode === "--pack") {
     pack();
+  } else if (mode === "--link") {
+    link();
   } else if (mode === "--publish") {
     const committed = readManifest().version;
     if (!value || committed !== value) throw new Error(`Expected version ${value}, package/package.json has ${committed}.`);

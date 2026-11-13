@@ -8,7 +8,7 @@ Rust linter; rules in `.dx` (docs/advanced.md). Binary `dxlint`.
 - test: `cargo test --workspace --lib` (plain `cargo test` compiles the top crate a second time for a bin with no tests; stable Rust owners only: VM, parser, patterns/DFA, cache/reads, type APIs, CLI/LSP; rule behaviour lives in fixtures)
 - rule fixtures: `dxlint fixtures [paths...] [--bless]` (default `fixtures/`)
 - package binaries: `npm run build:binaries` (Windows, Linux, macOS; setup in its header); any change to `src/`, `crates/` or Cargo files ships with it in the same batch (publishing refuses binaries whose `package/source.sha256` stamp is stale)
-- linked checkouts (projects running `package/` directly) need an engine change now: `npm run build:local` (this host's binary, incremental `local` profile, minutes; removes the stamp so a full `build:binaries` still follows before publishing)
+- linked checkouts link `published/` (gitignored), never `package/` or the working tree: once a change is proven (check + the project's own lint), `npm run publish:link` copies the package as npm ships it (binaries, std, rules) there. An engine change for them first needs `npm run build:local` (this host's binary, incremental `local` profile, minutes; removes the stamp so a full `build:binaries` still follows before publishing)
 - Windows binary's PGO profile: `npm run build:profile <project>...` (needs `rustup component add llvm-tools-preview`; lints real projects on an instrumented build), commit `scripts/dxlint-win32-x64.profdata`, then `build:binaries`; refresh when big engine changes landed, a stale one only gains less
 - self-lint: `cargo run --release --` (uses `.dx`); must stay clean
 - perf check: `dxlint --stats --no-cache <big file>`; compare before/after engine changes
