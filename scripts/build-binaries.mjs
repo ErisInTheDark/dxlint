@@ -19,7 +19,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { root, removeStamp, sourceHash, windowsProfile, writeStamp } from "./binary-sources.mjs";
+import { root, removeStamp, replaceFile, sourceHash, windowsProfile, writeStamp } from "./binary-sources.mjs";
 const platforms = {
   // The host build: it also refreshes target/release/dxlint.exe, for editors pointed there.
   "win32-x64": { target: "x86_64-pc-windows-msvc", built: "dxlint.exe", shipped: "dxlint-win32-x64.exe", env: windowsEnv, refresh: "dxlint.exe" },
@@ -49,21 +49,6 @@ function darwinEnv() {
   };
 }
 
-// Whatever links package/bin may be running a binary, which Windows won't let
-// anything overwrite but does let move: it moves aside until nothing runs it.
-const replaced = path.join(root, "target", "replaced-binaries");
-fs.mkdirSync(replaced, { recursive: true });
-function ship(binary, destination) {
-  for (const old of fs.readdirSync(replaced)) {
-    try {
-      fs.rmSync(path.join(replaced, old), { force: true });
-    } catch {
-      // Still running.
-    }
-  }
-  if (fs.existsSync(destination)) fs.renameSync(destination, path.join(replaced, `${path.basename(destination)}-${process.pid}`));
-  fs.copyFileSync(binary, destination);
-}
 
 const args = process.argv.slice(2);
 const local = args.includes("--local");
@@ -85,7 +70,7 @@ if (result.status !== 0) process.exit(result.status ?? 1);
 for (const { name, target, built, shipped, refresh } of building) {
   const binary = path.join(root, "target", target, profile, built);
   const destination = path.join(root, "package", "bin", shipped);
-  ship(binary, destination);
+  replaceFile(binary, destination);
   fs.chmodSync(destination, 0o755);
   console.log(`${name}: package/bin/${shipped}`);
   if (refresh) {

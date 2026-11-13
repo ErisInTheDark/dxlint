@@ -44,3 +44,27 @@ export function checkStamp() {
     throw new Error("package/bin was built from other sources than src/, crates/ and the Cargo files hold now; run npm run build:binaries");
   }
 }
+
+// Linked checkouts may be running a binary, which Windows won't let anything
+// overwrite or delete but does let move: it moves aside until nothing runs it.
+const replaced = path.join(root, "target", "replaced-binaries");
+let moved = 0;
+
+// Moves `file` out of the way, if it is there.
+export function moveAside(file) {
+  fs.mkdirSync(replaced, { recursive: true });
+  for (const old of fs.readdirSync(replaced)) {
+    try {
+      fs.rmSync(path.join(replaced, old), { force: true });
+    } catch {
+      // Still running.
+    }
+  }
+  if (fs.existsSync(file)) fs.renameSync(file, path.join(replaced, `${path.basename(file)}-${process.pid}-${moved++}`));
+}
+
+// Copies `from` over `to`, even while `to` runs.
+export function replaceFile(from, to) {
+  moveAside(to);
+  fs.copyFileSync(from, to);
+}

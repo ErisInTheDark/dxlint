@@ -16,7 +16,7 @@ import path from "node:path";
 import zlib from "node:zlib";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { checkStamp } from "./binary-sources.mjs";
+import { checkStamp, moveAside, replaceFile } from "./binary-sources.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const packageDir = path.join(root, "package");
@@ -116,11 +116,28 @@ function link() {
   for (const name of [...readManifest().files, "package.json"]) {
     const from = [path.join(packageDir, name), path.join(root, name)].find(candidate => fs.existsSync(candidate));
     if (!from) throw new Error(`no ${name} in package/ or the repository root`);
-    const to = path.join(published, name);
-    fs.rmSync(to, { recursive: true, force: true });
-    fs.cpSync(from, to, { recursive: true });
+    mirror(from, path.join(published, name));
   }
   console.log(`published ${path.relative(root, published)}`);
+}
+
+// Makes `to` a copy of `from`, file by file: a linked checkout may be
+// running a published binary (replaceFile moves it aside).
+function mirror(from, to) {
+  if (!fs.statSync(from).isDirectory()) {
+    if (fs.existsSync(to) && fs.statSync(to).isDirectory()) fs.rmSync(to, { recursive: true, force: true });
+    replaceFile(from, to);
+    return;
+  }
+  if (fs.existsSync(to) && !fs.statSync(to).isDirectory()) moveAside(to);
+  fs.mkdirSync(to, { recursive: true });
+  const wanted = new Set(fs.readdirSync(from));
+  for (const stale of fs.readdirSync(to).filter(entry => !wanted.has(entry))) {
+    const at = path.join(to, stale);
+    if (fs.statSync(at).isDirectory()) fs.rmSync(at, { recursive: true, force: true });
+    else moveAside(at);
+  }
+  for (const entry of wanted) mirror(path.join(from, entry), path.join(to, entry));
 }
 
 function npm(args) {
