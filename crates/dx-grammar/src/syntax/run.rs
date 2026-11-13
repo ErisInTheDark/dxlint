@@ -198,8 +198,14 @@ impl Scratch {
     }
 }
 
+/// A parse of a text this long lets its scratch go instead of keeping it
+/// for the next: scratch grows with the text, and a kept one would hold the
+/// biggest file's high-water mark for the rest of the run.
+const KEEP_SCRATCH_BELOW: usize = 256 * 1024;
+
 impl Drop for Run<'_> {
     fn drop(&mut self) {
+        if self.text.len() >= KEEP_SCRATCH_BELOW { return }
         super::phases::phase("clear", || self.scratch.clear());
         self.caches.scratch = std::mem::take(&mut self.scratch);
     }
