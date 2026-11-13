@@ -70,6 +70,11 @@ in ts_array, ts_array_pattern, ts_object, ts_object_pattern, ts_function, ts_arr
   option tuples trailing_comma_mode | null = null "tuple policy"
   let dangle_policies {arrays:arrays, objects:objects, functions:functions, imports:imports, exports:exports, importAttributes:importAttributes, dynamicImports:dynamicImports, enums:enums, generics:generics, tuples:tuples, "type-arguments":"never"}
   let dangle_tsx ends_with(file, ".tsx")
+  # One-line lists without a trailing comma are right under every mode but `always`.
+  let dangle_may_be_wrong contains([style, arrays, objects, functions, imports, exports, importAttributes, dynamicImports, enums, generics, tuples], "always")
+    || position(offset).js_line != position(end_offset).js_line
+    || re_test(byte_slice(source, offset, end_offset), /,\s*[)\]}>]|\/\*/)
+  when dangle_may_be_wrong
   each dangle_site in if is ts_import_attributes then layout_attribute_sites(layout_attribute_comma_sites, style, dangle_policies) else layout_dangle_lists(node, style, dangle_policies, ecma_version, dangle_tsx, source) {
     when layout_dangle_wrong(dangle_site, dangle_site.mode)
     report at { start: dangle_site.offset, end: dangle_site.offset + (if byte_slice(source, dangle_site.offset, dangle_site.offset + 2) == "\r\n" then 2 else 1) }
