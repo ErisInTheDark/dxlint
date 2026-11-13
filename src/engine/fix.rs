@@ -165,8 +165,16 @@ pub fn minimal_edit(source: &str, start: usize, end: usize, want: &str) -> Edit 
 
 impl Linter {
     pub fn fix(&self, path: &Path, text: &str) -> Fixed {
-        // One run for every pass: what other files say is read once.
-        let run = self.run();
+        self.run().fix(path, text)
+    }
+}
+
+impl super::LintRun<'_> {
+    /// `path` (reading `text`) with its fixes applied until none apply. Every
+    /// pass shares this run: what other files say is read once, and once
+    /// for every file a whole-project `--fix` touches.
+    pub fn fix(&self, path: &Path, text: &str) -> Fixed {
+        let run = self;
         let mut current = text.to_string();
         let mut applied = 0;
         for _ in 0..MAX_PASSES {

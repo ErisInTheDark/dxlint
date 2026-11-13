@@ -208,7 +208,7 @@ fn lint_file(linter: &Linter, run: &LintRun<'_>, cache: Option<&Cache>, path: &P
         };
         return Msg::File(FileResult { path: path.to_path_buf(), text, diags, fixed: 0 });
     }
-    let fixed = linter.fix(path, &text);
+    let fixed = run.fix(path, &text);
     if fixed.applied > 0 && fixed.text != text {
         if let Err(e) = std::fs::write(path, &fixed.text) {
             return Msg::Error(path.to_path_buf(), format!("cannot write fixes: {e}"));
