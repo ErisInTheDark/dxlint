@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::fx_hash::FxHashMap;
 use crate::names::Resolved;
-use crate::parts::{name_hash, Diff, FileParts, Name, Part, PartReads};
+use crate::parts::{name_hash, Diff, FileParts, Member, Name, Part, PartReads};
 
 use super::reads::{self, DepPath};
 use super::units::Unit;
@@ -129,7 +129,29 @@ impl Linter {
             hasher.finish()
         };
         let outside = hash_span(0, text.len() as u32);
-        for part in &mut statements { part.hash = hash_span(part.start, part.end) }
+        for part in &mut statements {
+            part.hash = hash_span(part.start, part.end);
+            part.shell = part.hash;
+        }
+        // The statement's text outside its members, bodies blanked as in
+        // `hash_span`: equal to its hash without members.
+        let shell_hash = |part: &Part| {
+            use std::hash::{BuildHasher, Hasher};
+            let inside_member = |start: u32, end: u32| part.members.iter().any(|member| start >= member.start && end <= member.end);
+            let mut skips: Vec<(u32, u32, bool)> = part.members.iter().map(|member| (member.start, member.end, false)).collect();
+            skips.extend(body_spans.iter().filter(|&&(start, end)| start >= part.start && end <= part.end && !inside_member(start, end)).map(|&(start, end)| (start, end, true)));
+            skips.sort_unstable();
+            let mut hasher = crate::fx_hash::FxBuild::default().build_hasher();
+            let mut at = part.start;
+            for (start, end, body) in skips {
+                if start < at { continue }
+                hasher.write(slice(at, start));
+                if body { hasher.write_u8(0xFF) }
+                at = end;
+            }
+            hasher.write(slice(at, part.end));
+            hasher.finish()
+        };
         let mut bodies: Vec<Part> = body_spans.iter().map(|&(start, end)| Part { start, end, hash: reads::hash_bytes(slice(start, end)), ..Part::default() }).collect();
         // What the file publishes is known from its tree alone.
         let mut published_by: Vec<Vec<Name>> = vec![Vec::new(); statements.len()];
@@ -189,9 +211,13 @@ impl Linter {
             let mut declares: Vec<Vec<Name>> = published_by;
             let mut refers: Vec<Vec<u32>> = vec![Vec::new(); statements.len()];
             let mut body_refers: Vec<Vec<u32>> = vec![Vec::new(); bodies.len()];
+            let mut outside_mentions: Vec<(u32, Name)> = Vec::new();
             let mut mention = |at: u32, name: Name| match body_at(at) {
                 Some(body) => body_mentions[body].push(name),
-                None => if let Some(statement) = statement_at(at) { mentions[statement].push(name) },
+                None => if let Some(statement) = statement_at(at) {
+                    mentions[statement].push(name);
+                    outside_mentions.push((at, name));
+                },
             };
             // Only top-level names matter to other files: locals are reached
             // only through their statements.
@@ -214,10 +240,23 @@ impl Linter {
             }
             let names_of = |mut list: Vec<Name>| { list.sort_unstable(); list.dedup(); list.into_boxed_slice() };
             let indices = |mut list: Vec<u32>| { list.sort_unstable(); list.dedup(); list.into_boxed_slice() };
+            let mut members = members(tree, names, &module_scopes, &statements, &key, &syntax);
+            for (at, name) in outside_mentions {
+                let Some(statement) = statement_at(at) else { continue };
+                let list = &mut members[statement];
+                let after = list.partition_point(|(member, _)| member.start <= at);
+                if after > 0 && at < list[after - 1].0.end { list[after - 1].1.push(name) }
+            }
             for (index, part) in statements.iter_mut().enumerate() {
                 part.mentions = names_of(std::mem::take(&mut mentions[index]));
                 part.declares = names_of(std::mem::take(&mut declares[index]));
                 part.refers = indices(std::mem::take(&mut refers[index]));
+                part.members = std::mem::take(&mut members[index]).into_iter().map(|(mut member, mentions)| {
+                    member.hash = hash_span(member.start, member.end);
+                    member.mentions = names_of(mentions);
+                    member
+                }).collect();
+                part.shell = shell_hash(part);
             }
             for (index, part) in bodies.iter_mut().enumerate() {
                 part.mentions = names_of(std::mem::take(&mut body_mentions[index]));
@@ -226,4 +265,51 @@ impl Linter {
         }
         FileParts::new((unit.path.clone(), unit.hash), outside, statements, bodies, (precise, failed), declared_names, coarse)
     }
+}
+
+/// Per statement, its members (start, end and declared names; hashes come
+/// later) with room for their mentions: the declaring nodes of the scopes
+/// the statement opens below the module scope, outermost only (a method's
+/// parameters belong to the method), each with the text since its previous
+/// sibling. A declaration holding its own scope's opener (a class naming
+/// itself inside) is the statement's, not a member.
+fn members(tree: &dx_tree::Tree, names: &Resolved, module_scopes: &[u32], statements: &[Part], key: impl Fn(u32) -> Name, syntax: impl Fn(u32) -> bool)
+    -> Vec<Vec<(Member, Vec<Name>)>> {
+    let mut by_node: FxHashMap<u32, Vec<Name>> = FxHashMap::default();
+    for (&node, &(scope, declaring, ..)) in names.declared.iter() {
+        if module_scopes.contains(&scope) { continue }
+        let Some(opener) = names.scopes.get(scope as usize).map(|info| tree.node(info.node)) else { continue };
+        let span = tree.node(declaring);
+        if span.start <= opener.start && opener.end <= span.end { continue }
+        by_node.entry(declaring).or_default().push(key(node));
+    }
+    let ends: Vec<u32> = statements.iter().map(|part| part.end).collect();
+    let mut found: Vec<Vec<(u32, Member)>> = vec![Vec::new(); statements.len()];
+    for (node, mut declares) in by_node {
+        let span = tree.node(node);
+        let statement = ends.partition_point(|&end| end <= span.start);
+        if statement >= statements.len() || span.end > statements[statement].end { continue }
+        let before = tree.parent(node).and_then(|parent| {
+            let siblings: Vec<u32> = tree.children(parent).iter().map(|edge| edge.node).filter(|&child| syntax(child)).collect();
+            let at = siblings.iter().position(|&child| child == node)?;
+            at.checked_sub(1).map(|previous| tree.node(siblings[previous]).end)
+        });
+        declares.sort_unstable();
+        declares.dedup();
+        let start = before.filter(|&end| end >= statements[statement].start && end <= span.start).unwrap_or(span.start);
+        found[statement].push((span.start, Member { start, end: span.end, declares: declares.into(), ..Member::default() }));
+    }
+    found.into_iter().map(|mut list| {
+        list.sort_unstable_by_key(|(at, member)| (*at, std::cmp::Reverse(member.end)));
+        let mut kept: Vec<(Member, Vec<Name>)> = Vec::new();
+        for (at, mut member) in list {
+            if let Some((last, _)) = kept.last() {
+                // Inside the previous one: a nested scope's, read through it.
+                if at < last.end { continue }
+                member.start = member.start.max(last.end);
+            }
+            kept.push((member, Vec::new()));
+        }
+        kept
+    }).collect()
 }

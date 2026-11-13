@@ -43,6 +43,26 @@ pub struct Part {
     pub mentions: Box<[Name]>,
     /// The statements its uses resolve to.
     pub refers: Box<[u32]>,
+    /// Its text without its members' (and bodies'): equal shells, the same
+    /// statement around other members. Equals `hash` without members.
+    pub shell: u64,
+    /// The declarations of the scopes it opens outside them, in text order:
+    /// a reader inside one reads only that one.
+    pub members: Box<[Member]>,
+}
+
+/// One declaration of a statement's own scopes (an interface's property, a
+/// class's method), with the text before it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Member {
+    pub start: u32,
+    pub end: u32,
+    /// Its text (opaque bodies blanked).
+    pub hash: u64,
+    /// Names it declares in the statement's scopes.
+    pub declares: Box<[Name]>,
+    /// Top-level names it uses.
+    pub mentions: Box<[Name]>,
 }
 
 /// One version of a file, as its readers' deps see it.
@@ -100,6 +120,12 @@ impl Ord for FileParts {
 pub enum Read {
     /// A top-level statement (by index), and what its names resolve to.
     Statement(u32),
+    /// A statement without its members: what entering it outside them reads
+    /// (lookups in its scopes record the names they ask as [`Read::Name`];
+    /// listing a scope reads its span).
+    Shell(u32),
+    /// One member (by index) of a statement.
+    Member(u32, u32),
     /// An opaque body (by index) it stepped into.
     Body(u32),
     /// A lookup of a top-level name, found or not.
@@ -119,6 +145,9 @@ pub enum Read {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct PartReads {
     pub statements: Box<[u32]>,
+    pub shells: Box<[u32]>,
+    /// (statement, member).
+    pub members: Box<[(u32, u32)]>,
     pub bodies: Box<[u32]>,
     pub names: Box<[Name]>,
     pub uses: Box<[Name]>,
@@ -128,10 +157,13 @@ pub struct PartReads {
 
 impl PartReads {
     pub fn new(reads: impl IntoIterator<Item = Read>) -> PartReads {
-        let (mut statements, mut bodies, mut names, mut uses, mut uses_of, mut whole) = (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), false);
+        let mut whole = false;
+        let (mut statements, mut shells, mut members, mut bodies, mut names, mut uses, mut uses_of) = (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
         for read in reads {
             match read {
                 Read::Statement(index) => statements.push(index),
+                Read::Shell(index) => shells.push(index),
+                Read::Member(index, member) => members.push((index, member)),
                 Read::Body(index) => bodies.push(index),
                 Read::Name(name) => names.push(name),
                 Read::Uses(name) => uses.push(name),
@@ -140,11 +172,18 @@ impl PartReads {
             }
         }
         fn sorted<T: Ord>(mut list: Vec<T>) -> Box<[T]> { list.sort_unstable(); list.dedup(); list.into_boxed_slice() }
-        PartReads { statements: sorted(statements), bodies: sorted(bodies), names: sorted(names), uses: sorted(uses), uses_of: sorted(uses_of), whole }
+        // A statement read whole covers its shell and members.
+        let statements = sorted(statements);
+        let whole_statement = |index: &u32| statements.binary_search(index).is_ok();
+        shells.retain(|index| !whole_statement(index));
+        members.retain(|(index, _)| !whole_statement(index));
+        PartReads { shells: sorted(shells), members: sorted(members), bodies: sorted(bodies), names: sorted(names), uses: sorted(uses), uses_of: sorted(uses_of), statements, whole }
     }
 
     pub fn iter(&self) -> impl Iterator<Item = Read> + '_ {
         self.statements.iter().map(|&i| Read::Statement(i))
+            .chain(self.shells.iter().map(|&i| Read::Shell(i)))
+            .chain(self.members.iter().map(|&(i, m)| Read::Member(i, m)))
             .chain(self.bodies.iter().map(|&i| Read::Body(i)))
             .chain(self.names.iter().map(|&n| Read::Name(n)))
             .chain(self.uses.iter().map(|&n| Read::Uses(n)))
@@ -160,12 +199,19 @@ pub struct Diff {
     pub all: bool,
     /// Old statements gone or changed.
     removed: FxHashSet<u32>,
+    /// Those among them whose shell lives on around other members: what
+    /// their names resolve to stays.
+    reshaped: FxHashSet<u32>,
+    /// Members of reshaped statements gone or changed: (statement, member).
+    removed_members: FxHashSet<(u32, u32)>,
     /// Statements came, went or changed.
     pub statements: bool,
     /// Names declared by statements that came, went or changed (`any`: a
     /// computed publication among them).
     declared: FxHashSet<Name>,
     any_declared: bool,
+    /// Names declared by members that came, went or changed.
+    member_declared: FxHashSet<Name>,
     /// Names mentioned by statements or bodies that came, went or changed.
     mentioned: FxHashSet<Name>,
     /// Old bodies gone or changed.
@@ -174,6 +220,41 @@ pub struct Diff {
     /// place; `changed_in_place` lists the bodies whose text changed then.
     same_outside: bool,
     changed_in_place: FxHashSet<u32>,
+}
+
+impl Diff {
+    /// Statement `index` (`old`) became `new` around the same shell: its
+    /// members that came, went or changed.
+    fn members_changed(&mut self, index: u32, old: &Part, new: &Part) {
+        let mut left = crate::fx_hash::FxHashMap::<u64, usize>::default();
+        for member in new.members.iter() { *left.entry(member.hash).or_default() += 1 }
+        for (at, member) in old.members.iter().enumerate() {
+            match left.get_mut(&member.hash) {
+                Some(count) if *count > 0 => *count -= 1,
+                _ => {
+                    self.removed_members.insert((index, at as u32));
+                    self.member_declared.extend(member.declares.iter().copied());
+                    self.mentioned.extend(member.mentions.iter().copied());
+                }
+            }
+        }
+        let mut left = crate::fx_hash::FxHashMap::<u64, usize>::default();
+        for member in old.members.iter() { *left.entry(member.hash).or_default() += 1 }
+        for member in new.members.iter() {
+            match left.get_mut(&member.hash) {
+                Some(count) if *count > 0 => *count -= 1,
+                _ => {
+                    self.member_declared.extend(member.declares.iter().copied());
+                    self.mentioned.extend(member.mentions.iter().copied());
+                }
+            }
+        }
+    }
+
+    /// Whether statement `index` is gone or changed beyond its members.
+    fn replaced(&self, index: u32) -> bool {
+        self.removed.contains(&index) && !self.reshaped.contains(&index)
+    }
 }
 
 impl FileParts {
@@ -237,26 +318,44 @@ impl FileParts {
         // Statements match by content: one gone or changed, or one new.
         let (old, now) = (counts(&self.statements), counts(&new.statements));
         let mut left = now.clone();
+        let mut gone = Vec::new();
         for (index, part) in self.statements.iter().enumerate() {
             match left.get_mut(&part.hash) {
                 Some(count) if *count > 0 => *count -= 1,
-                _ => {
-                    diff.removed.insert(index as u32);
-                    note(&mut diff, part);
-                }
+                _ => gone.push(index as u32),
             }
         }
         let mut left = old;
+        // Changed statements with members, by what stays when only members
+        // change: they pair with a gone statement of the same shape.
+        let mut arrived: crate::fx_hash::FxHashMap<(u64, bool, &[Name]), std::collections::VecDeque<&Part>> = Default::default();
         for part in new.statements.iter() {
             match left.get_mut(&part.hash) {
                 Some(count) if *count > 0 => *count -= 1,
                 _ => {
                     diff.statements = true;
-                    note(&mut diff, part);
+                    if part.members.is_empty() { note(&mut diff, part) } else {
+                        arrived.entry((part.shell, part.computed, &part.declares)).or_default().push_back(part);
+                    }
                 }
             }
         }
-        diff.statements |= !diff.removed.is_empty();
+        diff.statements |= !gone.is_empty();
+        for index in gone {
+            let part = &self.statements[index as usize];
+            diff.removed.insert(index);
+            let paired = if part.members.is_empty() { None } else {
+                arrived.get_mut(&(part.shell, part.computed, &*part.declares)).and_then(std::collections::VecDeque::pop_front)
+            };
+            match paired {
+                Some(now) => {
+                    diff.reshaped.insert(index);
+                    diff.members_changed(index, part, now);
+                }
+                None => note(&mut diff, part),
+            }
+        }
+        for part in arrived.into_values().flatten() { note(&mut diff, part) }
         let bodies = counts(&new.bodies);
         let mut left = bodies;
         for (index, part) in self.bodies.iter().enumerate() {
@@ -302,8 +401,10 @@ impl FileParts {
         match read {
             Read::Whole | Read::Span(..) => !diff.statements,
             Read::Body(index) => !diff.removed_bodies.contains(&index) && self.bodies.get(index as usize).is_some_and(|body| self.reach_holds(diff, body.refers.iter().copied())),
-            Read::Statement(index) => self.reach_holds(diff, std::iter::once(index)),
-            Read::Name(name) => !diff.any_declared && !diff.declared.contains(&name)
+            Read::Statement(index) => !diff.removed.contains(&index) && self.reach_holds(diff, std::iter::once(index)),
+            Read::Shell(index) => !diff.replaced(index) && self.reach_holds(diff, std::iter::once(index)),
+            Read::Member(index, member) => self.member_holds(diff, index, member) && self.reach_holds(diff, std::iter::once(index)),
+            Read::Name(name) => !diff.any_declared && !diff.declared.contains(&name) && !diff.member_declared.contains(&name)
                 && self.reach_holds(diff, self.statements.iter().enumerate().filter(|(_, part)| part.declares.contains(&name)).map(|(index, _)| index as u32)),
             Read::Uses(name) => !diff.mentioned.contains(&name),
             Read::UsesOf(node) => self.declared.get(&node).is_some_and(|name| !diff.mentioned.contains(name)),
@@ -317,20 +418,42 @@ impl FileParts {
             return reads.iter().all(|read| self.holds(diff, read, strict));
         }
         if reads.bodies.iter().any(|index| diff.removed_bodies.contains(index)) { return false }
+        if reads.statements.iter().any(|index| diff.removed.contains(index)) { return false }
+        if reads.shells.iter().any(|&index| diff.replaced(index)) { return false }
+        if reads.members.iter().any(|&(index, member)| !self.member_holds(diff, index, member)) { return false }
         if reads.uses.iter().any(|name| diff.mentioned.contains(name)) { return false }
         if reads.uses_of.iter().any(|node| self.declared.get(node).is_none_or(|name| diff.mentioned.contains(name))) { return false }
         if !reads.names.is_empty() && diff.any_declared { return false }
-        if reads.names.iter().any(|name| diff.declared.contains(name)) { return false }
+        if reads.names.iter().any(|name| diff.declared.contains(name) || diff.member_declared.contains(name)) { return false }
         let declaring = self.statements.iter().enumerate()
             .filter(|(_, part)| part.declares.iter().any(|name| reads.names.binary_search(name).is_ok()))
             .map(|(index, _)| index as u32);
         let from_bodies = reads.bodies.iter().filter_map(|&index| self.bodies.get(index as usize)).flat_map(|body| body.refers.iter().copied());
-        self.reach_holds(diff, reads.statements.iter().copied().chain(declaring).chain(from_bodies))
+        let entered = reads.statements.iter().chain(reads.shells.iter()).copied().chain(reads.members.iter().map(|&(index, _)| index));
+        self.reach_holds(diff, entered.chain(declaring).chain(from_bodies))
     }
 
-    /// Whether the statements reachable from `from` are unchanged, and no
-    /// changed statement declares a name they use (it could shadow or join
-    /// what they resolved to).
+    /// Whether member `member` of statement `index` reads the same: its
+    /// statement unchanged, or only other members of it changed, and no
+    /// changed statement declares a name it uses.
+    fn member_holds(&self, diff: &Diff, index: u32, member: u32) -> bool {
+        if !diff.removed.contains(&index) { return true }
+        diff.reshaped.contains(&index) && !diff.removed_members.contains(&(index, member))
+            && self.statements.get(index as usize).and_then(|part| part.members.get(member as usize))
+                .is_some_and(|member| !member.mentions.iter().any(|name| diff.declared.contains(name)))
+    }
+
+    /// The member of statement `index` holding bytes `start..end`.
+    pub fn member_at(&self, index: u32, start: u32, end: u32) -> Option<u32> {
+        let members = &self.statements.get(index as usize)?.members;
+        let after = members.partition_point(|member| member.start <= start);
+        (after > 0 && end <= members[after - 1].end).then(|| after as u32 - 1)
+    }
+
+    /// Whether the statements reachable from `from` resolve as before:
+    /// unchanged, or changed only in members (whose readers record those),
+    /// and no changed statement declares a name they use (it could shadow or
+    /// join what they resolved to).
     fn reach_holds(&self, diff: &Diff, from: impl Iterator<Item = u32>) -> bool {
         if diff.any_declared { return !diff.statements }
         let reach = self.reach();
@@ -342,7 +465,7 @@ impl FileParts {
         }
         for (index, part) in self.statements.iter().enumerate() {
             if seen[index / 64] >> (index % 64) & 1 == 0 { continue }
-            if diff.removed.contains(&(index as u32)) { return false }
+            if diff.replaced(index as u32) { return false }
             if part.mentions.iter().any(|name| diff.declared.contains(name)) { return false }
         }
         true
@@ -522,6 +645,35 @@ mod tests {
         let diff = old.diff(&uses);
         assert!(!old.holds(&diff, Read::Uses(name_hash("c")), false));
         assert!(old.holds(&diff, Read::Uses(name_hash("A")), false) && old.holds(&diff, Read::Name(name_hash("c")), false));
+    }
+
+    #[test]
+    fn readers_of_other_members_hold_while_a_statement_changes_only_in_members() {
+        let member = |hash: u64, name: &str, mentions: &[&str]| Member {
+            hash, declares: [name_hash(name)].into(), mentions: mentions.iter().map(|n| name_hash(n)).collect(), ..Member::default()
+        };
+        let shaped = |hash: u64, members: Vec<Member>| Part { shell: 5, members: members.into(), ..part(hash, &["I"], &["T"], &[1]) };
+        let t = || part(20, &["T"], &[], &[]);
+        // `interface I { a: T; b: number }`, `type T = string`.
+        let old = file(1, vec![shaped(10, vec![member(1, "a", &["T"]), member(2, "b", &[])]), t()]);
+        let all = |reads: &[Read], diff: &Diff| old.holds_all(diff, &PartReads::new(reads.iter().copied()), false);
+        // A member `c` joins `I`.
+        let added = old.diff(&file(2, vec![shaped(11, vec![member(1, "a", &["T"]), member(2, "b", &[]), member(3, "c", &[])]), t()]));
+        assert!(all(&[Read::Member(0, 0), Read::Shell(0), Read::Name(name_hash("I")), Read::Name(name_hash("a"))], &added));
+        assert!(!old.holds(&added, Read::Statement(0), false), "a reader of the whole statement sees the new member");
+        assert!(!all(&[Read::Shell(0), Read::Name(name_hash("c"))], &added), "a lookup of the new member finds it now");
+        // `b` changes: its readers and lookups break, `a`'s hold.
+        let changed = old.diff(&file(3, vec![shaped(12, vec![member(1, "a", &["T"]), member(4, "b", &[])]), t()]));
+        assert!(!all(&[Read::Member(0, 1)], &changed) && !all(&[Read::Name(name_hash("b"))], &changed));
+        assert!(all(&[Read::Member(0, 0), Read::Name(name_hash("a"))], &changed));
+        // A changed shell (a new heritage clause) breaks every reader of it.
+        let reshelled = old.diff(&file(4, vec![Part { shell: 6, ..shaped(13, vec![member(1, "a", &["T"]), member(2, "b", &[])]) }, t()]));
+        for read in [Read::Member(0, 0), Read::Shell(0), Read::Name(name_hash("I"))] {
+            assert!(!all(&[read], &reshelled) && !old.holds(&reshelled, read, false), "{read:?}");
+        }
+        // `T` changes: `a` reaches it through `I`.
+        let retyped = old.diff(&file(5, vec![shaped(10, vec![member(1, "a", &["T"]), member(2, "b", &[])]), part(21, &["T"], &[], &[])]));
+        assert!(!all(&[Read::Member(0, 0)], &retyped) && !old.holds(&retyped, Read::Member(0, 0), false));
     }
 
     #[test]

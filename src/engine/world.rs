@@ -323,9 +323,16 @@ impl<'a> LintWorld<'a> {
             let Some(parts) = self.parts_of(file) else { return self.note_part(file, crate::parts::Read::Whole) };
             // Wrappers of the whole file are its scope too; text no
             // statement holds is read whole.
+            // A node inside one member reads that member. Any other reads
+            // the statement around its members: members are read by entering
+            // them or by listing their scope (a read of the statement).
             match parts.statement_at(syntax.start) {
                 Some(index) if syntax.end > parts.statements[index as usize].end => return,
-                Some(index) => self.note_part(file, crate::parts::Read::Statement(index)),
+                Some(index) => self.note_part(file, match parts.member_at(index, syntax.start, syntax.end) {
+                    Some(member) => crate::parts::Read::Member(index, member),
+                    None if parts.statements[index as usize].members.is_empty() => crate::parts::Read::Statement(index),
+                    None => crate::parts::Read::Shell(index),
+                }),
                 None => self.note_part(file, crate::parts::Read::Whole),
             }
             if let Some(body) = self.linter.body_index(unit, syntax.start) { self.note_part(file, crate::parts::Read::Body(body)) }

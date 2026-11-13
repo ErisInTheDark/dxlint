@@ -282,7 +282,8 @@ impl Cache {
                     let failing: Vec<String> = read.iter()
                         .filter(|&one| !linter.holds(&Dep::Part(parts.clone(), Arc::new(crate::parts::PartReads::new([one])))))
                         .map(|one| match one {
-                            crate::parts::Read::Statement(at) => format!("statement {at} at byte {}", parts.statements.get(at as usize).map_or(0, |part| part.start)),
+                            crate::parts::Read::Statement(at) => parts.statements.get(at as usize)
+                                .map_or_else(|| format!("statement {at}"), |part| format!("statement {at} at byte {} ({} members)", part.start, part.members.len())),
                             one => format!("{one:?}"),
                         }).take(4).collect();
                     let now = linter.parts_now(&parts.path, self.text_hash(&parts.path));
@@ -827,6 +828,15 @@ impl Writer {
                 self.names(&part.mentions);
                 self.var(part.refers.len() as u64);
                 for &index in part.refers.iter() { self.var(u64::from(index)) }
+                self.out.extend_from_slice(&part.shell.to_le_bytes());
+                self.var(part.members.len() as u64);
+                for member in part.members.iter() {
+                    self.var(u64::from(member.start));
+                    self.var(u64::from(member.end));
+                    self.out.extend_from_slice(&member.hash.to_le_bytes());
+                    self.names(&member.declares);
+                    self.names(&member.mentions);
+                }
             }
         }
         let mut declared: Vec<(&u32, &crate::parts::Name)> = parts.declared.iter().collect();
@@ -843,9 +853,14 @@ impl Writer {
             self.out.push(8);
             self.path(&version.path);
             self.var(u64::from(parts[&(Arc::as_ptr(version) as usize)]));
-            for indices in [&read.statements, &read.bodies, &read.uses_of] {
+            for indices in [&read.statements, &read.bodies, &read.uses_of, &read.shells] {
                 self.var(indices.len() as u64);
                 for &index in indices.iter() { self.var(u64::from(index)) }
+            }
+            self.var(read.members.len() as u64);
+            for &(index, member) in read.members.iter() {
+                self.var(u64::from(index));
+                self.var(u64::from(member));
             }
             self.names(&read.names);
             self.names(&read.uses);
@@ -1153,7 +1168,15 @@ impl<'a> Reader<'a> {
                 let (declares, mentions) = (self.names()?, self.names()?);
                 let refers_count = self.count()?;
                 let refers = (0..refers_count).map(|_| u32::try_from(self.var()?).ok()).collect::<Option<Box<[u32]>>>()?;
-                Some(crate::parts::Part { start, end, hash, declares, computed, mentions, refers })
+                let shell = self.u64()?;
+                let member_count = self.count()?;
+                let members = (0..member_count).map(|_| {
+                    let (start, end) = (u32::try_from(self.var()?).ok()?, u32::try_from(self.var()?).ok()?);
+                    let hash = self.u64()?;
+                    let (declares, mentions) = (self.names()?, self.names()?);
+                    Some(crate::parts::Member { start, end, hash, declares, mentions })
+                }).collect::<Option<Box<[_]>>>()?;
+                Some(crate::parts::Part { start, end, hash, declares, computed, mentions, refers, shell, members })
             }).collect::<Option<Vec<_>>>()?;
             lists.push(list);
         }
@@ -1171,16 +1194,19 @@ impl<'a> Reader<'a> {
         if tag == 8 {
             let version = parts.get(usize::try_from(self.var()?).ok()?)?.clone();
             let mut indices = Vec::new();
-            for _ in 0..3 {
+            for _ in 0..4 {
                 let count = self.count()?;
                 indices.push((0..count).map(|_| u32::try_from(self.var()?).ok()).collect::<Option<Box<[u32]>>>()?);
             }
+            let count = self.count()?;
+            let members = (0..count).map(|_| Some((u32::try_from(self.var()?).ok()?, u32::try_from(self.var()?).ok()?))).collect::<Option<Box<[_]>>>()?;
             let (names, uses) = (self.names()?, self.names()?);
             let whole = self.u8()? != 0;
+            let shells = indices.pop()?;
             let uses_of = indices.pop()?;
             let bodies = indices.pop()?;
             let statements = indices.pop()?;
-            let read = crate::parts::PartReads { statements, bodies, names, uses, uses_of, whole };
+            let read = crate::parts::PartReads { statements, shells, members, bodies, names, uses, uses_of, whole };
             return Some(Dep::Part(version, Arc::new(read)));
         }
         let a = self.u64()?;
@@ -1363,13 +1389,15 @@ mod tests {
     }
     #[test]
     fn part_reads_keep_what_they_read_and_of_which_version_when_saved() {
-        use crate::parts::{name_hash, FileParts, Part, PartReads, Read};
+        use crate::parts::{name_hash, FileParts, Member, Part, PartReads, Read};
         let root = Path::new("/root/cached-parts");
-        let statement = Part { start: 0, end: 9, hash: 1, declares: [name_hash("a")].into(), mentions: [name_hash("a"), name_hash("b")].into(), refers: [1].into(), computed: false };
+        let member = Member { start: 2, end: 8, hash: 4, declares: [name_hash("m")].into(), mentions: [name_hash("b")].into() };
+        let statement = Part { start: 0, end: 9, hash: 1, declares: [name_hash("a")].into(), mentions: [name_hash("a"), name_hash("b")].into(), refers: [1].into(), computed: false,
+            shell: 5, members: [member].into() };
         let file = super::super::reads::dep_path(&root.join("f.ts"));
         let parts = Arc::new(FileParts::new((file.clone(), 7), 8, vec![statement, Part { start: 9, end: 20, hash: 2, ..Part::default() }], Vec::new(), (true, false),
             [(3, name_hash("a"))].into_iter().collect(), None));
-        let read = Arc::new(PartReads::new([Read::Statement(1), Read::Name(name_hash("a")), Read::UsesOf(3)]));
+        let read = Arc::new(PartReads::new([Read::Statement(1), Read::Shell(0), Read::Member(0, 0), Read::Name(name_hash("a")), Read::UsesOf(3)]));
         let dep = Dep::Part(parts.clone(), read.clone());
         let mut writer = Writer { out: Vec::new(), root: root.to_path_buf(), strings: Vec::new(), string_ids: HashMap::new() };
         writer.parts(&parts);
@@ -1379,6 +1407,7 @@ mod tests {
         let Some(Dep::Part(back, reads)) = reader.dep(std::slice::from_ref(&version)) else { panic!("a part read") };
         assert_eq!(*reads, *read);
         assert!(back.precise && back.hash == 7 && back.statements.len() == 2 && back.path == file);
+        assert_eq!((back.statements[0].shell, &back.statements[0].members), (5, &parts.statements[0].members));
         // The version judges an unrelated new statement as before.
         let added = FileParts::new((file.clone(), 9), 10, vec![Part { hash: 1, ..back.statements[0].clone() }, Part { hash: 2, ..Part::default() }, Part { hash: 3, declares: [name_hash("c")].into(), ..Part::default() }],
             Vec::new(), (false, false), Default::default(), None);
