@@ -55,26 +55,6 @@ type Key = (String, Vec<String>);
 struct Run {
     result: Result<Arc<str>, Arc<str>>,
     inputs: Vec<(PathBuf, u64)>,
-    /// The error came from this machine, not the program's answer: it could
-    /// not start, or went quiet too long (a busy machine slows it).
-    transient: bool,
-}
-
-/// Why a run failed, and whether it was this machine's doing
-/// ([`Run::transient`]).
-struct Failure {
-    why: String,
-    transient: bool,
-}
-
-impl Failure {
-    fn answer(why: String) -> Failure {
-        Failure { why, transient: false }
-    }
-
-    fn transient(why: String) -> Failure {
-        Failure { why, transient: true }
-    }
 }
 
 enum Slot {
@@ -267,7 +247,7 @@ impl Commands {
         for run in kept {
             if self.declared.get(&run.name).is_none_or(|declared| declared.argv != run.argv) { continue }
             let inputs = run.inputs.into_iter().map(|(path, hash)| (crate::config::source::normalize_path(&self.root.join(path)), hash)).collect();
-            runs.entry((run.name, run.args)).or_insert_with(|| Slot::Done(Arc::new(Run { result: Ok(run.payload), inputs, transient: false })));
+            runs.entry((run.name, run.args)).or_insert_with(|| Slot::Done(Arc::new(Run { result: Ok(run.payload), inputs })));
         }
     }
 
@@ -350,12 +330,13 @@ impl Commands {
     }
 
     /// `run`'s answer, after recording its inputs (and the marker) as reads.
-    /// A transient failure, inline (where nothing changes the marker), adds a
-    /// read that never holds again: the next process runs the command afresh.
+    /// A failure reports no inputs, so inline (where nothing changes the
+    /// marker) it adds a read that never holds again: the next process runs
+    /// the command afresh.
     fn recorded(&self, run: &Run, marker: &Path, inline: bool) -> Answer {
         reads::read(marker);
         for (path, _) in &run.inputs { reads::read(path); }
-        if let (Err(error), true) = (&run.result, inline && run.transient) {
+        if let (Err(error), true) = (&run.result, inline) {
             reads::note(reads::Dep::Text(reads::dep_path(marker), reads::hash_bytes(error.as_bytes())));
         }
         match &run.result {
@@ -373,9 +354,9 @@ impl Commands {
                     let hash = reads::disk_hash(&path);
                     (path, hash)
                 }).collect();
-                Run { result: Ok(payload.into()), inputs, transient: false }
+                Run { result: Ok(payload.into()), inputs }
             }
-            Err(failure) => Run { result: Err(failure.why.into()), inputs: Vec::new(), transient: failure.transient },
+            Err(why) => Run { result: Err(why.into()), inputs: Vec::new() },
         }
     }
 }
@@ -433,14 +414,14 @@ fn elapsed_ms(started: Instant) -> u64 {
 
 /// Runs `argv` plus `args` in `root` with no stdin, killed after
 /// [`QUIET_LIMIT`] without progress; stdout, or why it failed.
-fn execute(root: &Path, argv: &[String], args: &[String]) -> Result<String, Failure> {
+fn execute(root: &Path, argv: &[String], args: &[String]) -> Result<String, String> {
     use std::io::Read;
     use std::sync::atomic::{AtomicU64, Ordering};
-    let (program, fixed) = argv.split_first().ok_or_else(|| Failure::answer("empty command".to_owned()))?;
+    let (program, fixed) = argv.split_first().ok_or_else(|| "empty command".to_owned())?;
     let mut child = std::process::Command::new(program)
         .args(fixed).args(args).current_dir(root)
         .stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped())
-        .spawn().map_err(|e| Failure::transient(format!("cannot run `{program}`: {e}")))?;
+        .spawn().map_err(|e| format!("cannot run `{program}`: {e}"))?;
     let stdout = child.stdout.take().expect("piped");
     let mut stderr = child.stderr.take().expect("piped");
     let started = Instant::now();
@@ -451,22 +432,22 @@ fn execute(root: &Path, argv: &[String], args: &[String]) -> Result<String, Fail
     };
     let err = std::thread::spawn(move || { let mut text = String::new(); let _ = stderr.read_to_string(&mut text); text });
     let status = loop {
-        if let Some(status) = child.try_wait().map_err(|e| Failure::transient(e.to_string()))? { break status }
+        if let Some(status) = child.try_wait().map_err(|e| e.to_string())? { break status }
         if Duration::from_millis(elapsed_ms(started).saturating_sub(moved_ms.load(Ordering::Relaxed))) > QUIET_LIMIT {
             let _ = child.kill();
             let _ = child.wait();
-            return Err(Failure::transient(format!("`{program}` went {} s without progress (a `dxlint-input`, `dxlint-payload` or `dxlint-error` line)", QUIET_LIMIT.as_secs())));
+            return Err(format!("`{program}` went {} s without progress (a `dxlint-input`, `dxlint-payload` or `dxlint-error` line)", QUIET_LIMIT.as_secs()));
         }
         std::thread::sleep(Duration::from_millis(20));
     };
-    let stdout = out.join().map_err(|_| Failure::transient("stdout reader panicked".to_owned()))?.map_err(|e| Failure::transient(e.to_string()))?;
+    let stdout = out.join().map_err(|_| "stdout reader panicked".to_owned())?.map_err(|e| e.to_string())?;
     let stderr = err.join().unwrap_or_default();
     if !status.success() {
         let lines: Vec<&str> = stderr.lines().collect();
         let tail = lines[lines.len().saturating_sub(STDERR_TAIL)..].join("\n");
-        return Err(Failure::answer(format!("`{program}` failed ({status}){}{tail}", if tail.is_empty() { "" } else { ":\n" })));
+        return Err(format!("`{program}` failed ({status}){}{tail}", if tail.is_empty() { "" } else { ":\n" }));
     }
-    String::from_utf8(stdout).map_err(|_| Failure::answer(format!("`{program}` printed output that is not UTF-8")))
+    String::from_utf8(stdout).map_err(|_| format!("`{program}` printed output that is not UTF-8"))
 }
 
 #[cfg(test)]
@@ -555,7 +536,7 @@ mod tests {
     }
 
     #[test]
-    fn what_saw_this_machine_fail_a_run_never_holds_in_a_later_process() {
+    fn what_saw_a_run_fail_never_holds_in_a_later_process() {
         let dir = crate::config::source::normalize_path(&std::env::temp_dir().join("dxlint-commands-failure-test"));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("dir");
@@ -571,7 +552,8 @@ mod tests {
             (answer, reads.holds(&mut |dep| dep.holds(), &mut |_| true))
         };
         assert_eq!(answer("read"), (Answer::Ready("ok".into()), true));
-        assert!(matches!(answer("refuses"), (Answer::Failed(_), true)), "the program's own answer holds");
+        // A failure reports no inputs: only running again tells when its cause is fixed.
+        assert!(matches!(answer("refuses"), (Answer::Failed(_), false)), "a later process runs a failed program again");
         assert!(matches!(answer("missing"), (Answer::Failed(why), false) if why.contains("cannot run")), "a later process tries again");
         let _ = std::fs::remove_dir_all(&dir);
     }
