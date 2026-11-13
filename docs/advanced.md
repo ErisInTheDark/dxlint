@@ -725,8 +725,7 @@ in the root's directory (no shell: words split on spaces, double quotes keep
 one together) and gives `{ state, output, message }`. `state` is `ready`
 (`output` holds the payload), `failed` (`message` says why: exit code and the
 end of stderr, output not UTF-8, or 60 s without progress), `pending` or
-`disabled`. A program that could not start or went quiet too long failed
-because of this machine, so caches never keep it: the next lint runs it again.
+`disabled`. Caches never keep a failed run: the next lint runs it again.
 
 The program first prints a `dxlint-input <path>` line per file it read
 (relative to the root); everything after is the payload. dxlint keeps each
@@ -1244,7 +1243,14 @@ extend parser ts {
 - `files "glob" ...` limits the block's `|=` and `override` to matching files (config-relative globs, as `language` blocks take); without it they hold in every file of the language
 - anything else a `parser` holds (`token`, `node`, `production`, `flag`, ...) adds to it; a new name that already exists is an error that points at `|=` and `override`
 
-The TypeScript grammar keeps small productions as extension points: `class_modifier` (words a class member may start with) and `class_initializer` (tokens standing for a member's `=`).
+The TypeScript grammar keeps small productions as extension points: `class_modifier` (words a class member may start with), `class_initializer` (tokens standing for a member's `=`), `function_modifier` (words before `function`) and `variable_modifier` (words before `const`, `let` or `var`). Write a modifier as `text("word")` or a regex so it lands in the node's `modifier` field:
+
+```dx
+extend parser ts {
+  files "*.wts"
+  production function_modifier |= text("pure") same_line peek(/(?:function|async)\b/)
+}
+```
 
 ## Performance and caching
 

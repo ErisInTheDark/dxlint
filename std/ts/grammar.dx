@@ -254,7 +254,7 @@ parser ts in js {
   production ts_case = ("case" test:expression | "default") ":" body:(not(/case|default|\}/) statement)*
   production ts_try = "try" cut block:ts_block (kind:"catch" ("(" parameter:binding (":" type:goal(types, type_expression))? ")")? handler:ts_block)? ("finally" finalizer:ts_block)?
   production ts_labeled = label:ts_identifier ":" cut body:statement
-  production ts_variable_declaration = modifier:"declare"* @ts_parser_variable terminator(";", before("}"), newline, eof)
+  production ts_variable_declaration = modifier:variable_modifier* @ts_parser_variable terminator(";", before("}"), newline, eof)
   production ts_declarator = name:binding "!"? (":" type:goal(types, type_expression))? ("=" init:assignment)?
   production ts_expression_statement = expression:expression terminator(";", before("}"), newline, eof)
   production binding = ts_identifier | ts_object_pattern | ts_array_pattern
@@ -288,7 +288,7 @@ parser ts in js {
   production ts_decorator = "@" expression:lhs_expression
   production ts_parameter = decorator:ts_decorator* (modifier:/public|private|protected|readonly|override/ same_line peek(property_key))* name:(ts_rest | ts_this | binding) (optional:"?")? (":" type:goal(types, type_expression))? ("=" init:goal(code, clear(no_in, assignment)))?
   production parameters = "(" (parameter:ts_parameter ("," parameter:ts_parameter)* ","?)? ")"
-  production ts_function = modifier:"declare"* (modifier:"async" same_line)? "function" (modifier:"*" @ts_parser_function_header (body:clear(no_in, set(generator, ts_block)) | @ts_parser_semi) | @ts_parser_function_header (body:clear(no_in, clear(generator, ts_block)) | @ts_parser_semi))
+  production ts_function = modifier:function_modifier* (modifier:"async" same_line)? "function" (modifier:"*" @ts_parser_function_header (body:clear(no_in, set(generator, ts_block)) | @ts_parser_semi) | @ts_parser_function_header (body:clear(no_in, clear(generator, ts_block)) | @ts_parser_semi))
   production ts_arrow = try(
     peek(ts_identifier same_line "=>" | "(" | "<" | "async" same_line (ts_identifier same_line "=>" | "(" | "<"))
     (
@@ -461,7 +461,11 @@ parser ts in js {
     @ts_parser_method_header (body:clear(no_in, clear(generator, ts_block)) | @ts_parser_semi)
   ))
   # Extension points: `extend parser ts { production class_modifier |= ... }`
-  # adds member modifiers, `class_initializer` tokens standing for `=`.
+  # adds member modifiers, `class_initializer` tokens standing for `=`,
+  # `function_modifier` and `variable_modifier` words before `function` and
+  # `const`/`let`/`var`.
+  production function_modifier = text("declare")
+  production variable_modifier = text("declare")
   production class_modifier = text("static") peek(accessor_next) | /public|private|protected|readonly|abstract|override|declare|accessor|async/ same_line peek(accessor_next)
   production class_initializer = "="
   production ts_class_property = decorator:ts_decorator* @ts_parser_class_modifiers modifier:"*"? (kind:/get|set/ peek(accessor_next))? key:property_key optional:"?"? "!"? (":" type:goal(types, type_expression))? (discard(class_initializer) init:clear(no_in, assignment))? @ts_parser_semi

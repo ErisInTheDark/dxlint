@@ -1,0 +1,11 @@
+import .ts
+
+lang js "*.ts" "*.wts"
+extend parser ts {
+  files "*.wts"
+  production function_modifier |= text("pure") same_line peek(/(?:function|async)\b/)
+  production variable_modifier |= text("pure") same_line peek(/(?:const|let|var)\b/)
+}
+
+in ts_function rule pure-function warn "pure function" { when contains([] modifier, "pure") }
+in ts_variable_declaration rule pure-variable warn "pure variable" { when contains([] modifier, "pure") }

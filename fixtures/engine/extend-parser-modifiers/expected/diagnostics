@@ -1,0 +1,5 @@
+mapped.wts:1:1-1:25 pure-function#0 pure function
+mapped.wts:2:1-2:31 pure-function#0 pure function
+mapped.wts:3:1-3:40 pure-function#0 pure function
+mapped.wts:4:1-4:22 pure-variable#0 pure variable
+mapped.wts:5:1-5:32 pure-variable#0 pure variable

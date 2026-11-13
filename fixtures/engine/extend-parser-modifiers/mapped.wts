@@ -1,0 +1,7 @@
+pure function plain() {}
+pure async function waits() {}
+declare pure function declared(): void;
+pure const value = 1;
+declare pure let later: number;
+function untouched() {}
+const pure = 2;
