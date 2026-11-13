@@ -937,17 +937,18 @@ pub mod heap {
         pub fn report() -> Option<String> {
             if !on() { return None }
             const SHOWN: usize = 25;
-            const FRAMES: usize = 5;
+            // `DXLINT_HEAP_SITE_FRAMES=<n>`: frames kept per stack (default 5).
+            let frames = std::env::var("DXLINT_HEAP_SITE_FRAMES").ok().and_then(|n| n.parse().ok()).unwrap_or(5);
             let mib = |bytes: isize| bytes as f64 / 1048576.0;
             let mut symbols = crate::sampler::Symbols::new();
-            let plumbing = ["dxlint::_::", "dxlint::alloc::", "alloc::", "core::", "hashbrown::", "std::", "__rust", "smallvec::"];
+            let plumbing = ["dxlint::_::", "dx_core::alloc::", "alloc::", "core::", "hashbrown::", "std::", "__rust", "smallvec::"];
             let mut groups: std::collections::HashMap<String, (isize, isize)> = std::collections::HashMap::new();
             for site in SITES.iter().filter(|site| site.ready.load(Ordering::Acquire) == 1) {
                 let names: Vec<String> = site.frames.iter().map(|frame| frame.load(Ordering::Relaxed)).take_while(|&frame| frame != 0)
                     .map(|frame| symbols.name(frame - 1).to_string())
                     .skip_while(|name| plumbing.iter().any(|part| name.starts_with(part)))
                     .map(|name| name.split('<').next().unwrap_or_default().to_owned())
-                    .take(FRAMES).collect();
+                    .take(frames).collect();
                 let group = groups.entry(names.join(" < ")).or_default();
                 group.0 += site.live.load(Ordering::Relaxed);
                 group.1 += site.most.load(Ordering::Relaxed);
