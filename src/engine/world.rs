@@ -2179,8 +2179,14 @@ pub(super) fn opens_scopes<'a>(world: &'a LintWorld<'a>, classes: u64) -> bool {
 /// The parts of `unit` (which `world` holds alone, as its file 0) for
 /// judging an older version's reads: from its tree and words, without
 /// resolving its names (that needs its program).
+/// `unit`'s parts in a world over it alone, with its names: an older
+/// version described with names is judged by them, and a later one
+/// described from its words alone would count every word of each changed
+/// statement as declared there.
 pub(super) fn describe_alone<'a>(world: &'a LintWorld<'a>, unit: &super::units::Unit) -> crate::parts::FileParts {
-    world.linter.describe(unit, None, &publications(world, unit))
+    let names = world.on(0, world.ctx.tree.root).filter(|ctx| !ctx.names_resolving()).map(|ctx| ctx.names())
+        .filter(|names| names.complete && names.failures.is_empty());
+    world.linter.describe(unit, names, &publications(world, unit))
 }
 
 /// What the world's file (`unit`) publishes, by name (`None`: names nobody
