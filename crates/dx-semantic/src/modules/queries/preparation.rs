@@ -238,8 +238,12 @@ impl Queries<'_> {
                 target = Some(value);
             }
         }
-        while !self.is_publication(ScopeRef { file: scope.file, scope: containing })? {
+        // Globals belong to the file, whatever publishing scopes enclose them
+        // (a `global` block inside an ambient module).
+        let globals = matches!(item.action, Action::Globals { .. });
+        loop {
             let Some(parent) = names.scopes[containing as usize].parent else { break };
+            if !globals && self.is_publication(ScopeRef { file: scope.file, scope: containing })? { break }
             containing = parent;
         }
         Ok(if containing == scope.scope && self.is_publication(scope)? {

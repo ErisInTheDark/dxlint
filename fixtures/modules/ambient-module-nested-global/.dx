@@ -1,0 +1,4 @@
+import .ts
+in ts_call rule typed_by_global warn "typed by a global declaration" {
+  when ts_value_has_trait(node, "number") == true
+}
