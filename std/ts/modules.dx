@@ -60,6 +60,9 @@ import .ts/comments
       ]
       # `/// <reference lib="x" />` asks for `lib:x`, wherever the release keeps it.
       library_prefix "lib:"
+      # `/// <reference types="x" />` asks for `types:x`: the program's type
+      # roots first, then the packages seen from the file.
+      type_reference_prefix "types:"
       library_option "lib"
       default_libraries ["es2023", "dom"]
       types_option "types"
@@ -72,6 +75,26 @@ import .ts/comments
       # or forwarding through a reference); ambient modules need a keyword.
       name_hints ["\\u", "<reference"]
       ambient_hints ["module", "namespace"]
+      # What pulls another file into the program, as tsc follows imports and
+      # references; a cheap text scan, so imports in comments count too.
+      pulls {
+        "{found}" [
+          "\\b(?:from|import)\\s*[\"']([^\"'\\n]+)[\"']",
+          "\\b(?:require|import)\\s*\\(\\s*[\"']([^\"'\\n]+)[\"']",
+        ]
+      }
+      # A file only pulls reach joins the program when it may publish globals
+      # or ambient modules; a plain module is reached through its importers.
+      pulled_publishers ["(?m)^\\s*declare\\s+(?:global\\b|module\\s+[\"'])"]
+      pulled_modules ["(?m)^\\s*(?:import|export)\\b"]
+      # Reference directives count only in the file's leading comments, never
+      # inside a block comment (matched whole, so it holds no directive).
+      leading "\\A(?:[\\s\\uFEFF]+|//[^\\n]*|/\\*[\\s\\S]*?\\*/)*"
+      leading_pulls {
+        "./{found}" ["/\\*[\\s\\S]*?\\*/|///\\s*<reference\\s+path\\s*=\\s*[\"']([^\"']+)[\"']"]
+        "types:{found}" ["/\\*[\\s\\S]*?\\*/|///\\s*<reference\\s+types\\s*=\\s*[\"']([^\"']+)[\"']"]
+        "lib:{found}" ["/\\*[\\s\\S]*?\\*/|///\\s*<reference\\s+lib\\s*=\\s*[\"']([^\"']+)[\"']"]
+      }
     }
     when resolution.config.module == "commonjs" || resolution.config.module == 1 {
       conditions ["types", "require", "default"]
@@ -278,7 +301,7 @@ in ts_reference_path let ts_module_path_reference {
   value if starts_with(path, "./") || starts_with(path, "../") || starts_with(path, "/")
     || re_test(path, /^[A-Za-z]:\//) then path else "./{path}"
 }
-in ts_reference_types let ts_module_types_reference "@types/{ts_module_reference}"
+in ts_reference_types let ts_module_types_reference "types:{ts_module_reference}"
 in ts_reference_lib let ts_module_lib_reference "lib:{ts_module_reference}"
 in ts_reference_path {
   globals all value, type, query from module ts_module_path_reference

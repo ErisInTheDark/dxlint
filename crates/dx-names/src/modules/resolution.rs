@@ -77,6 +77,14 @@ pub struct Packages {
     pub type_join: Box<str>,
 }
 
+impl Packages {
+    /// Types package `name` as its directory is named (`@scope/x`: `scope__x`).
+    pub(super) fn type_name(&self, name: &str) -> String {
+        name.strip_prefix(&*self.scoped_prefix).filter(|_| !self.scoped_prefix.is_empty())
+            .map_or_else(|| name.to_string(), |name| name.replace('/', &self.type_join))
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Globals {
     /// Where a default library file lies, first found per package directory
@@ -87,6 +95,9 @@ pub struct Globals {
     /// (`<prefix><name>`), found like the configured ones
     /// ([`Resolver::library`]).
     pub library_prefix: Box<str>,
+    /// When set: a specifier starting with it names a types package by its
+    /// own name, found in the program's type roots first.
+    pub type_reference_prefix: Box<str>,
     pub library_option: Box<str>,
     pub default_libraries: Vec<Box<str>>,
     pub types_option: Box<str>,
@@ -101,9 +112,42 @@ pub struct Globals {
     /// When set: a program file can declare an ambient module scope only if
     /// its text contains one of these.
     pub ambient_hints: Vec<Box<str>>,
+    /// Text that pulls another file into the program, as a type checker
+    /// follows imports and references: per specifier template (`{found}` is
+    /// a pattern's first group), the patterns finding it. A cheap scan:
+    /// text in comments counts too.
+    pub pulls: Vec<(Box<str>, Vec<Box<str>>)>,
+    /// Like `pulls`, counted only inside the text `leading` matches at the
+    /// start of a file (directives a header must hold).
+    pub leading_pulls: Vec<(Box<str>, Vec<Box<str>>)>,
+    pub leading: Box<str>,
+    /// A file only pulls reached joins the program when it may publish
+    /// globals: one of `pulled_publishers` matches its text, or none of
+    /// `pulled_modules` does (a module reached by import stays reachable
+    /// through its importers alone).
+    pub pulled_publishers: Vec<Box<str>>,
+    pub pulled_modules: Vec<Box<str>>,
 }
 
 impl Globals {
+    /// Whether a file only pulls reached, reading `text`, joins the program.
+    pub fn joins(&self, text: &str) -> bool {
+        let any = |patterns: &[Box<str>]| patterns.iter().any(|pattern| dx_ir::re::compile(pattern).is_ok_and(|re| re.is_match(text)));
+        any(&self.pulled_publishers) || !any(&self.pulled_modules)
+    }
+
+    /// The specifiers `text` pulls in, in order of appearance per pattern.
+    pub fn pulled(&self, text: &str) -> Vec<String> {
+        let mut found = Vec::new();
+        pull(&self.pulls, text, &mut found);
+        if !self.leading_pulls.is_empty() {
+            let header = dx_ir::re::compile(&self.leading).ok()
+                .and_then(|re| re.find(text)).filter(|at| at.start() == 0).map_or("", |at| &text[at.range()]);
+            pull(&self.leading_pulls, header, &mut found);
+        }
+        found
+    }
+
     /// Whether a file with `text` may publish global `name`.
     pub fn may_publish(&self, text: &str, name: &str) -> bool {
         self.name_hints.is_empty() || text.contains(name) || self.name_hints.iter().any(|hint| text.contains(&**hint))
@@ -112,6 +156,20 @@ impl Globals {
     /// Whether a file with `text` may declare an ambient module scope.
     pub fn may_declare_ambient(&self, text: &str) -> bool {
         self.ambient_hints.is_empty() || self.ambient_hints.iter().any(|hint| text.contains(&**hint))
+    }
+}
+
+/// Each specifier `patterns` find in `text` (a pattern's first group, put in
+/// its template), in order of appearance per pattern.
+fn pull(patterns: &[(Box<str>, Vec<Box<str>>)], text: &str, found: &mut Vec<String>) {
+    for (template, patterns) in patterns {
+        for pattern in patterns {
+            let Ok(re) = dx_ir::re::compile(pattern) else { continue };
+            for groups in re.captures_iter(text) {
+                let Some(span) = groups.get_group(1) else { continue };
+                if let Ok(specifier) = expand(template, &[("found", &text[span.range()])]) { found.push(specifier) }
+            }
+        }
     }
 }
 
@@ -173,8 +231,13 @@ impl<H: Host + ?Sized> Resolver<'_, H> {
     fn resolve_inner(&self, importer: u32, specifier: &str, conditions: &[&str], question: &QueryContext) -> Result<Option<ScopeRef>, ()> {
         let path = self.host.path(importer).known().ok_or(())?;
         let dir = path.parent().ok_or(())?;
-        if let Some(name) = self.settings.library_name(specifier) {
-            return self.library(dir, name, question)?.map(|path| self.host.scope(&path, question).known().ok_or(())).transpose().map(Option::flatten);
+        let file = match (self.settings.library_name(specifier), self.settings.type_reference_name(specifier)) {
+            (Some(name), _) => Some(self.library(dir, name, question)?),
+            (None, Some(name)) => Some(self.type_reference(dir, name, question)?),
+            (None, None) => None,
+        };
+        if let Some(file) = file {
+            return file.map(|path| self.host.scope(&path, question).known().ok_or(())).transpose().map(Option::flatten);
         }
         let scope = |path: &Path| self.host.scope(path, question).known().ok_or(());
         let ambient = || self.host.ambient(importer, specifier, self.settings.ambient_scopes, question).known().ok_or(());
@@ -186,6 +249,51 @@ impl<H: Host + ?Sized> Resolver<'_, H> {
     pub fn resolve_path(&self, dir: &Path, specifier: &str, question: &QueryContext) -> Result<Option<PathBuf>, ()> {
         if self.settings.library_name(specifier).is_some() { return Ok(None) }
         self.search(dir, specifier, &[], question, &|path| Ok(Some(path.to_path_buf())), &|| Ok(None))
+    }
+
+    /// The file `specifier` names from `dir`, default libraries and type
+    /// references included.
+    pub fn file_of(&self, dir: &Path, specifier: &str, question: &QueryContext) -> Result<Option<PathBuf>, ()> {
+        if let Some(name) = self.settings.library_name(specifier) { return self.library(dir, name, question) }
+        if let Some(name) = self.settings.type_reference_name(specifier) { return self.type_reference(dir, name, question) }
+        self.resolve_path(dir, specifier, question)
+    }
+
+    /// The program's type roots: its configuration's type roots option, else
+    /// the type directories in every ancestor of its `directory`.
+    pub(super) fn type_roots(&self, config: &Configuration, directory: &Path) -> Result<Vec<PathBuf>, ()> {
+        let globals = &self.settings.globals;
+        Ok(match config.options.get(&*globals.type_roots_option) {
+            Some(option) => option.value.array().ok_or(())?.iter()
+                .map(|root| root.text().map(|root| clean(&option.directory.join(root))).ok_or(())).collect::<Result<_, _>>()?,
+            None => directory.ancestors().flat_map(|directory| globals.type_directories.iter().map(move |root| clean(&directory.join(&**root)))).collect(),
+        })
+    }
+
+    /// Types package `name` (`@scope/x` named `scope__x`) in the first of
+    /// `roots` holding it.
+    pub(super) fn type_package(&self, roots: &[PathBuf], name: &str, question: &QueryContext) -> Result<Option<PathBuf>, ()> {
+        let name = self.settings.packages.type_name(name);
+        for root in roots {
+            spend(question)?;
+            match self.package_path(&root.join(&name), ".", &[], question)? {
+                Probe::Found(path) => return Ok(Some(path)),
+                Probe::Blocked => return Err(()),
+                Probe::Missing => {}
+            }
+        }
+        Ok(None)
+    }
+
+    /// A type reference's package, as a type checker looks for it: in the
+    /// program's type roots, else among the packages seen from `dir`.
+    fn type_reference(&self, dir: &Path, name: &str, question: &QueryContext) -> Result<Option<PathBuf>, ()> {
+        let config = self.configuration(question)?;
+        let program = self.program_directory()?;
+        let directory = config.path.as_deref().and_then(Path::parent).unwrap_or(&program);
+        if let Some(path) = self.type_package(&self.type_roots(&config, directory)?, name, question)? { return Ok(Some(path)) }
+        let packaged = format!("{}/{}", self.settings.packages.type_directory, self.settings.packages.type_name(name));
+        self.search(dir, &packaged, &[], question, &|path| Ok(Some(path.to_path_buf())), &|| Ok(None))
     }
 
     /// The configured search for `specifier`, each file it finds taken
@@ -406,6 +514,12 @@ impl Settings {
     /// The default library a specifier names (`globals.library_prefix`).
     fn library_name<'s>(&self, specifier: &'s str) -> Option<&'s str> {
         let prefix = &*self.globals.library_prefix;
+        specifier.strip_prefix(prefix).filter(|_| !prefix.is_empty())
+    }
+
+    /// The types package a specifier names (`globals.type_reference_prefix`).
+    fn type_reference_name<'s>(&self, specifier: &'s str) -> Option<&'s str> {
+        let prefix = &*self.globals.type_reference_prefix;
         specifier.strip_prefix(prefix).filter(|_| !prefix.is_empty())
     }
 

@@ -301,6 +301,11 @@ fn inputs(answer: Known<Inputs>) -> Known<Arc<Vec<PathBuf>>> {
 #[derive(Default)]
 pub(super) struct Programs {
     paths: Memo<Context, Inputs>,
+    /// Per program: the revision and overlay count its kept list was last
+    /// found holding at. Until files are invalidated or overlaid nothing it
+    /// read can change, so it is checked once per such state, not per
+    /// asking file.
+    checked: Mutex<FxHashMap<Context, (u64, u64)>>,
     /// Input lists by content: files in different directories of one
     /// program share one list.
     inputs: Mutex<FxHashMap<u64, Vec<std::sync::Weak<Vec<PathBuf>>>>>,
@@ -308,9 +313,14 @@ pub(super) struct Programs {
 }
 
 impl Programs {
-    /// `holds`: whether an answer's reads still hold.
-    pub fn paths(&self, context: Context, holds: impl Fn(&Reads) -> bool, build: impl FnOnce() -> Known<Vec<PathBuf>>) -> Known<Arc<Vec<PathBuf>>> {
-        inputs(self.paths.get(context, None, |answer| holds(&answer.reads), || Known::Yes(build().known().map(|paths| self.intern(paths)))))
+    /// `holds`: whether an answer's reads still hold, asked once per
+    /// `revision` of the files and change of their overlays.
+    pub fn paths(&self, context: Context, revision: u64, holds: impl Fn(&Reads) -> bool, build: impl FnOnce() -> Known<Vec<PathBuf>>) -> Known<Arc<Vec<PathBuf>>> {
+        let state = (revision, reads::overlays_changed());
+        let checked = self.checked.lock().expect("program checks").get(&context) == Some(&state);
+        let answer = inputs(self.paths.get(context.clone(), None, |answer| checked || holds(&answer.reads), || Known::Yes(build().known().map(|paths| self.intern(paths)))));
+        self.checked.lock().expect("program checks").insert(context, state);
+        answer
     }
 
     fn intern(&self, paths: Vec<PathBuf>) -> Arc<Vec<PathBuf>> {
@@ -1179,8 +1189,8 @@ mod tests {
         let programs = Programs::default();
         let context = Context { anchor: config.to_path_buf(), settings: 0 };
         let (builds, validations) = (Cell::new(0), Cell::new(0));
-        let ask = |snapshot: &Snapshot| snapshot.paths(0, context.clone(), || {
-            programs.paths(context.clone(), |reads| {
+        let ask = |snapshot: &Snapshot, revision: u64| snapshot.paths(revision, context.clone(), || {
+            programs.paths(context.clone(), revision, |reads| {
                 validations.set(validations.get() + 1);
                 !reads.any(&mut |dep| !dep.holds())
             }, || {
@@ -1190,13 +1200,19 @@ mod tests {
             })
         });
         let run = Snapshot::default();
-        for _ in 0..20 { assert_eq!(ask(&run), Known::Unknown) }
+        for _ in 0..20 { assert_eq!(ask(&run, 0), Known::Unknown) }
         assert_eq!((builds.get(), validations.get()), (1, 0), "one run collects an unknown input list once");
-        assert_eq!(ask(&Snapshot::default()), Known::Unknown);
-        assert_eq!((builds.get(), validations.get()), (1, 1), "a new run keeps it while its reads hold");
+        // Other tests set buffers concurrently: each change may cost one check.
+        let overlays = reads::overlays_changed();
+        for _ in 0..20 { assert_eq!(ask(&Snapshot::default(), 0), Known::Unknown) }
+        assert_eq!(builds.get(), 1);
+        assert!(validations.get() as u64 <= reads::overlays_changed() - overlays, "nothing changed before the next revision");
+        assert_eq!(ask(&Snapshot::default(), 1), Known::Unknown);
+        assert_eq!(builds.get(), 1, "a new revision keeps it while its reads hold");
+        assert!(validations.get() >= 1);
         reads::set_buffer(config, "{\"files\":[]}");
-        assert_eq!(ask(&Snapshot::default()), Known::Unknown);
-        assert_eq!(builds.get(), 2);
+        assert_eq!(ask(&Snapshot::default(), 1), Known::Unknown);
+        assert_eq!(builds.get(), 2, "a changed buffer is checked within the revision");
         reads::drop_buffer(config);
     }
 

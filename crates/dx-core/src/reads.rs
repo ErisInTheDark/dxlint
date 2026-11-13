@@ -395,6 +395,10 @@ pub enum ScanTest {
     /// lacks `name` or never mentions it as a global (the engine answers
     /// that, see `Linter::passes`).
     Global { name: Box<str>, hints: Box<[Box<str>]> },
+    /// It pulls in the same files as before: the specifiers profile
+    /// `settings`' patterns find in it hash as `found` says per file (the
+    /// engine answers that, see `Linter::passes`).
+    Pulls { settings: u32, found: Box<[(DepPath, u64)]> },
 }
 
 impl Scan {
@@ -792,25 +796,38 @@ impl Buffers {
     }
 }
 
+/// Counts overlay changes ([`overlays_changed`]).
+static OVERLAYS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 fn buffers() -> &'static RwLock<Buffers> {
     static BUFFERS: OnceLock<RwLock<Buffers>> = OnceLock::new();
     BUFFERS.get_or_init(Default::default)
 }
 
+/// Changes [`buffers`], counted in [`overlays_changed`] once done.
+fn change_buffers(change: impl FnOnce(&mut Buffers)) {
+    change(&mut buffers().write().expect("buffers lock"));
+    OVERLAYS.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+}
+
+/// Changes so far to what files read as through overlays: equal counts
+/// mean no buffer was set, dropped or hidden in between.
+pub fn overlays_changed() -> u64 {
+    OVERLAYS.load(std::sync::atomic::Ordering::Acquire)
+}
+
 /// From now on, `path` reads as `text` (an unsaved editor buffer).
 pub fn set_buffer(path: &Path, text: &str) {
-    let mut buffers = buffers().write().expect("buffers lock");
-    if buffers.texts.insert(path.to_path_buf(), text.into()).is_none() {
+    change_buffers(|buffers| if buffers.texts.insert(path.to_path_buf(), text.into()).is_none() {
         buffers.index(path, true);
-    }
+    });
 }
 
 /// `path` reads from disk again.
 pub fn drop_buffer(path: &Path) {
-    let mut buffers = buffers().write().expect("buffers lock");
-    if buffers.texts.remove(path).is_some() {
+    change_buffers(|buffers| if buffers.texts.remove(path).is_some() {
         buffers.index(path, false);
-    }
+    });
 }
 
 pub fn buffer(path: &Path) -> Option<Arc<str>> {
@@ -819,7 +836,7 @@ pub fn buffer(path: &Path) -> Option<Arc<str>> {
 
 /// From now on, `path` reads as absent, whatever is on disk.
 pub fn hide_file(path: &Path) {
-    buffers().write().expect("buffers lock").hidden.insert(path.to_path_buf());
+    change_buffers(|buffers| { buffers.hidden.insert(path.to_path_buf()); });
 }
 
 /// `path`'s overlay, if any: `Some(Some(text))` for a buffer, `Some(None)`

@@ -1,0 +1,5 @@
+import .ts
+in ts_identifier rule typed_import warn "typed by an ambient module only a package's reference reaches" {
+  files "main.ts"
+  when text == "value" && parent is ts_binary && ts_value_has_trait(node, "number") == true
+}

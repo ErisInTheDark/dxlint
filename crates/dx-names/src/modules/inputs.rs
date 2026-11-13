@@ -107,25 +107,10 @@ impl Inputs<'_> {
         let settings = self.resolver.settings;
         let names = config.options.get(&*settings.globals.types_option).map(|option| texts(&option.value)).transpose()?;
         if names.as_ref().is_some_and(Vec::is_empty) { return Ok(()) }
-        let roots = match config.options.get(&*settings.globals.type_roots_option) {
-            Some(option) => texts(&option.value)?.iter().map(|root| clean(&option.directory.join(&**root))).collect(),
-            None => directory.ancestors().flat_map(|directory| settings.globals.type_directories.iter().map(move |root| clean(&directory.join(&**root)))).collect::<Vec<_>>(),
-        };
+        let roots = self.resolver.type_roots(config, directory)?;
         if let Some(names) = names {
             for name in names {
-                let name = name.strip_prefix(&*settings.packages.scoped_prefix).filter(|_| !settings.packages.scoped_prefix.is_empty()).map_or_else(
-                    || name.to_string(), |name| name.replace('/', &settings.packages.type_join)
-                );
-                let mut found = None;
-                for root in &roots {
-                    spend(self.question)?;
-                    match self.resolver.package_path(&root.join(&name), ".", &[], self.question)? {
-                        Probe::Found(path) => { found = Some(path); break; }
-                        Probe::Blocked => return Err(()),
-                        Probe::Missing => {}
-                    }
-                }
-                if let Some(path) = found {
+                if let Some(path) = self.resolver.type_package(&roots, &name, self.question)? {
                     self.libraries.push(path);
                 }
             }

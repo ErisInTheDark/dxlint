@@ -819,9 +819,12 @@ impl<'a> Files<'a> {
             let Known::Yes(anchor) = program_anchor(selected, &self, &QueryContext::once()) else { return Known::Unknown };
             let context = super::program::Context { anchor, settings: selected as *const Settings as usize };
             let program = std::hash::BuildHasher::hash_one(&crate::fx_hash::FxBuild::default(), &context);
-            let load = || self.0.linter.programs.paths(context.clone(), |reads| self.0.linter.reads_hold(reads), || {
+            let load = || self.0.linter.programs.paths(context.clone(), self.0.revision(), |reads| self.0.linter.reads_hold(reads), || {
                 let question = QueryContext::once();
-                let answer = program_inputs(selected, &self, &question);
+                let answer = match program_inputs(selected, &self, &question) {
+                    Known::Yes(paths) => Known::Yes(self.pulled_inputs(selected, paths, &question)),
+                    unknown => unknown,
+                };
                 if question.budget.limited() {
                     if let Some(profile) = self.0.ctx.profile {
                         super::Profile::add(&profile.semantic_budget_limits, 1);
@@ -850,6 +853,48 @@ impl<'a> Files<'a> {
             self.0.program.inputs.borrow_mut().insert(key, super::reads::Cached { value: answer.clone().known(), reads: cached.reads });
         }
         answer
+    }
+
+    /// `paths` and every file their text pulls in that may publish globals,
+    /// transitively, in the order found (a type checker's program follows
+    /// imports and references; a plain module stays reachable through its
+    /// importers). Default libraries pull only libraries, which come as
+    /// globals links. Recorded as a scan: an edit that keeps a file's pulls
+    /// keeps the list.
+    fn pulled_inputs(self, selected: &Settings, mut paths: Vec<PathBuf>, question: &QueryContext) -> Vec<PathBuf> {
+        let Some(index) = self.0.linter.names.settings_index(selected).filter(|_| !selected.globals.pulls.is_empty()) else { return paths };
+        let resolver = crate::names::modules::resolution::Resolver { host: &self, settings: selected };
+        let mut seen: crate::fx_hash::FxHashSet<super::reads::DepPath> = paths.iter().map(|path| super::reads::dep_path(path)).collect();
+        let (mut deps, mut found) = (Vec::new(), Vec::new());
+        let roots = paths.len();
+        let mut walk = paths.clone();
+        let mut at = 0;
+        while let Some(path) = walk.get(at).cloned() {
+            at += 1;
+            if selected.origin(&path) == crate::names::modules::resolution::Origin::Library { continue }
+            let (text, hash) = self.source_text(&path);
+            let text = text.as_deref().unwrap_or_default();
+            let (pulled, joins) = (selected.globals.pulled(text), selected.globals.joins(text));
+            let pulled_in = at > roots;
+            if pulled_in && joins { paths.push(path.clone()) }
+            let file = super::reads::dep_path(&path);
+            deps.push(super::reads::Dep::Text(file.clone(), hash));
+            found.push((file, super::pulls_hash(&pulled, pulled_in.then_some(joins))));
+            let Some(dir) = path.parent() else { continue };
+            for specifier in pulled {
+                let Ok(Some(target)) = resolver.file_of(dir, &specifier, question) else { continue };
+                // Only files a program reads as its own kind (not a module's
+                // JSON or script it imports).
+                let readable = selected.extensions.iter().any(|extension| target.to_string_lossy().ends_with(&**extension));
+                if readable && seen.insert(super::reads::dep_path(&target)) { walk.push(target) }
+            }
+        }
+        found.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
+        super::reads::note_scan(&Arc::new(super::reads::Scan {
+            files: Arc::new(super::reads::Reads { deps, ..Default::default() }),
+            test: super::reads::ScanTest::Pulls { settings: index, found: found.into() },
+        }));
+        paths
     }
 
     /// `path`'s text and hash, unrecorded: the linted text for the linted

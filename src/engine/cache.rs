@@ -732,6 +732,16 @@ impl Writer {
                 self.str(name);
                 hints
             }
+            ScanTest::Pulls { settings, found } => {
+                self.out.push(2);
+                self.var(u64::from(*settings));
+                self.var(found.len() as u64);
+                for (path, hash) in found.iter() {
+                    self.path(path);
+                    self.out.extend_from_slice(&hash.to_le_bytes());
+                }
+                return;
+            }
         };
         self.var(words.len() as u64);
         for word in words {
@@ -1034,6 +1044,11 @@ impl<'a> Reader<'a> {
         let head = match self.u8()? {
             0 => Head::Ambient(self.var()?),
             1 => Head::Global(self.str()?.into()),
+            2 => {
+                let settings = u32::try_from(self.var()?).ok()?;
+                let found = (0..self.count()?).map(|_| Some((super::reads::dep_path(&self.path()?), self.u64()?))).collect::<Option<_>>()?;
+                return Some(SavedScan { files, test: ScanTest::Pulls { settings, found } });
+            }
             _ => return None,
         };
         let hints: Box<[Box<str>]> = (0..self.var()?).map(|_| self.str().map(Box::from)).collect::<Option<_>>()?;

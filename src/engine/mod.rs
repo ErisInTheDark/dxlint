@@ -810,11 +810,17 @@ impl Linter {
     /// Whether `path`, reading `text` now (`None`: no such file), passes a
     /// scan's test.
     pub fn passes(&self, path: &Path, text: Option<&str>, test: &reads::ScanTest) -> bool {
-        let Some(text) = text else { return true };
-        let holding = |needles: &[Box<str>]| needles.iter().any(|needle| text.contains(&**needle));
-        match test {
-            reads::ScanTest::Ambient { hints, classes } => !hints.is_empty() && !holding(hints) || !self.opens_scopes(path, *classes),
-            reads::ScanTest::Global { name, hints } => !holding(hints) && (!text.contains(&**name) || !self.mentions_global(path, name)),
+        let holding = |needles: &[Box<str>]| text.is_some_and(|text| needles.iter().any(|needle| text.contains(&**needle)));
+        match (test, text) {
+            (reads::ScanTest::Pulls { settings, found }, text) => self.names.settings_at(*settings).is_some_and(|settings| {
+                let was = found.binary_search_by(|(at, _)| Path::cmp(at, path)).ok().map(|at| found[at].1);
+                let text = text.unwrap_or_default();
+                let pulled = settings.globals.pulled(text);
+                was.is_some_and(|was| was == pulls_hash(&pulled, None) || was == pulls_hash(&pulled, Some(settings.globals.joins(text))))
+            }),
+            (_, None) => true,
+            (reads::ScanTest::Ambient { hints, classes }, Some(_)) => !hints.is_empty() && !holding(hints) || !self.opens_scopes(path, *classes),
+            (reads::ScanTest::Global { name, hints }, Some(text)) => !holding(hints) && (!text.contains(&**name) || !self.mentions_global(path, name)),
         }
     }
 
@@ -1635,6 +1641,13 @@ struct Run<'a> {
     active: &'a [bool],
     /// Inside a `files` block: the severities and runtime options there.
     settings: Option<&'a scopes::FileSettings>,
+}
+
+/// What a [`reads::ScanTest::Pulls`] keeps per file: its pulled specifiers
+/// and whether it would join a program (`None`: a root, in regardless),
+/// hashed.
+pub(crate) fn pulls_hash(specifiers: &[String], joins: Option<bool>) -> u64 {
+    reads::hash_bytes(format!("{joins:?}\n{}", specifiers.join("\n")).as_bytes())
 }
 
 fn engine_warning(at: usize, message: String) -> Diagnostic {

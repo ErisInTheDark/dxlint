@@ -42,6 +42,10 @@ enum Field {
     Scopes,
     Substitutions,
     References,
+    /// Specifier templates, each with the patterns finding it (group 1).
+    Pulls(fn(&mut Settings) -> &mut Vec<(Box<str>, Vec<Box<str>>)>),
+    Pattern(fn(&mut Settings) -> &mut Box<str>),
+    Patterns(fn(&mut Settings) -> &mut Vec<Box<str>>),
     Format,
 }
 
@@ -90,6 +94,7 @@ const PACKAGES: &[Control] = &[
 const GLOBALS: &[Control] = &[
     Control { name: "libraries", field: Field::Strings(|s| &mut s.globals.libraries, Some(&["package_dir", "name"])) },
     Control { name: "library_prefix", field: Field::Text(|s| &mut s.globals.library_prefix, None) },
+    Control { name: "type_reference_prefix", field: Field::Text(|s| &mut s.globals.type_reference_prefix, None) },
     Control { name: "library_option", field: Field::Text(|s| &mut s.globals.library_option, None) },
     Control { name: "default_libraries", field: Field::Strings(|s| &mut s.globals.default_libraries, None) },
     Control { name: "types_option", field: Field::Text(|s| &mut s.globals.types_option, None) },
@@ -99,6 +104,11 @@ const GLOBALS: &[Control] = &[
     Control { name: "references", field: Field::Bool(|s| &mut s.globals.references) },
     Control { name: "name_hints", field: Field::Strings(|s| &mut s.globals.name_hints, None) },
     Control { name: "ambient_hints", field: Field::Strings(|s| &mut s.globals.ambient_hints, None) },
+    Control { name: "pulls", field: Field::Pulls(|s| &mut s.globals.pulls) },
+    Control { name: "leading_pulls", field: Field::Pulls(|s| &mut s.globals.leading_pulls) },
+    Control { name: "leading", field: Field::Pattern(|s| &mut s.globals.leading) },
+    Control { name: "pulled_publishers", field: Field::Patterns(|s| &mut s.globals.pulled_publishers) },
+    Control { name: "pulled_modules", field: Field::Patterns(|s| &mut s.globals.pulled_modules) },
 ];
 
 struct Compiler<'a> {
@@ -146,6 +156,23 @@ impl Compiler<'_> {
             }
             return Ok(());
         }
+        if let Field::Pulls(target) = field {
+            let SettingValue::Block(source) = &setting.value else { return Err(ConfigError::new(span, "expected a pulls block")) };
+            target(settings).clear();
+            for setting in source {
+                template(&setting.key.text, &["found"], setting.key.span)?;
+                let value = self.value(&setting.value, setting.key.span, false)?;
+                let patterns = strings(&value, setting.key.span)?;
+                for pattern in &patterns {
+                    let re = dx_ir::re::compile(pattern).map_err(|error| ConfigError::new(setting.key.span, error))?;
+                    if re.captures_len() < 2 {
+                        return Err(ConfigError::new(setting.key.span, format!("pattern `{pattern}` needs a group holding the specifier")));
+                    }
+                }
+                target(settings).push((setting.key.text.clone().into(), patterns));
+            }
+            return Ok(());
+        }
         if matches!(field, Field::References) {
             let SettingValue::Block(source) = &setting.value else { return Err(ConfigError::new(span, "expected a references block")) };
             settings.references.clear();
@@ -161,6 +188,16 @@ impl Compiler<'_> {
             Field::Text(target, variables) => {
                 let Value::Str(text) = value else { return Err(ConfigError::new(span, "expected text")) };
                 if let Some(variables) = variables { template(&text, variables, span)?; }
+                *target(settings) = text.to_string().into();
+            }
+            Field::Patterns(target) => {
+                let patterns = strings(&value, span)?;
+                for pattern in &patterns { dx_ir::re::compile(pattern).map_err(|error| ConfigError::new(span, error))?; }
+                *target(settings) = patterns;
+            }
+            Field::Pattern(target) => {
+                let Value::Str(text) = value else { return Err(ConfigError::new(span, "expected a pattern")) };
+                dx_ir::re::compile(&text).map_err(|error| ConfigError::new(span, error))?;
                 *target(settings) = text.to_string().into();
             }
             Field::Projection(target) => {
@@ -196,7 +233,7 @@ impl Compiler<'_> {
             Field::Format => {
                 if !matches!(value, Value::Str(ref value) if &**value == "jsonc") { return Err(ConfigError::new(span, "unsupported metadata format")) }
             }
-            Field::Block(_) | Field::Substitutions | Field::References => unreachable!(),
+            Field::Block(_) | Field::Substitutions | Field::References | Field::Pulls(_) => unreachable!(),
         }
         Ok(())
     }

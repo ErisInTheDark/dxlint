@@ -1,0 +1,5 @@
+import .ts
+in ts_identifier rule typed_global warn "typed by a global from a package only an import reaches" {
+  files "main.ts"
+  when text == "pulledGlobal" && ts_value_has_trait(node, "number") == true
+}
