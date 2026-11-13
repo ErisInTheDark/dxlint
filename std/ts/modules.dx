@@ -79,14 +79,14 @@ import .ts/comments
       # references; a cheap text scan, so imports in comments count too.
       pulls {
         "{found}" [
-          "\\b(?:from|import)\\s*[\"']([^\"'\\n]+)[\"']",
-          "\\b(?:require|import)\\s*\\(\\s*[\"']([^\"'\\n]+)[\"']",
+          "(?-u:\\b)(?:from|import)\\s*[\"']([^\"'\\n]+)[\"']",
+          "(?-u:\\b)(?:require|import)\\s*\\(\\s*[\"']([^\"'\\n]+)[\"']",
         ]
       }
       # A file only pulls reach joins the program when it may publish globals
       # or ambient modules; a plain module is reached through its importers.
-      pulled_publishers ["(?m)^\\s*declare\\s+(?:global\\b|module\\s+[\"'])"]
-      pulled_modules ["(?m)^\\s*(?:import|export)\\b"]
+      pulled_publishers ["(?m)^\\s*declare\\s+(?:global(?-u:\\b)|module\\s+[\"'])"]
+      pulled_modules ["(?m)^\\s*(?:import|export)(?-u:\\b)"]
       # Reference directives count only in the file's leading comments, never
       # inside a block comment (matched whole, so it holds no directive).
       leading "\\A(?:[\\s\\uFEFF]+|//[^\\n]*|/\\*[\\s\\S]*?\\*/)*"
