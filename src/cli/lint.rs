@@ -140,6 +140,21 @@ fn watch(linter: &Linter, profile: &crate::engine::Profile, every: std::time::Du
     }
 }
 
+/// `--progress`: every `every`, the files done so far, while `running`.
+fn progress(every: std::time::Duration, total: usize, done: &std::sync::atomic::AtomicUsize, running: impl Fn() -> bool) {
+    let started = std::time::Instant::now();
+    let tick = std::time::Duration::from_millis(100);
+    let mut waited = std::time::Duration::ZERO;
+    while running() {
+        std::thread::sleep(tick);
+        waited += tick;
+        if waited >= every {
+            waited = std::time::Duration::ZERO;
+            eprintln!("dxlint: {} of {total} files after {} s", done.load(std::sync::atomic::Ordering::Relaxed), started.elapsed().as_secs());
+        }
+    }
+}
+
 /// Items tagged with their place in a sequence, released in that order as
 /// soon as each one's predecessors are.
 pub(super) fn in_order<T>(tagged: impl IntoIterator<Item = (usize, T)>) -> impl Iterator<Item = T> {
@@ -544,10 +559,17 @@ fn lint_project(output: &mut Output<'_>, args: &LintArgs, project: &mut Project,
             let linter = &*linter;
             let run = linter.run().retiring();
             let working = std::sync::atomic::AtomicUsize::new(0);
+            let done = std::sync::atomic::AtomicUsize::new(0);
             std::thread::scope(|w| {
                 if let (Some(every), Some(profile)) = (watch_every(), linter.profile.as_ref()) {
                     let working = &working;
                     w.spawn(move || watch(linter, profile, every, working));
+                }
+                if let Some(every) = args.progress {
+                    let (working, done, next, total) = (&working, &done, &next, queue.len());
+                    w.spawn(move || progress(std::time::Duration::from_secs(every.get()), total, done, || {
+                        next.load(std::sync::atomic::Ordering::Relaxed) < total || working.load(std::sync::atomic::Ordering::Relaxed) > 0
+                    }));
                 }
                 // A worker waiting on a command isn't linting: another takes
                 // its place until it wakes.
@@ -555,7 +577,7 @@ fn lint_project(output: &mut Output<'_>, args: &LintArgs, project: &mut Project,
                 lanes.supervise(threads, || next.load(std::sync::atomic::Ordering::Relaxed) < queue.len(), || {
                     working.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     let tx = tx.clone();
-                    let (queue, order, next, working) = (&queue, &order, &next, &working);
+                    let (queue, order, next, working, done) = (&queue, &order, &next, &working, &done);
                     let run = &run;
                     std::thread::Builder::new().stack_size(crate::engine::WORKER_STACK).spawn_scoped(w, move || {
                         let _lane = Lane(lanes);
@@ -568,6 +590,7 @@ fn lint_project(output: &mut Output<'_>, args: &LintArgs, project: &mut Project,
                             if tx.send((index, lint_file(linter, run, cache, path, fix))).is_err() {
                                 break;
                             }
+                            done.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                             if crate::alloc::heap::files_on() {
                                 let (now, peak) = crate::alloc::heap::stretch();
                                 eprintln!("heapfile {} {} {}", peak / 1048576, now / 1048576, path.display());

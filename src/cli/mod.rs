@@ -155,6 +155,10 @@ pub struct LintArgs {
     /// Print timing and throughput
     #[arg(long)]
     pub stats: bool,
+    /// Every SECONDS, print how many files are done to stderr (for callers
+    /// that see output only at the end)
+    #[arg(long, value_name = "SECONDS")]
+    pub progress: Option<std::num::NonZeroU64>,
     /// Report which matchers and rules cost the most time (implies --no-cache)
     #[arg(long)]
     pub profile: bool,

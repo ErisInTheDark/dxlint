@@ -135,6 +135,7 @@ These rules need no extra configuration. Where dxlint cannot tell a type for cer
 | `dxlint --jobs 1` | lint on one thread (default: every core) |
 | `dxlint --no-cache` | ignore and do not write `.dxcache` |
 | `dxlint --stats` | timing, and how many files came from the cache |
+| `dxlint --progress 15` | every 15 s, how many files are done (stderr), for long runs whose output comes at the end |
 | `dxlint -c other.dx` | use another config |
 | `dxlint describe <name>` | explain a rule, option, layer or other name |
 
