@@ -560,18 +560,19 @@ pub fn track_listing<R>(f: impl FnOnce() -> R) -> (R, Arc<Reads>, Arc<[Dep]>) {
     let mut kept = Reads::default();
     let mut listing = Vec::new();
     let mut seen = HashSet::new();
+    // Deduplicated by hash (interned paths hash by address), not sorted:
+    // ordering compares paths component by component, and a program's
+    // list reads thousands of them.
+    let mut once = crate::fx_hash::FxHashSet::default();
     let mut stack = vec![&reads];
     while let Some(next) = stack.pop() {
         for dep in &next.deps {
+            if !once.insert(dep) { continue }
             if dep.reads_text() { kept.deps.push(dep.clone()) } else { listing.push(dep.clone()) }
         }
         kept.scans.extend(next.scans.iter().cloned());
         stack.extend(next.groups.iter().filter(|group| seen.insert(Arc::as_ptr(group))).map(|group| &**group));
     }
-    kept.deps.sort_unstable();
-    kept.deps.dedup();
-    listing.sort_unstable();
-    listing.dedup();
     (r, Arc::new(kept), listing.into())
 }
 
