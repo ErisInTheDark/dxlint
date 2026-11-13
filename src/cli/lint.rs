@@ -206,7 +206,10 @@ fn lint_file(linter: &Linter, run: &LintRun<'_>, cache: Option<&Cache>, path: &P
     let rel = linter.relative(path).to_string_lossy().replace('\\', "/");
     // With `--fix`, a cached result only saves work when there is nothing
     // to fix.
-    let saved = cache.and_then(|c| if fix { c.lookup(linter, &rel, &text) } else { c.result(run, linter, &rel, path, &text) });
+    let saved = {
+        let _timed = crate::engine::timing::enter(crate::engine::timing::Phase::Cache);
+        cache.and_then(|c| if fix { c.lookup(linter, &rel, &text) } else { c.result(run, linter, &rel, path, &text) })
+    };
     if let Some(diags) = saved {
         if !fix || diags.iter().all(|d| d.fix.is_none()) {
             return Msg::File(FileResult { path: path.to_path_buf(), text, diags, fixed: 0 });
@@ -587,7 +590,7 @@ fn lint_project(output: &mut Output<'_>, args: &LintArgs, project: &mut Project,
                             if lanes.surplus(threads) { break }
                             let Some(&index) = order.get(next.fetch_add(1, std::sync::atomic::Ordering::Relaxed)) else { break };
                             let (_, path) = &queue[index];
-                            if tx.send((index, lint_file(linter, run, cache, path, fix))).is_err() {
+                            if tx.send((index, crate::engine::timing::file(|| lint_file(linter, run, cache, path, fix)))).is_err() {
                                 break;
                             }
                             done.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -685,6 +688,7 @@ fn lint_project(output: &mut Output<'_>, args: &LintArgs, project: &mut Project,
         output.err(format_args!("  config reading: lexing {:.1} ms", lex_time.as_secs_f64() * 1000.0));
         let phases: Vec<String> = build_phases.iter().map(|(name, time)| format!("{name} {:.1}", time.as_secs_f64() * 1000.0)).collect();
         output.err(format_args!("  config build phases (ms): {}", phases.join(", ")));
+        output.err(format_args!("  {}", crate::engine::timing::summary()));
         if !linter.scopes.is_empty() {
             output.err(format_args!("  files blocks: {} rule copies for their option values", linter.scopes.copies()));
         }

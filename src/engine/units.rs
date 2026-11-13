@@ -82,6 +82,7 @@ impl Linter {
     }
 
     pub(super) fn parse(&self, path: &Path, text: &str, plan: ParsePlan<'_>) -> Result<ParsedFile, (u32, String)> {
+        let _timed = super::timing::enter(super::timing::Phase::Parse);
         #[cfg(feature = "work")]
         let _work = crate::work::enter("parse", || {
             use std::hash::{Hash, Hasher};

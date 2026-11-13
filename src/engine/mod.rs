@@ -22,6 +22,7 @@ pub use dx_core::reads;
 pub mod scopes;
 mod suppress;
 pub mod symbols;
+pub mod timing;
 pub mod world;
 #[cfg(test)]
 pub(crate) mod tests;

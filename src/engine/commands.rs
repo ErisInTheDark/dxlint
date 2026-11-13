@@ -253,6 +253,7 @@ impl Commands {
 
     /// `name`'s output for `args`, recording what it depends on.
     pub fn answer(self: &Arc<Self>, name: &str, args: &[String]) -> Answer {
+        let _timed = super::timing::enter(super::timing::Phase::Commands);
         let Some(declared) = self.declared.get(name) else {
             return Answer::Failed(format!("no command `{name}` in the root config").into());
         };

@@ -821,6 +821,7 @@ impl<'a> Files<'a> {
     fn input_paths(self, selected: &Settings) -> Known<Inputs> {
         let key = selected as *const Settings;
         if let Some(cached) = self.0.program.inputs.borrow().get(&key) { return cached.get().map_or(Known::Unknown, Known::Yes) }
+        let _timed = super::timing::enter(super::timing::Phase::Program);
         let reentries = super::program::reentries();
         let cached = super::reads::Cached::compute(|| {
             let Known::Yes(anchor) = program_anchor(selected, &self, &QueryContext::once()) else { return Known::Unknown };
@@ -941,6 +942,7 @@ impl<'a> Files<'a> {
         let hinted = !selected.globals.name_hints.is_empty();
         let key = (selected as *const Settings, if hinted { Box::from(name) } else { Box::from("") });
         if let Some(cached) = self.0.program.roots.borrow().get(&key) { return cached.get() }
+        let _timed = super::timing::enter(super::timing::Phase::Program);
         let cached = super::reads::Cached::compute(|| {
             let question = QueryContext::once();
             let roots = (|| {
