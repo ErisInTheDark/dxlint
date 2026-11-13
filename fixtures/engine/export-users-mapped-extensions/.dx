@@ -1,0 +1,8 @@
+import .ts
+
+lang js "*.ts" "*.wts"
+extend parser ts {
+  files "*.wts"
+}
+
+rule es-no-unused-exports

@@ -65,7 +65,8 @@ import .ts/comments
       types_option "types"
       type_roots_option "typeRoots"
       type_directories ["node_modules/@types"]
-      project_files ["**/*.ts", "**/*.tsx", "**/*.mts", "**/*.cts"]
+      # Without `include`: every file whose extension the program reads.
+      project_files ["**/*"]
       references true
       # A file publishes a global only by spelling its name (or escaping it,
       # or forwarding through a reference); ambient modules need a keyword.

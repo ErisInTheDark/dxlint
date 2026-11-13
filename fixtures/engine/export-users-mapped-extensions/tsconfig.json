@@ -1,0 +1,4 @@
+{
+	"contentMappers": [{ "package": "mapper", "extensions": [".wts"] }],
+	"compilerOptions": { "lib": [] }
+}

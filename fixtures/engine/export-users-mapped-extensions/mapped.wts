@@ -1,0 +1,3 @@
+import { onlyMappedFilesRead } from "./lib";
+
+console.log(onlyMappedFilesRead);
