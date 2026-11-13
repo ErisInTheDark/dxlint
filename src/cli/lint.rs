@@ -638,6 +638,7 @@ fn lint_project(output: &mut Output<'_>, args: &LintArgs, project: &mut Project,
         super::info::profile(output, linter, format, &fired);
     }
     let cached = cache.as_ref().map_or(0, Cache::hits);
+    let (partly, rules_rerun) = cache.as_ref().map_or((0, 0), Cache::partly);
     if let Some(cache) = cache {
         if let Err(e) = cache.save(whole && sources.is_none()) {
             render::error(output, &format!("cannot write {}: {e}", cache::FILE_NAME));
@@ -645,8 +646,9 @@ fn lint_project(output: &mut Output<'_>, args: &LintArgs, project: &mut Project,
     }
     if args.stats {
         let secs = started.elapsed().as_secs_f64();
+        let partly = if partly == 0 { String::new() } else { format!(", {partly} partly: {rules_rerun} rule runs") };
         output.err(format_args!(
-            "{files} files ({cached} from cache), {:.1} MiB in {:.1} ms ({:.0} MiB/s)",
+            "{files} files ({cached} from cache{partly}), {:.1} MiB in {:.1} ms ({:.0} MiB/s)",
             bytes as f64 / 1048576.0,
             secs * 1000.0,
             bytes as f64 / 1048576.0 / secs.max(1e-9)

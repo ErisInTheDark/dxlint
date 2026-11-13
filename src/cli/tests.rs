@@ -465,62 +465,54 @@ in .t match writer /WRITE/ {
 fn a_config_edit_reruns_only_the_rules_it_touches() {
     let config = |other: &str, helper: &str| format!(r#"
 lang t "*.t"
-command counted "node count.js"
 {helper}
 in .t match word /WORD/ {{
-  let out command_output(node, "counted", [])
-  rule stays warn "{{out.state}}"
+  rule stays warn "stays"
 }}
 in .t match shout /SHOUT/
 in shout rule other {other} "other"
 "#);
-    // A failed run is kept only by the process that ran it (a successful one
-    // outlives config edits), so each run of `stays` shows as a command run.
-    let count = "require('fs').appendFileSync('runs.txt', 'x'); process.exit(1)";
-    let dir = project("cli-cache-per-rule", &[(".dx", &config("warn", "")), ("count.js", count), ("a.t", "WORD SHOUT")]);
-    let runs = || std::fs::read_to_string(dir.join("runs.txt")).map_or(0, |runs| runs.len());
+    let dir = project("cli-cache-per-rule", &[(".dx", &config("warn", "")), ("a.t", "WORD SHOUT")]);
+    // The rules sorted with their severities, and how many rules ran again on
+    // the one file: `None` when the whole file was linted afresh.
     let lint = || {
-        let out = dxlint(&dir, &["--format", "jsonl"]);
+        let out = dxlint(&dir, &["--format", "jsonl", "--stats"]);
         let mut rules: Vec<(String, String)> = stdout(&out).lines().map(|line| {
             let row: serde_json::Value = serde_json::from_str(line).expect("json");
             (row["rule"].as_str().expect("rule").to_owned(), row["severity"].as_str().expect("severity").to_owned())
         }).collect();
         rules.sort();
-        rules
+        let stats = String::from_utf8_lossy(&out.stderr).into_owned();
+        let again = (0..3).find(|n| stats.contains(&format!("1 partly: {n} rule runs")));
+        (rules, again)
     };
     let pair = |rule: &str, severity: &str| (rule.to_owned(), severity.to_owned());
-    assert_eq!(lint(), [pair("other", "warn"), pair("stays", "warn")]);
-    assert_eq!(runs(), 1);
+    assert_eq!(lint(), (vec![pair("other", "warn"), pair("stays", "warn")], None));
     // Only `other` changes: `stays` keeps its report without running.
     std::fs::write(dir.join(".dx"), config("error", "")).expect("config");
-    assert_eq!(lint(), [pair("other", "error"), pair("stays", "warn")]);
-    assert_eq!(runs(), 1);
+    assert_eq!(lint(), (vec![pair("other", "error"), pair("stays", "warn")], Some(1)));
     // A rule gone takes its reports along.
     std::fs::write(dir.join(".dx"), config("error", "").replace(r#"in shout rule other error "other""#, "")).expect("config");
-    assert_eq!(lint(), [pair("stays", "warn")]);
-    assert_eq!(runs(), 1);
+    assert_eq!(lint(), (vec![pair("stays", "warn")], Some(0)));
     // Anything shared starts over.
     std::fs::write(dir.join(".dx"), config("error", "in .t match extra /EXTRA/")).expect("config");
-    assert_eq!(lint(), [pair("other", "error"), pair("stays", "warn")]);
-    assert_eq!(runs(), 2);
+    assert_eq!(lint(), (vec![pair("other", "error"), pair("stays", "warn")], None));
     // A helper only `other` reaches, directly and through another: `stays` keeps.
     let with = |text: &str| config("error", &format!("fn inner(x) = {text}\nfn outer(x) = inner(x)")).replace(r#"rule other error "other""#, r#"rule other error "{outer(1)}""#);
     std::fs::write(dir.join(".dx"), with("x")).expect("config");
-    assert_eq!(lint(), [pair("other", "error"), pair("stays", "warn")]);
-    let base = runs();
+    lint();
     std::fs::write(dir.join(".dx"), with("x + 1")).expect("config");
     let out = dxlint(&dir, &["--format", "jsonl"]);
     assert!(stdout(&out).contains("\"message\":\"2\""), "{}", stdout(&out));
-    assert_eq!(runs(), base);
+    std::fs::write(dir.join(".dx"), with("x + 2")).expect("config");
+    assert_eq!(lint().1, Some(1));
     // A helper the shared part reads is shared.
     let shared = |text: &str| config("error", &format!("fn inner(x) = {text}\nin .t let shared inner(1)"))
         .replace("in .t match word /WORD/ {", "in .t match word /WORD/ {\n  let reads shared");
     std::fs::write(dir.join(".dx"), shared("x")).expect("config");
     lint();
-    let before = runs();
     std::fs::write(dir.join(".dx"), shared("x + 1")).expect("config");
-    lint();
-    assert_eq!(runs(), before + 1);
+    assert_eq!(lint().1, None);
 }
 
 #[test]
@@ -705,7 +697,7 @@ fn cache_replays_results_and_relints_exactly_what_changed() {
     assert!(run().1.contains("(3 from cache)"));
     write(".dx", &rules.replace("{text}: ", "{text} is "));
     let (renamed, stats) = run();
-    assert!(renamed[0].starts_with("x is ") && stats.contains("(0 from cache)"), "{renamed:?} {stats}");
+    assert!(renamed[0].starts_with("x is ") && stats.contains("(0 from cache, 3 partly: 3 rule runs)"), "{renamed:?} {stats}");
 }
 
 #[test]

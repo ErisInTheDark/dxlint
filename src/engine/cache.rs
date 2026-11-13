@@ -112,6 +112,10 @@ pub struct Cache {
     /// Something new to write.
     changed: AtomicBool,
     hits: AtomicUsize,
+    /// Files whose saved result held for unchanged rules, and how many rules
+    /// they ran again.
+    partly: AtomicUsize,
+    rules_rerun: AtomicUsize,
     /// Whose finished runs the file keeps, whatever else invalidates it.
     commands: Arc<super::commands::Commands>,
 }
@@ -151,6 +155,8 @@ impl Cache {
             compact: false,
             changed: AtomicBool::new(false),
             hits: AtomicUsize::new(0),
+            partly: AtomicUsize::new(0),
+            rules_rerun: AtomicUsize::new(0),
         }
     }
 
@@ -171,6 +177,12 @@ impl Cache {
         self.hits.load(Ordering::Relaxed)
     }
 
+    /// Files whose saved result held for unchanged rules this run, and the
+    /// rules they ran again.
+    pub fn partly(&self) -> (usize, usize) {
+        (self.partly.load(Ordering::Relaxed), self.rules_rerun.load(Ordering::Relaxed))
+    }
+
     /// The saved result for `rel` (a path relative to the config, `/`
     /// separated), if `text` and everything its lint read are unchanged.
     pub fn lookup(&self, linter: &Linter, rel: &str, text: &str) -> Option<Vec<Diagnostic>> {
@@ -186,6 +198,8 @@ impl Cache {
         match self.find(linter, rel, text)? {
             Found::Whole(diags) => Some(diags),
             Found::Partly { kept, rerun } => {
+                self.partly.fetch_add(1, Ordering::Relaxed);
+                self.rules_rerun.fetch_add(rerun.iter().filter(|&&again| again).count(), Ordering::Relaxed);
                 let (mut diags, reads) = run.lint_rules_tracked(path, text, &rerun);
                 diags.extend(kept);
                 Diagnostic::dedup(&mut diags);
