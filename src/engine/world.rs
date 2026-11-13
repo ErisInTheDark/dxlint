@@ -879,9 +879,18 @@ impl<'a> Files<'a> {
         while let Some(path) = walk.get(at).cloned() {
             at += 1;
             if selected.origin(&path) == crate::names::modules::resolution::Origin::Library { continue }
-            let (text, hash) = self.source_text(&path);
-            let text = text.as_deref().unwrap_or_default();
-            let (pulled, joins) = (selected.globals.pulled(text), selected.globals.joins(text));
+            // The file as every program reads it (not the linted text: the
+            // list is shared), summarised once per run.
+            let compute = || {
+                let (text, hash) = super::reads::read_unrecorded(&path);
+                let text = text.as_deref().unwrap_or_default();
+                super::program::Pulled { hash, specifiers: selected.globals.pulled(text), joins: selected.globals.joins(text) }
+            };
+            let summary = match self.0.snapshot {
+                Some(snapshot) => snapshot.pulled(self.0.revision(), selected as *const Settings as usize, &path, compute),
+                None => Arc::new(compute()),
+            };
+            let (hash, pulled, joins) = (summary.hash, summary.specifiers.clone(), summary.joins);
             let pulled_in = at > roots;
             if pulled_in && joins { paths.push(path.clone()) }
             let file = super::reads::dep_path(&path);

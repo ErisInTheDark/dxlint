@@ -356,6 +356,15 @@ fn once<K: Eq + Hash, V: Clone>(slots: &Slots<K, V>, key: K, compute: impl FnOnc
     slot.get_or_init(|| Cached::compute(compute)).clone()
 }
 
+/// What one file's text pulls into a program ([`Snapshot::pulled`]).
+pub(super) struct Pulled {
+    /// The text's hash.
+    pub hash: u64,
+    pub specifiers: Vec<String>,
+    /// It may publish globals, so it joins a program that reaches it.
+    pub joins: bool,
+}
+
 #[derive(Default)]
 pub(super) struct Snapshot {
     /// The linter's revision when the run began: answers kept without one
@@ -385,6 +394,8 @@ pub(super) struct Snapshot {
     /// Directory listings behind those probes (`None`: unreadable).
     listings: RwLock<FxHashMap<PathBuf, (u64, Option<Arc<reads::Listing>>)>>,
     texts: RwLock<FxHashMap<PathBuf, (u64, Option<Arc<str>>, u64)>>,
+    /// [`Snapshot::pulled`] by (settings, path), with the revision each holds at.
+    pulled: RwLock<FxHashMap<(usize, PathBuf), (u64, Arc<Pulled>)>>,
     /// Per program (settings, identity) and global name: the inputs whose
     /// text may publish it, as positions in the program's survey.
     candidates: Slots<(usize, u64, Box<str>), Arc<[u32]>>,
@@ -785,7 +796,7 @@ impl Snapshot {
     /// hold: an editor's next lint after a keystroke redoes only what read
     /// the edited files.
     pub(super) fn carry(self, to: u64, keep: &mut Keep<'_>) -> Snapshot {
-        let Snapshot { revision, paths, catalogs, units, modules, augmentations, prefetched: _, input_sets: _, mentions: _, text_holds: _, listed: _, probes, listings, texts,
+        let Snapshot { revision, paths, catalogs, units, modules, augmentations, prefetched: _, input_sets: _, mentions: _, text_holds: _, listed: _, probes, listings, texts, pulled: _,
             candidates, surveys, words, configurations, metadata, packages, answers, tested: _, frames, editor, lints: _, uses: _ } = self;
         // A survey holds while its listing does; inputs whose text changed
         // are read again, and what was built from them patched to match.
@@ -819,6 +830,7 @@ impl Snapshot {
             probes: carried(probes, |path, (at, found)| keep(at, None, Some(&*path)).then_some((path, (to, found)))),
             listings: carried(listings, |dir, (at, listing)| keep(at, None, Some(&*dir)).then_some((dir, (to, listing)))),
             texts: carried(texts, |path, (at, text, hash)| keep(at, None, Some(&*path)).then_some((path, (to, text, hash)))),
+            pulled: Default::default(),
             candidates,
             words,
             surveys: Mutex::new(surveys),
@@ -882,6 +894,19 @@ impl Snapshot {
             None => reads::is_file_unrecorded(path),
         };
         self.probes.write().expect("run probes").insert(reads::dep_path(path), (revision, found));
+        found
+    }
+
+    /// What `path`'s text pulls into programs under settings `settings`
+    /// (with its text's hash), worked out once per revision: programs
+    /// follow the same files, which need not stay in memory for it.
+    pub(super) fn pulled(&self, revision: u64, settings: usize, path: &std::path::Path, compute: impl FnOnce() -> Pulled) -> Arc<Pulled> {
+        let key = (settings, path.to_owned());
+        if let Some((at, found)) = self.pulled.read().expect("run pulls").get(&key) {
+            if *at == revision { return found.clone() }
+        }
+        let found = Arc::new(compute());
+        self.pulled.write().expect("run pulls").insert(key, (revision, found.clone()));
         found
     }
 
