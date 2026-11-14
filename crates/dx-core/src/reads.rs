@@ -24,9 +24,12 @@ pub struct DiscoveryRequest {
 /// paths in millions of reads, so each is stored once.
 /// Equal paths are one allocation, so comparing is a pointer check and hashing
 /// reads the bytes: run-wide answers are keyed by these millions of times, and
-/// a [`Path`]'s own hash parses every component.
+/// a [`Path`]'s own hash parses every component. A thin pointer, so a
+/// [`Dep`] naming one stays small.
 #[derive(Clone, Debug)]
-pub struct DepPath(Arc<Path>);
+pub struct DepPath(Arc<Box<Path>>);
+
+const _: () = assert!(std::mem::size_of::<Dep>() == 24, "a dep stays three words: millions are kept");
 
 impl std::ops::Deref for DepPath {
     type Target = Path;
@@ -34,6 +37,20 @@ impl std::ops::Deref for DepPath {
 }
 impl AsRef<Path> for DepPath {
     fn as_ref(&self) -> &Path { &self.0 }
+}
+
+/// An interned path, found by its content.
+struct InternedPath(Arc<Box<Path>>);
+
+impl std::borrow::Borrow<Path> for InternedPath {
+    fn borrow(&self) -> &Path { &self.0 }
+}
+impl PartialEq for InternedPath {
+    fn eq(&self, other: &InternedPath) -> bool { **self.0 == **other.0 }
+}
+impl Eq for InternedPath {}
+impl Hash for InternedPath {
+    fn hash<H: Hasher>(&self, state: &mut H) { (**self.0).hash(state) }
 }
 impl PartialEq for DepPath {
     fn eq(&self, other: &DepPath) -> bool { Arc::ptr_eq(&self.0, &other.0) }
@@ -56,22 +73,22 @@ pub fn dep_path(path: &Path) -> DepPath {
     /// doubles, so it stays proportional to the live paths.
     #[derive(Default)]
     struct Interned {
-        paths: HashSet<Arc<Path>>,
+        paths: HashSet<InternedPath>,
         sweep_at: usize,
     }
     const FIRST_SWEEP: usize = 4096;
     static PATHS: OnceLock<RwLock<Interned>> = OnceLock::new();
     let interned = PATHS.get_or_init(Default::default);
-    if let Some(found) = interned.read().expect("dep paths").paths.get(path) { return DepPath(found.clone()) }
+    if let Some(found) = interned.read().expect("dep paths").paths.get(path) { return DepPath(found.0.clone()) }
     let mut interned = interned.write().expect("dep paths");
-    if let Some(found) = interned.paths.get(path) { return DepPath(found.clone()) }
+    if let Some(found) = interned.paths.get(path) { return DepPath(found.0.clone()) }
     crate::alloc::lasting(|| {
         if interned.paths.len() >= interned.sweep_at {
-            interned.paths.retain(|held| Arc::strong_count(held) > 1);
+            interned.paths.retain(|held| Arc::strong_count(&held.0) > 1);
             interned.sweep_at = (interned.paths.len() * 2).max(FIRST_SWEEP);
         }
-        let path: Arc<Path> = Arc::from(path);
-        interned.paths.insert(path.clone());
+        let path = Arc::new(Box::<Path>::from(path));
+        interned.paths.insert(InternedPath(path.clone()));
         DepPath(path)
     })
 }
