@@ -87,6 +87,9 @@ import .ts/comments
       # or ambient modules; a plain module is reached through its importers.
       pulled_publishers ["(?m)^\\s*declare\\s+(?:global(?-u:\\b)|module\\s+[\"'])"]
       pulled_modules ["(?m)^\\s*(?:import|export)(?-u:\\b)"]
+      # Global lookups skip modules: a top-level `import`/`export` (column 0;
+      # a namespace's indented `export` keeps its script global).
+      global_modules ["(?m)^(?:import|export)(?-u:\\b)"]
       # Reference directives count only in the file's leading comments, never
       # inside a block comment (matched whole, so it holds no directive).
       leading "\\A(?:[\\s\\uFEFF]+|//[^\\n]*|/\\*[\\s\\S]*?\\*/)*"

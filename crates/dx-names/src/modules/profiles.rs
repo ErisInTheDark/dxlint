@@ -109,6 +109,7 @@ const GLOBALS: &[Control] = &[
     Control { name: "leading", field: Field::Pattern(|s| &mut s.globals.leading) },
     Control { name: "pulled_publishers", field: Field::Patterns(|s| &mut s.globals.pulled_publishers) },
     Control { name: "pulled_modules", field: Field::Patterns(|s| &mut s.globals.pulled_modules) },
+    Control { name: "global_modules", field: Field::Patterns(|s| &mut s.globals.global_modules) },
 ];
 
 struct Compiler<'a> {

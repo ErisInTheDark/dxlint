@@ -127,13 +127,23 @@ pub struct Globals {
     /// through its importers alone).
     pub pulled_publishers: Vec<Box<str>>,
     pub pulled_modules: Vec<Box<str>>,
+    /// A program file one of these matches is a module: it publishes global
+    /// names only where `pulled_publishers` match, so global lookups never
+    /// parse it otherwise. Exact where `pulled_modules` may over-match.
+    pub global_modules: Vec<Box<str>>,
+}
+
+/// Whether `text` may publish globals: one of `publishers` matches it, or
+/// none of `modules` does ([`Globals::pulled_publishers`]).
+pub fn joins(publishers: &[Box<str>], modules: &[Box<str>], text: &str) -> bool {
+    let any = |patterns: &[Box<str>]| patterns.iter().any(|pattern| dx_ir::re::compile(pattern).is_ok_and(|re| re.is_match(text)));
+    any(publishers) || !any(modules)
 }
 
 impl Globals {
     /// Whether a file only pulls reached, reading `text`, joins the program.
     pub fn joins(&self, text: &str) -> bool {
-        let any = |patterns: &[Box<str>]| patterns.iter().any(|pattern| dx_ir::re::compile(pattern).is_ok_and(|re| re.is_match(text)));
-        any(&self.pulled_publishers) || !any(&self.pulled_modules)
+        joins(&self.pulled_publishers, &self.pulled_modules, text)
     }
 
     /// The specifiers `text` pulls in, in order of appearance per pattern.

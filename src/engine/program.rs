@@ -592,10 +592,32 @@ pub(super) enum StableQuestion {
     Augmentations { classes: u64 },
 }
 
-/// A program's inputs with their texts (`None`: unreadable) and whether the
-/// text holds a name-independent publication hint (so it may publish any
-/// global name).
-pub(super) type Survey = Arc<[(PathBuf, Option<Arc<str>>, bool)]>;
+/// A program's inputs with their texts (`None`: unreadable) and which global
+/// names each may publish.
+pub(super) type Survey = Arc<[(PathBuf, Option<Arc<str>>, Publishes)]>;
+
+/// Which global names a surveyed input's text may publish.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Publishes {
+    /// Any: it holds a name-independent hint, or can't be read.
+    Any,
+    /// Those it spells.
+    Spelled,
+    /// None: a module declaring nothing global ([`crate::names::modules::resolution::joins`]).
+    Nothing,
+}
+
+impl Publishes {
+    /// Whether a text it holds (`spelled`: the text spells the name) may
+    /// publish that name.
+    pub fn name(self, spelled: bool) -> bool {
+        match self {
+            Publishes::Any => true,
+            Publishes::Spelled => spelled,
+            Publishes::Nothing => false,
+        }
+    }
+}
 
 /// A program's input list (when known), its reads other than which files
 /// exist, and those listing reads ([`reads::track_listing`]).
@@ -610,11 +632,19 @@ pub(super) struct Surveyed {
     pub reads: Arc<Reads>,
     /// The name-independent publication hints each text was checked for.
     pub hints: Arc<[Box<str>]>,
+    /// The patterns deciding whether a text may publish globals at all.
+    pub publishers: Arc<[Box<str>]>,
+    pub modules: Arc<[Box<str>]>,
 }
 
-/// Whether text (`None`: unreadable) may publish any global name.
-pub(super) fn holds_hint(text: Option<&str>, hints: &[Box<str>]) -> bool {
-    text.is_none_or(|text| hints.iter().any(|hint| text.contains(&**hint)))
+/// Which global names text (`None`: unreadable) may publish.
+pub(super) fn publishes(text: Option<&str>, hints: &[Box<str>], publishers: &[Box<str>], modules: &[Box<str>]) -> Publishes {
+    match text {
+        Some(text) if !hints.iter().any(|hint| text.contains(&**hint)) => {
+            if crate::names::modules::resolution::joins(publishers, modules, text) { Publishes::Spelled } else { Publishes::Nothing }
+        }
+        _ => Publishes::Any,
+    }
 }
 
 impl Surveyed {
@@ -628,13 +658,17 @@ impl Surveyed {
         let mut sources = self.sources.to_vec();
         let mut deps = self.reads.deps.clone();
         for &at in changed {
-            let (path, text, hinted) = &mut sources[at];
+            let (path, text, published) = &mut sources[at];
             let (now, hash) = reads::read_unrecorded(path);
-            *hinted = holds_hint(now.as_deref(), &self.hints);
+            *published = publishes(now.as_deref(), &self.hints, &self.publishers, &self.modules);
             *text = now;
             if let Some(reads::Dep::Text(_, read)) = deps.get_mut(at) { *read = hash }
         }
-        Surveyed { sources: sources.into(), reads: Arc::new(Reads { deps, groups: self.reads.groups.clone(), ..Default::default() }), hints: self.hints.clone() }
+        Surveyed {
+            sources: sources.into(),
+            reads: Arc::new(Reads { deps, groups: self.reads.groups.clone(), ..Default::default() }),
+            hints: self.hints.clone(), publishers: self.publishers.clone(), modules: self.modules.clone(),
+        }
     }
 
     /// Whether input `at`'s text may publish global `name` (`text`: its
@@ -642,7 +676,7 @@ impl Surveyed {
     fn may_publish(&self, at: usize, name: &str, text: &(Survey, Sketches)) -> bool {
         let mut holds = [false];
         text.1.mark(name, &text.0, &mut holds, &TextHolds::default());
-        self.sources[at].2 || holds[0]
+        self.sources[at].2.name(holds[0])
     }
 }
 
@@ -1115,11 +1149,11 @@ mod tests {
     #[test]
     fn sketches_mark_exactly_the_texts_a_substring_search_finds() {
         let texts = ["declare var Promise: PromiseConstructor;", "", "Map Set WeakMap", "no names here", "promise", "PromiseLike<T>"];
-        let mut entries: Vec<(PathBuf, Option<Arc<str>>, bool)> = texts.iter().enumerate()
-            .map(|(index, text)| (PathBuf::from(format!("/sketch/{index}")), Some(Arc::from(*text)), false)).collect();
-        entries.push((PathBuf::from("/sketch/unreadable"), None, false));
+        let mut entries: Vec<(PathBuf, Option<Arc<str>>, Publishes)> = texts.iter().enumerate()
+            .map(|(index, text)| (PathBuf::from(format!("/sketch/{index}")), Some(Arc::from(*text)), Publishes::Spelled)).collect();
+        entries.push((PathBuf::from("/sketch/unreadable"), None, Publishes::Spelled));
         // Past one word of inputs, so rows span several words.
-        entries.extend((0..70).map(|index| (PathBuf::from(format!("/sketch/fill{index}")), Some(Arc::from(format!("filler {index} Set"))), false)));
+        entries.extend((0..70).map(|index| (PathBuf::from(format!("/sketch/fill{index}")), Some(Arc::from(format!("filler {index} Set"))), Publishes::Spelled)));
         let survey: Survey = entries.into();
         let sketches = sketch_texts(&survey);
         for name in ["Promise", "Map", "Set", "Pr", "x", "WeakMap", "absent", "filler 69"] {

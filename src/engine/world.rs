@@ -960,15 +960,17 @@ impl<'a> Files<'a> {
                         // Hints don't depend on the name: each text is checked
                         // for them once per program, not once per name.
                         let survey = self.timed("modules.roots.survey", || snapshot.survey((settings, program), || {
-                            let hints: Arc<[Box<str>]> = selected.globals.name_hints.clone().into();
+                            let globals = &selected.globals;
+                            let hints: Arc<[Box<str>]> = globals.name_hints.clone().into();
+                            let (publishers, modules): (Arc<[Box<str>]>, Arc<[Box<str>]>) = (globals.pulled_publishers.clone().into(), globals.global_modules.clone().into());
                             let mut deps = Vec::with_capacity(paths.len());
                             let sources = paths.iter().map(|path| {
                                 let (text, hash) = self.source_text(path);
                                 deps.push(super::reads::Dep::Text(super::reads::dep_path(path), hash));
-                                let hinted = super::program::holds_hint(text.as_deref(), &hints);
-                                (path.clone(), text, hinted)
+                                let published = super::program::publishes(text.as_deref(), &hints, &publishers, &modules);
+                                (path.clone(), text, published)
                             }).collect();
-                            super::program::Surveyed { sources, reads: super::reads::Scan::files(deps, &listing), hints }
+                            super::program::Surveyed { sources, reads: super::reads::Scan::files(deps, &listing), hints, publishers, modules }
                         }));
                         let super::program::Surveyed { sources, reads: files, .. } = survey.get();
                         // Kept as survey positions: a run asks thousands of
@@ -980,7 +982,7 @@ impl<'a> Files<'a> {
                             let mut holding = vec![false; sources.len()];
                             sketches.mark(name, &sources, &mut holding, &snapshot.text_holds);
                             sources.iter().zip(holding).enumerate()
-                                .filter(|(_, ((_, _, hinted), holds))| *hinted || *holds)
+                                .filter(|(_, ((_, _, published), holds))| published.name(*holds))
                                 .map(|(at, _)| u32::try_from(at).expect("inputs fit u32")).collect()
                         });
                         Known::Yes((Candidates::Surveyed(sources, shared.get()), files))
