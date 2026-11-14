@@ -40,8 +40,15 @@ pub struct DeclaredFrontend {
 
 /// What one parse leaves for token nodes and the file's facts.
 struct Spans {
-    tokens: Vec<TokenSpan>,
-    trivia: Vec<TriviaSpan>,
+    tokens: Box<[TokenSpan]>,
+    /// Only the gaps [`opens_token`] holds: no other gap can answer
+    /// [`Native::inside_token`], and gaps never overlap.
+    trivia: Box<[TriviaSpan]>,
+}
+
+/// Whether trivia at `start` (a comment, not whitespace) counts as a token.
+fn opens_token(text: &str, start: u32) -> bool {
+    text[start as usize..].starts_with(|c: char| !c.is_whitespace())
 }
 
 impl DeclaredFrontend {
@@ -179,7 +186,8 @@ impl Frontend for DeclaredFrontend {
         }
         let parsed = self.parser.parse_root(text, context, &self.registration)
             .map_err(|failure| (failure.offset, format!("expected {}", failure.expected.join(" or "))))?;
-        let state: Arc<dyn Any + Send + Sync> = Arc::new(Spans { tokens: parsed.tokens, trivia: parsed.trivia });
+        let trivia = parsed.trivia.into_iter().filter(|trivia| opens_token(text, trivia.start)).collect();
+        let state: Arc<dyn Any + Send + Sync> = Arc::new(Spans { tokens: parsed.tokens.into_boxed_slice(), trivia });
         Ok(Parsed { nodes: parsed.nodes, root: parsed.root, state: Some(state) })
     }
 
@@ -230,12 +238,11 @@ impl Frontend for DeclaredFrontend {
 
     fn file<'t>(&'t self, input: FileInput<'t, '_>) -> Box<dyn Native + 't> {
         let spans = input.state.clone().and_then(|state| state.downcast::<Spans>().ok());
-        Box::new(DeclaredFile { text: input.text, spans, name_escapes: &self.name_escapes, token_lines: &self.token_lines, tokens: Default::default() })
+        Box::new(DeclaredFile { spans, name_escapes: &self.name_escapes, token_lines: &self.token_lines, tokens: Default::default() })
     }
 }
 
 struct DeclaredFile<'t> {
-    text: &'t str,
     spans: Option<Arc<Spans>>,
     token_lines: &'t [bool],
     name_escapes: &'t [Arc<regex_automata::meta::Regex>],
@@ -274,10 +281,9 @@ impl Native for DeclaredFile<'_> {
         let token = spans.tokens.partition_point(|token| token.start < at).checked_sub(1)
             .map(|index| &spans.tokens[index])
             .is_some_and(|token| token.end > at && !self.token_lines.get(usize::from(token.token)).copied().unwrap_or(false));
-        // Trivia that isn't whitespace (a comment) is one token too.
         token || spans.trivia.partition_point(|trivia| trivia.start < at).checked_sub(1)
             .map(|index| &spans.trivia[index])
-            .is_some_and(|trivia| trivia.end > at && self.text[trivia.start as usize..].starts_with(|c: char| !c.is_whitespace()))
+            .is_some_and(|trivia| trivia.end > at)
     }
 
     fn tokens(&self) -> Option<Rc<Tokens>> {
