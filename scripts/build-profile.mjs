@@ -21,8 +21,11 @@ function run(program, args, options) {
 }
 
 const flags = `-Cprofile-generate=${raw.replaceAll("\\", "/")}`;
+// The linker's temp files stay in the workspace, as build:binaries keeps them.
+const tmp = path.join(root, "target", "tmp");
+fs.mkdirSync(tmp, { recursive: true });
 const built = run("cargo", ["build", "--release", "--locked", "--bin", "dxlint", "-j", "1", "--target", target, "--target-dir", path.join(work, "generate")],
-  { cwd: root, env: { ...process.env, CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: flags } });
+  { cwd: root, env: { ...process.env, TMP: tmp, TEMP: tmp, CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: flags } });
 if (built !== 0) process.exit(built ?? 1);
 const instrumented = path.join(work, "generate", target, "release", "dxlint.exe");
 for (const project of projects) {
