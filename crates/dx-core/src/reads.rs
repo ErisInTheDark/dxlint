@@ -444,6 +444,24 @@ impl Reads {
         self.deps.is_empty() && self.groups.is_empty() && self.scans.is_empty()
     }
 
+    /// Whether these reads (groups too) only ask which files exist: no
+    /// texts, modules or scans.
+    pub fn only_lists(&self) -> bool {
+        let names = self.names();
+        names.texts == 0 && !names.modules && self.scans_free()
+    }
+
+    fn scans_free(&self) -> bool {
+        self.scans.is_empty() && self.groups.iter().all(|group| group.scans_free())
+    }
+
+    /// Whether these reads (groups and scans too) never ask which files
+    /// exist.
+    pub fn lists_nothing(&self) -> bool {
+        let names = self.names();
+        names.files == 0 && !names.dirs && !names.modules
+    }
+
     /// The file names these reads read.
     pub fn names(&self) -> Names {
         *self.names.get_or_init(|| {
@@ -561,11 +579,12 @@ pub fn note_group(group: &Arc<Reads>) {
 
 /// Runs `f`, splitting what it read: which files exist (listing reads, for
 /// a [`Scan`] over the listed files to hold: a new file then breaks only
-/// lookups it could change), and the rest, for the caller to note.
+/// lookups it could change), and the rest, for the caller to note. Groups
+/// wholly of one kind stay shared groups of that part.
 pub fn track_listing<R>(f: impl FnOnce() -> R) -> (R, Arc<Reads>, Arc<Reads>) {
     let (r, reads) = track(f);
     let mut kept = Reads::default();
-    let mut listing = Vec::new();
+    let (mut listing, mut listed) = (Vec::new(), Vec::new());
     let mut seen = HashSet::new();
     // Deduplicated by hash (interned paths hash by address), not sorted:
     // ordering compares paths component by component, and a program's
@@ -578,9 +597,13 @@ pub fn track_listing<R>(f: impl FnOnce() -> R) -> (R, Arc<Reads>, Arc<Reads>) {
             if dep.reads_text() { kept.deps.push(dep.clone()) } else { listing.push(dep.clone()) }
         }
         kept.scans.extend(next.scans.iter().cloned());
-        stack.extend(next.groups.iter().filter(|group| seen.insert(Arc::as_ptr(group))).map(|group| &**group));
+        for group in next.groups.iter().filter(|group| seen.insert(Arc::as_ptr(group))) {
+            if group.only_lists() { listed.push(group.clone()) }
+            else if group.lists_nothing() { kept.groups.push(group.clone()) }
+            else { stack.push(&**group) }
+        }
     }
-    (r, Arc::new(kept), Arc::new(Reads { deps: listing, ..Default::default() }))
+    (r, Arc::new(kept), Arc::new(Reads { deps: listing, groups: listed, ..Default::default() }))
 }
 
 /// `reads` sharing every group and scan with equal ones already kept: a

@@ -318,7 +318,14 @@ impl Programs {
     pub fn paths(&self, context: Context, revision: u64, holds: impl Fn(&Reads) -> bool, build: impl FnOnce() -> Known<Vec<PathBuf>>) -> Known<Arc<Vec<PathBuf>>> {
         let state = (revision, reads::overlays_changed());
         let checked = self.checked.lock().expect("program checks").get(&context) == Some(&state);
-        let answer = inputs(self.paths.get(context.clone(), None, |answer| checked || holds(&answer.reads), || Known::Yes(build().known().map(|paths| self.intern(paths)))));
+        // Kept already split as each run's listed inputs split them
+        // ([`reads::track_listing`]), so runs share the parts, not copies.
+        let answer = inputs(self.paths.get(context.clone(), None, |answer| checked || holds(&answer.reads), || {
+            let (found, kept, listing) = reads::track_listing(build);
+            reads::note_group(&kept);
+            reads::note_group(&listing);
+            Known::Yes(found.known().map(|paths| self.intern(paths)))
+        }));
         self.checked.lock().expect("program checks").insert(context, state);
         answer
     }
