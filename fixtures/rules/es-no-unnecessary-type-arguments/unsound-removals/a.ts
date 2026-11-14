@@ -25,3 +25,11 @@ export class Plain extends Manager<Options> {}
 export function orDefault<T = any>(key: string, fallback: T): T { return key ? fallback : fallback; }
 export const sort = orDefault<Sort>("sort", Sort.Date);
 export const text = orDefault<string>("text", "a");
+
+// A type argument equal to its default still decides the type: without it,
+// the arguments infer the parameter (`string`, `"a"`), not the default.
+export class Dropdown<O extends string = never> { constructor(public initial: O | Options) {} }
+declare const chosen: string;
+export const dropdown: Dropdown<never> = new Dropdown<never>(chosen);
+export function pick<K extends string = never>(key: K | number): K { return key as never; }
+export const picked: never = pick<never>("a");

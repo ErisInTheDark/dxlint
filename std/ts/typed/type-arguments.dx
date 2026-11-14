@@ -269,6 +269,13 @@ fn type_argument_inferred(n, site, signature, formal) = count(n.parent.type_argu
     && !any(parameters, parameter => parameter != null && parameter != first(pair) && type_argument_mentions(n, parameter, formal))
   value pair != null && !literal_only && type_argument_same(n, last(pair), true)
 }
+# A call's argument whose parameter mentions the type parameter infers it:
+# the default then applies only where nothing is written.
+fn type_argument_infers(n, site, signature, formal) = n.parent is (ts_call, ts_new) && {
+  value parameters: type_argument_parameter_sites(n, site, signature)
+  value any(zip(parameters, n.parent.argument.nodes), pair => pair != null && first(pair) != null && last(pair) != null
+    && type_argument_mentions(n, first(pair), formal))
+}
 fn type_argument_redundancy(n) = {
   value owner: n.parent.node
   value arguments: owner.type_argument.nodes
@@ -279,7 +286,7 @@ fn type_argument_redundancy(n) = {
   value default_site: if defaults != null && count(defaults) == 1 then first(defaults) else null
   value default: if default_site != null then declaration_value(owner, default_site) else null
   value if last(arguments) != n then null
-    else if default != null && type_argument_same(n, default, false)
+    else if default != null && type_argument_same(n, default, false) && !type_argument_infers(n, site, signature, formal)
       && (!type_argument_unresolved(n) || type_argument_written_same(n, default_site)) then "default"
     else if formal != null && type_argument_inferred(n, site, signature, formal) then "inferred"
     else null
