@@ -489,14 +489,24 @@ pub(super) struct ProgramAnswers {
     values: RwLock<FxHashMap<ValueKey, Cached<Option<StableValue>>>>,
     /// Facts derived from those values, the same way.
     facts: RwLock<FxHashMap<RunFactKey, Cached<StableFact>>>,
+    /// Hashes of keys answered once: an answer is kept from its second
+    /// asking on, so what only one file asks is never held.
+    asked: Mutex<crate::fx_hash::FxHashSet<u64>>,
 }
 
 impl ProgramAnswers {
+    /// Whether an answer for `key` is worth keeping: it was asked before.
+    fn asked_again(&self, key: &impl std::hash::Hash) -> bool {
+        let hash = std::hash::BuildHasher::hash_one(&crate::fx_hash::FxBuild::default(), key);
+        !self.asked.lock().expect("run asks").insert(hash)
+    }
+
     pub(super) fn value_answer(&self, key: &ValueKey) -> Option<Cached<Option<StableValue>>> {
         self.values.read().expect("run values").get(key).cloned()
     }
 
     pub(super) fn keep_value(&self, key: ValueKey, answer: Cached<Option<StableValue>>) {
+        if !self.asked_again(&key) { return }
         self.values.write().expect("run values").insert(key, answer);
     }
 
@@ -505,6 +515,7 @@ impl ProgramAnswers {
     }
 
     pub(super) fn keep_fact(&self, key: RunFactKey, answer: Cached<StableFact>) {
+        if !self.asked_again(&key) { return }
         self.facts.write().expect("run facts").insert(key, answer);
     }
 }
@@ -887,7 +898,7 @@ impl Snapshot {
                 let values = table.values.read().expect("run values").iter()
                     .filter(|((at, _), answer)| keep(*at, Some(&answer.reads), None))
                     .map(|((_, leaf), answer)| ((to, leaf.clone()), answer.clone())).collect();
-                (program, Arc::new(ProgramAnswers { values: RwLock::new(values), facts: Default::default() }))
+                (program, Arc::new(ProgramAnswers { values: RwLock::new(values), ..Default::default() }))
             }).collect()),
             tested: Default::default(),
             frames,
