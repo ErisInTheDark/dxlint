@@ -970,10 +970,17 @@ impl Warmer {
         });
         if let Some(sender) = queue { let _ = sender.send(path.to_owned()); }
     }
+
+    /// Lets the threads read what is queued and end, instead of stopping them.
+    pub fn detach(mut self) {
+        drop(self.queue.take());
+    }
 }
 
 impl Drop for Warmer {
-    fn drop(&mut self) { self.stopped.store(true, std::sync::atomic::Ordering::Relaxed) }
+    fn drop(&mut self) {
+        if self.queue.get().is_some() { self.stopped.store(true, std::sync::atomic::Ordering::Relaxed) }
+    }
 }
 
 /// An open buffer's text hash, kept for the last buffer asked on this

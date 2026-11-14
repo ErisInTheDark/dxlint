@@ -47,6 +47,16 @@ pub fn root() -> Option<&'static Path> {
 fn from_disk(dir: &str, name: &str) -> Option<&'static str> {
     static TEXTS: OnceLock<std::sync::Mutex<HashMap<String, &'static str>>> = OnceLock::new();
     let root = root()?;
+    // A config reads most of the library one file at a time: read it all
+    // ahead, so cold files are waited for together.
+    static WARMED: std::sync::Once = std::sync::Once::new();
+    WARMED.call_once(|| {
+        let warmer = dx_core::reads::Warmer::default();
+        for (dir, name) in names().map(|name| ("std", name)).chain(rulesets().map(|name| ("rules", name))) {
+            warmer.warm(&root.join(format!("{dir}/{name}.dx")));
+        }
+        warmer.detach();
+    });
     let key = format!("{dir}/{name}");
     let mut texts = TEXTS.get_or_init(Default::default).lock().expect("library lock");
     if let Some(&text) = texts.get(&key) {
