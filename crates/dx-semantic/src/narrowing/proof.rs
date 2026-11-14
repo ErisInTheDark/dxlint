@@ -278,7 +278,8 @@ impl Narrowing<'_> {
         let mut kept = Vec::new();
         for alternative in alternatives {
             let actual = self.projected(NodeValue::rows(vec![alternative.clone()]), &path);
-            let included = self.included(&expected, &actual);
+            let included = self.included(&expected, &actual)
+                || negative && path.is_empty() && self.included_with_fewer(&expected, &alternative);
             if self.semantic.question.budget.exhausted() { return NodeValue::Unknown }
             if negative {
                 if !included || self.wholly_top(&actual) { kept.push(alternative) }
@@ -339,6 +340,23 @@ impl Narrowing<'_> {
             }
         }
         None
+    }
+
+    /// Whether an intersection row is included through fewer of its parts:
+    /// it lies inside each such intersection, so one included is enough
+    /// (`NonNullable<T>` reads as the alias's `T & {}` node beside `T`'s
+    /// and `{}`'s parts). One or two parts are dropped: a wrapper and its `{}`.
+    fn included_with_fewer(&self, expected: &NodeValue, row: &[Leaf]) -> bool {
+        const MOST: usize = 8;
+        let count = row.len();
+        if !(2..=MOST).contains(&count) { return false }
+        let ones = (0..count).map(|first| (first, None));
+        let twos = (0..count).flat_map(|first| (first + 1..count).map(move |second| (first, Some(second))));
+        ones.chain(twos.filter(|_| count > 2)).any(|(first, second)| {
+            if !self.semantic.question.budget.step() { return false }
+            let fewer: Vec<Leaf> = row.iter().enumerate().filter(|&(at, _)| at != first && Some(at) != second).map(|(_, &leaf)| leaf).collect();
+            self.included(expected, &NodeValue::rows(vec![fewer]))
+        })
     }
 
     fn included(&self, expected: &NodeValue, actual: &NodeValue) -> bool {

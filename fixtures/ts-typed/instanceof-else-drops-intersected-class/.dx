@@ -1,0 +1,10 @@
+import .ts
+
+# The `else` of `s instanceof Box` holds no `Box`, also when `s` is an
+# intersection (`T & {}`) of a union holding a merged `Box` interface.
+in ts_call.argument rule arms {
+  when text == "s"
+  let box_kept any(value_parts(node) ?? [], arm => value_has_member(arm.handle, 'open', null) == true)
+  info "{box_kept}"
+}
+rule arms
