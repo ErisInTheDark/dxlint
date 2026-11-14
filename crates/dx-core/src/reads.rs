@@ -560,10 +560,20 @@ pub fn track<R>(f: impl FnOnce() -> R) -> (R, Reads) {
     unwinding.0 = false;
     let parts = crate::parts::end();
     let mut frame = FRAMES.with(|f| f.borrow_mut().pop()).unwrap_or_default();
+    // One question often reads the same of many files (a global name's
+    // absence in every library file): those reads share one copy.
+    let mut distinct: Vec<Arc<crate::parts::PartReads>> = Vec::new();
     for (owner, read) in parts {
         // Owners name their unit's interned path.
         frame.deps.insert(match owner.parts() {
-            Some(parts) => Dep::Part(parts, Arc::new(read)),
+            Some(parts) => Dep::Part(parts, match distinct.iter().find(|kept| ***kept == read) {
+                Some(kept) => kept.clone(),
+                None => {
+                    let read = Arc::new(read);
+                    distinct.push(read.clone());
+                    read
+                }
+            }),
             None => Dep::Text(owner.path.clone(), owner.hash),
         });
     }
