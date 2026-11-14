@@ -51,6 +51,9 @@ fn ts_token_gap(source, start, end) = {
   value if text == "" || text == " " then {
     text: text, start: start, end: end, spaced: text == " ", line_break: false,
     blank_lines: 0, blank_gaps: 0, comments: false,
+  } else if re_test(text, /^\r?\n[ \t]*$/) then {
+    text: text, start: start, end: end, spaced: true, line_break: true,
+    blank_lines: 0, blank_gaps: 0, comments: false,
   } else {
   value breaks: ts_token_breaks(text)
   value plain: !contains(text, "/")
