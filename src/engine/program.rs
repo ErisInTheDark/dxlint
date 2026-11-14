@@ -940,6 +940,12 @@ impl Snapshot {
         }
     }
 
+    /// The missing folder a probe of `path` answers no through, if any
+    /// ([`reads::missing_ancestor`]).
+    pub(super) fn missing_folder(&self, revision: u64, path: &std::path::Path) -> Option<std::path::PathBuf> {
+        reads::missing_ancestor(path, &|dir| self.listing(revision, dir))
+    }
+
     /// `dir`'s listing, read once per revision ([`reads::list_known`]).
     fn listing(&self, revision: u64, dir: &std::path::Path) -> Option<Arc<reads::Listing>> {
         if let Some((at, listing)) = self.listings.read().expect("run listings").get(dir) {

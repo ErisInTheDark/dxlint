@@ -1186,11 +1186,18 @@ impl<'a> Files<'a> {
 
     /// Whether `path` is a file, recorded; probed once per run.
     fn probe_file(self, path: &Path) -> bool {
-        let found = match self.0.snapshot {
-            Some(snapshot) => snapshot.is_file(self.0.revision(), path),
-            None => super::reads::is_file_unrecorded(path),
+        let Some(snapshot) = self.0.snapshot else {
+            let found = super::reads::is_file_unrecorded(path);
+            super::reads::note(super::reads::Dep::IsFile(super::reads::dep_path(path), found));
+            return found;
         };
-        super::reads::note(super::reads::Dep::IsFile(super::reads::dep_path(path), found));
+        let found = snapshot.is_file(self.0.revision(), path);
+        // Probes under a missing folder read that folder's absence once.
+        let read = match (!found).then(|| snapshot.missing_folder(self.0.revision(), path)).flatten() {
+            Some(folder) => super::reads::Dep::IsDir(super::reads::dep_path(&folder), false),
+            None => super::reads::Dep::IsFile(super::reads::dep_path(path), found),
+        };
+        super::reads::note(read);
         found
     }
 

@@ -1121,6 +1121,26 @@ pub fn list_known(dir: &Path, listed: &dyn Fn(&Path) -> Option<Arc<Listing>>) ->
     list_unrecorded(dir)
 }
 
+/// The highest folder holding `path` that its listed parent surely lacks
+/// ([`list_known`]'s test): a file probed under it is missing with it, so
+/// one read of that folder stands for every such probe. `None` when the
+/// folder holding `path` exists or may.
+pub fn missing_ancestor(path: &Path, listed: &dyn Fn(&Path) -> Option<Arc<Listing>>) -> Option<PathBuf> {
+    let mut missing = None;
+    let mut dir = path.parent()?;
+    while let (Some(parent), Some(name)) = (dir.parent(), dir.file_name()) {
+        // An editor's buffers can hold files in a folder the disk lacks.
+        if buffers().read().expect("buffers lock").directories.contains_key(dir) { break }
+        // Windows drops a name's trailing dots and spaces when opening it
+        // (`a/...` opens `a`): such a name is no folder a listing can rule out.
+        if name.to_str().is_none_or(|name| name.ends_with(['.', ' '])) { break }
+        if !listed(parent).is_some_and(|listing| lacks_entry(&listing, name)) { break }
+        missing = Some(dir);
+        dir = parent;
+    }
+    missing.map(Path::to_path_buf)
+}
+
 /// Whether `listing` surely has no entry `name`, even ignoring case.
 fn lacks_entry(listing: &Listing, name: &std::ffi::OsStr) -> bool {
     if listing.files.contains(name) || listing.unsure.contains(name) { return false }
@@ -1493,6 +1513,15 @@ mod tests {
         let missing = dir.join("missing").join("node_modules").join("pkg");
         assert!(!is_file_listed(&missing.join("package.json"), &memo.get(&missing).unwrap()));
         assert!(is_file_listed(&dir.join("Present").join("a.ts"), &memo.get(&dir.join("Present")).unwrap()));
+        // One read of the highest missing folder stands for probes inside it,
+        // and holds while it stays missing; present folders and names the OS
+        // would rewrite (`...` opens its parent on Windows) stand for none.
+        let listed = |parent: &Path| memo.get(parent);
+        let folder = missing_ancestor(&missing.join("package.json"), &listed).expect("a missing folder");
+        assert_eq!(folder, dir.join("missing"));
+        assert!(Dep::IsDir(dep_path(&folder), false).holds());
+        assert_eq!(missing_ancestor(&dir.join("Present").join("b.ts"), &listed), None);
+        assert_eq!(missing_ancestor(&dir.join("Present").join("...").join("b.ts"), &listed), None);
         if Path::new(&dir.to_string_lossy().to_uppercase()).is_dir() {
             // Case-insensitive file system: another casing names the same folder.
             assert!(is_file_listed(&dir.join("present").join("a.ts"), &memo.get(&dir.join("present")).unwrap()));
