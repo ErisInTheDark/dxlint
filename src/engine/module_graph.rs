@@ -13,7 +13,6 @@ use crate::names::question::{Known, QueryContext, ScopeRef};
 use crate::path_globs::PathGlobs;
 
 use super::reads::{self, Dep, DepPath, ModuleAsk, Reads};
-use super::units::ParsePlan;
 use super::Linter;
 
 type Specifiers = Arc<[Box<str>]>;
@@ -566,15 +565,13 @@ impl Linter {
         (specifiers, found)
     }
 
-    /// `text` parsed for structure only, and dropped: nothing else keeps the
-    /// tree. A reference from a kind declaring no names reads the whole module.
+    /// `text` parsed as its unit, read whole for structure (imports inside
+    /// opaque bodies count), then kept as the unit later loads reuse. A
+    /// reference from a kind declaring no names reads the whole module.
     fn parse_summary(&self, settings: &Settings, path: &Path, text: Arc<str>, hash: u64, links: bool) -> (Specifiers, Option<Arc<Links>>) {
         let nothing = || (Arc::from([]), links.then(Arc::default));
-        let rel = self.relative(path);
-        let Some(lang) = self.grammar.lang_for(&rel) else { return nothing() };
-        let front = self.grammar.native_for(lang);
-        let plan = ParsePlan { lang, front, layers: false, overlays: &[], child_layers: false, tokens: &[] };
-        let Ok(parsed) = self.parse(path, &text, plan) else { return nothing() };
+        let Some(lang) = self.grammar.lang_for(&self.relative(path)) else { return nothing() };
+        let Some(parsed) = self.unit_tree(path, lang, &text) else { return nothing() };
         let tree = &parsed.tree;
         let kinds: Vec<(u32, Vec<Vec<u16>>)> = settings.references.iter().filter_map(|(kind, fields)| {
             let paths = fields.iter().map(|field| field.split('.').map(|label| self.grammar.labels.get(label)).collect::<Option<Vec<u16>>>()).collect::<Option<Vec<_>>>()?;
@@ -597,13 +594,16 @@ impl Linter {
         }
         found.sort_unstable();
         found.dedup();
-        if !links { return (found.into(), None) }
         let unit = self.bare_unit(path, lang, text, hash, parsed);
-        let (mut said, _) = reads::track(|| self.alone_on(&unit, super::world::module_links));
-        said.whole.extend(whole);
-        said.whole.sort_unstable();
-        said.whole.dedup();
-        (found.into(), Some(Arc::new(said)))
+        let said = links.then(|| {
+            let (mut said, _) = reads::track(|| self.alone_on(&unit, super::world::module_links));
+            said.whole.extend(whole);
+            said.whole.sort_unstable();
+            said.whole.dedup();
+            Arc::new(said)
+        });
+        self.keep_unit(unit);
+        (found.into(), said)
     }
 }
 

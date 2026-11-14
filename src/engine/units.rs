@@ -52,6 +52,35 @@ impl Linter {
         Unit { path: reads::dep_path(path), rel, lang, text, hash, parsed, names: OnceLock::new(), lines: OnceLock::new(), bodies: OnceLock::new(), entered: OnceLock::new() }
     }
 
+    /// `text` parsed as a unit is: the layers and tokens other files read.
+    pub(super) fn unit_tree(&self, path: &Path, lang: usize, text: &str) -> Option<ParsedFile> {
+        let front = self.grammar.native_for(lang);
+        let tokens = front.and_then(|index| self.unit_token_kinds.get(index)).map_or(&[][..], Vec::as_slice);
+        let plan = ParsePlan { lang, front, layers: true, overlays: &self.unit_overlays, child_layers: self.unit_child_layers, tokens };
+        self.parse(path, text, plan).ok()
+    }
+
+    /// `unit` (over a [`Linter::unit_tree`]) as other files read it: owned
+    /// by its text's read, without what is inside its opaque bodies, and
+    /// with nothing answered over the whole tree.
+    fn kept_unit(&self, unit: Unit) -> Arc<Unit> {
+        let Unit { path, rel, lang, text, hash, mut parsed, .. } = unit;
+        parsed.tree.owner = Some(Arc::new(crate::parts::Owner::new(path.clone(), hash)));
+        let mut unit = Unit { path, rel, lang, text, hash, parsed, names: OnceLock::new(), lines: OnceLock::new(), bodies: OnceLock::new(), entered: OnceLock::new() };
+        self.without_bodies(&mut unit);
+        Arc::new(unit)
+    }
+
+    /// Keeps `unit`, whose whole tree was read for something else, for later
+    /// unit loads of its text; a unit already kept for the path stays.
+    pub(super) fn keep_unit(&self, unit: Unit) {
+        let path = unit.path.to_path_buf();
+        if self.units.lock().expect("unit cache").contains_key(&path) { return }
+        let _owner = crate::alloc::heap::Owner::enter(crate::alloc::heap::UNITS);
+        let unit = self.kept_unit(unit);
+        self.units.lock().expect("unit cache").entry(path).or_insert(unit);
+    }
+
     /// `unit`'s opaque bodies ([`Linter::opaque_ranges`]), found once.
     pub(super) fn bodies(&self, unit: &Unit) -> Option<Arc<reads::Bodies>> {
         unit.bodies.get_or_init(|| {
@@ -187,17 +216,9 @@ impl Linter {
         }
         let parse = || -> Option<Arc<Unit>> {
             let _owner = crate::alloc::heap::Owner::enter(crate::alloc::heap::UNITS);
-            let rel = self.relative(path);
-            let lang = self.grammar.lang_for(&rel)?;
-            let front = self.grammar.native_for(lang);
-            let tokens = front.and_then(|index| self.unit_token_kinds.get(index)).map_or(&[][..], Vec::as_slice);
-            let plan = ParsePlan { lang, front, layers: true, overlays: &self.unit_overlays, child_layers: self.unit_child_layers, tokens };
-            let mut parsed = self.parse(path, &text, plan).ok()?;
-            let path_read = reads::dep_path(path);
-            parsed.tree.owner = Some(Arc::new(crate::parts::Owner::new(path_read.clone(), hash)));
-            let mut unit = Unit { path: path_read, rel: rel.to_string_lossy().replace('\\', "/"), lang, text, hash, parsed, names: OnceLock::new(), lines: OnceLock::new(), bodies: OnceLock::new(), entered: OnceLock::new() };
-            self.without_bodies(&mut unit);
-            let unit = Arc::new(unit);
+            let lang = self.grammar.lang_for(&self.relative(path))?;
+            let parsed = self.unit_tree(path, lang, &text)?;
+            let unit = self.kept_unit(self.bare_unit(path, lang, text, hash, parsed));
             self.units.lock().expect("unit cache").insert(path.to_owned(), unit.clone());
             Some(unit)
         };
