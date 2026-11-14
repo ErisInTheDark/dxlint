@@ -1113,7 +1113,12 @@ pub fn list_known(dir: &Path, listed: &dyn Fn(&Path) -> Option<Arc<Listing>>) ->
 
 /// Whether `listing` surely has no entry `name`, even ignoring case.
 fn lacks_entry(listing: &Listing, name: &std::ffi::OsStr) -> bool {
-    !listing.files.contains(name) && !listing.unsure.contains(name) && !listing.folded.contains(&name.to_string_lossy().to_lowercase())
+    if listing.files.contains(name) || listing.unsure.contains(name) { return false }
+    match name.to_str() {
+        // Most probed names are lowercase already: no copy to fold them.
+        Some(name) if name.bytes().all(|byte| byte.is_ascii() && !byte.is_ascii_uppercase()) => !listing.folded.contains(name),
+        _ => !listing.folded.contains(&name.to_string_lossy().to_lowercase()),
+    }
 }
 
 /// Whether `path` is a file, unrecorded, answered from its directory's

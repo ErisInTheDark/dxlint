@@ -396,9 +396,8 @@ pub(super) struct Snapshot {
     pub(super) text_holds: TextHolds,
     /// [`Snapshot::listed_inputs`] by (revision, program).
     listed: Mutex<FxHashMap<(u64, u64), (Arc<Vec<PathBuf>>, Arc<Reads>, Arc<Reads>)>>,
-    /// Module resolution's file probes and reads, once per path and revision.
-    probes: RwLock<FxHashMap<reads::DepPath, (u64, bool)>>,
-    /// Directory listings behind those probes (`None`: unreadable).
+    /// Directory listings answering module resolution's file probes (`None`:
+    /// unreadable).
     listings: RwLock<FxHashMap<PathBuf, (u64, Option<Arc<reads::Listing>>)>>,
     texts: RwLock<FxHashMap<PathBuf, (u64, Option<Arc<str>>, u64)>>,
     /// Files read ahead for this run ([`Snapshot::warm`]).
@@ -807,7 +806,7 @@ impl Snapshot {
     /// hold: an editor's next lint after a keystroke redoes only what read
     /// the edited files.
     pub(super) fn carry(self, to: u64, keep: &mut Keep<'_>) -> Snapshot {
-        let Snapshot { revision, paths, catalogs, units, modules, augmentations, prefetched: _, input_sets: _, mentions: _, text_holds: _, listed: _, probes, listings, texts, warmer, warmed: _, pulled: _,
+        let Snapshot { revision, paths, catalogs, units, modules, augmentations, prefetched: _, input_sets: _, mentions: _, text_holds: _, listed: _, listings, texts, warmer, warmed: _, pulled: _,
             candidates, surveys, words, configurations, metadata, packages, answers, tested: _, frames, editor, lints: _, uses: _ } = self;
         // A survey holds while its listing does; inputs whose text changed
         // are read again, and what was built from them patched to match.
@@ -838,7 +837,6 @@ impl Snapshot {
             mentions: Default::default(),
             text_holds: Default::default(),
             listed: Default::default(),
-            probes: carried(probes, |path, (at, found)| keep(at, None, Some(&*path)).then_some((path, (to, found)))),
             listings: carried(listings, |dir, (at, listing)| keep(at, None, Some(&*dir)).then_some((dir, (to, listing)))),
             texts: carried(texts, |path, (at, text, hash)| keep(at, None, Some(&*path)).then_some((path, (to, text, hash)))),
             warmer,
@@ -886,21 +884,15 @@ impl Snapshot {
         slot.loaded.get_or_init(load).clone()
     }
 
-    /// Whether `path` is a file, probed once per revision; the caller
+    /// Whether `path` is a file, from its directory's listing; the caller
     /// records the read.
     pub(super) fn is_file(&self, revision: u64, path: &std::path::Path) -> bool {
-        if let Some(&(at, found)) = self.probes.read().expect("run probes").get(&super::reads::dep_path(path)) {
-            if at == revision { return found }
-        }
         // Resolution probes many candidate names per directory: list each
         // directory once instead of asking the file system per name.
-        let listing = path.parent().and_then(|dir| self.listing(revision, dir));
-        let found = match &listing {
-            Some(listing) => reads::is_file_listed(path, listing),
+        match path.parent().and_then(|dir| self.listing(revision, dir)) {
+            Some(listing) => reads::is_file_listed(path, &listing),
             None => reads::is_file_unrecorded(path),
-        };
-        self.probes.write().expect("run probes").insert(reads::dep_path(path), (revision, found));
-        found
+        }
     }
 
     /// `dir`'s listing, read once per revision ([`reads::list_known`]).
