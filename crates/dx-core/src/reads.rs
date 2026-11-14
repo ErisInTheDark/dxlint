@@ -939,6 +939,43 @@ fn content(path: &Path) -> (Option<Arc<str>>, u64) {
     }
 }
 
+/// Reads files ahead on background threads so a later read finds them in the
+/// system's file cache: a cold file is mostly waiting (tens of milliseconds
+/// where a scanner checks each one), which these threads do instead, several
+/// at once.
+/// Nothing they read is recorded or kept.
+#[derive(Default)]
+pub struct Warmer {
+    queue: OnceLock<Option<std::sync::mpsc::Sender<PathBuf>>>,
+    stopped: Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// Reads a [`Warmer`] keeps in flight.
+const WARMING_READS: usize = 4;
+
+impl Warmer {
+    pub fn warm(&self, path: &Path) {
+        let queue = self.queue.get_or_init(|| {
+            let (sender, paths) = std::sync::mpsc::channel::<PathBuf>();
+            let paths = Arc::new(std::sync::Mutex::new(paths));
+            let started = (0..WARMING_READS).filter(|_| {
+                let (paths, stopped) = (paths.clone(), self.stopped.clone());
+                std::thread::Builder::new().name("dxlint-warm".into()).spawn(move || loop {
+                    let Ok(path) = paths.lock().map_err(drop).and_then(|paths| paths.recv().map_err(drop)) else { break };
+                    if stopped.load(std::sync::atomic::Ordering::Relaxed) { break }
+                    if let Ok(mut file) = std::fs::File::open(&path) { let _ = std::io::copy(&mut file, &mut std::io::sink()); }
+                }).is_ok()
+            }).count();
+            (started > 0).then_some(sender)
+        });
+        if let Some(sender) = queue { let _ = sender.send(path.to_owned()); }
+    }
+}
+
+impl Drop for Warmer {
+    fn drop(&mut self) { self.stopped.store(true, std::sync::atomic::Ordering::Relaxed) }
+}
+
 /// An open buffer's text hash, kept for the last buffer asked on this
 /// thread (an editor's checks ask about the edited file's many times).
 fn buffer_hash(text: &Arc<str>) -> u64 {

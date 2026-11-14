@@ -876,6 +876,7 @@ impl<'a> Files<'a> {
         let (mut deps, mut found) = (Vec::new(), Vec::new());
         let roots = paths.len();
         let mut walk = paths.clone();
+        if let Some(snapshot) = self.0.snapshot { walk.iter().for_each(|path| snapshot.warm(path)) }
         let mut at = 0;
         while let Some(path) = walk.get(at).cloned() {
             at += 1;
@@ -903,7 +904,10 @@ impl<'a> Files<'a> {
                 // Only files a program reads as its own kind (not a module's
                 // JSON or script it imports).
                 let readable = selected.extensions.iter().any(|extension| target.to_string_lossy().ends_with(&**extension));
-                if readable && seen.insert(super::reads::dep_path(&target)) { walk.push(target) }
+                if readable && seen.insert(super::reads::dep_path(&target)) {
+                    if let Some(snapshot) = self.0.snapshot { snapshot.warm(&target) }
+                    walk.push(target);
+                }
             }
         }
         found.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));

@@ -401,6 +401,9 @@ pub(super) struct Snapshot {
     /// Directory listings behind those probes (`None`: unreadable).
     listings: RwLock<FxHashMap<PathBuf, (u64, Option<Arc<reads::Listing>>)>>,
     texts: RwLock<FxHashMap<PathBuf, (u64, Option<Arc<str>>, u64)>>,
+    /// Files read ahead for this run ([`Snapshot::warm`]).
+    warmer: reads::Warmer,
+    warmed: Mutex<crate::fx_hash::FxHashSet<PathBuf>>,
     /// [`Snapshot::pulled`] by (settings, path), with the revision each holds at.
     pulled: RwLock<FxHashMap<(usize, PathBuf), (u64, Arc<Pulled>)>>,
     /// Per program (settings, identity) and global name: the inputs whose
@@ -804,7 +807,7 @@ impl Snapshot {
     /// hold: an editor's next lint after a keystroke redoes only what read
     /// the edited files.
     pub(super) fn carry(self, to: u64, keep: &mut Keep<'_>) -> Snapshot {
-        let Snapshot { revision, paths, catalogs, units, modules, augmentations, prefetched: _, input_sets: _, mentions: _, text_holds: _, listed: _, probes, listings, texts, pulled: _,
+        let Snapshot { revision, paths, catalogs, units, modules, augmentations, prefetched: _, input_sets: _, mentions: _, text_holds: _, listed: _, probes, listings, texts, warmer, warmed: _, pulled: _,
             candidates, surveys, words, configurations, metadata, packages, answers, tested: _, frames, editor, lints: _, uses: _ } = self;
         // A survey holds while its listing does; inputs whose text changed
         // are read again, and what was built from them patched to match.
@@ -838,6 +841,8 @@ impl Snapshot {
             probes: carried(probes, |path, (at, found)| keep(at, None, Some(&*path)).then_some((path, (to, found)))),
             listings: carried(listings, |dir, (at, listing)| keep(at, None, Some(&*dir)).then_some((dir, (to, listing)))),
             texts: carried(texts, |path, (at, text, hash)| keep(at, None, Some(&*path)).then_some((path, (to, text, hash)))),
+            warmer,
+            warmed: Default::default(),
             pulled: Default::default(),
             candidates,
             words,
@@ -919,6 +924,11 @@ impl Snapshot {
         let found = Arc::new(compute());
         self.pulled.write().expect("run pulls").insert(key, (revision, found.clone()));
         found
+    }
+
+    /// Reads `path` ahead of this run's own read of it, once per run.
+    pub(super) fn warm(&self, path: &std::path::Path) {
+        if self.warmed.lock().expect("run warmed").insert(path.to_owned()) { self.warmer.warm(path) }
     }
 
     /// `path`'s text and hash, read once per revision; the caller records
