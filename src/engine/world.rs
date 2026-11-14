@@ -877,6 +877,7 @@ impl<'a> Files<'a> {
         let roots = paths.len();
         let mut walk = paths.clone();
         if let Some(snapshot) = self.0.snapshot { walk.iter().for_each(|path| snapshot.warm(path)) }
+        let mut resolved: crate::fx_hash::FxHashMap<PathBuf, FolderResolutions> = crate::fx_hash::FxHashMap::default();
         let mut at = 0;
         while let Some(path) = walk.get(at).cloned() {
             at += 1;
@@ -899,8 +900,9 @@ impl<'a> Files<'a> {
             deps.push(super::reads::Dep::Text(file.clone(), hash));
             found.push((file, super::pulls_hash(&pulled, pulled_in.then_some(joins))));
             let Some(dir) = path.parent() else { continue };
+            let from_dir = resolved.entry(dir.to_path_buf()).or_default();
             for specifier in pulled {
-                let Ok(Some(target)) = resolver.file_of(dir, &specifier, question) else { continue };
+                let Some(target) = from_dir.resolve(&specifier, question, || resolver.file_of(dir, &specifier, question)) else { continue };
                 // Only files a program reads as its own kind (not a module's
                 // JSON or script it imports).
                 let readable = selected.extensions.iter().any(|extension| target.to_string_lossy().ends_with(&**extension));
@@ -2239,6 +2241,44 @@ impl Files<'_> {
         let answer = linter.module_answer(&ask);
         super::reads::note(super::reads::Dep::Module(Arc::new(ask), super::module_graph::ModuleAnswer::hash(answer.as_deref())));
         Some(answer)
+    }
+}
+
+/// One folder's specifiers as a closure walk resolved them: files of a
+/// folder import the same modules, and each resolves twice per walk. The
+/// first resolution fills the resolver's own memos; the second shows what
+/// every later repeat spends of the budget, which they then spend without
+/// resolving, so the walk stops where it would have. Their reads are
+/// already the walk's.
+#[derive(Default)]
+struct FolderResolutions(crate::fx_hash::FxHashMap<Box<str>, (Option<PathBuf>, Option<u32>)>);
+
+impl FolderResolutions {
+    fn resolve(&mut self, specifier: &str, question: &QueryContext, mut resolve: impl FnMut() -> Result<Option<PathBuf>, ()>) -> Option<PathBuf> {
+        let budget = &question.budget;
+        match self.0.get_mut(specifier) {
+            Some((target, Some(steps))) => {
+                if budget.remaining() < *steps {
+                    budget.exhaust();
+                    return None;
+                }
+                for _ in 0..*steps { budget.step(); }
+                target.clone()
+            }
+            Some((_, repeat @ None)) => {
+                let before = budget.remaining();
+                let target = resolve().ok()?;
+                *repeat = Some(before - budget.remaining());
+                target
+            }
+            // Only answers repeat: an unknown one (the budget, a question
+            // still being answered) may come out otherwise when asked again.
+            None => {
+                let target = resolve().ok()?;
+                self.0.insert(specifier.into(), (target.clone(), None));
+                target
+            }
+        }
     }
 }
 
