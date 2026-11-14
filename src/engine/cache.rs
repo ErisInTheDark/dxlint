@@ -366,13 +366,15 @@ impl Cache {
     /// directory, and one listing answers them all.
     fn listed_file(&self, path: &Path) -> bool {
         let Some(dir) = path.parent() else { return super::reads::is_file_unrecorded(path) };
-        if let Some(listing) = self.listings.read().expect("cache listings").get(dir) {
-            return listing.as_ref().map_or_else(|| super::reads::is_file_unrecorded(path), |listing| super::reads::is_file_listed(path, listing));
-        }
-        let listing = super::reads::list_unrecorded(dir).map(Arc::new);
-        let held = listing.as_ref().map_or_else(|| super::reads::is_file_unrecorded(path), |listing| super::reads::is_file_listed(path, listing));
-        self.listings.write().expect("cache listings").insert(dir.to_path_buf(), listing);
-        held
+        self.listing(dir).map_or_else(|| super::reads::is_file_unrecorded(path), |listing| super::reads::is_file_listed(path, &listing))
+    }
+
+    /// `dir`'s listing, read once per run ([`super::reads::list_known`]).
+    fn listing(&self, dir: &Path) -> Option<Arc<super::reads::Listing>> {
+        if let Some(listing) = self.listings.read().expect("cache listings").get(dir) { return listing.clone() }
+        let listing = super::reads::list_known(dir, &|parent| self.listing(parent)).map(Arc::new);
+        self.listings.write().expect("cache listings").insert(dir.to_path_buf(), listing.clone());
+        listing
     }
 
     /// Saved refs as reads, each group and scan built once.

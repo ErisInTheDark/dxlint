@@ -889,20 +889,23 @@ impl Snapshot {
         }
         // Resolution probes many candidate names per directory: list each
         // directory once instead of asking the file system per name.
-        let listing = path.parent().and_then(|dir| {
-            if let Some((at, listing)) = self.listings.read().expect("run listings").get(dir) {
-                if *at == revision { return listing.clone() }
-            }
-            let listing = reads::list_unrecorded(dir).map(Arc::new);
-            self.listings.write().expect("run listings").insert(dir.to_owned(), (revision, listing.clone()));
-            listing
-        });
+        let listing = path.parent().and_then(|dir| self.listing(revision, dir));
         let found = match &listing {
             Some(listing) => reads::is_file_listed(path, listing),
             None => reads::is_file_unrecorded(path),
         };
         self.probes.write().expect("run probes").insert(reads::dep_path(path), (revision, found));
         found
+    }
+
+    /// `dir`'s listing, read once per revision ([`reads::list_known`]).
+    fn listing(&self, revision: u64, dir: &std::path::Path) -> Option<Arc<reads::Listing>> {
+        if let Some((at, listing)) = self.listings.read().expect("run listings").get(dir) {
+            if *at == revision { return listing.clone() }
+        }
+        let listing = reads::list_known(dir, &|parent| self.listing(revision, parent)).map(Arc::new);
+        self.listings.write().expect("run listings").insert(dir.to_owned(), (revision, listing.clone()));
+        listing
     }
 
     /// What `path`'s text pulls into programs under settings `settings`

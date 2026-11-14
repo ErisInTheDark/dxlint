@@ -341,6 +341,14 @@ impl<'l> GraphHost<'l> {
     fn new(linter: &'l Linter, root: &Path) -> Self {
         GraphHost { linter, program: RefCell::new(root.join("_")), configurations: RefCell::default(), metadata: RefCell::default(), listings: RefCell::default() }
     }
+
+    /// `directory`'s listing, read once ([`reads::list_known`]).
+    fn listing(&self, directory: &Path) -> Option<Arc<reads::Listing>> {
+        if let Some(listing) = self.listings.borrow().get(directory) { return listing.clone() }
+        let listing = reads::list_known(directory, &|parent| self.listing(parent)).map(Arc::new);
+        self.listings.borrow_mut().insert(directory.to_path_buf(), listing.clone());
+        listing
+    }
 }
 
 impl Host for GraphHost<'_> {
@@ -353,12 +361,8 @@ impl Host for GraphHost<'_> {
     }
 
     fn is_file(&self, path: &Path, _: &QueryContext) -> Known<bool> {
-        let found = match path.parent() {
-            Some(directory) => {
-                let mut listings = self.listings.borrow_mut();
-                let listing = listings.entry(directory.to_path_buf()).or_insert_with(|| reads::list_unrecorded(directory).map(Arc::new));
-                listing.as_ref().map_or_else(|| reads::is_file_unrecorded(path), |listing| reads::is_file_listed(path, listing))
-            }
+        let found = match path.parent().and_then(|directory| self.listing(directory)) {
+            Some(listing) => reads::is_file_listed(path, &listing),
             None => reads::is_file_unrecorded(path),
         };
         reads::note(Dep::IsFile(reads::dep_path(path), found));

@@ -1055,6 +1055,23 @@ pub fn list_unrecorded(dir: &Path) -> Option<Listing> {
     Some(listing)
 }
 
+/// `dir`'s listing like [`list_unrecorded`], but empty without touching the
+/// disk when `listed` (the caller's memo of listings, itself built with this)
+/// shows `dir`'s parent has no entry of its name: resolution asks after
+/// `node_modules/<package>` under every folder, and opening each missing one
+/// is the costly part.
+pub fn list_known(dir: &Path, listed: &dyn Fn(&Path) -> Option<Arc<Listing>>) -> Option<Listing> {
+    if let (Some(parent), Some(name)) = (dir.parent(), dir.file_name()) {
+        if listed(parent).is_some_and(|listing| lacks_entry(&listing, name)) { return Some(Listing::default()) }
+    }
+    list_unrecorded(dir)
+}
+
+/// Whether `listing` surely has no entry `name`, even ignoring case.
+fn lacks_entry(listing: &Listing, name: &std::ffi::OsStr) -> bool {
+    !listing.files.contains(name) && !listing.unsure.contains(name) && !listing.folded.contains(&name.to_string_lossy().to_lowercase())
+}
+
 /// Whether `path` is a file, unrecorded, answered from its directory's
 /// `listing` where that is certain (an exact plain-file name, or no entry
 /// of that name even ignoring case); a real probe otherwise.
@@ -1066,7 +1083,7 @@ pub fn is_file_listed(path: &Path, listing: &Listing) -> bool {
     }
     let Some(name) = path.file_name() else { return file_exists(path) };
     if listing.files.contains(name) { return true }
-    if !listing.unsure.contains(name) && !listing.folded.contains(&name.to_string_lossy().to_lowercase()) { return false }
+    if lacks_entry(listing, name) { return false }
     file_exists(path)
 }
 
@@ -1397,6 +1414,31 @@ mod tests {
         std::fs::remove_dir(library.parent().unwrap()).unwrap();
         std::fs::remove_dir(dir.join("node_modules")).unwrap();
         std::fs::remove_dir(dir).unwrap();
+    }
+
+    #[test]
+    fn folders_their_parent_lacks_list_empty_and_present_ones_list_their_files() {
+        struct Memo(std::cell::RefCell<HashMap<PathBuf, Option<Arc<Listing>>>>);
+        impl Memo {
+            fn get(&self, dir: &Path) -> Option<Arc<Listing>> {
+                if let Some(known) = self.0.borrow().get(dir) { return known.clone() }
+                let listing = list_known(dir, &|parent| self.get(parent)).map(Arc::new);
+                self.0.borrow_mut().insert(dir.to_owned(), listing.clone());
+                listing
+            }
+        }
+        let dir = std::env::temp_dir().join(format!("dxlint-known-missing-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("Present")).unwrap();
+        std::fs::write(dir.join("Present").join("a.ts"), "a").unwrap();
+        let memo = Memo(Default::default());
+        let missing = dir.join("missing").join("node_modules").join("pkg");
+        assert!(!is_file_listed(&missing.join("package.json"), &memo.get(&missing).unwrap()));
+        assert!(is_file_listed(&dir.join("Present").join("a.ts"), &memo.get(&dir.join("Present")).unwrap()));
+        if Path::new(&dir.to_string_lossy().to_uppercase()).is_dir() {
+            // Case-insensitive file system: another casing names the same folder.
+            assert!(is_file_listed(&dir.join("present").join("a.ts"), &memo.get(&dir.join("present")).unwrap()));
+        }
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
