@@ -1,0 +1,1 @@
+input.ts:4:18-4:29 dynamic-inference#0 A dynamic inferred argument must not become its constraint.

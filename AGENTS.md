@@ -43,7 +43,7 @@ Rust linter; rules in `.dx` (docs/advanced.md). Binary `dxlint`.
 
 ## Invariants
 
-- Rule behaviour tests: scenario folders under `fixtures/` (fixtures/AGENTS.md).
+- Rule behaviour tests: scenario folders under `fixtures/` (fixtures/AGENTS.md). `known-gaps/` holds user-ungated ones (reported, never failing; known-gaps/README.md)
 
 - `.dx` defines languages and rules; Rust is the language-neutral engine that runs them. Syntax, names, types, calls, modules, effects and narrowing are declared in `std/<lang>/` (docs/ts.md); rule options, what is wrong, positions, messages and fixes live in rule `.dx` (shared logic as `fn`)
 - No language in Rust: the engine knows no language and no rule. Nothing in Rust is named after a language or rule, parses a language, takes rule options or builds messages; syntax is a declared parser or pattern layers. Missing expressiveness: extend the engine/DSL generically

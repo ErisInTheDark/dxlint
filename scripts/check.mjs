@@ -60,6 +60,20 @@ if (!flags.has("--no-fixtures")) {
   run.done(/scenarios, 0 failed/.test(summary ?? ""));
 }
 
+// Ungated known gaps (known-gaps/README.md): reported, never failing; one
+// that passes again belongs back in fixtures/.
+if (!flags.has("--no-fixtures") && fixtures.length === 0 && fs.existsSync(path.join(root, "known-gaps"))) {
+  const details = path.join(tmp, "check-gaps.txt");
+  const file = fs.openSync(details, "w");
+  const gaps = cli("known gaps", ["fixtures", "known-gaps", "--jobs", "1"].join(" "), file);
+  fs.closeSync(file);
+  const summary = gaps.stdout.split("\n").find(line => /scenarios, \d+ failed/.test(line));
+  const [, total, red] = /(\d+) scenarios, (\d+) failed/.exec(summary ?? "") ?? [];
+  const passing = total === undefined ? 0 : Number(total) - Number(red);
+  console.log(`     ${summary?.trim() ?? "no summary"} (not gating)${passing > 0 ? `; ${passing} pass now: move them back into fixtures/` : ""}; details in ${path.relative(root, details)}`);
+  gaps.done(true);
+}
+
 const lint = cli("self-lint", "--jobs 1 --no-workbench-view");
 lint.stdout.split("\n").filter(line => line.trim() && !line.startsWith("running") && !line.startsWith("test result")).slice(-3).forEach(line => console.log(`     ${line.trim()}`));
 lint.done(lint.status === 0);

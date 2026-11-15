@@ -1,0 +1,2 @@
+input.ts:10:7-10:13 es-no-unnecessary-type-arguments#1
+input.ts:7:6-7:11 es-no-unnecessary-type-arguments#1
