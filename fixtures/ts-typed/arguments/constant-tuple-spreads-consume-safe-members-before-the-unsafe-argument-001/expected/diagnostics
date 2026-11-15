@@ -1,2 +1,2 @@
-a.ts:1:106-1:106 es-no-unsafe-argument#0
-a.ts:1:165-1:165 es-no-unsafe-argument:tuple#0
+a.ts:1:106-1:114 es-no-unsafe-argument#0
+a.ts:1:165-1:179 es-no-unsafe-argument:tuple#0

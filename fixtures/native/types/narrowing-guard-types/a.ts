@@ -8,6 +8,14 @@ function kinds(x: unknown) {
   if (typeof x === "undefined") probe(x, "undefined");
   if (typeof x === "function") probe(x, "function");
   if (typeof x === "object") probe(x, "object-null");
+  if (x === 1) probe(x, "one");
+}
+function dynamic(x: any) {
+  if (typeof x === "string") probe(x, "string");
+  if (x instanceof Box) probe(x, "object");
+  if (x === 1) probe(x, "any");
+  if (typeof x === "function") probe(x, "any");
+  if (typeof x === "object") probe(x, "any");
 }
 class Box { value = 1; }
 function instance(x: unknown) {

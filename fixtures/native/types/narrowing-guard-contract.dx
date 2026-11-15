@@ -14,7 +14,8 @@ in ts_call rule guard-contract {
   let matches if expected.text == '"unknown"' then arms == null
       || any(arms, arm => any(arm, part => contains(part.traits, "unknown") || contains(part.traits, "parameter")))
     else arms != null && count(arms) > 0 && (
-      if expected.text == '"string"' then subject always string
+      if expected.text == '"any"' then subject always any
+      else if expected.text == '"string"' then subject always string
       else if expected.text == '"number"' then subject always number
       else if expected.text == '"boolean"' then subject always boolean
       else if expected.text == '"bigint"' then subject always bigint

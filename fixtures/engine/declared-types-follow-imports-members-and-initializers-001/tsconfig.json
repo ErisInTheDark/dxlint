@@ -1,1 +1,1 @@
-{ "compilerOptions": { "paths": { "@app/*": ["./src/*"] } } }
+{ "compilerOptions": { "lib": ["fixture"], "types": [], "paths": { "@app/*": ["./src/*"] } } }
