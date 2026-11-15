@@ -68,7 +68,8 @@ fn ts_value_print_part(part) = {
   value args: if carrier.description.kind == "tuple" && part.product_known && part.product != null then
     map(zip(carrier.arguments ?? [], part.product.elements), pair => {
       value flags: last(pair)
-      value (if flags.repeated then "..." else "") ts_value_print(first(pair)) (if flags.optional then "?" else "")
+      value element: ts_value_print(first(pair))
+      value if flags.optional then "(" element " | undefined)?" else if flags.values then "..." element "[]" else element
     })
     else map(carrier.arguments ?? [], item => ts_value_print(item))
   value joined: { value args; join ", " }
@@ -113,12 +114,27 @@ fn ts_value_print_member(edge, seen) = {
     || any(edge.member.sources, source => source.flags == null) then "unknown"
     else "{prefix}{name}{optional}: {result};"
 }
+# A single call signature prints as its function type: `<T>(v: T) => T`.
+fn ts_value_print_signature(n, header, seen) = {
+  value formals: map(site_field(n, header.site, "type_parameter") ?? [], formal => site_text(n, first(site_field(n, formal, "name") ?? [])).text)
+  value names: map(site_field(n, header.site, "parameter") ?? [], parameter => site_text(n, first(site_field(n, parameter, "name") ?? [])).text)
+  value types: map(header.parameters, parameter => ts_value_print_handle_seen(parameter, seen))
+  value params: zip(names, types, (name, text) => "{name}: {text}")
+  value generics: if count(formals) > 0 then "<" {value formals; join ", "} ">" else ""
+  value generics "(" {value params; join ", "} ") => " ts_value_print_handle_seen(header.result, seen)
+}
+fn ts_value_print_callable(part, seen) = if part.carrier != null || !contains(part.traits, "callable") then null else {
+  value headers: flat_map(value_signatures(part.handle) ?? [], arm => arm)
+  value if count(headers) == 1 then ts_value_print_signature(last(seen), first(headers), seen) else null
+}
 fn ts_value_print_handle_part(part, seen) = {
   value structural: part.carrier == null && contains(part.traits, "structural")
     && !contains(part.traits, "callable") && !contains(part.traits, "constructible")
   value children: if structural then value_children(part.handle, true, []) else null
   value members: map(children ?? [], edge => ts_value_print_member(edge, seen))
-  value if !structural then ts_value_print(value_constituents(part.handle))
+  value callable: ts_value_print_callable(part, seen)
+  value if callable != null then callable
+    else if !structural then ts_value_print(value_constituents(part.handle))
     else if children == null then "unknown"
     else if count(children) == 0 then "{{}}"
     else "{{ " {value members; join " "} " }}"
@@ -140,7 +156,13 @@ fn ts_value_print_handle_seen(n, seen) = {
   value if arms == null then "unknown" else if count(arms) == 0 then "never"
     else {value ranked; sort_by (pair) pair.rank; map (pair) pair.label; unique; join " | "}
 }
-fn ts_value_print_handle(n) = ts_value_print_handle_seen(n, [])
+# A plain (argument-free) written reference keeps its name: tsc keeps alias names
+# for object-literal aliases, but expands instantiated conditional aliases.
+fn ts_value_print_handle(n) = {
+  value annotation: ts_value_print_annotation(n)
+  value plain: annotation is ts_type_reference && count(annotation.type_argument.nodes) == 0
+  value if plain then ts_value_print_written(n) ?? ts_value_print_handle_seen(n, []) else ts_value_print_handle_seen(n, [])
+}
 # The type TypeScript prints for an expression: a type parameter stands for its
 # constraint (`any` counts as `unknown`), and a reference keeps its written name.
 fn ts_value_print_annotation(n) = if n is ts_identifier && name_binding(n) != null
