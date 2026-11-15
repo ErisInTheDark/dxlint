@@ -148,6 +148,8 @@ in ts_identifier {
     # `[key: string]: T` names nothing.
     || is ts_parameter.name && parent is ts_index_signature.parameter then null
     else if ts_name_outside_method != null then "outside"
+    # `import X = A.B`, `export = A.B`: `A` names a namespace in every meaning.
+    else if is ts_member.object && ts_name_entity_path(parent.node) then "entity"
     # A computed key inside type syntax reads like `typeof`: type-only
     # imports count.
     else if ts_name_type_key then "query"
@@ -155,7 +157,10 @@ in ts_identifier {
   when ts_name_resolution == "outside" { resolves value outside ts_name_outside_method }
   when ts_name_resolution == "value" { resolves value }
   when ts_name_resolution == "query" { resolves query }
+  when ts_name_resolution == "entity" { resolves value, type }
 }
+fn ts_name_entity_path(n) = n is (ts_export_assignment.expression, ts_import_equals.value)
+  || n is ts_member.object && ts_name_entity_path(n.parent.node)
 in ts_identifier let ts_name_type_key containing(ts_computed_key) != null && name_type_access
 in ts_type_reference { resolves type name }
 # `export { x }` uses `x`; `export { x } from "m"` does not.

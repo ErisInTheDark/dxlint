@@ -245,10 +245,14 @@ impl<'a> Queries<'a> {
                     loop {
                         let current = ScopeRef { file: name.file, scope };
                         if self.is_publication(current)? {
-                            let published = self.global_scope(current, &key, class).known().ok_or(())?.ok_or(())?;
-                            if published.contains(&target) {
-                                targets = self.global(name.file, &key, class).known().ok_or(())?;
-                                handled = true;
+                            // One class at a time: a name asked in several
+                            // (`import X = A.B`'s `A`) reads each publication.
+                            for bit in (0..64).map(|bit| 1 << bit).filter(|bit| class & bit != 0) {
+                                let published = self.global_scope(current, &key, bit).known().ok_or(())?.ok_or(())?;
+                                if published.contains(&target) {
+                                    targets.extend(self.global(name.file, &key, bit).known().ok_or(())?);
+                                    handled = true;
+                                }
                             }
                             break;
                         }
@@ -454,7 +458,6 @@ impl<'a> Queries<'a> {
     /// Outer` exports `Outer`'s members too): the members of the assigned
     /// declarations' own publication scopes.
     fn assigned_members(&self, scope: ScopeRef, name: &str, classes: u64) -> Result<Vec<Target>, ()> {
-        let world = self.semantic.world;
         let all = self.asks(u64::MAX, classes);
         let mut assigned = Vec::new();
         for bit in (0..64).map(|bit| 1 << bit).filter(|bit| all & bit != 0) {
@@ -464,21 +467,39 @@ impl<'a> Queries<'a> {
         let mut targets = Vec::new();
         for target in assigned {
             let Target::Node(node) = target else { continue };
-            let names = world.names(node.file).ok_or(())?;
-            // The target is a declared name: its declaration owns the scope.
-            let owner = world.tree(node.file).ok_or(())?.parent(node.node);
-            for (index, info) in names.scopes.iter().enumerate() {
-                if info.node != node.node && Some(info.node) != owner { continue }
-                self.spend()?;
-                let owned = ScopeRef { file: node.file, scope: index as u32 };
-                if !self.is_publication(owned)? { continue }
-                for bit in (0..64).map(|bit| 1 << bit).filter(|bit| classes & bit != 0) {
-                    let Some(found) = self.publication(owned, name, bit).known().ok_or(())? else { return Err(()) };
-                    targets.extend(found);
-                }
+            if self.owned_members(node, name, classes, &mut targets)? { continue }
+            // A qualified target (`export = Outer.Public`) is no declared
+            // name: read the declarations it defines.
+            let leaf = Leaf { target, frame: FrameId::ROOT };
+            let Known::Yes(defined) = self.semantic.values().follow(leaf, &[crate::DECLARATION]) else { return Err(()) };
+            for definition in defined {
+                let Target::Node(node) = definition.target else { continue };
+                self.owned_members(node, name, classes, &mut targets)?;
             }
         }
         Ok(targets)
+    }
+
+    /// `name` in the publication scopes `node` (a declaration or its name)
+    /// owns; whether it owns any.
+    fn owned_members(&self, node: NodeRef, name: &str, classes: u64, targets: &mut Vec<Target>) -> Result<bool, ()> {
+        let world = self.semantic.world;
+        let names = world.names(node.file).ok_or(())?;
+        // A declared name: its declaration owns the scope.
+        let owner = world.tree(node.file).ok_or(())?.parent(node.node);
+        let mut owns = false;
+        for (index, info) in names.scopes.iter().enumerate() {
+            if info.node != node.node && Some(info.node) != owner { continue }
+            self.spend()?;
+            let owned = ScopeRef { file: node.file, scope: index as u32 };
+            if !self.is_publication(owned)? { continue }
+            owns = true;
+            for bit in (0..64).map(|bit| 1 << bit).filter(|bit| classes & bit != 0) {
+                let Some(found) = self.publication(owned, name, bit).known().ok_or(())? else { return Err(()) };
+                targets.extend(found);
+            }
+        }
+        Ok(owns)
     }
 
     fn publication(&self, scope: ScopeRef, name: &str, class: u64) -> Answer {

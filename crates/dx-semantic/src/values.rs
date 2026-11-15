@@ -985,7 +985,12 @@ impl Values<'_> {
                     let frame = if binding.is_some_and(|frame| frame.args.is_some() || frame.through.is_some()) {
                         site.frame
                     } else {
-                        self.definition_frame(site.frame, owner, through, binding.map_or(0, |frame| frame.classes))
+                        // A definition found in several classes (`import Box
+                        // = ns.Box`) reads in the view its reference asks.
+                        let found = binding.map_or(0, |frame| frame.classes);
+                        let asked = self.question.get(leaf.frame).map_or(0, |frame| frame.classes);
+                        let view = if found & asked != 0 { found & asked } else { found };
+                        self.definition_frame(site.frame, owner, through, view)
                     };
                     let definition = Leaf { target, frame };
                     // An alias of an alias (`import Again = Alias`) defines
