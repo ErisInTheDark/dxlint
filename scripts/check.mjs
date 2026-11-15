@@ -56,7 +56,8 @@ if (!flags.has("--no-fixtures")) {
   fs.closeSync(file);
   const summary = run.stdout.split("\n").find(line => /scenarios, \d+ failed/.test(line));
   console.log(`     ${summary?.trim() ?? "no summary"}; failures in ${path.relative(root, details)}`);
-  run.done(summary !== undefined);
+  // Every scenario passes, or the check fails: a known red one is still red.
+  run.done(/scenarios, 0 failed/.test(summary ?? ""));
 }
 
 const lint = cli("self-lint", "--jobs 1 --no-workbench-view");
