@@ -380,6 +380,9 @@ in ts_template {
 }
 in ts_regex { unwraps instance "RegExp" }
 
+# `class X extends B<number>`: the heritage arguments sit on the class and
+# instantiate the base its name reads.
+in ts_identifier { when parent is ts_class && node == parent.extends.node { arguments parent.type_argument } }
 in ts_identifier {
   # One answer for which recipe applies: an identifier's value asks once.
   let ts_value_name_route when {
@@ -561,6 +564,8 @@ in ts_import, ts_import_specifier, ts_meta_property, ts_import_call {
   unwraps unknown
 }
 in ts_import_equals { when value.node is ts_call { unwraps unknown } }
+# `import Box = ns.Box; Box<number>`: the reference's arguments pass through the alias.
+in ts_import_equals { when value.node not ts_call { arguments through.type_argument } }
 in ts_super {
   let ts_value_super_context ts_value_this_context(node)
   let ts_value_super_base ts_value_super_context.container.extends.node

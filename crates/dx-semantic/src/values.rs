@@ -1042,7 +1042,11 @@ impl Values<'_> {
     /// view matters): a 2,000-member enum is evaluated once, not per
     /// reference.
     fn definition_frame(&self, parent: super::question::FrameId, owner: NodeRef, through: Leaf, classes: u64) -> super::question::FrameId {
-        if let Some(shared) = self.shared_frame(owner, classes) { return shared }
+        // An owner that reads its arguments from where it was reached
+        // (`import Box = ns.Box`: `Box<number>`'s) keeps that reference.
+        if !self.reads_arguments(owner) {
+            if let Some(shared) = self.shared_frame(owner, classes) { return shared }
+        }
         // A bare reference (`Map`) to a declaration generic only in its own
         // formals binds every formal to its default, whoever refers: all
         // such references share one frame, read through the declaration.
@@ -1053,6 +1057,14 @@ impl Values<'_> {
         }
         let through = match through.target { Target::Node(_) => Some(through), _ => None };
         self.question.bind_definition(parent, owner, through, None, classes)
+    }
+
+    /// Whether `owner`'s kind declares `arguments` of its own (an alias
+    /// passing a reference's type arguments on).
+    fn reads_arguments(&self, owner: NodeRef) -> bool {
+        self.world.tree(owner.file).and_then(|tree| tree.nodes.get(owner.node as usize))
+            .and_then(|data| self.tables.kinds.get(data.matcher as usize))
+            .is_some_and(|kind| !kind.arguments.is_empty())
     }
 
     /// The one frame every reach of `owner` (with view `classes`) shares
