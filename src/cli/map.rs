@@ -34,7 +34,8 @@ struct Server {
     cwd: PathBuf,
     /// `--config`: one config for every path.
     config: Option<PathBuf>,
-    /// What each config loaded so far offers; `None` when it did not load.
+    /// What each config loaded so far offers; `None` when it did not load or
+    /// has errors (a partial config would pass text through unmapped).
     projects: HashMap<PathBuf, Option<Project>>,
 }
 
@@ -55,7 +56,7 @@ impl Server {
             let (path, between) = if explicit { (config.clone(), Vec::new()) } else { config::loader(&config, &Disk) };
             let (mut stdout, mut stderr) = (std::io::sink(), std::io::stderr());
             let mut output = Output { cwd: &cwd, stdout: &mut stdout, stderr: &mut stderr };
-            load_tree_with(&mut output, &path, |_| between, None, true).ok().map(|(project, _)| project)
+            load_tree_with(&mut output, &path, |_| between, None, true).ok().map(|(project, _)| project).filter(|project| project.config_ok)
         }).as_ref().ok_or_else(|| format!("the `.dx` config for {} does not load", path.display()))
     }
 
@@ -209,12 +210,17 @@ fn declared(output: &mut Output<'_>, spec: &str) -> Result<Declared, u8> {
 fn preview(output: &mut Output<'_>, server: &mut Server, paths: &[PathBuf]) -> u8 {
     let mut code = 0;
     for path in paths {
+        if let Err(error) = server.project(path) {
+            output.err(format_args!("{}: {error}", path.display()));
+            code = 2;
+            continue;
+        }
         // As the Workbench view has it, when one is applied.
         let text = match crate::engine::reads::read_unrecorded(&normalize_path(&output.cwd.join(path))).0 {
             Some(text) => text.to_string(),
             None => {
                 output.err(format_args!("{}: cannot read it", path.display()));
-                code = 1;
+                code = code.max(1);
                 continue;
             }
         };
@@ -222,7 +228,7 @@ fn preview(output: &mut Output<'_>, server: &mut Server, paths: &[PathBuf]) -> u
             Ok(mapped) => mapped,
             Err(error) => {
                 output.err(format_args!("{}: {error}", path.display()));
-                code = 1;
+                code = code.max(1);
                 continue;
             }
         };
@@ -233,7 +239,7 @@ fn preview(output: &mut Output<'_>, server: &mut Server, paths: &[PathBuf]) -> u
         for problem in &mapped.problems {
             let (line, column) = lines.line_col(&text, problem.start);
             output.err(format_args!("{}:{}:{}: {}", path.display(), line + 1, column + 1, problem.message));
-            code = 1;
+            code = code.max(1);
         }
     }
     code
@@ -372,6 +378,19 @@ mod tests {
         let mut server = Server { cwd: dir.clone(), config: Some(other), projects: HashMap::new() };
         let mapped = server.mapped(&dir.join("a.wts").to_string_lossy(), TEXT).unwrap();
         assert!(mapped.text.contains("get x ()"), "{}", mapped.text);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// A config with errors maps nothing: no raw text passes through.
+    #[test]
+    fn a_config_with_errors_fails_the_mapping() {
+        let dir = dir("broken", "import ../missing/mod.dx\n", TEXT);
+        let mut server = Server { cwd: dir.clone(), config: None, projects: HashMap::new() };
+        let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+        let mut output = Output { cwd: &dir, stdout: &mut stdout, stderr: &mut stderr };
+        assert_eq!(preview(&mut output, &mut server, &[dir.join("a.wts")]), 2);
+        assert!(server.mapped(&dir.join("a.wts").to_string_lossy(), TEXT).is_err());
+        assert_eq!(String::from_utf8_lossy(&stdout), "");
         std::fs::remove_dir_all(dir).ok();
     }
 

@@ -1361,7 +1361,9 @@ a compiler treats them as syntax errors, which can hide its other errors.
 
 `dxlint map item.wts` prints what a file maps to (several files get a
 `==> path <==` header each), problems to stderr with exit code 1; `--config`
-maps every file with one config instead of each file's nearest `.dx`.
+maps every file with one config instead of each file's nearest `.dx`. A
+config with errors maps nothing: they print to stderr and the exit code is 2;
+served requests (below) get an error reply instead.
 
 `dxlint map` with no files serves requests over stdin and stdout, one
 long-lived process for a whole build: configs load once and files map in
