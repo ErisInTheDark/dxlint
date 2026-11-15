@@ -89,6 +89,7 @@ const PACKAGES: &[Control] = &[
     Control { name: "scoped_prefix", field: Field::Text(|s| &mut s.packages.scoped_prefix, None) },
     Control { name: "type_directory", field: Field::Text(|s| &mut s.packages.type_directory, None) },
     Control { name: "type_join", field: Field::Text(|s| &mut s.packages.type_join, None) },
+    Control { name: "preserve_links_option", field: Field::Text(|s| &mut s.packages.preserve_links_option, None) },
 ];
 
 const GLOBALS: &[Control] = &[

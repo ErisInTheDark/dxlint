@@ -376,6 +376,10 @@ impl Host for GraphHost<'_> {
         self.linter.discovered(request)
     }
 
+    fn link(&self, dir: &Path, _: &QueryContext) -> Known<Option<PathBuf>> {
+        Known::Yes(reads::link_target(dir))
+    }
+
     fn metadata(&self, path: &Path, question: &QueryContext) -> Result<Option<Arc<Json>>, ()> {
         if let Some(found) = self.metadata.borrow().get(path) { return Ok(found.clone()) }
         let parsed = parse_metadata(self.text(path, question).known().ok_or(())?.as_deref())?;

@@ -41,6 +41,7 @@ import .ts/comments
       scoped_prefix "@"
       type_directory "@types"
       type_join "__"
+      preserve_links_option "preserveSymlinks"
     }
     conditions ["types", condition, "default"]
     ambient_scopes [ambient_module]

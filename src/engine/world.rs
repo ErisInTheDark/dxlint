@@ -2169,6 +2169,10 @@ impl Host for Files<'_> {
         }
     }
 
+    fn link(&self, dir: &Path, _: &QueryContext) -> Known<Option<PathBuf>> {
+        Known::Yes(super::reads::link_target(dir))
+    }
+
     fn metadata(&self, path: &Path, question: &QueryContext) -> Result<Option<Arc<Json>>, ()> {
         let Some(snapshot) = self.0.snapshot.filter(|_| path != self.0.path) else {
             return parse_metadata(Host::text(self, path, question).known().ok_or(())?.as_deref());

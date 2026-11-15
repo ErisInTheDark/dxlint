@@ -35,6 +35,10 @@ pub trait Host {
     fn package(&self, _settings: &Settings, _root: &Path, _subpath: &str, _conditions: &[&str], probe: &mut dyn FnMut() -> Result<Probe<PathBuf>, ()>) -> Result<Probe<PathBuf>, ()> {
         probe()
     }
+    /// Where the directory link at `dir` leads (`None`: no link).
+    fn link(&self, _dir: &Path, _question: &QueryContext) -> Known<Option<PathBuf>> {
+        Known::Yes(None)
+    }
 }
 
 pub fn parse_metadata(text: Option<&str>) -> Result<Option<Arc<Json>>, ()> {
@@ -75,6 +79,9 @@ pub struct Packages {
     pub scoped_prefix: Box<str>,
     pub type_directory: Box<str>,
     pub type_join: Box<str>,
+    /// The compiler option that keeps a linked package's own path; without
+    /// it, a file found through a link reads as the file it leads to.
+    pub preserve_links_option: Box<str>,
 }
 
 impl Packages {
@@ -421,11 +428,38 @@ impl<H: Host + ?Sized> Resolver<'_, H> {
     }
 
     fn package<T>(&self, root: &Path, subpath: &str, conditions: &[&str], question: &QueryContext, found: &dyn Fn(&Path) -> Result<Option<T>, ()>) -> Result<Probe<T>, ()> {
-        let probed = self.host.package(self.settings, root, subpath, conditions, &mut || self.package_path(root, subpath, conditions, question))?;
+        // A linked package (a workspace's `node_modules/x` -> `packages/x`)
+        // gives the file it leads to, as a type checker reads it: importers
+        // through the link and through the real path then share one file.
+        let probed = if self.preserves_links(question)? {
+            self.package_path(root, subpath, conditions, question)?
+        } else {
+            self.host.package(self.settings, root, subpath, conditions, &mut || match self.package_path(root, subpath, conditions, question)? {
+                Probe::Found(path) => Ok(Probe::Found(self.through_link(root, path, question)?)),
+                probe => Ok(probe),
+            })?
+        };
         Ok(match probed {
             Probe::Found(path) => found(&path)?.map_or(Probe::Missing, Probe::Found),
             Probe::Blocked => Probe::Blocked,
             Probe::Missing => Probe::Missing,
+        })
+    }
+
+    fn preserves_links(&self, question: &QueryContext) -> Result<bool, ()> {
+        let option = &*self.settings.packages.preserve_links_option;
+        if option.is_empty() { return Ok(true) }
+        let config = self.configuration(question)?;
+        Ok(matches!(config.options.get(option).map(|option| &option.value), Some(Json::Bool(true))))
+    }
+
+    /// `path` (found below package directory `root`) through `root`'s link.
+    fn through_link(&self, root: &Path, path: PathBuf, question: &QueryContext) -> Result<PathBuf, ()> {
+        spend(question)?;
+        let Some(target) = self.host.link(root, question).known().ok_or(())? else { return Ok(path) };
+        Ok(match path.strip_prefix(root) {
+            Ok(rest) => clean(&target.join(rest)),
+            Err(_) => path,
         })
     }
 
@@ -660,6 +694,7 @@ mod tests {
     #[derive(Default)]
     struct Files {
         paths: BTreeMap<PathBuf, (u32, String)>,
+        links: BTreeMap<PathBuf, PathBuf>,
     }
 
     impl Files {
@@ -692,6 +727,9 @@ mod tests {
             let path = request.root.join(&**name);
             Known::Yes(self.paths.contains_key(&path).then_some(path).into_iter().collect())
         }
+        fn link(&self, dir: &Path, _: &QueryContext) -> Known<Option<PathBuf>> {
+            Known::Yes(self.links.get(dir).cloned())
+        }
     }
 
     fn settings() -> Settings {
@@ -709,9 +747,27 @@ mod tests {
                 scoped_prefix: "@".into(),
                 type_directory: "@types".into(),
                 type_join: "__".into(),
+                preserve_links_option: "preserveSymlinks".into(),
             },
             ..Settings::default()
         }
+    }
+
+    /// A workspace's `node_modules/@app/data` links to `src/data`: importing
+    /// through the package reads the one real file (relative imports inside
+    /// it then resolve from there too), unless the program preserves links.
+    #[test]
+    fn linked_packages_resolve_to_the_files_they_lead_to() {
+        let mut files = Files::default();
+        let importer = files.add("/app/mods/m/main.ts", "");
+        let real = files.add("/app/src/data/Gather.ts", "");
+        let linked = files.add("/app/node_modules/@app/data/Gather.ts", "");
+        files.links.insert("/app/node_modules/@app/data".into(), "/app/src/data".into());
+        let settings = configured();
+        let resolve = |files: &Files| Resolver { host: files, settings: &settings }.resolve(importer.file, "@app/data/Gather", &[], &QueryContext::default());
+        assert_eq!(resolve(&files), Known::Yes(Some(real)));
+        files.add("/app/mods/m/tsconfig.json", r#"{"compilerOptions":{"preserveSymlinks":true}}"#);
+        assert_eq!(resolve(&files), Known::Yes(Some(linked)));
     }
 
     #[test]

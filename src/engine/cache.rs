@@ -293,7 +293,7 @@ impl Cache {
                 dep => format!("{} of {}", match dep {
                     Dep::Text(..) => "text", Dep::IsFile(..) => "file probe", Dep::IsDir(..) => "dir probe", Dep::List(..) => "listing",
                     Dep::Discovered(..) => "discovery", Dep::Requested(..) => "requested files", Dep::Outside(..) => "outside bodies",
-                    Dep::Module(..) => "module answer", Dep::Part(..) => "parts",
+                    Dep::Module(..) => "module answer", Dep::Part(..) => "parts", Dep::Link(..) => "link",
                 }, dep.path().display()),
             });
         }
@@ -890,6 +890,7 @@ impl Writer {
             Dep::Discovered(found) => (5, found.hash),
             Dep::Requested(_, hash) => (6, *hash),
             Dep::Module(_, hash) => (9, *hash),
+            Dep::Link(_, hash) => (10, *hash),
             Dep::Part(..) => unreachable!("written above"),
         };
         self.out.push(tag);
@@ -1250,6 +1251,7 @@ impl<'a> Reader<'a> {
                 let ask = super::reads::ModuleAsk { root: path, settings, module, stop: self.string_list()?.into(), ignore: self.string_list()?.into(), exports };
                 Dep::Module(std::sync::Arc::new(ask), a)
             }
+            10 => Dep::Link(path, a),
             _ => return None,
         })
     }

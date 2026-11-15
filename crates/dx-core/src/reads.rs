@@ -118,6 +118,8 @@ pub enum Dep {
     /// could change it, but only a changed answer breaks the read
     /// ([`Linter::holds`]).
     Module(Arc<ModuleAsk>, u64),
+    /// Where a directory link leads, hashed ([`MISSING`] when it is none).
+    Link(DepPath, u64),
 }
 
 /// A question to a program's import graph (`module_graph`).
@@ -283,7 +285,7 @@ impl Bodies {
 impl Dep {
     pub fn path(&self) -> &Path {
         match self {
-            Dep::Text(p, _) | Dep::IsFile(p, _) | Dep::IsDir(p, _) | Dep::List(p, _) | Dep::Outside(p, _) => p,
+            Dep::Text(p, _) | Dep::IsFile(p, _) | Dep::IsDir(p, _) | Dep::List(p, _) | Dep::Outside(p, _) | Dep::Link(p, _) => p,
             Dep::Discovered(found) => &found.dir,
             Dep::Part(parts, _) => &parts.path,
             Dep::Requested(request, _) => &request.root,
@@ -329,6 +331,7 @@ impl Dep {
             Dep::Part(parts, _) => content(&parts.path).1 == parts.hash,
             Dep::IsFile(p, b) => file_exists(p) == *b,
             Dep::IsDir(p, b) => directory_exists(p) == *b,
+            Dep::Link(p, h) => link_hash(resolve_link(p).as_deref()) == *h,
             Dep::List(p, h) => listing(p).1 == *h,
             Dep::Discovered(found) => discovery(found.name).is_some_and(|d| walk(d, &found.dir, 1).1 == found.hash),
             Dep::Requested(request, hash) => request_walk(request).map_or(MISSING, |(_, current)| current) == *hash,
@@ -488,7 +491,7 @@ impl Reads {
                     Dep::Text(path, _) | Dep::Outside(path, _) => names.texts |= Names::bit(path),
                     Dep::Part(parts, _) => names.texts |= Names::bit(&parts.path),
                     Dep::IsFile(path, _) => names.files |= Names::bit(path),
-                    Dep::IsDir(..) | Dep::List(..) | Dep::Discovered(..) | Dep::Requested(..) => names.dirs = true,
+                    Dep::IsDir(..) | Dep::List(..) | Dep::Discovered(..) | Dep::Requested(..) | Dep::Link(..) => names.dirs = true,
                     Dep::Module(..) => names.modules = true,
                 }
             }
@@ -674,7 +677,7 @@ pub fn shared(reads: Arc<Reads>) -> Arc<Reads> {
 pub fn kept_census() -> String {
     let Some(kept) = KEPT.get() else { return String::new() };
     let kept = kept.lock().unwrap_or_else(|e| e.into_inner());
-    const KINDS: [&str; 9] = ["text", "is file", "is dir", "list", "discovered", "requested", "outside", "part", "module"];
+    const KINDS: [&str; 10] = ["text", "is file", "is dir", "list", "discovered", "requested", "outside", "part", "module", "link"];
     let (mut held, mut groups, mut scans, mut deps) = (0usize, 0usize, 0usize, [0usize; KINDS.len()]);
     for reads in kept.groups.values().flatten().filter_map(std::sync::Weak::upgrade) {
         held += 1;
@@ -684,6 +687,7 @@ pub fn kept_census() -> String {
             deps[match dep {
                 Dep::Text(..) => 0, Dep::IsFile(..) => 1, Dep::IsDir(..) => 2, Dep::List(..) => 3,
                 Dep::Discovered(..) => 4, Dep::Requested(..) => 5, Dep::Outside(..) => 6, Dep::Part(..) => 7, Dep::Module(..) => 8,
+                Dep::Link(..) => 9,
             }] += 1;
         }
     }
@@ -744,7 +748,8 @@ impl Kept {
             let path = match dep {
                 Dep::Requested(request, _) => { std::ptr::hash(Arc::as_ptr(request), &mut hasher); continue }
                 Dep::Module(ask, _) => { std::ptr::hash(Arc::as_ptr(ask), &mut hasher); continue }
-                Dep::Text(path, _) | Dep::IsFile(path, _) | Dep::IsDir(path, _) | Dep::List(path, _) | Dep::Outside(path, _) => path,
+                Dep::Text(path, _) | Dep::IsFile(path, _) | Dep::IsDir(path, _) | Dep::List(path, _) | Dep::Outside(path, _)
+                    | Dep::Link(path, _) => path,
                 Dep::Discovered(found) => &found.dir,
                 Dep::Part(parts, _) => &parts.path,
             };
@@ -1176,6 +1181,44 @@ pub fn is_dir(path: &Path) -> bool {
     let found = directory_exists(path);
     note(Dep::IsDir(dep_path(path), found));
     found
+}
+
+/// Where the directory link (symlink or junction) at `dir` finally leads,
+/// recorded; `None` when `dir` is no link.
+pub fn link_target(dir: &Path) -> Option<PathBuf> {
+    let target = resolve_link(dir);
+    note(Dep::Link(dep_path(dir), link_hash(target.as_deref())));
+    target
+}
+
+fn link_hash(target: Option<&Path>) -> u64 {
+    target.map_or(MISSING, |target| hash_bytes(target.as_os_str().as_encoded_bytes()))
+}
+
+fn resolve_link(dir: &Path) -> Option<PathBuf> {
+    /// Links to links, as far as a resolver follows them.
+    const MAX_HOPS: usize = 8;
+    let mut at = dir.to_path_buf();
+    let mut followed = false;
+    for _ in 0..MAX_HOPS {
+        let Ok(target) = std::fs::read_link(&at) else { break };
+        // Junctions answer in the verbatim form (`\\?\C:\...`).
+        let target = match target.to_str().and_then(|text| text.strip_prefix(r"\\?\")) {
+            Some(plain) if !plain.starts_with("UNC\\") => PathBuf::from(plain),
+            _ => target,
+        };
+        let joined = if target.is_absolute() { target } else { at.parent()?.join(target) };
+        at = joined.components().fold(PathBuf::new(), |mut path, part| {
+            match part {
+                std::path::Component::CurDir => {}
+                std::path::Component::ParentDir => { path.pop(); }
+                part => path.push(part),
+            }
+            path
+        });
+        followed = true;
+    }
+    followed.then_some(at)
 }
 
 fn directory_exists(path: &Path) -> bool {
