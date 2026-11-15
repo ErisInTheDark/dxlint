@@ -13,6 +13,11 @@ pub use preparation::ClassAnswers;
 
 type Answer = Known<Option<Vec<Target>>>;
 
+/// The export name a module gives what it assigns as a whole (`exports x as
+/// "="`), beside `"*"` for its namespace: a name it doesn't export reads the
+/// assigned declarations' own members.
+const ASSIGNED: &str = "=";
+
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 enum Request {
     Definition(NodeRef, u64),
@@ -437,8 +442,42 @@ impl<'a> Queries<'a> {
             let Some(found) = self.publication(scope, name, bit).known().ok_or(())? else { return Err(()) };
             targets.extend(found);
         }
+        if targets.is_empty() && name != ASSIGNED && name != "*" {
+            targets = self.assigned_members(scope, name, classes)?;
+        }
         targets.sort_unstable();
         targets.dedup();
+        Ok(targets)
+    }
+
+    /// A name a module doesn't export, read from what it assigns (`export =
+    /// Outer` exports `Outer`'s members too): the members of the assigned
+    /// declarations' own publication scopes.
+    fn assigned_members(&self, scope: ScopeRef, name: &str, classes: u64) -> Result<Vec<Target>, ()> {
+        let world = self.semantic.world;
+        let all = self.asks(u64::MAX, classes);
+        let mut assigned = Vec::new();
+        for bit in (0..64).map(|bit| 1 << bit).filter(|bit| all & bit != 0) {
+            let Some(found) = self.publication(scope, ASSIGNED, bit).known().ok_or(())? else { return Err(()) };
+            assigned.extend(found);
+        }
+        let mut targets = Vec::new();
+        for target in assigned {
+            let Target::Node(node) = target else { continue };
+            let names = world.names(node.file).ok_or(())?;
+            // The target is a declared name: its declaration owns the scope.
+            let owner = world.tree(node.file).ok_or(())?.parent(node.node);
+            for (index, info) in names.scopes.iter().enumerate() {
+                if info.node != node.node && Some(info.node) != owner { continue }
+                self.spend()?;
+                let owned = ScopeRef { file: node.file, scope: index as u32 };
+                if !self.is_publication(owned)? { continue }
+                for bit in (0..64).map(|bit| 1 << bit).filter(|bit| classes & bit != 0) {
+                    let Some(found) = self.publication(owned, name, bit).known().ok_or(())? else { return Err(()) };
+                    targets.extend(found);
+                }
+            }
+        }
         Ok(targets)
     }
 
