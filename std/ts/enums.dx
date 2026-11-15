@@ -237,8 +237,10 @@ in ts_jsx_expression.expression rule es-no-unsafe-enum-assignment:jsx {
 in ts_call.argument, ts_new.argument, ts_template.expression rule es-no-unsafe-enum-assignment:arguments {
   when !(is ts_template.expression) || parent is ts_tagged_template.quasi
   when unparenthesised_node(node) not (ts_object, ts_array)
-  # `f(...[1])` passes the elements: reported at the spread.
-  let passed if node is ts_spread && node.argument is ts_array then filter(node.argument.element.nodes,
+  # `f(...[1])` passes the elements: reported at the spread. One with a spread
+  # of its own (`...[1, ...numbers]`) passes as the whole array.
+  let passed if node is ts_spread && node.argument is ts_array
+    && !any(node.argument.element.nodes, element => element is ts_spread) then filter(node.argument.element.nodes,
     item => unparenthesised_node(item) not (ts_object, ts_array)) else [node]
   let contexts flat_map(passed, item => enum_policy(item, item))
   when any(contexts, context => enum_context_bad(context))

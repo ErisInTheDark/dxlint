@@ -5,12 +5,22 @@ fn ts_value_print_literal_parts(parts) = parts != null && len(parts) > 0
   && any(parts, arm => any(arm, part => !contains(part.traits, "parameter")))
   && all(parts, arm => all(filter(arm, part => !contains(part.traits, "parameter")),
     part => contains(part.traits, "literal") || part.identity_known && part.identity.kind == "value"))
+# A type parameter names its constraint's primitive (`T extends 'a' | 'b'`:
+# `string`), as TypeScript ESLint's getTypeName does.
+fn arithmetic_parameter_primitive(parts) = {
+  value parameter: parts != null && count(parts) > 0 && all(parts, arm => any(arm, part => contains(part.traits, "parameter")))
+  value primitives: unique(flat_map(parts ?? [], arm => flat_map(arm, part =>
+    filter(["string", "number", "bigint", "boolean"], trait => contains(part.traits, trait)))))
+  value if parameter && count(primitives) == 1 then first(primitives) else null
+}
 # Widening only changes literals: structure would collapse to `object`, so keep
 # the handle's shape unless every printed constituent is a literal.
 fn arithmetic_type_name(n) = {
   value written: ts_value_print_written(n)
   value parts: value_constituents(n)
+  value primitive: arithmetic_parameter_primitive(parts)
   value if written != null then written
+    else if primitive != null then primitive
     else if ts_value_print_literal_parts(parts) then ts_value_print(value_widened(n) ?? parts)
     else ts_value_print_handle(n)
 }
