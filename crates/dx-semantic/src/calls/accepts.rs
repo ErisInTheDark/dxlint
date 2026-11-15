@@ -386,6 +386,9 @@ impl<'a, 'world> Run<'a, 'world> {
         if target == Known::Yes(true) { return Known::Yes(true) }
         let source = universal_source(actual, values);
         if source == Known::Yes(true) { return Known::Yes(true) }
+        // A top value not proven dynamic (`unknown`: open, so `any` stays a
+        // possible trait) fits only a top target.
+        if target == Known::Yes(false) && universal_target(actual, values) == Known::Yes(true) { return Known::Yes(false) }
         if target == Known::Unknown || source == Known::Unknown { return Known::Unknown }
         let expected_value = NodeValue::rows(vec![expected.to_vec()]);
         let actual_value = NodeValue::rows(vec![actual.to_vec()]);

@@ -86,10 +86,15 @@ fn argument_expected(parent: Leaf, kind: &crate::KindNames, at: Leaf, values: &V
             if candidate.is_some() { return Known::Unknown }
             let rest = values.tables.vocabulary.traits.iter().position(|name| name == "rest")
                 .map_or(Known::Yes(false), |id| values.fits(formal, id as u16));
-            let expected = match rest {
-                Known::Yes(false) => values.values(formal),
-                Known::Yes(true) => values.member(&values.values(formal), &Key::Ordinal(position as u32)),
-                Known::Unknown => return Known::Unknown,
+            // A spread into a rest parameter passes (part of) its array.
+            let spread = match rest {
+                Known::Yes(true) => super::rest(at, values),
+                _ => Known::Yes(false),
+            };
+            let expected = match (rest, spread) {
+                (Known::Unknown, _) | (_, Known::Unknown) => return Known::Unknown,
+                (Known::Yes(false), _) | (_, Known::Yes(true)) => values.values(formal),
+                (Known::Yes(true), Known::Yes(false)) => values.member(&values.values(formal), &Key::Ordinal(position as u32)),
             };
             candidate = Some(expected);
         }

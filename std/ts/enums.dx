@@ -14,8 +14,9 @@ fn enum_root_bad(sender, receiver) = sender != null && receiver != null && len(r
       && any(receiver, target => any(domains, domain => any(target, part => contains(part.traits, domain))))
       && !any(receiver, target => any(enum_origins(target), b => any(origins, a =>
         a.carrier.file == b.carrier.file && a.carrier.node == b.carrier.node)))
-      && all(source, part => !contains(part.traits, "any") && !contains(part.traits, "unknown")
-        && !contains(part.uncertain_traits, "enum"))
+      # A type parameter stands for its constraint, the arm's other parts.
+      && all(source, part => contains(part.traits, "parameter") || !contains(part.traits, "any")
+        && !contains(part.traits, "unknown") && !contains(part.uncertain_traits, "enum"))
   })
 fn enum_relation_children(pair, source) = {
   value identity: {sender: pair.sender, receiver: pair.receiver}
@@ -109,6 +110,22 @@ fn enum_annotation_target(context) = {
   value if frame == null then null else
     fold(frame.path, frame.target, (target, key) => value_lookup(target, key).member)
 }
+# The key a computed access must match: the key constraint of the mapped
+# type (`[P in E]`) or the computed member key (`[E.A]: ...`) it reads. An
+# unknown key (`value[key]`, `key: K`) reads the one site all members share.
+fn enum_index_target(n) = {
+  value key: value_key(n.index.node)
+  value sites: if key != null then flat_map(value_lookup(n.object.node, key).alternatives ?? [], arm =>
+      if arm.matched then map(arm.sources ?? [], origin => origin.site) else [])
+    else unique(flat_map(value_children(n.object.node, true, []) ?? [], edge =>
+      map(edge.member.sources ?? [], origin => origin.site)))
+  value member: if key == null && count(sites) != 1 then null else first(sites)
+  value parameter: if member == null then null else first(site_field(n, member, "type_parameter") ?? [])
+  value computed: if member == null || parameter != null then null else first(site_field(n, member, "key") ?? [])
+  value key_site: if parameter != null then first(site_field(n, parameter, "constraint") ?? [])
+    else if computed != null then first(site_field(n, computed, "expression") ?? []) else null
+  value if key_site != null then declaration_value(n, key_site) else null
+}
 fn enum_policy(site, source) = {
   value context: if site is ts_property then site
     else if source is ts_spread && source.parent is ts_object
@@ -118,6 +135,7 @@ fn enum_policy(site, source) = {
   value target: if site is ts_update || site is ts_assignment && site.enum_mutation then source
     else if site is (ts_as, ts_type_assertion) then site.type.node
     else if site.type != null then site.type.node
+    else if site is ts_index then enum_index_target(site)
     else if context != null && expected.present == true then value_expected_handle(context)
     else if context != null then enum_annotation_target(context) else null
   value owner: if source is ts_return.argument || source is ts_arrow.body then return_value_owner(source) else null

@@ -84,10 +84,8 @@ pub(super) fn candidates(call: Leaf, values: &Values<'_>) -> Answer {
         }
         let Known::Yes(arguments) = values.follow(call, &invoke.item.arguments) else { return Known::Unknown };
         for &argument in &arguments {
-            if rest(argument, values) != Known::Yes(false) {
-                // Unknown-length spreads cannot become invented finite slots.
-                return Known::Unknown;
-            }
+            // Spreads are placed per overload ([`candidate`]).
+            if rest(argument, values) == Known::Unknown { return Known::Unknown }
         }
         let callee = values.evaluate(call, &invoke.item.callee);
         let receiver = invoke.item.receiver.as_ref().map(|receiver| values.evaluate(call, receiver));
@@ -419,6 +417,9 @@ fn candidate(header: Header, call: Leaf, arguments: &[Leaf], receiver: Option<&N
         let mut captured = Vec::new();
         for &actual in actuals {
             if !values.question.budget.step() { return Known::Unknown }
+            // A spread of unknown length lands only in a rest parameter:
+            // it cannot become invented finite slots.
+            if !is_rest && rest(actual, values) != Known::Yes(false) { return Known::Unknown }
             captured.push(actual);
         }
         mapping.push((parameter, captured));
@@ -433,6 +434,20 @@ fn candidate(header: Header, call: Leaf, arguments: &[Leaf], receiver: Option<&N
     }
     if decide && !has_rest && arguments.len() > parameters.len() {
         arity = Known::Yes(false);
+    }
+    if !has_rest && arguments.len() > parameters.len() {
+        for &argument in arguments.get(parameters.len()..).unwrap_or_default() {
+            if rest(argument, values) != Known::Yes(false) { return Known::Unknown }
+        }
+    }
+    // Inference reads a rest parameter's arguments as its elements.
+    if !formals.is_empty() {
+        for (parameter, actuals) in &mapping {
+            if rest(*parameter, values) != Known::Yes(true) { continue }
+            for &actual in actuals {
+                if rest(actual, values) != Known::Yes(false) { return Known::Unknown }
+            }
+        }
     }
     if arity == Known::Yes(false) {
         return Known::Yes(Candidate { chosen: Chosen { header, mapping }, compatible: Known::Yes(false), instantiated: false, pending: None });
@@ -454,7 +469,13 @@ fn candidate(header: Header, call: Leaf, arguments: &[Leaf], receiver: Option<&N
         'slots: for (parameter, is_rest, actuals) in slots {
             for (offset, &actual) in actuals.iter().enumerate() {
                 if compatible == Known::Yes(false) { break 'slots }
-                let expected = if is_rest {
+                let spread = is_rest && match rest(actual, values) {
+                    Known::Yes(spread) => spread,
+                    Known::Unknown => return Known::Unknown,
+                };
+                let expected = if spread {
+                    values.values(parameter)
+                } else if is_rest {
                     values.member(&values.values(parameter), &Key::Ordinal(offset as u32))
                 } else {
                     values.values(parameter)

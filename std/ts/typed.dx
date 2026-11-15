@@ -465,15 +465,20 @@ in ts_call.argument rule es-await-thenable:iterable {
   when parent.is_promise_aggregator == true && not ts_array && ts_await_nonawaitable_iterable(node)
   warn "Unexpected iterable of non-Promise (non-\"Thenable\") values passed to promise aggregator."
 }
+# No arm declares `Symbol[name]` (an open library interface leaves
+# value_has_member undecided, though its declarations lack the member).
+fn typed_lacks_symbol(n, name) = value_has_member(n, {global: "Symbol", class: "value", path: [name]}, null) == false || {
+  value key: ts_value_symbol_key(n, name)
+  value arms: if key == null then null else value_lookup(n, key).alternatives
+  value arms != null && count(arms) > 0 && all(arms, arm => arm.matched == false)
+}
 in ts_for_of rule es-await-thenable:for-of {
   report at { start: offset, end: last(overlapping(ts_close_paren, right.end_offset, body.offset)).end_offset }
-  when contains([] modifier, "await")
-    && value_has_member(right.node, {global: "Symbol", class: "value", path: ["asyncIterator"]}, null) == false
+  when contains([] modifier, "await") && typed_lacks_symbol(right.node, "asyncIterator")
   warn "Unexpected `for await...of` of a value that is not async iterable."
 }
 in ts_declarator.init rule es-await-thenable:using {
-  when starts_with(parent.parent.kind.text, "await")
-    && value_has_member(node, {global: "Symbol", class: "value", path: ["asyncDispose"]}, null) == false
+  when starts_with(parent.parent.kind.text, "await") && typed_lacks_symbol(node, "asyncDispose")
   warn "Unexpected `await using` of a value that is not async disposable."
 }
 

@@ -634,8 +634,11 @@ impl Values<'_> {
         for member in keyed { Self::merge_member(&mut members, member); }
         if wanted.is_some() && !members.is_empty() { return Known::Yes(members) }
         if !matches!(request, MemberRequest::Coverage) {
-            let own: Vec<_> = members.iter().map(|member| member.key.clone()).collect();
+            // Own members hide inherited ones, and an earlier base hides a
+            // later one (`{ ...a, ...b }` lists `b` first).
+            let mut own: Vec<_> = members.iter().map(|member| member.key.clone()).collect();
             for (views, base, when) in &kind.member_bases {
+                if wanted.is_some() && !members.is_empty() { break }
                 if classes & views == 0 { continue }
                 if !self.question.budget.step() { return Known::Unknown }
                 match when.map_or(Known::Yes(true), |condition| self.world.condition(at, condition, self.semantic)) {
@@ -654,8 +657,12 @@ impl Values<'_> {
                         let rows = if matches!(request, MemberRequest::Shape) { self.shape_members(&base) } else { self.members(&base) };
                         let Known::Yes(mut rows) = rows else { return Known::Unknown };
                         if rows.len() != 1 { return Known::Unknown }
-                        for member in rows.pop().unwrap_or_default() {
-                            if !own.contains(&member.key) { Self::merge_member(&mut members, member) }
+                        let layer = rows.pop().unwrap_or_default();
+                        let hidden = own.clone();
+                        for member in layer {
+                            if hidden.contains(&member.key) { continue }
+                            own.push(member.key.clone());
+                            Self::merge_member(&mut members, member);
                         }
                     }
                 }

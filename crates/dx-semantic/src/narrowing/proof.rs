@@ -285,6 +285,11 @@ impl Narrowing<'_> {
                 if !included || self.wholly_top(&actual) { kept.push(alternative) }
             } else if included {
                 kept.push(alternative);
+            } else if path.is_empty() && self.wholly_top(&actual) {
+                // A guard narrows `any`/`unknown` to what it tests for
+                // (`typeof x === "string"`: `string`), not to an intersection.
+                let NodeValue::Alternatives(refined) = &expected else { unreachable!() };
+                kept.extend(refined.iter().cloned());
             } else if !self.proven_disjoint(&expected, &actual) {
                 if path.is_empty() {
                     let NodeValue::Alternatives(refined) = &expected else { unreachable!() };

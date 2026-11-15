@@ -42,13 +42,21 @@ fn type_is_allowed(entries, groups, node) = {
   value count(groups) > 0 && any(entries, entry =>
     all(groups, group => any(group, gate => type_specifier_matches(entry, gate, directory))))
 }
+# The `declare module "pkg"` a declaration sits in, if any: it declares that package.
+fn type_specifier_ambient_package(n, site) = {
+  value owner: find(walk([site], current => site_parent(n, current)), current => current.kind == "ts_namespace"
+    && re_test(site_text(n, current).text, /^\s*(?:export\s+)?(?:declare\s+)?module\s*["']/))
+  value name: if owner == null then null else first(site_field(n, owner, "name") ?? [])
+  value if name == null then null else replace(replace(site_text(n, name).text, "\"", ""), "'", "")
+}
 fn type_specifier_site(entry, n, site, name, directory) = {
   value origin: declaration_origin(n, site)
+  value ambient: if entry.from == "package" then type_specifier_ambient_package(n, site) else null
   value if origin == null || name == null || entry.from == "file" && directory == null then null else type_specifier_matches(entry, {
     name: name,
-    from: if origin.kind == "library" then "lib" else if origin.kind == "package" then "package" else "file",
+    from: if ambient != null || origin.kind == "package" then "package" else if origin.kind == "library" then "lib" else "file",
     path: origin.path,
-    package: origin.package
+    package: ambient ?? origin.package
   }, directory)
 }
 fn type_specifier_part(entry, n, part, directory) = {

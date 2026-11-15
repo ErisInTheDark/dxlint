@@ -379,6 +379,11 @@ fn assertion_check(n, ignored, check_const) = {
       || !literal_preserved || !enum_preserved) || generic == null then null
     else {subject: subject, raw_subject: raw_subject, contextual: receiver && !same, generic: generic}
 }
+# One arm each side, equal up to instantiation (`Box<string>` handles differ
+# between the union and the assertion): assignable both ways.
+fn assertion_mutual_arm(retained, target) = count(retained) == 1 && count(target) == 1
+  && value_accepts(first(retained).handle, first(target).handle, "value", "value") == true
+  && value_accepts(first(target).handle, first(retained).handle, "value", "value") == true
 fn assertion_non_null_style(n) = {
   value source: value_parts(n.expression.node)
   value target: value_parts(n.type.node)
@@ -387,7 +392,8 @@ fn assertion_non_null_style(n) = {
   value non_null: value_union(first(retained).handle, map(slice(retained, 1), arm => arm.handle))
   value if !assertion_parts_known(source) || !assertion_parts_non_null(target) then null
     else count(retained) < count(source)
-      && (assertion_same_handles(retained, target) == true || assertion_same_value(non_null, n.type.node)
+      && (assertion_same_handles(retained, target) == true || assertion_mutual_arm(retained, target)
+        || assertion_same_value(non_null, n.type.node)
         || assertion_same_scalar_type(non_null, n.type.node))
 }
 fn assertion_unassigned(n) = n is ts_identifier && (n.declaration == null && n.resolved != "global" || n.declaration.parent is ts_declarator && n.declaration.ambient != true && (n.declaration.parent.init == null && { value n.declaration.parent.token_texts; slice 1 2; first } != "!"

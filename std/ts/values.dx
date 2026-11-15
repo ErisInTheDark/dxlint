@@ -307,7 +307,11 @@ fn ts_value_nonthenable(n) = {
   })
   value if certain then true else {
     value shape: ts_value_then_headers(member_call_parameters(n, "then"))
-    value if parts == null || len(parts) == 0 || !shape.known then null else !shape.thenable
+    # No arm has a `then` at all (not even through an indexer).
+    value then_arms: value_lookup(n, "then").alternatives
+    value absent: then_arms != null && count(then_arms) > 0 && all(then_arms, arm => arm.matched == false)
+    value if parts == null || len(parts) == 0 then null else if absent then true
+      else if !shape.known then null else !shape.thenable
   }
 }
 # Read from certain traits: `always any` stays unknown for an open type
@@ -749,6 +753,12 @@ in ts_object {
   let ts_value_any_spreads filter(property.nodes, item => item is ts_spread && item.argument always any)
   when len(ts_value_any_spreads) > 0 { unwraps ...ts_value_any_spreads.argument }
   when len(ts_value_any_spreads) == 0 { unwraps scope members from it }
+  # Spread members under the own ones; of two spreads, the later wins.
+  let ts_value_spread_sources reverse(filter(property.nodes, item => item is ts_spread))
+  let ts_value_last_spread first(ts_value_spread_sources)
+  let ts_value_earlier_spreads slice(ts_value_spread_sources, 1)
+  when ts_value_last_spread != null { members members inherits ts_value_last_spread.argument }
+  when len(ts_value_earlier_spreads) > 0 { members members inherits &...ts_value_earlier_spreads.argument }
 }
 in ts_object { fits object, truthy in members }
 in ts_interface {
@@ -879,6 +889,11 @@ in ts_class {
   when extends != null {
     members statics inherits extends
     members members inherits extends.["prototype"]
+  }
+  # A base class is a function too (`C.name`, `C.length`).
+  # (A program without that global has no such layer.)
+  when extends == null && count(global_declarations(node, "Function", "type") ?? []) > 0 {
+    members statics inherits instance "Function"
   }
   # An interface of the same name merges into the instance (`implements`
   # adds nothing).

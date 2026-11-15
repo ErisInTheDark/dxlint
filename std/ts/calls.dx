@@ -175,7 +175,7 @@ define {
     calls tag with calls_arguments
   }
 
-  in ts_declarator {
+  in ts_declarator, ts_parameter {
     when type != null { in init expects type }
   }
   in ts_class_property { in init expects type ?? it.expected }
