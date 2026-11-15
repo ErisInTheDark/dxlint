@@ -212,6 +212,8 @@ in enum_transfer rule es-no-unsafe-enum-assignment {
     else "The value assigned here does not have a shared enum type with the expected enum {enum_names_text(contexts)}."
 }
 in ts_array.element rule es-no-unsafe-enum-assignment:element {
+  # A spread argument's elements are arguments (`:arguments` reports them).
+  when !(parent.parent is ts_spread && parent.parent.parent is (ts_call, ts_new))
   when !parent.enum_checked && unparenthesised_node(node) not (ts_object, ts_array)
   let contexts enum_policy(node, node)
   when any(contexts, context => enum_context_bad(context))
@@ -232,7 +234,10 @@ in ts_jsx_expression.expression rule es-no-unsafe-enum-assignment:jsx {
 in ts_call.argument, ts_new.argument, ts_template.expression rule es-no-unsafe-enum-assignment:arguments {
   when !(is ts_template.expression) || parent is ts_tagged_template.quasi
   when unparenthesised_node(node) not (ts_object, ts_array)
-  let contexts enum_policy(node, node)
+  # `f(...[1])` passes the elements: reported at the spread.
+  let passed if node is ts_spread && node.argument is ts_array then filter(node.argument.element.nodes,
+    item => unparenthesised_node(item) not (ts_object, ts_array)) else [node]
+  let contexts flat_map(passed, item => enum_policy(item, item))
   when any(contexts, context => enum_context_bad(context))
   warn "The argument passed here does not have a shared enum type with the expected enum {enum_names_text(contexts)}."
 }

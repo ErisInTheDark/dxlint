@@ -28,17 +28,21 @@ pub(super) fn expected(at: Leaf, values: &Values<'_>) -> Known<Option<NodeValue>
         answer => return answer,
     }
     if kind.calls.invokes.is_empty() {
-        // An argument may sit one level down (a tagged template's
-        // substitutions live in its template): the grandparent invokes.
-        let grandparent = match values.semantic.parent(parent) {
-            Known::Yes(Some(grandparent)) => grandparent,
-            Known::Yes(None) => return Known::Yes(None),
-            Known::Unknown => return Known::Unknown,
-        };
-        // A grandparent of no named kind invokes nothing.
-        let Some(outer) = super::kind(grandparent, values) else { return Known::Yes(None) };
-        if outer.calls.invokes.is_empty() { return Known::Yes(None) }
-        return argument_expected(grandparent, outer, at, values);
+        // An argument may sit a level or two down (a tagged template's
+        // substitutions live in its template; `f(...[a, b])` passes the
+        // spread array's elements): the nearest invoking ancestor decides.
+        let mut ancestor = parent;
+        for _ in 0..2 {
+            ancestor = match values.semantic.parent(ancestor) {
+                Known::Yes(Some(ancestor)) => ancestor,
+                Known::Yes(None) => return Known::Yes(None),
+                Known::Unknown => return Known::Unknown,
+            };
+            // An ancestor of no named kind invokes nothing.
+            let Some(outer) = super::kind(ancestor, values) else { return Known::Yes(None) };
+            if !outer.calls.invokes.is_empty() { return argument_expected(ancestor, outer, at, values) }
+        }
+        return Known::Yes(None);
     }
     argument_expected(parent, kind, at, values)
 }

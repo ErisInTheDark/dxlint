@@ -417,9 +417,13 @@ fn candidate(header: Header, call: Leaf, arguments: &[Leaf], receiver: Option<&N
         let mut captured = Vec::new();
         for &actual in actuals {
             if !values.question.budget.step() { return Known::Unknown }
-            // A spread of unknown length lands only in a rest parameter:
-            // it cannot become invented finite slots.
-            if !is_rest && rest(actual, values) != Known::Yes(false) { return Known::Unknown }
+            // A spread of unknown length lands in a rest parameter, or as the
+            // last argument in an optional one (it may be empty: `p.then(f,
+            // ...handlers)`); it cannot become invented required slots.
+            if !is_rest && rest(actual, values) != Known::Yes(false) {
+                let last = arguments.last() == Some(&actual);
+                if !last || values.optional(parameter) != Known::Yes(true) { return Known::Unknown }
+            }
             captured.push(actual);
         }
         mapping.push((parameter, captured));
@@ -469,18 +473,23 @@ fn candidate(header: Header, call: Leaf, arguments: &[Leaf], receiver: Option<&N
         'slots: for (parameter, is_rest, actuals) in slots {
             for (offset, &actual) in actuals.iter().enumerate() {
                 if compatible == Known::Yes(false) { break 'slots }
-                let spread = is_rest && match rest(actual, values) {
+                let spread = match rest(actual, values) {
                     Known::Yes(spread) => spread,
                     Known::Unknown => return Known::Unknown,
                 };
-                let expected = if spread {
+                let expected = if spread && is_rest {
                     values.values(parameter)
                 } else if is_rest {
                     values.member(&values.values(parameter), &Key::Ordinal(offset as u32))
                 } else {
                     values.values(parameter)
                 };
-                let actual = values.values(actual);
+                // A spread in a single parameter passes one of its elements.
+                let actual = if spread && !is_rest {
+                    values.member(&values.values(actual), &Key::Ordinal(0))
+                } else {
+                    values.values(actual)
+                };
                 let mismatch = exact.map(|exact| {
                     let mismatch = dynamic_mismatch(&expected, &actual, values);
                     if mismatch != Known::Yes(false) { exact.set(true) }

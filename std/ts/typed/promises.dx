@@ -99,7 +99,9 @@ in ts_call let promise_finally_callback { value callee.node; unparenthesised_nod
 
 fn promise_async_policy(n, names) = {
   value source: if n is ts_function && n.name != null then name_binding(n.name.node).node ?? n.name.node else n
-  value signatures: value_signatures(source)
+  # A getter is no callable: it returns its declared (or body's) value.
+  value getter: n is ts_method && n.kind == "get"
+  value signatures: if getter then [[{result: n.return_type.node ?? n}]] else value_signatures(source)
   value headers: flat_map(signatures ?? [], arm => arm)
   value returns: map(headers, header => {
     value arms: if header.result == null then null else value_parts(header.result)
@@ -128,8 +130,9 @@ fn promise_async_policy(n, names) = {
 
 in ts_call.argument, ts_new.argument, ts_template.expression rule es-no-misused-promises:void-arguments {
   when parent not ts_call || node.index != 0 || !parent.promise_finally_callback
-  when promise_void_context(node)
-  when !promise_void_overload_accepts(node)
+  # `f(...[1, async () => {}])` passes the elements: reported at the spread.
+  let passed if node is ts_spread && node.argument is ts_array then node.argument.element.nodes else [node]
+  when any(passed, item => promise_void_context(item) && !promise_void_overload_accepts(item))
   report at unparenthesised_node(node)
   warn "Promise returned in function argument where a void return was expected."
 }

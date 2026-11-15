@@ -158,15 +158,20 @@ define {
   in ts_type_parameter { optional when default != null }
   in ts_rest, ts_spread { fits rest }
 
+  # A spread array literal passes its elements (`f(...[1, cb])` is `f(1, cb)`).
+  in ts_call, ts_new {
+    let calls_arguments flat_map(argument.nodes, item => if item is ts_spread && item.argument is ts_array
+      && !any(item.argument.element.nodes, element => element is ts_spread) then item.argument.element.nodes else [item])
+  }
   in ts_call {
-    when in_optional_chain == true { calls (callee \ nullable, undefined) with argument }
+    when in_optional_chain == true { calls (callee \ nullable, undefined) with calls_arguments }
     # A bare call's `this` is void: a signature declaring `this: object` does not apply.
     when in_optional_chain != true && callee is ts_identifier {
-      calls callee with argument this (trait void, undefined, nullable, falsy, nonthenable)
+      calls callee with calls_arguments this (trait void, undefined, nullable, falsy, nonthenable)
     }
-    when in_optional_chain != true && !(callee is ts_identifier) { calls callee with argument }
+    when in_optional_chain != true && !(callee is ts_identifier) { calls callee with calls_arguments }
   }
-  in ts_new { constructs callee with argument }
+  in ts_new { constructs callee with calls_arguments }
   # Overload resolution tries the subtype relation (where `any` fits only
   # `any`/`unknown`) before assignability.
   in ts_call, ts_new { overloads exact first }
