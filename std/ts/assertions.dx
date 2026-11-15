@@ -233,6 +233,33 @@ fn assertion_named_unchanged(n, subject) = {
     else if written != null then written == n.type.text
     else !contains(["object", "unknown"], printed) && printed == ts_value_print_handle(n.type.node)
 }
+# TypeScript ESLint's hasSameProperties + mutual assignability, for differently
+# named shapes (`record as Props`): one shape each side, the same keys, each
+# readonly on both sides or neither, each pair of member values assignable both
+# ways. Compared member by member: an object literal's own runtime facts
+# (`object`, `truthy`) are no requirement an interface type could promise.
+# Plain shapes only: upstream also needs equal type arguments, which arrays,
+# tuples and instantiated generics would have to compare (`PropsB[]` vs
+# `PropsA[]` are mutually assignable yet kept).
+fn assertion_property_edges(n) = {
+  value arms: value_parts(n)
+  value plain: arms != null && count(arms) == 1 && all(first(arms).parts, part => part.product_known && part.product == null
+    && part.carrier_known && (part.carrier == null || count(part.carrier.arguments ?? []) == 0))
+  value if !plain then null else value_children(first(arms).handle, true, [])
+}
+fn assertion_property_readonly(edge) = any(edge.member.sources, source => contains(source.flags, "readonly"))
+fn assertion_same_properties(source, target) = {
+  value left: assertion_property_edges(source)
+  value right: assertion_property_edges(target)
+  value left != null && right != null && count(left) > 0 && count(left) == count(right)
+    && all(left, edge => edge.member != null) && all(right, edge => edge.member != null)
+    && all(left, edge => any(right, other => other.member.key == edge.member.key
+      && other.member.optional == edge.member.optional
+      && assertion_property_readonly(other) == assertion_property_readonly(edge)
+      && value_accepts(other.handle, edge.handle, "value", "value") == true
+      && value_accepts(edge.handle, other.handle, "value", "value") == true))
+    && value_accepts(target, source, "value", "value") == true
+}
 # The receiver's own typing (union, satisfies, another assertion) gives no contextual type.
 fn assertion_property_receiver(n) = {
   value property: n.parent.node
@@ -385,8 +412,8 @@ fn assertion_check(n, ignored, check_const) = {
       && !assertion_parts_deep_contain_any(operand, 4) && !assertion_parts_deep_contain_any(annotation, 4)
       && (assertion_same_value(subject, n.type.node)
         || (subject not (ts_object, ts_array) || assertion_context_identity(n) == true)
-          && assertion_named_unchanged(n, subject)
-          && assertion_same_shape(subject, n.type.node))
+          && (assertion_named_unchanged(n, subject) && assertion_same_shape(subject, n.type.node)
+            || assertion_same_properties(subject, n.type.node)))
   value generic: assertion_generic_call(subject)
   value literal_preserved: !any(annotation ?? [], arm => any(arm.parts, part =>
     part.identity_known && part.identity.kind == "value")) || assertion_literal_preserved(n)
