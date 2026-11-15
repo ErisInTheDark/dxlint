@@ -1250,6 +1250,9 @@ in ts_type_keyword {
       fits falsy when ts_value_intrinsic_formal always falsy
     }
   }
+  # The `this` type (`on(): this`) is the receiver of the call reading the
+  # signature (`store.on(1)`: `store`'s type); elsewhere it stays unknown.
+  when text == "this" { unwraps through.callee.object }
   when text == "string" { unwraps (trait string, truthy) | (trait string, falsy) }
   when text == "number" { unwraps (trait number, truthy) | (trait number, falsy) }
   when text == "boolean" { unwraps (trait boolean, truthy) | (trait boolean, falsy) }
