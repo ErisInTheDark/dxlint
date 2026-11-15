@@ -48,7 +48,7 @@ void open();
 | `es-use-using-disposable:declare` | a `const`, `let` or `var` initialized with a disposable value, on its name |
 | `es-use-using-disposable:hold` | an expression statement whose value is disposable |
 
-A value counts as disposable when it has a `[Symbol.dispose]` or `[Symbol.asyncDispose]` member; one with both is reported as asynchronous. A value typed `any` is not reported.
+A value counts as disposable when it has a `[Symbol.dispose]` or `[Symbol.asyncDispose]` member; one with both is reported as asynchronous. A value typed `any` is not reported, nor a method call that returns its receiver (`server.listen()` declared `listen(): this`): the receiver already holds that resource.
 
 `es-use-using-disposable:declare` also leaves out:
 

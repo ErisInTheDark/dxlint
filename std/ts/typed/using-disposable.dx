@@ -14,13 +14,21 @@ fn using_disposable_primitive(bare) = bare is (ts_null, ts_boolean, ts_number, t
 # members, so it cannot carry Symbol.dispose or Symbol.asyncDispose.
 fn using_disposable_plain_object(bare) = bare is ts_object
   && !any(bare.property.nodes, member => member is ts_spread || member.key is ts_computed_key)
+# A method returning its receiver (`server.listen(): this`) hands back a
+# resource its receiver already holds.
+fn using_disposable_returns_receiver(bare) = bare is ts_call && bare.callee is ts_member && {
+  value selection: call_selection(bare)
+  value selection != null && count(selection.selected) > 0 && all(selection.selected, site =>
+    any(site_field(bare, site, "return_type") ?? [], type => site_text(bare, type).text == "this"))
+}
 fn using_disposable_kind(n) = {
   value bare: unparenthesised_node(n)
   value if bare is ts_assignment && bare.operator == "=" then using_disposable_kind(bare.right.node)
     else if bare == null || using_disposable_primitive(bare) || using_disposable_plain_object(bare) then null else {
-    value if !(n could object) then null
+    value kind: if !(n could object) then null
       else if value_has_member(n, {global: "Symbol", class: "value", path: ["asyncDispose"]}, null) == true then "async"
       else if value_has_member(n, {global: "Symbol", class: "value", path: ["dispose"]}, null) == true then "sync" else null
+    value if kind == null || using_disposable_returns_receiver(bare) then null else kind
   }
 }
 in ts_node let using_disposable_held using_disposable_kind(node)

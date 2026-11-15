@@ -62,3 +62,8 @@ function testedOnly() { const a = open(); return a ? 1 : 2; }
 function borrowed() { const a = open(); consume(a); }
 function assignedLocally() { let a; a = open(); consume(a); }
 function cycle() { let a = open(); let b = a; a = b; b = a; }
+declare class Server implements AsyncDisposable { [Symbol.asyncDispose](): Promise<void>; listen(): this; fork(): Server }
+declare const server: Server;
+server.listen();
+const same = server.listen();
+server.fork();

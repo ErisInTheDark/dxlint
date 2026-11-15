@@ -18,3 +18,4 @@ input.ts:64:24-64:25 es-use-using-disposable:declare#1
 input.ts:64:40-64:41 es-use-using-disposable:declare#1
 input.ts:64:47-64:52 es-use-using-disposable:hold#1
 input.ts:64:54-64:59 es-use-using-disposable:hold#1
+input.ts:69:1-69:14 es-use-using-disposable:hold#0
