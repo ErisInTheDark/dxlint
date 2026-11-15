@@ -52,25 +52,30 @@ fn import_deprecation_doc(n, site) = {
     doc => doc != null))
 }
 fn import_remote_sites(n, sites) = filter(sites ?? [], site => import_remote_site(n, site))
-# `export { /** @deprecated */ X }`: the specifier carries the documentation,
-# not `X`'s declaration. Found among the statements of the declaring file.
+fn export_specifier_named(n, specifier, name) = {
+  value exported: first(site_field(n, specifier, "exported") ?? []) ?? first(site_field(n, specifier, "local") ?? [])
+  value exported != null && site_text(n, exported).text == name
+}
+# `export { /** @deprecated */ X }` or `/** @deprecated */ export { X }`: the
+# specifier or its statement carries the documentation, not `X`'s declaration.
+# Found among the statements of the declaring file.
 fn import_specifier_docs(n, site, name) = if !site_mentions(n, site, "@deprecated") then [] else {
   value root: last(walk([site], current => site_parent(n, current)))
   value exports: filter(site_field(n, root, "body") ?? [], statement => statement.kind == "ts_export")
-  value specifiers: flat_map(exports, statement => site_field(n, statement, "specifier") ?? [])
-  value named: filter(specifiers, specifier => {
-    value exported: first(site_field(n, specifier, "exported") ?? []) ?? first(site_field(n, specifier, "local") ?? [])
-    value exported != null && site_text(n, exported).text == name
-  })
-  value map(named, specifier => deprecation_leading_doc(site_text(n, specifier).leading))
+  value flat_map(exports, statement => flat_map(
+    filter(site_field(n, statement, "specifier") ?? [], specifier => export_specifier_named(n, specifier, name)),
+    specifier => [deprecation_leading_doc(site_text(n, specifier).leading), deprecation_leading_doc(site_text(n, statement).leading)]))
 }
-fn import_deprecation_tag(n) = {
+# `declarations`: whether the declarations' own docs count, beside the export
+# specifiers'; a call with one selected signature reads only that signature's.
+fn import_deprecation_tag(n, declarations) = {
   value values: import_remote_sites(n, name_definitions(n, "value"))
   value types: if count(values) > 0 then [] else import_remote_sites(n, name_definitions(n, "type"))
   value sites: filter(if count(values) > 0 then values else types, site => site_mentions(n, site, "@deprecated"))
   value if count(sites) == 0 then null else {
     value imported: name_binding(n).node.imported_name ?? n.text
-    value deprecation_first(flat_map(reverse(sites), site => [import_deprecation_doc(n, site)] import_specifier_docs(n, site, imported)))
+    value deprecation_first(flat_map(reverse(sites), site =>
+      (if declarations then [import_deprecation_doc(n, site)] else []) import_specifier_docs(n, site, imported)))
   }
 }
 fn deprecation_local_doc(n) = {
@@ -147,7 +152,11 @@ fn deprecation_reason(n) = {
     else site_sources(subject, site).sites ?? [])
   value members: if subject is (ts_member, ts_index) || subject.deprecation_pattern_key then deprecation_symbols(subject).sites else []
   value origin: declaration_identity(subject)
-  value declarations: unique([] members (if origin != null then [origin] else []) sites)
+  # A name read from a destructured member (`const { old: local } = o; local`)
+  # is not that member: only a member access reports it.
+  value own_sites: if subject not ts_identifier then sites else filter(sites, site =>
+    !contains(["ts_property_signature", "ts_property", "ts_pattern_property", "ts_method_signature", "ts_class_property"], site.kind))
+  value declarations: unique([] members (if origin != null then [origin] else []) own_sites)
   value owners: if call == null then declarations else filter(roots.sites ?? [], site =>
     !contains(["ts_function", "ts_arrow", "ts_method", "ts_function_type", "ts_method_signature", "ts_call_signature"], site.kind))
   value signatures: if call != null && selection != null && !selection.uncertain && count(selection.selected) == 1
@@ -159,9 +168,11 @@ fn deprecation_reason(n) = {
     && name_binding(subject.object.node).node is ts_import.namespace
   value published: if namespace then flat_map(members, site => import_specifier_docs(subject, site, deprecation_symbols(subject).name)) else []
   value own: deprecation_first([deprecation_local_doc(subject)] docs published)
-  # A name bound by an import is deprecated where its module publishes it.
-  value imported: if own == null && subject is ts_identifier && name_binding(subject).node.deprecation_import == true
-    then import_deprecation_tag(subject) else null
+  # A name bound by an import is deprecated where its module publishes it;
+  # with one selected signature, only the export specifiers' docs join its own.
+  value imported: if own == null && subject is ts_identifier
+    && (name_binding(subject).node.deprecation_import == true || subject.deprecation_reexport)
+    then import_deprecation_tag(subject, count(signatures) == 0) else null
   value own ?? imported
 }
 
@@ -169,6 +180,8 @@ in ts_node let deprecation_import
   if is (ts_import, ts_import_equals) then true
   else if is (ts_program, ts_block, ts_function, ts_arrow, ts_class, ts_interface) then false
   else parent.deprecation_import == true
+# `export { x } from "m"`: `x` names the module's export, bound by nothing local.
+in ts_node let deprecation_reexport is ts_export_specifier.local && parent.parent.from != null
 in ts_node let deprecation_pattern_key is ts_pattern_property.key || is ts_property.key && parent.flow_destructuring_target
 in ts_node let deprecation_shorthand is ts_property.key && parent.value.node == null && !deprecation_pattern_key
 in ts_node let deprecation_excluded

@@ -17,8 +17,8 @@ fn import_namespace(n) = {
 }
 
 # Found once per import, not once per use of the name it binds.
-in ts_import_specifier let import_tag import_deprecation_tag(local.node ?? imported.node)
-in ts_import let import_default_tag if default_import == null then null else import_deprecation_tag(default_import.node)
+in ts_import_specifier let import_tag import_deprecation_tag(local.node ?? imported.node, true)
+in ts_import let import_default_tag if default_import == null then null else import_deprecation_tag(default_import.node, true)
 
 in ts_import_specifier rule es-import-no-deprecated:specifier {
   when import_tag != null

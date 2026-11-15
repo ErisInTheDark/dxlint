@@ -41,7 +41,13 @@ fn definitions(semantic: &Semantic<'_>, at: Leaf, args: &[Value<'static>]) -> Kn
     let names = context.names;
     let declaration = if names.declared.contains_key(&context.node.node) { context.node.node }
         else if let Some(&declaration) = names.declaration.get(&context.node.node) { declaration }
-        else { return Known::Yes(Value::Null) };
+        // No local declaration: a name the module layer resolves itself
+        // (a re-export's `export { x } from "m"`) still stands for its own.
+        else { return match semantic.modules().definition(context.node, class) {
+            Known::Yes(Some(targets)) if !targets.is_empty() => Known::Yes(sites(semantic, targets)),
+            Known::Unknown => Known::Unknown,
+            Known::Yes(_) => Known::Yes(Value::Null),
+        } };
     // Of merged declarations (`interface X` + `namespace X`), the one of `class`.
     let declaration = names.declaration_in(names.merged.get(&declaration).copied().unwrap_or(declaration), class);
     let node = NodeRef { file: context.node.file, node: declaration };
@@ -52,21 +58,26 @@ fn definitions(semantic: &Semantic<'_>, at: Leaf, args: &[Value<'static>]) -> Kn
             ("file".into(), Value::Num(f64::from(node.file))),
             ("node".into(), Value::Num(f64::from(node.node))),
         ])])),
-        Known::Yes(Some(targets)) => Known::Yes(Value::list(targets.into_iter().filter_map(|target| {
-            // A scope target (a namespace, an enum) stands for its owner.
-            let node = match target {
-                Target::Node(node) => node,
-                Target::Scope(scope) => NodeRef { file: scope.file, node: semantic.world.names(scope.file)?.scopes.get(scope.scope as usize)?.node },
-                _ => return None,
-            };
-            Some(Value::record(vec![
-                ("file".into(), Value::Num(f64::from(node.file))),
-                ("node".into(), Value::Num(f64::from(node.node))),
-            ]))
-        }).collect())),
+        Known::Yes(Some(targets)) => Known::Yes(sites(semantic, targets)),
         Known::Yes(None) => Known::Yes(Value::list(Vec::new())),
         Known::Unknown => Known::Unknown,
     }
+}
+
+/// Definition targets as `{file, node}` sites; a scope target (a
+/// namespace, an enum) stands for its owner.
+fn sites(semantic: &Semantic<'_>, targets: Vec<Target>) -> Value<'static> {
+    Value::list(targets.into_iter().filter_map(|target| {
+        let node = match target {
+            Target::Node(node) => node,
+            Target::Scope(scope) => NodeRef { file: scope.file, node: semantic.world.names(scope.file)?.scopes.get(scope.scope as usize)?.node },
+            _ => return None,
+        };
+        Some(Value::record(vec![
+            ("file".into(), Value::Num(f64::from(node.file))),
+            ("node".into(), Value::Num(f64::from(node.node))),
+        ]))
+    }).collect())
 }
 
 enum Role {
