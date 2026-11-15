@@ -15,7 +15,7 @@ function written<T extends Element>(x: T | null) {
 }
 function nested<T extends Element>(x: T | null) {
   if (!x) return;
-  const child = () => new C<T>(x);
+  const child = () => new C(x);
 }
 function unrelated<T extends Element>(x: T | null, y: T | null) {
   if (!y) return;
