@@ -119,6 +119,20 @@ pub(super) fn sites(values: &Values<'_>, at: Leaf, mut expression: &Value) -> Kn
             }
             Value::Spread { path, .. } => return values.follow(at, path),
             Value::Scope { classes, from } => return values.scopes(at, from, *classes),
+            // A global's declarations (`scope namespace from instance "JSX"`).
+            Value::Instance { name, classes, arguments } if arguments.is_empty() => {
+                let Some(importer) = values.importer(at) else { return Known::Unknown };
+                let Known::Yes(targets) = values.semantic.modules().global(importer, name, *classes) else { return Known::Unknown };
+                let mut sites = Vec::with_capacity(targets.len());
+                for target in targets {
+                    let Target::Node(node) = target else { return Known::Unknown };
+                    let Known::Yes(owner) = values.declaration_owner(node) else { return Known::Unknown };
+                    // Read in the view asked for (`in type`: its type members).
+                    let frame = values.question.bind_definition(crate::question::FrameId::ROOT, owner, None, None, *classes);
+                    sites.push(Leaf { target: Target::Node(owner), frame });
+                }
+                return Known::Yes(sites);
+            }
             Value::From(base, key, classes) if *classes == 0 => {
                 let base = Run::new(values, vec![Task::Expression(at, base)]).run_answer();
                 let answer = if !base.exists {

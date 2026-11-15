@@ -12,8 +12,10 @@ define {
 exclusive null, undefined, string, number, boolean, bigint, symbol, object
 exclusive falsy, truthy
 exclusive thenable, nonthenable
-# TypeScript's `object` keyword takes every non-primitive: a shape with members is one.
+# TypeScript's `object` keyword takes every non-primitive: a shape is one,
+# even `{}` (`{} extends object` holds; as a target `{}` still takes `"abc"`).
 trait shaped implies object
+trait structural implies object
 trait array implies object
 trait tuple implies object
 trait callable implies object

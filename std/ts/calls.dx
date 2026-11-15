@@ -224,9 +224,14 @@ define {
     }
   }
   in ts_property { in value expects it.expected }
+  # An intrinsic element (`<div>`, `<x-widget>`) takes `JSX.IntrinsicElements[tag]`.
   in ts_jsx_attribute {
     let calls_jsx_key ts_value_key(name.node)
-    in value expects parent.name.first_parameter.[calls_jsx_key]
+    let calls_jsx_intrinsic if re_test(parent.name.text, /^[a-z]|-/) then parent.name.text else null
+    when calls_jsx_intrinsic == null { in value expects parent.name.first_parameter.[calls_jsx_key] }
+    when calls_jsx_intrinsic != null {
+      in value expects (scope namespace from instance "JSX" in type).["IntrinsicElements"].[calls_jsx_intrinsic].[calls_jsx_key]
+    }
   }
   in ts_jsx_expression { in expression expects it.expected }
   in ts_arrow {
