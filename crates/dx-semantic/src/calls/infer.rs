@@ -31,9 +31,19 @@ pub(super) fn instantiate(header: Header, call: Leaf, mapping: &[(Leaf, Vec<Leaf
     values.calls().profile(ProfileQuery::Infer, || {
         let Known::Yes(site) = values.semantic.leaf(header.site) else { return Known::Unknown };
         let header = Header { site, ..header };
-        let Some(owner) = node(header.site, values) else { return Known::Unknown };
-        let Known::Yes(classes) = values.question.owner_classes(header.site.frame, owner) else { return Known::Unknown };
-        let Known::Yes(formals) = formals(header.site, values) else { return Known::Unknown };
+        // A signature inherited by a class (`class C<T> extends B`) makes the
+        // class's own instance: its formals are the class's, and the bound
+        // frame is where its result (`returns`) is read.
+        let generic = match header.delegate {
+            Some((delegate, _)) => {
+                let Known::Yes(delegate) = values.semantic.leaf(delegate) else { return Known::Unknown };
+                delegate
+            }
+            None => header.site,
+        };
+        let Some(owner) = node(generic, values) else { return Known::Unknown };
+        let Known::Yes(classes) = values.question.owner_classes(generic.frame, owner) else { return Known::Unknown };
+        let Known::Yes(formals) = formals(generic, values) else { return Known::Unknown };
         if !formals.is_empty() && dx_core::levers::on(dx_core::levers::Lever::NoInference) { return Known::Unknown }
         let mut contributions = Vec::new();
         for (position, formal) in formals.iter().enumerate() {
@@ -78,8 +88,21 @@ pub(super) fn instantiate(header: Header, call: Leaf, mapping: &[(Leaf, Vec<Leaf
                 }
             }
         }
-        let Known::Yes(contributions) = run.arguments() else { return Known::Unknown };
+        let Known::Yes(mut contributions) = run.arguments() else { return Known::Unknown };
         let pending = deferred && contributions.iter().any(Option::is_none);
+        // What the arguments leave unbound the call's context may infer
+        // through the result (`get() as number`, `const x: Box<string> =
+        // make()`), below every argument (TypeScript's return type inference).
+        if !pending && header.delegate.is_none() && contributions.iter().any(Option::is_none) {
+            if let (Known::Yes(Some(context)), Some((site, signature))) = (values.calls().expected(call), super::signature(header, values)) {
+                if let Known::Yes(mut returned) = super::accepts::Run::new(values, &formals, &contributions) {
+                    let pattern = returned.recipe(site, &signature.result);
+                    returned.deferring(false);
+                    let _ = returned.relate_or_skip(&pattern, &context);
+                    if let Known::Yes(found) = returned.arguments() { contributions = found }
+                }
+            }
+        }
         let mut slots = Vec::new();
         let mut defaulted = Vec::new();
         for (&formal, contribution) in formals.iter().zip(contributions) {
@@ -87,7 +110,7 @@ pub(super) fn instantiate(header: Header, call: Leaf, mapping: &[(Leaf, Vec<Leaf
             let mut from_default = false;
             let value = if let Some(value) = contribution { value } else {
                 let Known::Yes(prefix) = copy_slots(&slots, values) else { return Known::Unknown };
-                let frame = values.question.bind_slots(header.site.frame, owner, Some(call), prefix.into_iter().map(Some).collect(), classes);
+                let frame = values.question.bind_slots(generic.frame, owner, Some(call), prefix.into_iter().map(Some).collect(), classes);
                 let formal = Leaf { frame, ..formal };
                 // Waiting on a callback in the first pass: an open parameter
                 // (itself and its bound) that types the callback
@@ -127,7 +150,7 @@ pub(super) fn instantiate(header: Header, call: Leaf, mapping: &[(Leaf, Vec<Leaf
         // the declaration): only the other slots are checked.
         let (checked, defaults): (Vec<_>, Vec<_>) = slots.into_iter().zip(defaulted)
             .map(|(slot, from_default)| if from_default { (None, Some(slot)) } else { (Some(slot), None) }).unzip();
-        let checked = match constrained_arguments(header.site, Some(call), &formals, checked, &locked, values) {
+        let checked = match constrained_arguments(generic, Some(call), &formals, checked, &locked, values) {
             Known::Yes(Some(slots)) => slots,
             Known::Yes(None) => return Known::Yes(None),
             Known::Unknown => return Known::Unknown,
@@ -135,11 +158,15 @@ pub(super) fn instantiate(header: Header, call: Leaf, mapping: &[(Leaf, Vec<Leaf
         let slots = checked.into_iter().zip(defaults).map(|(slot, default)| default.or(slot)).collect();
         // Nothing to instantiate: the header's own frame, so a non-generic
         // signature has one result for every call site, as in TypeScript.
-        let frame = if formals.is_empty() { header.site.frame }
-            else { values.question.bind_slots(header.site.frame, owner, Some(call), slots, classes) };
+        let frame = if formals.is_empty() { generic.frame }
+            else { values.question.bind_slots(generic.frame, owner, Some(call), slots, classes) };
+        let (site, delegate) = match header.delegate {
+            Some((_, index)) => (header.site, Some((Leaf { frame, ..generic }, index))),
+            None => (Leaf { frame, ..header.site }, None),
+        };
         let mut fits = if check { Known::Yes(true) } else { Known::Unknown };
         for (parameter, actuals) in if check { mapping } else { &[] } {
-            let parameter = Leaf { frame, ..*parameter };
+            let parameter = Leaf { frame: site.frame, ..*parameter };
             let Known::Yes(is_rest) = super::rest(parameter, values) else { return Known::Unknown };
             for (offset, &actual) in actuals.iter().enumerate() {
                 let expected = if is_rest {
@@ -154,7 +181,7 @@ pub(super) fn instantiate(header: Header, call: Leaf, mapping: &[(Leaf, Vec<Leaf
                 }
             }
         }
-        Known::Yes(Some(Instantiated { header: Header { site: Leaf { frame, ..header.site }, ..header }, fits, pending }))
+        Known::Yes(Some(Instantiated { header: Header { site, delegate, ..header }, fits, pending }))
     })
 }
 

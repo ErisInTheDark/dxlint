@@ -302,10 +302,9 @@ impl<'a, 'world> Run<'a, 'world> {
             let target = spelled_target.as_deref().unwrap_or(&expected[..]);
             let mut answer = self.choose(target, |run, expected| run.alternative(expected, actual));
             // A value that stands for finite alternatives (an enum type)
-            // fits a target its alternatives each fit (`E` to `E.A | E.B`):
-            // only a target naming some of them can (their rows hold it).
-            if answer != Known::Yes(true) && actual.len() == 1
-                && expected.iter().any(|row| row.len() > 1 && row.contains(&actual[0])) {
+            // fits a target its alternatives each fit (`E` to `E.A | E.B`,
+            // a numeric `E` to `number`).
+            if answer != Known::Yes(true) && actual.len() == 1 {
                 if let Some(spelled) = self.enumerated_arm(actual) {
                     let whole = NodeValue::Alternatives(expected.clone());
                     match self.alternatives(&whole, &spelled) {

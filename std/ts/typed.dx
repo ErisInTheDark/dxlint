@@ -49,12 +49,16 @@ define {
 
 fn generated_empty_type(n) = {
   value arms: value_parts(n)
-  value arms != null && any(arms, arm =>
-    count(arm.parts) > 0 && all(arm.parts, part =>
+  value arms != null && any(arms, arm => {
+    # An intersection node kept as its own part (`T & {}`) adds no members.
+    value concrete: filter(arm.parts, part => part.traits != ["intersection"])
+    value handles: if count(concrete) == count(arm.parts) then [arm.handle] else map(concrete, part => part.handle)
+    value count(concrete) > 0 && all(concrete, part =>
       contains(part.traits, "structural") && count(part.uncertain_traits) == 0
       && part.carrier_known && part.carrier == null)
-    && value_children(arm.handle, true, []) == []
-    && value_signatures(arm.handle) == [[]] && value_constructors(arm.handle) == [[]])
+      && all(handles, handle => value_children(handle, true, []) == []
+        && value_signatures(handle) == [[]] && value_constructors(handle) == [[]])
+  })
 }
 in ts_type_reference, ts_intersection rule es-no-generated-empty-object-type {
   when node is ts_intersection || count(type_argument.nodes) > 0
@@ -186,7 +190,9 @@ fn stringification_ignored_alias(n, ignored) = {
   value roots: value_sources(n)
   value sites: walk(if count(roots.sites) == 1 then roots.sites else [], site =>
     if count(site_sources(n, site).sites) == 1 then site_sources(n, site).sites else [])
-  value arms != null && all(arms, arm => all(arm.parts, part => part.carrier_known && part.carrier == null))
+  # TypeScript keeps an alias's name for unions and structural shapes, not
+  # for a lone class or interface (`type ClassAlias = Plain` reads as `Plain`).
+  value arms != null && (count(arms) > 1 || all(arms, arm => all(arm.parts, part => part.carrier_known && part.carrier == null)))
     && any(sites, site => site.kind == "ts_type_alias" && contains(ignored, site.name))
 }
 fn stringification_part(n, part, ignored, check_unknown, seen) = {

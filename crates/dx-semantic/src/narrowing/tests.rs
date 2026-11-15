@@ -351,10 +351,10 @@ use dx_tree::{Edge, Node, Tree};
         let world = TestWorld::new();
         let mut tables = tables();
         let forward = Value::Includes {
-            value: Box::new(Value::Path(vec![2])), from: None,
+            value: Box::new(Value::Path(vec![2])), from: None, dynamic: false,
         };
         let reverse = Value::Includes {
-            value: Box::new(Value::Path(vec![])), from: Some(Box::new(Value::Path(vec![2]))),
+            value: Box::new(Value::Path(vec![])), from: Some(Box::new(Value::Path(vec![2]))), dynamic: false,
         };
         tables.kinds[0].unwraps = [forward.clone(), reverse.clone()].into_iter().map(|value| Unwrapping {
             effect: Some(0), value: Some(value), ..Default::default()
@@ -444,7 +444,7 @@ use dx_tree::{Edge, Node, Tree};
         tables.kinds[9].unwraps.push(Unwrapping { value: Some(Value::Path(vec![10, 2])), ..Default::default() });
         tables.kinds[10].unwraps.push(Unwrapping {
             effect: Some(0),
-            value: Some(Value::Includes { value: Box::new(Value::Path(vec![12])), from: Some(Box::new(Value::Path(vec![11]))) }),
+            value: Some(Value::Includes { value: Box::new(Value::Path(vec![12])), from: Some(Box::new(Value::Path(vec![11]))), dynamic: false }),
             ..Default::default()
         });
         tables.kinds[11].calls.invokes.push(Conditional {
@@ -724,7 +724,7 @@ use dx_tree::{Edge, Node, Tree};
         let question = QueryContext::default();
         let semantic = Semantic::new(&world, &tables, &question);
         let subject = Place { root: leaf(1), path: vec![] };
-        let proof = Value::Includes { value: Box::new(Value::Path(vec![2])), from: None };
+        let proof = Value::Includes { value: Box::new(Value::Path(vec![2])), from: None, dynamic: false };
         let positive = semantic.narrowing().apply(leaf(3), &proof, &subject, candidates());
         let negative = semantic.narrowing().apply(leaf(3), &Value::Not(Box::new(proof)), &subject, candidates());
         assert_eq!(semantic.values().always(&positive, 1 << 1), Known::Yes(true));
@@ -743,7 +743,7 @@ use dx_tree::{Edge, Node, Tree};
         let question = QueryContext::default();
         let semantic = Semantic::new(&world, &tables, &question);
         let subject = Place { root: leaf(1), path: vec![] };
-        let proof = Value::Includes { value: Box::new(Value::Path(vec![2])), from: None };
+        let proof = Value::Includes { value: Box::new(Value::Path(vec![2])), from: None, dynamic: false };
         let before = NodeValue::leaf(leaf(12));
         let positive = semantic.narrowing().apply(leaf(3), &proof, &subject, before.clone());
         assert_eq!(semantic.values().always(&positive, 1 << 1), Known::Yes(true));
@@ -761,7 +761,7 @@ use dx_tree::{Edge, Node, Tree};
         let semantic = Semantic::new(&world, &tables, &question);
         let subject = Place { root: leaf(1), path: vec![] };
         let before = NodeValue::rows(vec![vec![leaf(11)], vec![leaf(12)]]);
-        let proof = Value::Includes { value: Box::new(Value::Path(vec![3])), from: None };
+        let proof = Value::Includes { value: Box::new(Value::Path(vec![3])), from: None, dynamic: false };
         let positive = semantic.narrowing().apply(leaf(3), &proof, &subject, before.clone());
         let negative_proof = Value::Not(Box::new(proof.clone()));
         let negative = semantic.narrowing().apply(leaf(3), &negative_proof, &subject, before);

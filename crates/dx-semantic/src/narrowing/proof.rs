@@ -48,7 +48,7 @@ impl Narrowing<'_> {
                         pending.push(Work::Test { at: *site, negative, input });
                     }
                     Value::Excludes { traits, from } => results.push(self.excludes(at, from.as_deref(), &context, input, *traits, negative)),
-                    Value::Includes { value, from } => results.push(self.includes(at, from.as_deref(), &context, input, value, negative)),
+                    Value::Includes { value, from, dynamic } => results.push(self.includes(at, from.as_deref(), &context, input, value, negative, *dynamic)),
                     Value::Has { key, from } => results.push(self.has(at, from.as_deref(), &context, input, key, negative)),
                     _ => results.push(input),
                 },
@@ -234,6 +234,13 @@ impl Narrowing<'_> {
         matches!(value, NodeValue::Alternatives(rows) if !rows.is_empty() && rows.iter().all(|row| values.wholly_top(row)))
     }
 
+    /// `value` is only dynamic tops (`any`).
+    fn wholly_dynamic(&self, value: &NodeValue) -> bool {
+        let values = self.semantic.values();
+        matches!(value, NodeValue::Alternatives(rows) if !rows.is_empty()
+            && rows.iter().all(|row| !row.is_empty() && row.iter().all(|&leaf| values.dynamic(leaf) == Known::Yes(true))))
+    }
+
     fn excludes(&self, at: Leaf, from: Option<&Value>, context: &ProofContext<'_>, base: NodeValue, traits: u64, negative: bool) -> NodeValue {
         let Known::Yes(path) = self.projection(at, from, context, None) else { return base };
         if lone_through_member(&path, &base) { return base }
@@ -266,7 +273,8 @@ impl Narrowing<'_> {
         through_member(fallback, kept)
     }
 
-    fn includes(&self, at: Leaf, from: Option<&Value>, context: &ProofContext<'_>, base: NodeValue, value: &Value, negative: bool) -> NodeValue {
+    #[allow(clippy::too_many_arguments)]
+    fn includes(&self, at: Leaf, from: Option<&Value>, context: &ProofContext<'_>, base: NodeValue, value: &Value, negative: bool, dynamic: bool) -> NodeValue {
         let Known::Yes(path) = self.projection(at, from, context, None) else { return base };
         if lone_through_member(&path, &base) { return base }
         let expected = self.semantic.values().evaluate(at, value);
@@ -278,18 +286,21 @@ impl Narrowing<'_> {
         let mut kept = Vec::new();
         for alternative in alternatives {
             let actual = self.projected(NodeValue::rows(vec![alternative.clone()]), &path);
-            let included = self.included(&expected, &actual)
-                || negative && path.is_empty() && self.included_with_fewer(&expected, &alternative);
+            // A guard narrows `unknown` (and `any`, when the test says so) to
+            // what it tests for (`typeof x === "string"`: `string`), not to
+            // an intersection; `any` fits everything, so this comes first.
+            let top = !negative && path.is_empty() && self.wholly_top(&actual)
+                && (dynamic || !self.wholly_dynamic(&actual));
+            let included = !top && (self.included(&expected, &actual)
+                || negative && path.is_empty() && self.included_with_fewer(&expected, &alternative));
             if self.semantic.question.budget.exhausted() { return NodeValue::Unknown }
             if negative {
                 if !included || self.wholly_top(&actual) { kept.push(alternative) }
-            } else if included {
-                kept.push(alternative);
-            } else if path.is_empty() && self.wholly_top(&actual) {
-                // A guard narrows `any`/`unknown` to what it tests for
-                // (`typeof x === "string"`: `string`), not to an intersection.
+            } else if top {
                 let NodeValue::Alternatives(refined) = &expected else { unreachable!() };
                 kept.extend(refined.iter().cloned());
+            } else if included {
+                kept.push(alternative);
             } else if !self.proven_disjoint(&expected, &actual) {
                 if path.is_empty() {
                     let NodeValue::Alternatives(refined) = &expected else { unreachable!() };

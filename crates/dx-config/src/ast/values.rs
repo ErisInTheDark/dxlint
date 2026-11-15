@@ -69,11 +69,18 @@ pub enum Unwrap {
     Intersection(Vec<Unwrap>),
     Spread { intersection: bool, path: Vec<Name>, value: Option<Box<Unwrap>> },
     From(Box<Unwrap>, Box<Unwrap>, Vec<Name>),
+    /// `a.?[key]`: the member at `key` of those alternatives of `a` that
+    /// have it (a contextual member: `{ a } | { b }` gives `a`'s type for `a`).
+    Present(Box<Unwrap>, Box<Unwrap>),
+    /// `instantiate <value> with <field>`: the value's generic declarations
+    /// bound to the field's nodes, in order (`take<Callback>`).
+    Instantiate { of: Box<Unwrap>, arguments: Vec<Name> },
     /// Project owned scopes without unwrapping the source nodes.
     Scope { classes: Vec<Name>, from: Box<Unwrap> },
     Not(Box<Unwrap>),
     Excludes { traits: Vec<Name>, from: Option<Box<Unwrap>> },
-    Includes { value: Box<Unwrap>, from: Option<Box<Unwrap>> },
+    /// `dynamic`: the test also narrows a dynamic top (`any`) to `value`.
+    Includes { value: Box<Unwrap>, from: Option<Box<Unwrap>>, dynamic: bool },
     Has { key: Box<Unwrap>, from: Option<Box<Unwrap>> },
     /// `keys of <value>`: the value's member keys, each a literal (`keyof`).
     Keys { of: Box<Unwrap> },

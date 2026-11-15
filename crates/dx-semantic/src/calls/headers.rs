@@ -9,8 +9,12 @@ pub(super) fn headers(value: &NodeValue, invoke: InvokeKind, values: &Values<'_>
         return Known::Unknown;
     };
     let NodeValue::Alternatives(arms) = values.expand(value) else { return Known::Unknown };
+    let parameter = values.tables.vocabulary.trait_bit("parameter");
     let mut sets = Vec::new();
     for arm in arms {
+        // An open type parameter beside its constraint's parts calls as the
+        // constraint (TypeScript's apparent type).
+        let constrained = arm.len() > 1;
         let mut pending: Vec<_> = arm.into_iter().rev().map(|site| (site, None)).collect();
         let mut set = Vec::new();
         let mut seen = FxHashSet::default();
@@ -19,6 +23,8 @@ pub(super) fn headers(value: &NodeValue, invoke: InvokeKind, values: &Values<'_>
             let Known::Yes(site) = values.semantic.leaf(site) else { return Known::Unknown };
             match values.fits(site, trait_id as u16) {
                 Known::Yes(false) => continue,
+                Known::Unknown if constrained && parameter != 0
+                    && values.always(&NodeValue::leaf(site), parameter) == Known::Yes(true) => continue,
                 Known::Unknown => return Known::Unknown,
                 Known::Yes(true) => {}
             }

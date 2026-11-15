@@ -954,7 +954,7 @@ impl<'a> Parser<'a> {
         // no payload).
         let effect = (first.kind == Tk::Ident
             && !self.ts.peek_raw(1).is_some_and(|token| token.is_ident("for"))
-            && !matches!(&*first.text, "from" | "excludes" | "includes" | "has" | "scope" | "instance" | "trait" | "select" | "product" | "modified" | "unknown")
+            && !matches!(&*first.text, "from" | "excludes" | "includes" | "has" | "scope" | "instance" | "instantiate" | "trait" | "select" | "product" | "modified" | "unknown")
             && !(first.is_ident("returned") && self.ts.peek_raw(1).is_some_and(|token| token.is_ident("default")))
             && !(first.is_ident("keys") && self.ts.peek_raw(1).is_some_and(|token| token.is_ident("of")))
             && (possible || matches!(next, Some(Tk::Ident | Tk::Bang | Tk::Str | Tk::LParen))))
@@ -1047,16 +1047,21 @@ impl<'a> Parser<'a> {
         self.unwrap_lookup()
     }
 
-    /// `a.[key]`: the member of `a` at `key` (as `from a at key`); binds
-    /// tightest.
+    /// `a.[key]`: the member of `a` at `key` (as `from a at key`); `a.?[key]`
+    /// reads it only from the alternatives that have it. Binds tightest.
     fn unwrap_lookup(&mut self) -> Option<Unwrap> {
         let mut value = self.unwrap_primary()?;
-        while self.on_line(Tk::Dot) && self.ts.peek_raw(1).is_some_and(|t| t.kind == Tk::LBrack) {
+        loop {
+            let present = self.ts.peek_raw(1).is_some_and(|t| t.kind == Tk::Question)
+                && self.ts.peek_raw(2).is_some_and(|t| t.kind == Tk::LBrack);
+            if !self.on_line(Tk::Dot) || !(present || self.ts.peek_raw(1).is_some_and(|t| t.kind == Tk::LBrack)) { break }
             self.ts.next_raw();
+            if present { self.ts.next_raw(); }
             self.ts.next_raw();
             let key = self.unwrap_value()?;
             self.expect(Tk::RBrack, "`]`")?;
-            value = Unwrap::From(Box::new(value), Box::new(key), Vec::new());
+            value = if present { Unwrap::Present(Box::new(value), Box::new(key)) }
+                else { Unwrap::From(Box::new(value), Box::new(key), Vec::new()) };
         }
         Some(value)
     }
@@ -1107,6 +1112,16 @@ impl<'a> Parser<'a> {
             Tk::Ident if &*t.text == "select" => {
                 self.ts.next_raw();
                 self.select_value()
+            }
+            Tk::Ident if &*t.text == "instantiate" => {
+                self.ts.next_raw();
+                let of = Box::new(self.unwrap_unary()?);
+                if !self.word("with") {
+                    self.error_here("expected `with <field>`: `instantiate expression with type_argument`");
+                    return None;
+                }
+                let arguments = self.name_path("the field holding the type arguments")?;
+                Some(Unwrap::Instantiate { of, arguments })
             }
             Tk::Ident if &*t.text == "unknown" => {
                 self.ts.next_raw();
@@ -1172,7 +1187,14 @@ impl<'a> Parser<'a> {
                 self.ts.next_raw();
                 let what = Box::new(self.unwrap_unary()?);
                 let from = if self.word("from") { Some(Box::new(self.unwrap_unary()?)) } else { None };
-                Some(if &*t.text == "includes" { Unwrap::Includes { value: what, from } } else { Unwrap::Has { key: what, from } })
+                Some(if &*t.text == "includes" {
+                    // `static` spells the default, for macros choosing either.
+                    let dynamic = self.word("dynamic");
+                    if !dynamic { self.word("static"); }
+                    Unwrap::Includes { value: what, from, dynamic }
+                } else {
+                    Unwrap::Has { key: what, from }
+                })
             }
             Tk::Ident if &*t.text == "excludes" => {
                 self.ts.next_raw();
@@ -1400,9 +1422,9 @@ impl<'a> Parser<'a> {
     fn name_path(&mut self, what: &str) -> Option<Vec<Name>> {
         self.skip(false, true);
         let mut path = vec![self.ident(what)?];
-        // `a.[key]` is a lookup after the path, not part of it.
+        // `a.[key]` and `a.?[key]` are lookups after the path, not part of it.
         while self.ts.peek_raw(0).is_some_and(|t| t.kind == Tk::Dot)
-            && !self.ts.peek_raw(1).is_some_and(|t| t.kind == Tk::LBrack)
+            && !self.ts.peek_raw(1).is_some_and(|t| matches!(t.kind, Tk::LBrack | Tk::Question))
         {
             self.ts.next_raw();
             path.push(self.ident(what)?);

@@ -100,7 +100,8 @@ in ts_enum_member {
 in ts_qualified_name {
   arguments parent.type_argument
   let ts_value_qualified_key ts_value_key(right.node)
-  defines (scope module, namespace from left.definition).[ts_value_qualified_key] ?? (scope statics from left.definition).[ts_value_qualified_key]
+  # `import Alias = ns.E; Alias.Zero`: the alias stands for what it defines.
+  defines (scope module, namespace from left.definition).[ts_value_qualified_key] ?? (scope statics from left.definition).[ts_value_qualified_key] ?? (scope module, namespace from left.definition.definition).[ts_value_qualified_key] ?? (scope statics from left.definition.definition).[ts_value_qualified_key]
   unwraps definition
 }
 

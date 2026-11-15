@@ -391,7 +391,14 @@ fn candidate(header: Header, call: Leaf, arguments: &[Leaf], receiver: Option<&N
         }
     }
     let Known::Yes(classes) = values.question.owner_classes(header.site.frame, owner) else { return Known::Unknown };
-    let frame = values.question.bind_slots(header.site.frame, owner, Some(call), explicit.iter().cloned().map(Some).collect(), classes);
+    // Formals the callee's value already fixed (`take<Callback>` read
+    // earlier) stay fixed when the call writes none.
+    let slots: Vec<Option<NodeValue>> = if !explicit.is_empty() || header.site.frame == crate::question::FrameId::ROOT {
+        explicit.iter().cloned().map(Some).collect()
+    } else {
+        formals.iter().map(|&formal| values.bound_argument(formal).known().flatten()).collect()
+    };
+    let frame = values.question.bind_slots(header.site.frame, owner, Some(call), slots, classes);
     let header = Header { site: Leaf { frame, ..header.site }, ..header };
     let Known::Yes(parameters) = values.follow(header.site, &signature.item.parameters) else { return Known::Unknown };
     // Arity first: arguments without a parameter, or a required parameter

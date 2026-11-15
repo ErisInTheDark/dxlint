@@ -13,27 +13,74 @@ fn argument_value_finding(site, mode, sender, receiver, display) = {
 fn assignment_may_be_unsafe(parts) = parts != null && any(parts, arm => any(arm, part =>
   contains(part.traits, "any")
   || part.carrier_known && part.carrier != null && count(part.carrier.arguments ?? []) > 0))
+# The lone signature a call with spread arguments relates to, and whether its
+# last parameter is a rest parameter.
+fn argument_header(call) = {
+  value arms: if call is ts_new then value_constructors(call.callee.node) else value_signatures(call.callee.node)
+  value header: if arms != null && count(arms) == 1 && count(first(arms)) == 1 then first(first(arms)) else null
+  value parameters: if header != null then site_field(call, header.site, "parameter") ?? [] else []
+  value names: if count(parameters) > 0 then site_field(call, last(parameters), "name") ?? [] else []
+  value if header == null || header.parameters == null then null
+    else {parameters: header.parameters, rest: count(names) == 1 && first(names).kind == "ts_rest"}
+}
+# The parameter an argument at `position` meets (a rest parameter's element past the others).
+fn argument_parameter_at(header, position) = {
+  value fixed: if header.rest then count(header.parameters) - 1 else count(header.parameters)
+  value if position < fixed then get(header.parameters, position)
+    else if header.rest then value_lookup(last(header.parameters), position - fixed).member else null
+}
+# A spread tuple's element handles (`f(...pair)` passes each); null for anything else.
+fn argument_tuple_elements(source) = {
+  value arms: value_parts(source)
+  value part: if arms != null && count(arms) == 1 && count(first(arms).parts) == 1 then first(first(arms).parts) else null
+  value tuple: part != null && part.product_known && part.product != null && part.carrier.description.kind == "tuple"
+    && !any(part.product.elements, element => element.values || element.optional)
+  value if tuple then map(part.product.elements, (element, index) => value_lookup(part.handle, index).member) else null
+}
+fn argument_tuple_findings(argument, header, elements, position) = filter(map(elements, (element, index) => {
+  value sender: value_constituents(element)
+  value parameter: argument_parameter_at(header, position + index)
+  value receiver: if parameter != null then value_constituents(parameter) else null
+  value if parameter != null && ts_value_category(sender) != null && receiver != null
+    && !ts_value_trait(receiver, "unknown") && !ts_value_trait(receiver, "any")
+    then argument_value_finding(argument, "tuple", sender, receiver, null) else null
+}), finding => finding != null)
+# Arguments in order: a spread tuple passes its elements to the next parameters
+# (TypeScript ESLint), so later arguments meet the parameters after them.
 fn argument_value_findings(call) = if call not (ts_call, ts_new, ts_tagged_template) then [] else {
-  value if call is ts_tagged_template then call.quasi.expression.nodes else call.argument.nodes
-  flat_map (argument) {
+  value arguments: if call is ts_tagged_template then call.quasi.expression.nodes else call.argument.nodes
+  value header: if any(arguments, argument => argument is ts_spread) then argument_header(call) else null
+  value walked: fold(arguments, {position: 0, shifted: false, lost: false, findings: []}, (state, argument) => {
     value spread: argument is ts_spread
     value source: if spread then argument.argument.node else argument
     value sender: value_constituents(source)
-    value expected: if spread || !assignment_may_be_unsafe(sender) then null else value_expected(argument)
-    value receiver: expected.value
+    value tuple: if spread && header != null && !state.lost && ts_value_category(sender) == null
+      then argument_tuple_elements(source) else null
+    value parameter: if !spread && state.shifted && !state.lost && header != null && assignment_may_be_unsafe(sender)
+      then argument_parameter_at(header, state.position) else null
+    value expected: if spread || parameter != null || !assignment_may_be_unsafe(sender) then null else value_expected(argument)
+    value receiver: if parameter != null then value_constituents(parameter) else expected.value
     value carrier: assignment_carrier(sender)
     value element: first(carrier.arguments)
-    value when {
+    value found: when {
       spread && ts_value_category(sender) != null then
         [argument_value_finding(argument, "spread", sender, null, null)]
+      tuple != null then argument_tuple_findings(argument, header, tuple, state.position)
       spread && assignment_array(sender, source) && ts_value_category(element) != null then
         [argument_value_finding(argument, "array", element, null, sender)]
-      !spread && expected.present == true && receiver != null
+      !spread && (expected.present == true || parameter != null) && receiver != null
         && !assignment_empty_map(source) && assignment_unsafe(sender, receiver, call) then
         [argument_value_finding(argument, "argument", sender, receiver, null)]
       else then []
     }
-  }
+    value {
+      position: state.position + (if tuple != null then count(tuple) else 1),
+      shifted: state.shifted || tuple != null,
+      lost: state.lost || spread && tuple == null,
+      findings: concat(state.findings, found),
+    }
+  })
+  value walked.findings
 }
 fn return_value_owner(n) = {
   value n.parent.node

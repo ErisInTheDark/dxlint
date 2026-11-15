@@ -220,11 +220,16 @@ pub enum Value {
     Spread { intersection: bool, path: Vec<u16>, value: Option<Box<Value>> },
     /// Scope mask zero uses the source kind's member defaults.
     From(Box<Value>, Box<Value>, u64),
+    /// The member at the key of the alternatives that have it.
+    Present(Box<Value>, Box<Value>),
+    /// The value's generic declarations bound to the values at `arguments`.
+    Instantiate { of: Box<Value>, arguments: Vec<u16> },
     /// Project scopes without expanding the source values.
     Scope { classes: u64, from: Box<Value> },
     Not(Box<Value>),
     Excludes { traits: u64, from: Option<Box<Value>> },
-    Includes { value: Box<Value>, from: Option<Box<Value>> },
+    /// `dynamic`: the test also narrows a dynamic top (`any`) to `value`.
+    Includes { value: Box<Value>, from: Option<Box<Value>>, dynamic: bool },
     Has { key: Box<Value>, from: Option<Box<Value>> },
     /// The value's member keys, one literal leaf each (`keyof`).
     Keys { of: Box<Value> },

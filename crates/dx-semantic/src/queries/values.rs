@@ -178,7 +178,7 @@ fn member(semantic: &Semantic<'_>, at: Leaf, args: &[Value<'static>]) -> Known<V
     project(semantic, values.member(&values.values(at), &key))
 }
 
-fn query_key(semantic: &Semantic<'_>, at: Leaf, value: &Value<'static>) -> Known<Key> {
+pub(super) fn query_key(semantic: &Semantic<'_>, at: Leaf, value: &Value<'static>) -> Known<Key> {
     if let Some(key) = member_key(value) { return Known::Yes(key) }
     let values = semantic.values();
     if let Value::Node(node, _) = value {

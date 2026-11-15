@@ -337,6 +337,14 @@ fn assertion_context_skipped(n) = {
     else if parent is ts_assignment && parent.right.offset == n.offset && parent.parent not ts_expression_statement then true
     else false
 }
+# An asserted type with generic methods (`method<T>(v: T): T`) the operand's
+# don't match keeps the assertion (TypeScript ESLint's genericsMismatch).
+fn assertion_generic_mismatch(n) = {
+  value target: value_parts(n.type.node)
+  value edges: if target != null && count(target) == 1 then value_children(first(target).handle, true, []) ?? [] else []
+  value any(edges, edge => any(flat_map(value_signatures(edge.handle) ?? [], arm => arm),
+    header => count(site_field(n, header.site, "type_parameter") ?? []) > 0))
+}
 fn assertion_check(n, ignored, check_const) = {
   value literal_const: n.type.text == "const"
   value raw_subject: if literal_const then n.expression.node else assertion_subject(n, ignored)
@@ -349,13 +357,24 @@ fn assertion_check(n, ignored, check_const) = {
       || value_accepts(n, n.expression.node, "expected", "widened") == true
       || n.parent.node is ts_property && value_accepts(n.expression.node, n.expression.node, "expected", "value") == true)
     && !assertion_context_skipped(n)
+    && !assertion_generic_mismatch(n)
   value chain_contextual: !literal_const && n.expression.node is (ts_as, ts_type_assertion)
     && (assertion_parts_contain_any(value_trait_parts(n.expression.node, ["any"]))
       || ts_value_trait(value_constituent_traits(n.expression.node, ["unknown"]), "unknown") == true)
     && value_accepts(n, subject, "expected", "value") == true
   value receiver: contextual || chain_contextual
   value identity: !literal_const && assertion_context_identity(n)
+  # `[]` is `never[]` already (strict): asserting that changes nothing.
+  value empty_never: subject is ts_array && count(subject.element.nodes) == 0
+    && n.type.node is ts_array_type && n.type.node.type is ts_type_keyword && n.type.node.type.text == "never"
+    && ts_compiler_option(n, "strictNullChecks") == true
+  # A generic call's literal result (`echo(3)`) is inferred from the assertion's
+  # wider primitive (`as number`: `echo<number>`), as TypeScript infers it.
+  value generic_widened: !literal_const && subject is ts_call && assertion_parts_known(annotation)
+    && all(annotation, arm => all(arm.parts, part => part.identity_known && part.identity == null && part.carrier == null))
+    && assertion_generic_call(subject) == true && ts_value_print(value_widened(subject)) == ts_value_print(value_constituents(n.type.node))
   value same: if literal_const then assertion_same_handles(operand, annotation) == true
+    else if empty_never || generic_widened then true
     else if assertion_context_identity(n) == true then true
     else if assertion_error_identity(n) == true then true
     else if assertion_non_nullable_identity(n, subject) == true then true
@@ -374,7 +393,7 @@ fn assertion_check(n, ignored, check_const) = {
       || subject is ts_call && generic == false
   value enum_preserved: ts_value_has_enum(n) != null && ts_value_has_enum(n) == ts_value_has_enum(subject)
   value if contains(ignored, n.type.text) || literal_const && (!check_const || !assertion_const_scalar(n))
-    || !receiver && (!same || !identity && subject is (ts_object, ts_array)
+    || !receiver && (!same || !identity && !empty_never && subject is (ts_object, ts_array)
       || !literal_const && subject is ts_template && count(subject.expression.nodes) == 0
       || !literal_preserved || !enum_preserved) || generic == null then null
     else {subject: subject, raw_subject: raw_subject, contextual: receiver && !same, generic: generic}

@@ -332,9 +332,11 @@ in ts_null {
 }
 in ts_null { fits nonthenable }
 in ts_boolean, ts_number, ts_bigint, ts_string { fits literal }
+# Only a literal expression is fresh and widens; a written literal type
+# (`(): true`, `x as 1`, inside `ts_literal_type`) keeps its literal.
 in ts_boolean {
   fits boolean
-  widens (trait boolean, truthy) | (trait boolean, falsy)
+  when parent not ts_literal_type { widens (trait boolean, truthy) | (trait boolean, falsy) }
   fits falsy when text == "false"
   fits truthy when text == "true"
   identity text == "true"
@@ -343,21 +345,21 @@ in ts_number {
   let ts_value_number_raw replace(text, "_", "")
   let ts_value_number js_number(ts_value_number_raw)
   fits number
-  widens (trait number, truthy) | (trait number, falsy)
+  when parent not ts_literal_type { widens (trait number, truthy) | (trait number, falsy) }
   fits falsy when ts_value_number == 0
   fits truthy when ts_value_number != 0
   identity ts_value_number
 }
 in ts_bigint {
   fits bigint
-  widens (trait bigint, truthy) | (trait bigint, falsy)
+  when parent not ts_literal_type { widens (trait bigint, truthy) | (trait bigint, falsy) }
   fits falsy when js_bigint(text) == "0"
   fits truthy when js_bigint(text) != "0"
   identity { type: "bigint", value: js_bigint(text) }
 }
 in ts_string {
   fits string
-  widens (trait string, truthy) | (trait string, falsy)
+  when parent not ts_literal_type { widens (trait string, truthy) | (trait string, falsy) }
   fits falsy when js_string(text) == ""
   fits truthy when js_string(text) != ""
   identity js_string(text)
@@ -560,8 +562,13 @@ in ts_assignment_pattern {
   when parent is ts_pattern_property && !ts_value_assignment_any { unwraps (parent.parent.[ts_value_assignment_key]) \ undefined | right.widened }
   when parent not (ts_array_pattern, ts_pattern_property) { unwraps left ?? right }
 }
-in ts_import, ts_import_specifier, ts_meta_property, ts_import_call {
+in ts_import, ts_import_specifier, ts_meta_property {
   unwraps unknown
+}
+# A promise of the module's namespace (`await import("./m")`).
+in ts_import_call {
+  when ts_module_dynamic_source != null { unwraps instance "Promise" of definition }
+  when ts_module_dynamic_source == null { unwraps unknown }
 }
 in ts_import_equals { when value.node is ts_call { unwraps unknown } }
 # `import Box = ns.Box; Box<number>`: the reference's arguments pass through the alias.
@@ -599,7 +606,9 @@ in ts_this {
   }
 }
 
-in ts_parenthesized, ts_satisfies, ts_instantiation { unwraps expression }
+in ts_parenthesized, ts_satisfies { unwraps expression }
+# `take<Callback>`: `take`'s signature with `T` fixed (no inference at calls).
+in ts_instantiation { unwraps instantiate expression with type_argument }
 in ts_as, ts_type_assertion {
   when type.text == "const" { unwraps expression }
   when type.text != "const" { unwraps type }
@@ -766,6 +775,12 @@ in ts_object {
   when len(ts_value_earlier_spreads) > 0 { members members inherits &...ts_value_earlier_spreads.argument }
 }
 in ts_object { fits object, truthy in members }
+# `{ [Symbol.dispose]() {} }`: a computed key is keyed by its value (a real symbol).
+in ts_object {
+  let ts_value_object_computed filter(property.nodes, item => item is (ts_property, ts_method)
+    && item.key is ts_computed_key && ts_value_key(item.key.node) == null)
+  indexed keyed ts_value_object_computed by key.expression using it in members
+}
 in ts_interface {
   when extends != null { members members inherits &...extends }
   fits builtin_function in members when
@@ -862,8 +877,10 @@ in ts_index {
   let ts_value_index_nullish in_optional_chain == true && object could nullable
     || ts_value_optional_member(node, index.node)
     || (if ts_compiler_option(node, "noUncheckedIndexedAccess") == true then ts_value_unchecked_index(node) else false)
-  when object always any { unwraps object }
-  when !(object always any) {
+  # As for `ts_member`: a type parameter whose parts are certainly not `any` reads its indexes.
+  let ts_value_index_dynamic ts_value_has_trait(object.node, "any") != false && object always any
+  when ts_value_index_dynamic { unwraps object }
+  when !ts_value_index_dynamic {
     when !ts_value_index_nullish { unwraps (object \ nullable, undefined).[index] }
     when ts_value_index_nullish { unwraps (object \ nullable, undefined).[index] | trait undefined, nullable, falsy, nonthenable }
   }
@@ -918,6 +935,8 @@ in ts_parameter {
   }
 }
 in ts_property { flag readonly when ts_value_const_context(node) }
+# `{ old: 1, ...a }`: a later spread's member of the same key wins.
+in ts_property { flag yields when parent is ts_object && any(parent.property.nodes, item => item is ts_spread && item.offset > offset) }
 in ts_property_signature, ts_index_signature, ts_class_property, ts_parameter {
   flag readonly when any([] modifier, modifier => modifier == "readonly")
 }
@@ -994,7 +1013,9 @@ in ts_type_query {
   # `typeof f<T>` instantiates `f`'s own type parameters.
   arguments type_argument
   when name is ts_qualified_name { unwraps name }
-  when name not ts_qualified_name { unwraps name.definition }
+  when name not ts_qualified_name && count(type_argument.nodes) == 0 { unwraps name.definition }
+  # A value whose type is generic (`declare const take: <T>(fn: T) => T`) too.
+  when name not ts_qualified_name && count(type_argument.nodes) > 0 { unwraps instantiate name.definition with type_argument }
 }
 in ts_type_predicate {
   carries as {
@@ -1035,14 +1056,12 @@ in ts_literal_type {
   when !starts_with(text, "-") { unwraps value }
   when starts_with(text, "-") && value is ts_number {
     fits number, literal
-    widens (trait number, truthy) | (trait number, falsy)
     fits falsy when value always falsy
     fits truthy when value always truthy
     identity -value.ts_value_number
   }
   when starts_with(text, "-") && value is ts_bigint {
     fits bigint, literal
-    widens (trait bigint, truthy) | (trait bigint, falsy)
     fits falsy when value always falsy
     fits truthy when value always truthy
     identity { type: "bigint", value: ts_value_negated_bigint(value.text) }

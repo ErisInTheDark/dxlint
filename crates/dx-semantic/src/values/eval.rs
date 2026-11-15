@@ -410,6 +410,26 @@ impl<'a, 'world> Run<'a, 'world> {
                 };
                 self.answers.push(Answer { exists: true, value });
             }
+            Value::Present(base, key) => {
+                let base = Run::new(self.values, vec![Task::Expression(at, base)]).run_answer();
+                if !base.exists {
+                    self.answers.push(base);
+                    return;
+                }
+                let answer = match self.values.key(at, key) {
+                    Known::Yes(key) => match self.values.present_member(&base.value, &key) {
+                        Some(value) => Answer { exists: true, value },
+                        None => Answer::absent(),
+                    },
+                    Known::Unknown => Answer::unknown(),
+                };
+                self.answers.push(answer);
+            }
+            Value::Instantiate { of, arguments } => {
+                let base = Run::new(self.values, vec![Task::Expression(at, of)]).run_answer();
+                let value = if base.exists { self.values.instantiate(at, &base.value, arguments) } else { NodeValue::Unknown };
+                self.answers.push(Answer { exists: true, value });
+            }
             Value::Keys { of } => {
                 let operand = Run::new(self.values, vec![Task::Expression(at, of)]).run_answer();
                 let value = if operand.exists { self.values.keys(&operand.value) } else { NodeValue::Unknown };
@@ -620,9 +640,12 @@ impl<'a, 'world> Run<'a, 'world> {
                     }
                     Known::Yes(false) => {}
                     // An open part (a type parameter) can't settle it; a
-                    // part exclusive with the trait (its constraint) does.
+                    // part exclusive with the trait, or that can't have it
+                    // (its constraint: `T extends { a: number }` is never
+                    // `null`), does: the parts hold at once.
                     Known::Unknown if alternative.len() > 1
-                        && self.values.row_excludes(alternative, bit.trailing_zeros() as u16) == Known::Yes(true) => {}
+                        && (self.values.row_excludes(alternative, bit.trailing_zeros() as u16) == Known::Yes(true)
+                            || alternative.iter().any(|&leaf| self.values.could(&NodeValue::leaf(leaf), bit) == Known::Yes(false))) => {}
                     Known::Unknown => excluded = Known::Unknown,
                 }
             }

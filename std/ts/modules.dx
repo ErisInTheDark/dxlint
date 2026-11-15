@@ -167,6 +167,16 @@ in ts_import {
     resolves type, query namespace.node in module js_string(from.text) as "*" asking all
   }
 }
+# `import("./m")` (a written specifier) reads the module's namespace, as `import * as`.
+fn ts_module_dynamic_specifier(n) = {
+  value bare: last(walk([first(n.argument.nodes)], item => if item is ts_parenthesized then [item.expression.node] else []))
+  value if bare is ts_string then js_string(bare.text)
+    else if bare is ts_template && count(bare.expression.nodes) == 0 then re_replace(bare.text, /^`|`$/, "") else null
+}
+in ts_import_call {
+  let ts_module_dynamic_source ts_module_dynamic_specifier(node)
+  when ts_module_dynamic_source != null { resolves value node in module ts_module_dynamic_source as "*" }
+}
 in ts_import_specifier {
   when kind != "type" && parent.kind != "type" {
     resolves value, type, query local.node ?? imported.node in module js_string(parent.from.text) as ts_module_name(imported.node)
@@ -235,6 +245,16 @@ in ts_export {
   }
 }
 in ts_export_assignment { exports value, type, query expression.node as "=" }
+# `export = Outer.Public`: a qualified target reads the namespace member, as
+# `import X = Outer.Public` does.
+fn ts_module_export_target(n) = n.parent is ts_export_assignment
+  || n.parent is ts_member && n == n.parent.object.node && ts_module_export_target(n.parent.node)
+in ts_member {
+  let ts_module_member_key ts_module_name(property.node)
+  when ts_module_export_target(node) {
+    defines (scope module, namespace from object.definition).[ts_module_member_key]
+  }
+}
 
 in ts_variable_declaration {
   when ts_module_public(node) { exports value, query declaration.nodes }

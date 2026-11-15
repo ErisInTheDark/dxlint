@@ -129,6 +129,14 @@ fn value_names<'a>(value: &'a Unwrap, out: &mut Names<'a>) {
             value_names(key, out);
             path_names(classes, out);
         }
+        Unwrap::Present(source, key) => {
+            value_names(source, out);
+            value_names(key, out);
+        }
+        Unwrap::Instantiate { of, arguments } => {
+            value_names(of, out);
+            path_names(arguments, out);
+        }
         Unwrap::Scope { classes, from } => {
             path_names(classes, out);
             value_names(from, out);
@@ -138,7 +146,7 @@ fn value_names<'a>(value: &'a Unwrap, out: &mut Names<'a>) {
             path_names(traits, out);
             if let Some(from) = from { value_names(from, out); }
         }
-        Unwrap::Includes { value, from } | Unwrap::Has { key: value, from } => {
+        Unwrap::Includes { value, from, .. } | Unwrap::Has { key: value, from } => {
             value_names(value, out);
             if let Some(from) = from { value_names(from, out); }
         }

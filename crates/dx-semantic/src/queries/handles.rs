@@ -88,15 +88,15 @@ static HANDLES: &[HandleFunction] = &[
         None => Known::Unknown,
     } },
     HandleFunction { name: "value_at", call: project_path },
-    HandleFunction { name: "value_lookup", call: |semantic, value, args| match args.first().and_then(member_key) {
+    HandleFunction { name: "value_lookup", call: |semantic, value, args| match handle_key(semantic, &value, args.first()) {
         Some(key) => lookup_in(semantic, value, &key),
         None => Known::Unknown,
     } },
-    HandleFunction { name: "member_call_parameters", call: |semantic, value, args| match args.first().and_then(member_key) {
+    HandleFunction { name: "member_call_parameters", call: |semantic, value, args| match handle_key(semantic, &value, args.first()) {
         Some(key) => member_parameters_in(semantic, &value, &key),
         None => Known::Unknown,
     } },
-    HandleFunction { name: "value_has_member", call: |semantic, value, args| match args.first().and_then(member_key) {
+    HandleFunction { name: "value_has_member", call: |semantic, value, args| match handle_key(semantic, &value, args.first()) {
         Some(key) => match semantic.values().has_member(&value, &key) {
             Known::Yes(found) => Known::Yes(Value::Bool(found)),
             Known::Unknown => Known::Unknown,
@@ -113,6 +113,16 @@ static HANDLES: &[HandleFunction] = &[
         }
     } },
 ];
+
+/// A handle question's key; a global key (`{global: "Symbol", path:
+/// ["dispose"]}`) resolves in the program of the handle's value.
+fn handle_key(semantic: &Semantic<'_>, value: &NodeValue, key: Option<&Value<'static>>) -> Option<Key> {
+    let key = key?;
+    if let Some(key) = member_key(key) { return Some(key) }
+    let NodeValue::Alternatives(rows) = value else { return None };
+    let at = *rows.first()?.first()?;
+    super::values::query_key(semantic, at, key).known()
+}
 
 pub fn handle_id(name: &str) -> Option<crate::queries::HandleId> {
     HANDLES.iter().position(|function| function.name == name).map(|index| crate::queries::HandleId(index as u16))

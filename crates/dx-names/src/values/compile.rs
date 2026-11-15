@@ -50,6 +50,11 @@ pub(in crate) fn lower_value(
             let bits = class_bits(&mut vocabulary.scope_classes, classes, errors)?;
             Value::From(Box::new(lower(of, vocabulary, errors)?), Box::new(lower(key, vocabulary, errors)?), bits)
         }
+        Unwrap::Present(of, key) => Value::Present(Box::new(lower(of, vocabulary, errors)?), Box::new(lower(key, vocabulary, errors)?)),
+        Unwrap::Instantiate { of, arguments } => Value::Instantiate {
+            of: Box::new(lower(of, vocabulary, errors)?),
+            arguments: path(errors, arguments)?,
+        },
         Unwrap::Scope { classes, from } => {
             let bits = class_bits(&mut vocabulary.scope_classes, classes, errors)?;
             Value::Scope { classes: bits, from: Box::new(lower(from, vocabulary, errors)?) }
@@ -71,14 +76,16 @@ pub(in crate) fn lower_value(
             };
             Value::Excludes { traits: bits, from }
         }
-        Unwrap::Includes { value: part, from } | Unwrap::Has { key: part, from } => {
-            let is_has = matches!(value, Unwrap::Has { .. });
+        Unwrap::Includes { value: part, from, .. } | Unwrap::Has { key: part, from } => {
             let part = Box::new(lower(part, vocabulary, errors)?);
             let from = match from {
                 Some(value) => Some(Box::new(lower(value, vocabulary, errors)?)),
                 None => None,
             };
-            if is_has { Value::Has { key: part, from } } else { Value::Includes { value: part, from } }
+            match value {
+                Unwrap::Includes { dynamic, .. } => Value::Includes { value: part, from, dynamic: *dynamic },
+                _ => Value::Has { key: part, from },
+            }
         }
         Unwrap::Keys { of } => Value::Keys { of: Box::new(lower(of, vocabulary, errors)?) },
         Unwrap::Argument { index, of } => Value::Argument { index: *index, of: Box::new(lower(of, vocabulary, errors)?) },

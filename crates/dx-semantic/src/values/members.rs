@@ -261,12 +261,42 @@ impl Values<'_> {
         let mut alternatives = Vec::new();
         for row in rows {
             let Some(member) = row else { return NodeValue::Unknown };
-            if member.sources.is_empty() { return NodeValue::Unknown }
-            alternatives.push(eval::combine(self, member.sources.into_iter().map(|source| {
-                source.value.as_ref().map_or_else(|| self.values(source.site), |value| self.evaluate(source.site, value))
-            }), true));
+            let Some(value) = self.member_value(member) else { return NodeValue::Unknown };
+            alternatives.push(value);
         }
         eval::combine(self, alternatives, false)
+    }
+
+    /// [`Values::member`] of only the alternatives that have the member (a
+    /// contextual member); `None` when none has it.
+    pub fn present_member(&self, value: &NodeValue, key: &Key) -> Option<NodeValue> {
+        let Some(_nested) = self.question.budget.nest() else { return Some(NodeValue::Unknown) };
+        let Known::Yes(rows) = self.keyed_members(value, key) else { return Some(NodeValue::Unknown) };
+        let mut alternatives = Vec::new();
+        for member in rows.into_iter().flatten() {
+            let Some(value) = self.member_value(member) else { return Some(NodeValue::Unknown) };
+            alternatives.push(value);
+        }
+        (!alternatives.is_empty()).then(|| eval::combine(self, alternatives, false))
+    }
+
+    fn member_value(&self, member: Member) -> Option<NodeValue> {
+        if member.sources.is_empty() { return None }
+        Some(eval::combine(self, member.sources.into_iter().map(|source| {
+            let value = source.value.as_ref().map_or_else(|| self.values(source.site), |value| self.evaluate(source.site, value));
+            let required = source.edits.and_then(|id| self.question.modified(id)).is_some_and(|modified| modified.required == Some(true));
+            if required { self.without_undefined(value) } else { value }
+        }), true))
+    }
+
+    /// `value` without its alternatives that are always `undefined` (a member
+    /// made required by `-?`).
+    fn without_undefined(&self, value: NodeValue) -> NodeValue {
+        let bit = self.tables.vocabulary.trait_bit("undefined");
+        let NodeValue::Alternatives(rows) = &value else { return value };
+        if bit == 0 { return value }
+        let kept: Vec<_> = rows.iter().filter(|row| self.always(&NodeValue::rows(vec![row.to_vec()]), bit) != Known::Yes(true)).cloned().collect();
+        if kept.len() == rows.len() || kept.is_empty() { value } else { NodeValue::rows(kept) }
     }
 
     pub fn member_sites(&self, value: &NodeValue, key: &Key) -> Known<Vec<Leaf>> {
@@ -627,18 +657,23 @@ impl Values<'_> {
                 key, sources: sites.into_iter().map(MemberSource::normal).collect(), required: Known::Unknown,
             });
         }
-        if wanted.is_some_and(|wanted| members.iter().any(|member| &member.key == wanted)) {
+        // An own member flagged `yields` (`{ old: 1, ...a }`: written before
+        // a spread) gives way to a base that has its key.
+        let has_bases = !kind.member_bases.is_empty();
+        let yields = |member: &Member| has_bases && !member.sources.is_empty() && member.sources.iter().all(|source|
+            matches!(self.flags(source.site), Known::Yes(flags) if flags.iter().any(|flag| &**flag == "yields")));
+        if wanted.is_some_and(|wanted| members.iter().any(|member| &member.key == wanted && !yields(member))) {
             return Known::Yes(members);
         }
         let Known::Yes(keyed) = self.indexed_members(at, request, true) else { return Known::Unknown };
         for member in keyed { Self::merge_member(&mut members, member); }
-        if wanted.is_some() && !members.is_empty() { return Known::Yes(members) }
+        if wanted.is_some() && members.iter().any(|member| !yields(member)) { return Known::Yes(members) }
         if !matches!(request, MemberRequest::Coverage) {
             // Own members hide inherited ones, and an earlier base hides a
             // later one (`{ ...a, ...b }` lists `b` first).
-            let mut own: Vec<_> = members.iter().map(|member| member.key.clone()).collect();
+            let mut own: Vec<_> = members.iter().filter(|member| !yields(member)).map(|member| member.key.clone()).collect();
             for (views, base, when) in &kind.member_bases {
-                if wanted.is_some() && !members.is_empty() { break }
+                if wanted.is_some() && members.iter().any(|member| !yields(member)) { break }
                 if classes & views == 0 { continue }
                 if !self.question.budget.step() { return Known::Unknown }
                 match when.map_or(Known::Yes(true), |condition| self.world.condition(at, condition, self.semantic)) {
@@ -651,7 +686,10 @@ impl Values<'_> {
                     Some(key) => {
                         let Known::Yes(mut rows) = self.keyed_members(&base, key) else { return Known::Unknown };
                         if rows.len() != 1 { return Known::Unknown }
-                        if let Some(member) = rows.pop().flatten() { Self::merge_member(&mut members, member) }
+                        if let Some(member) = rows.pop().flatten() {
+                            members.retain(|own| own.key != member.key);
+                            Self::merge_member(&mut members, member);
+                        }
                     }
                     None => {
                         let rows = if matches!(request, MemberRequest::Shape) { self.shape_members(&base) } else { self.members(&base) };
@@ -662,6 +700,8 @@ impl Values<'_> {
                         for member in layer {
                             if hidden.contains(&member.key) { continue }
                             own.push(member.key.clone());
+                            // A yielding own member of that key gives way.
+                            members.retain(|own| own.key != member.key || !yields(own));
                             Self::merge_member(&mut members, member);
                         }
                     }

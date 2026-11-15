@@ -62,7 +62,9 @@ impl Values<'_> {
         Known::Yes(members.into_iter().map(|mut member| {
             let indexed = member.sources.iter().all(|source| matches!(source.origin, MemberOrigin::Indexer(_)));
             if let (Some(required), false) = (modified.required, indexed) { member.required = Known::Yes(required) }
-            if !modified.flags.is_empty() {
+            // `-?` also drops the `undefined` optionality gave the value
+            // ([`Values::member`] reads the edits).
+            if !modified.flags.is_empty() || modified.required == Some(true) && !indexed {
                 for source in &mut member.sources { source.edits = Some(id) }
             }
             member

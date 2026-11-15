@@ -53,12 +53,21 @@ fn readonly_parameter_children(handle, members, arguments, unchecked) = {
       else {kind: "edge", edge: edge}),
   }
 }
+fn readonly_parameter_deferred_branches(source) = if source is ts_conditional_type then [source.consequent.node, source.alternate.node] else {
+  value sources: value_sources(source)
+  value alias: if count(sources.sites) == 1 then first(sources.sites) else null
+  value body: if alias.kind == "ts_type_alias" then first(site_field(source, alias, "type") ?? []) else null
+  value if body.kind != "ts_conditional_type" then []
+    else map(flat_map(["consequent", "alternate"], field => site_field(source, body, field) ?? []), site => declaration_value(source, site))
+}
 fn readonly_parameter_step(entry, settings) = if entry.kind == "source" then {
   value arms: value_parts(entry.source)
+  value deferred: if arms == null && entry.root then readonly_parameter_deferred_branches(entry.source) else []
   value skipped: entry.root && count(arms) > 0 && all(arms, arm => readonly_parameter_branded(arm))
   value {
-    answer: if arms == null then null else true,
-    children: if skipped then [] else map(arms ?? [], arm => {kind: "arm", arm: arm}),
+    answer: if arms == null && count(deferred) == 0 then null else true,
+    children: if count(deferred) > 0 then map(deferred, branch => {kind: "source", source: branch, root: false})
+      else if skipped then [] else map(arms ?? [], arm => {kind: "arm", arm: arm}),
   }
 } else if entry.kind == "edge" then {
   value edge: entry.edge

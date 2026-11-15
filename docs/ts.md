@@ -174,7 +174,11 @@ and member chains, generic arguments fixed by an argument (`map(x => ...)`),
   `||`, early `return`/`throw`) when they test it with `typeof`,
   `=== null`/`undefined`, truthiness, `instanceof` or `Array.isArray`. An
   assignment to it in between cancels the guards; anything else leaves the
-  declared type.
+  declared type. As in TypeScript, `any` keeps its type under equality
+  tests, `typeof x === "function"`/`"object"` and `instanceof Object`; other
+  `typeof`, `instanceof` and type predicate tests narrow it (`unknown`
+  narrows under all of them). In `.dx`, `includes <value> from <subject>
+  dynamic` marks a test that narrows `any`.
 
 Where a type cannot be told, `type` is null and rules stay quiet; there is
 no contextual inference beyond callback parameters.

@@ -871,6 +871,35 @@ impl Values<'_> {
         self.importer(at).is_some_and(|importer| matches!(self.semantic.modules().global(importer, name, classes), Known::Yes(targets) if targets.is_empty()))
     }
 
+    /// `value` with its generic declarations (`take` of `take<Callback>`)
+    /// bound to the values at `arguments`, in order; as it is when nothing in
+    /// it is generic (a constructor value whose signatures are).
+    fn instantiate(&self, at: Leaf, value: &NodeValue, arguments: &[u16]) -> NodeValue {
+        let Known::Yes(sites) = self.follow(at, arguments) else { return NodeValue::Unknown };
+        let NodeValue::Alternatives(rows) = value else { return NodeValue::Unknown };
+        let slots: Vec<Option<NodeValue>> = sites.iter().map(|&site| Some(self.values(site))).collect();
+        let mut instantiated = false;
+        let mut bound = Vec::with_capacity(rows.len());
+        for row in rows {
+            let mut leaves = Vec::with_capacity(row.len());
+            for &leaf in row {
+                if !self.question.budget.step() { return NodeValue::Unknown }
+                if let Target::Node(node) = leaf.target {
+                    if self.semantic.generic_scope(node) == Some(node.node) && self.semantic.declares_formals(node) {
+                        let Known::Yes(classes) = self.question.owner_classes(leaf.frame, node) else { return NodeValue::Unknown };
+                        let frame = self.question.bind_slots(leaf.frame, node, Some(at), slots.clone(), classes);
+                        leaves.push(Leaf { frame, ..leaf });
+                        instantiated = true;
+                        continue;
+                    }
+                }
+                leaves.push(leaf);
+            }
+            bound.push(leaves);
+        }
+        if instantiated { NodeValue::rows(bound) } else { value.clone() }
+    }
+
     fn instance(&self, at: Leaf, name: &str, classes: u64, arguments: &[Value]) -> NodeValue {
         let Some(_nested) = self.question.budget.nest() else { return NodeValue::Unknown };
         let Some(importer) = self.importer(at) else { return NodeValue::Unknown };
@@ -959,15 +988,35 @@ impl Values<'_> {
                         self.definition_frame(site.frame, owner, through, binding.map_or(0, |frame| frame.classes))
                     };
                     let definition = Leaf { target, frame };
-                    if !definitions.contains(&definition) { definitions.push(definition) }
+                    // An alias of an alias (`import Again = Alias`) defines
+                    // what its target defines.
+                    let aliases = owner != node && matches!(target, Target::Node(_)) && self.world.tree(owner.file)
+                        .and_then(|tree| tree.nodes.get(owner.node as usize))
+                        .and_then(|data| self.tables.kinds.get(data.matcher as usize))
+                        .is_some_and(|kind| !kind.defines.is_empty());
+                    let followed = if aliases {
+                        match self.definitions(definition, through) {
+                            Known::Yes(leaves) if !leaves.is_empty() => leaves,
+                            _ => vec![definition],
+                        }
+                    } else { vec![definition] };
+                    for definition in followed {
+                        if !definitions.contains(&definition) { definitions.push(definition) }
+                    }
                 }
                 return Known::Yes(definitions);
             }
         }
         let Some(names) = self.world.names(node.file) else { return Known::Unknown };
-        if names.keys.get(&node.node) == Some(&None) { return Known::Unknown }
-        let classes = names.asked.get(&node.node).map(|lookup| lookup.classes)
+        // A name with no key reads only through a module route (`import("./m")`).
+        let keyless = names.keys.get(&node.node) == Some(&None);
+        let recorded = names.asked.get(&node.node).map(|lookup| lookup.classes)
             .or_else(|| names.declared.get(&node.node).map(|&(_, _, classes, _)| classes));
+        // A node that is no name can still resolve through a module route
+        // (`import("./m")`), as a value; else it defines nothing.
+        let routed = self.tables.kinds.get(data.matcher as usize).is_some_and(|kind| !kind.modules.items.is_empty());
+        let unnamed = routed && recorded.is_none() && !names.keys.contains_key(&node.node) && !names.declaration.contains_key(&node.node);
+        let classes = recorded.or_else(|| unnamed.then(|| self.tables.vocabulary.declaration_class("value")).filter(|&classes| classes != 0));
         let declaration = names.declaration_in(node.node, classes.unwrap_or(0));
         let name = (names.declaration.contains_key(&node.node) || names.declared.contains_key(&declaration)).then_some(declaration);
         let modules = self.semantic.modules();
@@ -978,6 +1027,8 @@ impl Values<'_> {
         let targets = match route {
             Known::Unknown => return Known::Unknown,
             Known::Yes(Some(targets)) => targets,
+            Known::Yes(None) if keyless => return Known::Unknown,
+            Known::Yes(None) if unnamed => return Known::Yes(Vec::new()),
             Known::Yes(None) => match name {
                 // Declarations merged into the name that combine (overloads,
                 // interface and namespace merging), as the global publication

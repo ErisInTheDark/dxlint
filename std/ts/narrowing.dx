@@ -33,8 +33,10 @@ in ts_conditional {
 }
 in ts_type_predicate {
   resolves value name
-  when modifier == null { unwraps truthy includes type from name }
+  when modifier == null { unwraps truthy includes type from name dynamic }
 }
+# Equality keeps `any` as it is (TypeScript); predicates, typeof and
+# instanceof narrow it (`dynamic`), except to `Object`/`Function`.
 in ts_binary {
   when operator == "===" && (right always literal || right always undefined || right.structure_unwrapped is ts_null) { unwraps truthy includes right from left }
   when operator == "===" && (left always literal || left always undefined || left.structure_unwrapped is ts_null) { unwraps truthy includes left from right }
@@ -58,16 +60,20 @@ in ts_binary {
     unwraps truthy right \ nullable
   }
   when operator == "in" { unwraps truthy has left from right }
-  when operator == "instanceof" {
+  when operator == "instanceof" && (right not ts_identifier || right.text != "Object" && right.text != "Function") {
+    unwraps truthy includes right.["prototype"] from left dynamic
+  }
+  when operator == "instanceof" && right is ts_identifier && (right.text == "Object" || right.text == "Function") {
     unwraps truthy includes right.["prototype"] from left
   }
 }
 
-@macro narrowing_typeof(tag, expected, available) {
+# `mode`: `dynamic` when the test narrows `any` (all but "function"/"object").
+@macro narrowing_typeof(tag, expected, available, mode) {
   in ts_binary {
     when left.structure_unwrapped is ts_unary && left.structure_unwrapped.operator == "typeof" && right.literal_value.value == tag && available {
       when operator == "===" || operator == "==" {
-        unwraps truthy includes expected from left.structure_unwrapped.argument
+        unwraps truthy includes expected from left.structure_unwrapped.argument mode
       }
       when operator == "!==" || operator == "!=" {
         unwraps truthy !includes expected from left.structure_unwrapped.argument
@@ -75,7 +81,7 @@ in ts_binary {
     }
     when right.structure_unwrapped is ts_unary && right.structure_unwrapped.operator == "typeof" && left.literal_value.value == tag && available {
       when operator == "===" || operator == "==" {
-        unwraps truthy includes expected from right.structure_unwrapped.argument
+        unwraps truthy includes expected from right.structure_unwrapped.argument mode
       }
       when operator == "!==" || operator == "!=" {
         unwraps truthy !includes expected from right.structure_unwrapped.argument
@@ -83,14 +89,14 @@ in ts_binary {
     }
   }
 }
-@narrowing_typeof("string", (trait string, truthy | trait string, falsy), true)
-@narrowing_typeof("number", (trait number, truthy | trait number, falsy), true)
-@narrowing_typeof("boolean", (trait boolean, truthy | trait boolean, falsy), true)
-@narrowing_typeof("bigint", (trait bigint, truthy | trait bigint, falsy), true)
-@narrowing_typeof("symbol", (trait symbol, truthy), true)
-@narrowing_typeof("undefined", (trait undefined, nullable, falsy, nonthenable), true)
-@narrowing_typeof("function", (instance "Function"), global_declarations(node, "Function", "type") != null && count(global_declarations(node, "Function", "type")) > 0)
-@narrowing_typeof("function", (trait callable, object, truthy), global_declarations(node, "Function", "type") == [])
-@narrowing_typeof("object", (trait object, truthy | trait null, nullable, falsy, nonthenable), true)
+@narrowing_typeof("string", (trait string, truthy | trait string, falsy), true, dynamic)
+@narrowing_typeof("number", (trait number, truthy | trait number, falsy), true, dynamic)
+@narrowing_typeof("boolean", (trait boolean, truthy | trait boolean, falsy), true, dynamic)
+@narrowing_typeof("bigint", (trait bigint, truthy | trait bigint, falsy), true, dynamic)
+@narrowing_typeof("symbol", (trait symbol, truthy), true, dynamic)
+@narrowing_typeof("undefined", (trait undefined, nullable, falsy, nonthenable), true, dynamic)
+@narrowing_typeof("function", (instance "Function"), global_declarations(node, "Function", "type") != null && count(global_declarations(node, "Function", "type")) > 0, static)
+@narrowing_typeof("function", (trait callable, object, truthy), global_declarations(node, "Function", "type") == [], static)
+@narrowing_typeof("object", (trait object, truthy | trait null, nullable, falsy, nonthenable), true, static)
 
 }
