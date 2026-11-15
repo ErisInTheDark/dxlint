@@ -41,6 +41,12 @@ pub fn start(dir: PathBuf) -> std::thread::JoinHandle<Result<View, String>> {
     std::thread::spawn(move || read(&dir))
 }
 
+/// Reads the view for the repository holding `dir` and applies it: tools
+/// (`map`, `check`, ...) read configs and files as lint does.
+pub fn apply_now(dir: &Path) -> Result<(), String> {
+    read(dir).map(|view| apply(&view))
+}
+
 /// From now on, held files read as the view has them.
 pub fn apply(view: &View) {
     for (path, text) in &view.texts {

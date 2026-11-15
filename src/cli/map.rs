@@ -209,10 +209,11 @@ fn declared(output: &mut Output<'_>, spec: &str) -> Result<Declared, u8> {
 fn preview(output: &mut Output<'_>, server: &mut Server, paths: &[PathBuf]) -> u8 {
     let mut code = 0;
     for path in paths {
-        let text = match std::fs::read_to_string(output.cwd.join(path)) {
-            Ok(text) => text,
-            Err(error) => {
-                output.err(format_args!("{}: {error}", path.display()));
+        // As the Workbench view has it, when one is applied.
+        let text = match crate::engine::reads::read_unrecorded(&normalize_path(&output.cwd.join(path))).0 {
+            Some(text) => text.to_string(),
+            None => {
+                output.err(format_args!("{}: cannot read it", path.display()));
                 code = 1;
                 continue;
             }

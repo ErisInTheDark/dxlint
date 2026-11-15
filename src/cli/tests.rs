@@ -991,6 +991,17 @@ fn a_workbench_view_lints_held_files_as_it_has_them_and_fixes_none_of_them() {
 }
 
 #[test]
+fn map_reads_configs_and_files_as_the_workbench_view_has_them() {
+    let dir = crate::config::source::normalize_path(&project("cli-workbench-map", &[(".dx", "import .ts\n"), ("a.ts", "class A { x = 1; }\n")]));
+    // Another thread holds the config: its transform exists only in the view.
+    let held = "import .ts\nin ts_class_property transform t { rewrite as \"y = 2;\" }\n";
+    super::workbench::apply(&super::workbench::View { texts: vec![(dir.join(".dx"), held.into())], absent: Vec::new() });
+    let out = dxlint(&dir, &["map", "a.ts"]);
+    assert_eq!(out.code, 0, "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(stdout(&out).contains("y = 2;"), "{}", stdout(&out));
+}
+
+#[test]
 fn named_paths_inside_each_other_lint_each_file_once() {
     let dir = project("cli-overlapping-roots", &[(".dx", RULES), ("sub/.dx", NESTED), ("sub/a.t", "LOUD\n")]);
     let out = dxlint(&dir, &["--format", "jsonl", "-c", ".dx", ".", "sub"]);

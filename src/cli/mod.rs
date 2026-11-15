@@ -353,6 +353,10 @@ where
             render::error(&mut output, "map accepts only --config, --protocol and file paths");
             return 2;
         }
+        {
+            let mut output = Output { cwd, stdout: &mut std::io::sink(), stderr: &mut stderr };
+            if let Err(code) = tool_view(&mut output, &cli.lint) { return code }
+        }
         // Serving, stdout carries only protocol messages.
         if args.paths.is_empty() {
             let mut no_output = std::io::sink();
@@ -380,6 +384,11 @@ where
         }
     };
     let config = &cli.config;
+    // Lint reads the view itself (beside its config loads); fixture runs read
+    // only their scenarios.
+    if !matches!(cli.command, None | Some(Command::Fixtures { .. }) | Some(Command::Functions)) {
+        if let Err(code) = tool_view(&mut output, &cli.lint) { return code }
+    }
     match cli.command {
         Some(Command::Fixtures { paths, bless, jobs }) => fixtures::run(&mut output, &paths, bless, jobs.get()),
         None => lint::run(&mut output, cli.lint, config, sources.as_ref()),
@@ -434,6 +443,17 @@ where
         Some(Command::Map(_)) => unreachable!("map owns its streams"),
         Some(Command::Lsp) => unreachable!("LSP owns its streams"),
     }
+}
+
+/// In a Workbench agent's shell, tools read the arc view as lint does. One
+/// that can't be read stops the tool (exit 2): a mapper or config check
+/// answering from other threads' unfinished files would mislead its caller.
+fn tool_view(output: &mut Output<'_>, lint: &LintArgs) -> Result<(), u8> {
+    if !workbench::active() || lint.no_workbench_view { return Ok(()) }
+    workbench::apply_now(output.cwd).map_err(|error| {
+        render::error(output, &format!("workbench view not applied ({error})"));
+        2
+    })
 }
 
 /// A built linter, and whether its config had no errors.
