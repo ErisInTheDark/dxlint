@@ -26,6 +26,9 @@ struct Project {
     files: HashSet<PathBuf>,
     /// Config errors by the URI of the file they point at.
     errors: HashMap<String, Vec<Value>>,
+    /// The text of every file it read when last built, hashed: a file saved
+    /// again unchanged (a checkout, a formatter) builds nothing.
+    texts: u64,
 }
 
 #[derive(Default)]
@@ -84,17 +87,22 @@ fn nearest<'a, T>(by_dir: &'a HashMap<PathBuf, T>, dir: &Path) -> Option<&'a T> 
 }
 
 /// Configs under `roots` (walked like the scan walks them), plus the nearest
-/// one above each root.
-pub fn discover(roots: &[PathBuf]) -> HashSet<PathBuf> {
+/// one above each root; and the walk's `.gitignore`s with their text hashes.
+pub fn discover(roots: &[PathBuf]) -> (HashSet<PathBuf>, HashMap<PathBuf, u64>) {
     let mut found: HashSet<PathBuf> = roots.iter().filter_map(|r| config::find(r)).collect();
+    let mut gitignores = HashMap::new();
     if let Some(walker) = scan::walker(roots, |_| true) {
         for entry in walker.build().flatten() {
-            if entry.file_name() == CONFIG_NAME && entry.file_type().is_some_and(|t| t.is_file()) {
+            if !entry.file_type().is_some_and(|t| t.is_file()) { continue }
+            if entry.file_name() == CONFIG_NAME {
                 found.insert(normalize_path(entry.path()));
+            } else if entry.file_name() == ".gitignore" {
+                let path = normalize_path(entry.path());
+                gitignores.insert(path.clone(), crate::engine::reads::disk_hash(&path));
             }
         }
     }
-    found
+    (found, gitignores)
 }
 
 impl Projects {
@@ -136,6 +144,16 @@ impl Projects {
             })?.0;
             Some((symbols, id))
         })
+    }
+
+    /// Whether a loaded config reads `file` (itself, or an import).
+    pub fn reads(&self, file: &Path) -> bool {
+        self.by_dir.values().any(|p| p.files.contains(file))
+    }
+
+    /// Whether `configs` are exactly the configs known (loaded or folded).
+    pub fn knows_exactly(&self, configs: &HashSet<PathBuf>) -> bool {
+        self.known == *configs
     }
 
     pub fn is_loaded(&self, config: &Path) -> bool {
@@ -182,6 +200,18 @@ impl Projects {
         }
         let nested: Vec<PathBuf> = self.known.iter().filter(|c| c.parent().is_some_and(|d| d != dir && d.starts_with(dir))).cloned().collect();
         let (loaded, folded) = config::load_tree(config, |_| nested, None, sources);
+        let texts = {
+            let mut hasher = std::hash::DefaultHasher::new();
+            for (_, file) in loaded.sources.files() {
+                std::hash::Hash::hash(&(&file.name, &file.text), &mut hasher);
+            }
+            std::hash::Hasher::finish(&hasher)
+        };
+        let unchanged = self.by_dir.get(dir).is_some_and(|p| p.linter.is_some() && p.texts == texts)
+            && folded.iter().all(|nested| nested.parent().is_some_and(|d| self.folded.get(d).is_some_and(|root| root == dir)));
+        if unchanged {
+            return false;
+        }
         let built = build(loaded, dir.to_path_buf());
         // Folded folders are linted by this config's linter: their own
         // entries go, so the nearest entry above them is this one.
@@ -199,6 +229,7 @@ impl Projects {
             self.load(&nested.join(CONFIG_NAME), sources, uri_of);
         }
         let project = self.by_dir.entry(dir.to_path_buf()).or_default();
+        project.texts = texts;
         project.files = built.sources.files().filter_map(|(_, f)| f.path.clone()).collect();
         project.symbols = built.symbols.clone();
         project.errors.clear();

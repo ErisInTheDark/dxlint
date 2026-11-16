@@ -30,7 +30,7 @@
     "onLanguage:dx"
   ],
   "scripts": {
-    "test": "node --test extension.test.js",
+    "test": "node --test extension.test.js tokens.test.js",
     "package": "vsce package --out dxlint.vsix"
   },
   "contributes": {

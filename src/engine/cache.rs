@@ -24,6 +24,16 @@ use crate::config::ast::Severity;
 use super::reads::{hash_bytes, Dep, Reads, Scan, ScanTest};
 
 pub const FILE_NAME: &str = ".dxcache";
+
+/// What kind of read `dep` is, for explainers.
+pub fn dep_kind(dep: &Dep) -> &'static str {
+    match dep {
+        Dep::Text(..) => "text", Dep::IsFile(..) => "file probe", Dep::IsDir(..) => "dir probe", Dep::List(..) => "listing",
+        Dep::Discovered(..) => "discovery", Dep::Requested(..) => "requested files", Dep::Outside(..) => "outside bodies",
+        Dep::Module(..) => "module answer", Dep::Part(..) => "parts", Dep::Link(..) => "link",
+    }
+}
+
 /// Bumped whenever the encoding changes.
 const MAGIC: &[u8; 4] = b"ZLCF";
 
@@ -237,7 +247,7 @@ impl Cache {
             // Reports of no rule are the file's own: they don't change.
             old == new
         }).cloned().collect();
-        let rerun = linter.rules.iter().zip(&linter.rule_states).map(|(rule, state)| !rule.transform && was(&rule.name) != Some(*state)).collect();
+        let rerun = linter.rules.iter().zip(&linter.rule_states).map(|(rule, state)| rule.checks() && was(&rule.name) != Some(*state)).collect();
         Some(Found::Partly { kept, rerun })
     }
 
@@ -290,11 +300,7 @@ impl Cache {
                     let named = |parts: Option<&crate::parts::FileParts>| parts.map_or("unparsed", |parts| if parts.failed { "failed" } else if parts.precise { "named" } else { "unnamed" });
                     format!("parts of {} ({}; was {}, now {})", parts.path.display(), failing.join(", "), named(Some(parts)), named(now.as_deref()))
                 }
-                dep => format!("{} of {}", match dep {
-                    Dep::Text(..) => "text", Dep::IsFile(..) => "file probe", Dep::IsDir(..) => "dir probe", Dep::List(..) => "listing",
-                    Dep::Discovered(..) => "discovery", Dep::Requested(..) => "requested files", Dep::Outside(..) => "outside bodies",
-                    Dep::Module(..) => "module answer", Dep::Part(..) => "parts", Dep::Link(..) => "link",
-                }, dep.path().display()),
+                dep => format!("{} of {}", dep_kind(dep), dep.path().display()),
             });
         }
         for &i in &refs.scans {

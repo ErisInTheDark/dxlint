@@ -1,6 +1,6 @@
 //! Background workspace scan: lints every file on disk and streams each
 //! file's diagnostics to the client as soon as it is done, with progress.
-//! Tabs the user has open go first, then the rest breadth-first. A newer scan
+//! Tabs the user has open go first, then the rest in path order. A newer scan
 //! (config change) cancels older ones via the generation. Scans reuse and
 //! update each config's `.dxcache`.
 //!
@@ -194,9 +194,11 @@ impl<'a> Runs<'a> {
     }
 
     /// Background lints run each file on one thread: nobody waits on one
-    /// file, and split rule groups would each hold its facts.
+    /// file, and split rule groups would each hold its facts. Like a CLI
+    /// run, a program's answers go once its files are done, not at the end
+    /// of the batch.
     fn background(linters: impl IntoIterator<Item = &'a Linter>) -> Self {
-        Self::new(linters, |linter| linter.run().serial())
+        Self::new(linters, |linter| linter.run().serial().retiring())
     }
 
     fn new(linters: impl IntoIterator<Item = &'a Linter>, mut run: impl FnMut(&'a Linter) -> LintRun<'a>) -> Self {
@@ -461,7 +463,7 @@ fn worth_walking(linters: &Linters, dir: &Path) -> bool {
     }
 }
 
-/// Scans `roots`, linting `tabs` first, then every other file breadth-first,
+/// Scans `roots`, linting `tabs` first, then every other file in path order,
 /// each with its nearest config.
 pub fn start(linters: Linters, roots: Vec<PathBuf>, tabs: Vec<PathBuf>, shared: Arc<Shared>, out: Outbox, progress: bool) {
     let generation = shared.generation.fetch_add(1, Ordering::SeqCst) + 1;
@@ -586,7 +588,8 @@ impl Scan {
         }
     }
 
-    /// Every file some config wants, shallowest first.
+    /// Every file some config wants, in path order: a program's files lie
+    /// together, so its answers can go once they are done.
     fn collect(&self, roots: &[PathBuf]) -> Vec<PathBuf> {
         let linters = self.linters.clone();
         let Some(walk) = walker(&scan_roots(roots, &self.linters), move |dir| worth_walking(&linters, dir)) else {
@@ -601,14 +604,14 @@ impl Scan {
                 let Ok(entry) = entry else { return WalkState::Continue };
                 let path = entry.path();
                 if entry.file_type().is_some_and(|t| t.is_file()) && self.linters.for_path(path).is_some_and(|l| l.wants(path)) {
-                    found.lock().expect("lock").push((entry.depth(), path.to_path_buf()));
+                    found.lock().expect("lock").push(path.to_path_buf());
                 }
                 WalkState::Continue
             })
         });
         let mut found = found.into_inner().expect("lock");
-        found.sort();
-        found.into_iter().map(|(_, path)| path).collect()
+        found.sort_unstable();
+        found
     }
 
     /// Lints priority files, then `files` in order, one at a time: the

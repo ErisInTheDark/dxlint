@@ -21,7 +21,19 @@ type Specifiers = Arc<[Box<str>]>;
 #[derive(Default)]
 pub(super) struct ModuleGraphs {
     graphs: Mutex<FxHashMap<(DepPath, u32), Graph>>,
+    /// What each program's graph depends on, as of its last build or
+    /// update: asked without waiting for a graph being built.
+    reach: std::sync::RwLock<FxHashMap<(DepPath, u32), Reach>>,
     summaries: Mutex<FxHashMap<DepPath, Summary>>,
+}
+
+/// What a program's graph depends on ([`Linter::module_sees`]).
+#[derive(Clone)]
+enum Reach {
+    /// Its files, what chose them and what resolving their imports read.
+    Graph { files: Arc<FxHashMap<DepPath, u32>>, listing: Arc<Reads>, resolving: Arc<Reads> },
+    /// Its files could not be listed: what trying read.
+    Unlisted(Arc<Reads>),
 }
 
 /// What a version of a file says of other files; `links` only once asked.
@@ -105,7 +117,7 @@ struct Graph {
     resolving: Arc<Reads>,
     paths: Vec<DepPath>,
     modules: Vec<Box<str>>,
-    by_path: FxHashMap<DepPath, u32>,
+    by_path: Arc<FxHashMap<DepPath, u32>>,
     by_module: FxHashMap<Box<str>, u32>,
     specifiers: Vec<Specifiers>,
     /// Every file's, once a question about exports asked.
@@ -396,6 +408,18 @@ impl Host for GraphHost<'_> {
 }
 
 impl Linter {
+    /// Whether `changed` files could change `ask`'s answer: they are files
+    /// of its program, or what chose or resolved them (or failed to list
+    /// them) `sees` them. Without a graph to ask, they could.
+    pub(super) fn module_sees(&self, ask: &ModuleAsk, changed: &[PathBuf], sees: impl Fn(&Reads) -> bool) -> bool {
+        let reach = self.module_graphs.reach.read().expect("program reach").get(&(ask.root.clone(), ask.settings)).cloned();
+        match reach {
+            Some(Reach::Graph { files, listing, resolving }) => changed.iter().any(|path| files.contains_key(&reads::dep_path(path))) || sees(&listing) || sees(&resolving),
+            Some(Reach::Unlisted(listing)) => sees(&listing),
+            None => true,
+        }
+    }
+
     /// What `ask`'s program's graph answers now; `None` when the module is
     /// not one of its files or the program cannot be read.
     pub(super) fn module_answer(&self, ask: &ModuleAsk) -> Option<Arc<ModuleAnswer>> {
@@ -403,11 +427,22 @@ impl Linter {
         let revision = self.invalidation.load(std::sync::atomic::Ordering::Acquire);
         let mut graphs = self.module_graphs.graphs.lock().expect("module graphs");
         let key = (ask.root.clone(), ask.settings);
-        let mut graph = match graphs.remove(&key) {
-            Some(graph) if graph.revision == revision => graph,
-            old => self.fresh_graph(old, settings, &ask.root, revision, ask.exports)?,
+        let publish = |reach: Reach| { self.module_graphs.reach.write().expect("program reach").insert(key.clone(), reach); };
+        let (mut graph, fresh) = match graphs.remove(&key) {
+            Some(graph) if graph.revision == revision => (graph, false),
+            old => match self.fresh_graph(old, settings, &ask.root, revision, ask.exports) {
+                Ok(graph) => (graph, true),
+                Err(listing) => {
+                    publish(Reach::Unlisted(Arc::new(listing)));
+                    return None;
+                }
+            },
         };
+        let resolved = Arc::as_ptr(&graph.resolving);
         if ask.exports { self.know_names(&mut graph, settings, &ask.root) }
+        if fresh || Arc::as_ptr(&graph.resolving) != resolved {
+            publish(Reach::Graph { files: graph.by_path.clone(), listing: graph.listing.clone(), resolving: graph.resolving.clone() });
+        }
         let answer = graph.answer(ask);
         graphs.insert(key, graph);
         answer
@@ -428,14 +463,14 @@ impl Linter {
 
     /// The graph at `revision`: `old` brought up to date when the edits
     /// since keep its files and resolutions, else built again.
-    fn fresh_graph(&self, old: Option<Graph>, settings: &Settings, root: &Path, revision: u64, links: bool) -> Option<Graph> {
+    fn fresh_graph(&self, old: Option<Graph>, settings: &Settings, root: &Path, revision: u64, links: bool) -> Result<Graph, Reads> {
         if let Some(mut graph) = old {
             if let Some((changed, stayed)) = self.invalidated_since(graph.revision) {
                 let stale = super::Stale::new(&changed, &stayed);
                 if !self.is_stale(&stale, &graph.listing) && !self.is_stale(&stale, &graph.resolving) {
                     self.apply_edits(&mut graph, settings, root, &changed);
                     graph.revision = revision;
-                    return Some(graph);
+                    return Ok(graph);
                 }
             }
         }
@@ -482,11 +517,12 @@ impl Linter {
         graph.link();
     }
 
-    fn build_graph(&self, settings: &Settings, root: &Path, revision: u64, links: bool) -> Option<Graph> {
+    /// The graph, or what trying to list its files read when they can't be.
+    fn build_graph(&self, settings: &Settings, root: &Path, revision: u64, links: bool) -> Result<Graph, Reads> {
         let host = GraphHost::new(self, root);
         let question = QueryContext::once();
         let (inputs, listing) = reads::track(|| program_sources(settings, &host, &question));
-        let Known::Yes(inputs) = inputs else { return None };
+        let Known::Yes(inputs) = inputs else { return Err(listing) };
         let paths: Vec<DepPath> = inputs.iter()
             .filter(|path| settings.origin(path) == Origin::Project && self.grammar.lang_for(&self.relative(path)).is_some())
             .map(|path| reads::dep_path(path)).collect();
@@ -497,7 +533,7 @@ impl Linter {
             revision,
             listing: Arc::new(listing),
             resolving: Arc::default(),
-            by_path: paths.iter().enumerate().map(|(at, path)| (path.clone(), index(at))).collect(),
+            by_path: Arc::new(paths.iter().enumerate().map(|(at, path)| (path.clone(), index(at))).collect()),
             by_module: modules.iter().enumerate().map(|(at, module)| (module.clone(), index(at))).collect(),
             imports: vec![Vec::new(); paths.len()],
             importers: Vec::new(),
@@ -517,7 +553,7 @@ impl Linter {
         });
         graph.resolving = Arc::new(resolving);
         graph.link();
-        Some(graph)
+        Ok(graph)
     }
 
     /// Every file's specifiers and, if asked, links, parsing on several
@@ -629,7 +665,7 @@ mod tests {
             resolving: Arc::default(),
             paths: modules.iter().map(|module| reads::dep_path(Path::new(module))).collect(),
             modules: modules.iter().map(|&module| module.into()).collect(),
-            by_path: FxHashMap::default(),
+            by_path: Arc::default(),
             by_module: modules.iter().enumerate().map(|(at, &module)| (module.into(), at as u32)).collect(),
             specifiers: Vec::new(),
             links: None,

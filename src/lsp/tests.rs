@@ -309,6 +309,24 @@ fn suggestions_are_offered_as_quick_fixes_that_rename_their_placeholder() {
 }
 
 #[test]
+fn highlights_are_served_per_line_in_utf16() {
+    let dir = project("lsp-highlights");
+    std::fs::write(dir.join(".dx"), format!("{CONFIG}\nin str highlight strings string\nin bad highlight bads keyword\n")).expect("config");
+    let mut c = Client::start(&dir);
+    let open = dir.join("open.t");
+    // A string over two lines, after a character two UTF-16 units wide.
+    c.notify("textDocument/didOpen", json!({ "textDocument": { "uri": uri(&open), "languageId": "t", "version": 1, "text": "\u{1F600}\"a\nb\" BAD\n" } }));
+    c.diagnostics_for(&open);
+    let found = c.request("dxlint/highlights", json!({ "textDocument": { "uri": uri(&open) } }));
+    assert_eq!(found["tokens"], json!([
+        { "line": 0, "character": 2, "length": 2, "tokenType": "string" },
+        { "line": 1, "character": 0, "length": 2, "tokenType": "string" },
+        { "line": 1, "character": 3, "length": 3, "tokenType": "keyword" },
+    ]));
+    c.shutdown();
+}
+
+#[test]
 fn rescans_leave_open_buffers_diagnostics_alone() {
     let dir = project("lsp-rescan-open");
     let config = dir.join(".dx");

@@ -9,7 +9,7 @@ use super::scopes::{Change, Scoped, Scopes, Setting};
 use super::symbols::Symbols;
 use super::fix::{Clause, FixPlan, PartPlan};
 use super::{Compiled, InertRule, Linter, NodeSelection, OptionSlot, Rule, Target};
-use crate::config::ast::{Config, Dropped, Expr, FixDef, Name, Parent, RuleDef, Severity, Target as AstTarget, Use};
+use crate::config::ast::{Config, Dropped, Expr, FixDef, Name, Parent, RuleDef, RuleKind, Severity, Target as AstTarget, Use};
 use crate::config::schema::{Schema, Schemas};
 use crate::config::error::ConfigError;
 use crate::config::source::SourceMap;
@@ -1208,9 +1208,12 @@ fn rule(def: &RuleDef, g: &Grammar, schemas: &Schemas, attrs: &AttrNames, tables
         if let Some(c) = scope.compile(e, errors) { when.push(c) }
     }
     scope.param_read = None;
+    if let RuleKind::Highlight(token_type) = &def.kind {
+        super::highlight::check_token_type(token_type, errors);
+    }
     let message = def.message.as_ref().and_then(|m| scope.compile(m, errors));
     let fix = match &def.fix {
-        Some(rewrite) if def.transform => fix_plan(&scope, None, &super::transform::marked_rewrite(rewrite), errors),
+        Some(rewrite) if matches!(def.kind, RuleKind::Transform) => fix_plan(&scope, None, &super::transform::marked_rewrite(rewrite), errors),
         fix => fix.as_ref().and_then(|fix| fix_plan(&scope, None, fix, errors)),
     };
     let suggestions = def.suggestions.iter().filter_map(|s| fix_plan(&scope, Some(&s.title), &s.fix, errors)).collect();
@@ -1311,7 +1314,7 @@ fn rule(def: &RuleDef, g: &Grammar, schemas: &Schemas, attrs: &AttrNames, tables
         all_tokens: reads_children || helper_tokens || on_tokens && reads_siblings,
         token_fields: targets_tokens || own_tokens,
         target_layers,
-        transform: def.transform,
+        kind: def.kind.clone(),
         name: def.name.text.clone(),
         span: def.name.span,
         targets,

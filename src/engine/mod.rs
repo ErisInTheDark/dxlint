@@ -13,6 +13,7 @@ pub use dx_grammar::frontend;
 mod inspect;
 pub(crate) use dx_runtime::language_options;
 pub mod transform;
+pub mod highlight;
 mod message;
 mod module_graph;
 pub(crate) mod profile;
@@ -73,8 +74,9 @@ pub enum NodeSelection {
 }
 
 pub struct Rule {
-    /// Written `transform`: runs only when a file is mapped ([`transform`]).
-    pub transform: bool,
+    /// A `transform` runs only when a file is mapped ([`transform`]), a
+    /// `highlight` only when an editor asks ([`highlight`]).
+    pub kind: crate::config::ast::RuleKind,
     pub name: String,
     pub span: Span,
     pub targets: Vec<Target>,
@@ -140,6 +142,11 @@ pub struct Rule {
 }
 
 impl Rule {
+    /// A rule proper: linting runs it (transforms and highlights it never does).
+    pub fn checks(&self) -> bool {
+        matches!(self.kind, crate::config::ast::RuleKind::Check)
+    }
+
     /// The final configuration used to specialise this rule's expressions.
     pub fn options(&self) -> &[OptionSlot] {
         &self.options
@@ -956,6 +963,35 @@ impl Linter {
         !stale.changed.is_empty() && !stale.holds(reads, &|dep| self.holds_judging(dep, stale.strict), &|path, test| self.passes(path, reads::read_unrecorded(path).0.as_deref(), test))
     }
 
+    /// What one of `kept` recorded that changes to `paths` could change
+    /// (described, for an explainer), if anything; `stayed[i]`: `paths[i]`
+    /// was edited, not created or deleted. A server drops changes nothing
+    /// it lints or read could see (build output, scratch folders) instead
+    /// of making every answer go.
+    pub fn could_see<'r>(&self, paths: &[PathBuf], stayed: &[bool], mut kept: impl Iterator<Item = &'r Reads>) -> Option<String> {
+        if paths.is_empty() { return None }
+        let seen = RefCell::new(None::<String>);
+        let note = |dep: &Dep| { seen.borrow_mut().get_or_insert_with(|| format!("{} {}", cache::dep_kind(dep), dep.path().display())); };
+        // Walks and listings filtered by path see only what they admit.
+        let unlisted = |dep: &Dep| matches!(dep, Dep::List(..) | Dep::IsDir(..) | Dep::Discovered(..) | Dep::Requested(..))
+            && !paths.iter().any(|path| dep.touches(path) && dep.admits(path));
+        // A module graph's own reads: what chose and resolved its files.
+        let graph = Stale::new(paths, stayed);
+        let graph_sees = |reads: &Reads| !graph.holds(reads, &|dep| unlisted(dep) || { note(dep); false }, &|_, _| false);
+        let unaffected = |dep: &Dep| {
+            let unaffected = match dep {
+                Dep::Module(ask, _) => !self.module_sees(ask, paths, &graph_sees),
+                dep => unlisted(dep),
+            };
+            if !unaffected { note(dep) }
+            unaffected
+        };
+        let stale = Stale::new(paths, stayed);
+        let scanned = |path: &Path, _: &reads::ScanTest| { note(&Dep::Text(reads::dep_path(path), 0)); false };
+        let seeing = kept.any(|recorded| !stale.holds(recorded, &unaffected, &scanned));
+        seeing.then(|| seen.into_inner().unwrap_or_else(|| "a listing".into()))
+    }
+
     /// One parsed file's native facts, from front end `front`.
     fn native_facts<'t>(
         &'t self,
@@ -996,8 +1032,9 @@ impl Linter {
         let Some(lang) = self.grammar.lang_for(&rel) else { return Vec::new() };
         let settings = self.scopes.for_file(&rel, &self.rules);
         let severity = |i: usize| settings.as_ref().map_or(self.rules[i].severity, |s| s.severity[i]);
-        // A transform runs only when asked for: mapping a file, never linting it.
-        let active: Vec<bool> = self.rules.iter().enumerate().map(|(i, f)| only.map_or(!f.transform, |only| only[i]) && f.applies_to(&rel, lang, severity(i))).collect();
+        // Transforms and highlights run only when asked for (mapping a file,
+        // an editor colouring it), never when linting it.
+        let active: Vec<bool> = self.rules.iter().enumerate().map(|(i, f)| only.map_or(f.checks(), |only| only[i]) && f.applies_to(&rel, lang, severity(i))).collect();
         if !active.iter().any(|a| *a) {
             return Vec::new();
         }

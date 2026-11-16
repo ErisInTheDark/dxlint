@@ -415,6 +415,27 @@ mod tests {
         assert!(mapped.text.contains(r#"volatile: ["listed"]"#), "{}", mapped.text);
     }
 
+    /// Text a `fn` builds keeps where its nodes came from: `copy`, `mirror`
+    /// and `renamed` mark pieces anywhere, not only in `rewrite` templates.
+    #[test]
+    fn functions_building_output_keep_their_pieces() {
+        let config = concat!(
+            "import .ts\n",
+            "fn getter(k) = \" get \" copy(k) \"() {{ return this.\" renamed(k, \"$_{k}\") \"; }} // \" mirror(k)\n",
+            "in ts_class_property transform t { rewrite at { start: end_offset, end: end_offset } as getter(key) }\n",
+        );
+        let text = "class A { x = 1; }";
+        let dir = dir("pieces", config, "");
+        let built = crate::engine::build(crate::config::load_text(".dx", config, &Disk), dir.clone());
+        assert!(built.errors.is_empty(), "{:#?}", built.errors);
+        let mapped = built.linter.expect("compiled").mapped(&dir.join("a.ts"), text);
+        assert_eq!(mapped.text, "class A { x = 1; get x() { return this.$_x; } // x }");
+        let x = text.find('x').expect("x");
+        let pieces: Vec<(PieceKind, &str)> = mapped.pieces.iter().filter(|p| p.source == (x..x + 1)).map(|p| (p.kind, &mapped.text[p.output.clone()])).collect();
+        assert_eq!(pieces, [(PieceKind::Copy, "x"), (PieceKind::Renamed, "$_x"), (PieceKind::Mirror, "x")]);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
     #[test]
     fn linting_never_runs_a_transform() {
         let config = "import .ts\nin ts_class_property transform t error \"mapped only\" { }\n";

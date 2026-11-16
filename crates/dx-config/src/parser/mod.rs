@@ -33,6 +33,9 @@ const RESERVED: &[&str] = &[
     "warn", "error", "native", "let", "drop", "override", "forward", "is", "define", "schema", "each", "language",
 ];
 
+/// Words defining something written like a rule on a context's layers.
+const RULE_WORDS: [&str; 3] = ["rule", "transform", "highlight"];
+
 /// Items about names and effects; words only
 /// in item position on a layer.
 const NAME_ITEMS: &[&str] = &["scope", "declares", "resolves", "targets", "unwraps", "widens", "defines", "refers", "constrains", "defaults", "enumerates", "assigned", "fits", "carries", "arguments", "indexed", "members", "member", "runs", "labels", "opaque", "exports", "globals", "uses", "merges",
@@ -455,7 +458,7 @@ impl<'a> Parser<'a> {
         if !first.is_ident("in") { return false }
         for ahead in 1.. {
             let Some(token) = self.ts.peek_raw(ahead) else { return false };
-            if token.is_ident("rule") || token.is_ident("transform") { return true }
+            if RULE_WORDS.iter().any(|word| token.is_ident(word)) { return true }
             if token.kind == Tk::Newline || token.is_ident("let") || token.is_ident("match") || &*token.text == "{" { return false }
         }
         false
@@ -504,7 +507,7 @@ impl<'a> Parser<'a> {
             (Tk::Ident, "in") => self.context_item(),
             (Tk::Ident, "match") => self.matcher(ctx),
             (Tk::Ident, "rule") => self.rule(ctx),
-            (Tk::Ident, "transform") if ctx.is_some() => self.rule(ctx),
+            (Tk::Ident, "transform" | "highlight") if ctx.is_some() => self.rule(ctx),
             (Tk::Ident, "indent") => self.indent(ctx),
             (Tk::Ident, "let") => self.attr(ctx),
             (Tk::Ident, "forward") => self.forward(ctx),
@@ -567,7 +570,7 @@ impl<'a> Parser<'a> {
                 self.block(&ctx, t.span);
             }
             Some(t) if t.is_ident("match") => self.matcher(Some(&ctx)),
-            Some(t) if t.is_ident("rule") || t.is_ident("transform") => self.rule(Some(&ctx)),
+            Some(t) if RULE_WORDS.iter().any(|word| t.is_ident(word)) => self.rule(Some(&ctx)),
             Some(t) if t.is_ident("indent") => self.indent(Some(&ctx)),
             Some(t) if t.is_ident("let") => self.attr(Some(&ctx)),
             Some(t) if t.is_ident("forward") => self.forward(Some(&ctx)),
@@ -2119,9 +2122,21 @@ impl<'a> Parser<'a> {
         let Some(name) = self.glued_name("a rule name", false) else { return };
         let targets: Vec<Target> = ctx.parents.iter().map(target_of).collect();
         let mut def = RuleDef::new(name, targets);
-        def.transform = kw.is_ident("transform");
+        if kw.is_ident("transform") {
+            def.kind = RuleKind::Transform;
+        } else if kw.is_ident("highlight") {
+            self.skip(false, true);
+            let Some(token_type) = self.ident("a token type: `keyword`, `property`, `type`, `string`, ...") else { return };
+            // Its diagnostics carry the token type.
+            def.message = Some(Expr { kind: ExprKind::Str(token_type.text.clone()), span: token_type.span });
+            def.kind = RuleKind::Highlight(token_type);
+        }
         def.defined_only = self.defining > 0;
         self.rule_tail(&mut def, None);
+        if let (RuleKind::Highlight(token_type), Some(_)) = (&def.kind, def.severity) {
+            self.errors.push(ConfigError::new(token_type.span, "a highlight only colours its nodes: no severity or message")
+                .note("`in <layer> highlight name <token type>`; `rule name off` turns it off"));
+        }
         let existing = self.config.rules.iter().position(|r| r.name.text == def.name.text);
         match (existing, overriding) {
             (Some(i), Some(_)) => {
@@ -2305,10 +2320,11 @@ impl<'a> Parser<'a> {
     /// rule's `fix` repairs code; a transform's `rewrite` is what the file
     /// maps to. Reports the other.
     fn edit_clause_fits(&mut self, def: &RuleDef, word: &Token) -> bool {
-        match (def.transform, &*word.text) {
-            (true, "fix") => self.errors.push(ConfigError::new(word.span, "a transform says what the file maps to with `rewrite`, not `fix`")
+        match (&def.kind, &*word.text) {
+            (RuleKind::Transform, "fix") => self.errors.push(ConfigError::new(word.span, "a transform says what the file maps to with `rewrite`, not `fix`")
                 .note("`rewrite { at <span> as \"text\" }`; `fix` belongs to rules, which repair code")),
-            (false, "rewrite") => self.errors.push(ConfigError::new(word.span, "`rewrite` belongs to transforms; a rule repairs code with `fix`")),
+            (RuleKind::Check, "rewrite") => self.errors.push(ConfigError::new(word.span, "`rewrite` belongs to transforms; a rule repairs code with `fix`")),
+            (RuleKind::Highlight(_), _) => self.errors.push(ConfigError::new(word.span, format!("a highlight only colours its nodes: no `{}`", word.text))),
             _ => return true,
         }
         false
@@ -2689,9 +2705,13 @@ impl<'a> Parser<'a> {
                     }
                 }
                 // `suggest "title" ...`: a fix offered as a choice.
-                (Tk::Ident, "suggest") if def.transform => {
+                (Tk::Ident, "suggest") if !matches!(def.kind, RuleKind::Check) => {
                     self.bump();
-                    self.errors.push(ConfigError::new(t.span, "a transform offers no suggestions: its `rewrite` is what the file maps to"));
+                    let message = match def.kind {
+                        RuleKind::Transform => "a transform offers no suggestions: its `rewrite` is what the file maps to",
+                        _ => "a highlight only colours its nodes: no suggestions",
+                    };
+                    self.errors.push(ConfigError::new(t.span, message));
                 }
                 (Tk::Ident, "suggest") => {
                     self.bump();

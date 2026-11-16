@@ -7,6 +7,7 @@ use serde_json::{json, Value};
 use crate::config::ast::Severity;
 use crate::config::error::ConfigError;
 use crate::config::source::SourceMap;
+use crate::engine::highlight::Highlight;
 use crate::engine::{Diagnostic, Edit, Fix, Linter};
 use crate::line_index::LineIndex;
 
@@ -14,6 +15,26 @@ pub fn range(text: &str, lines: &LineIndex, start: usize, end: usize) -> Value {
     let (sl, sc) = lines.to_utf16(text, start);
     let (el, ec) = lines.to_utf16(text, end);
     json!({ "start": { "line": sl, "character": sc }, "end": { "line": el, "character": ec } })
+}
+
+/// Highlights as editor tokens: `{ line, character, length, tokenType }`
+/// in UTF-16 units, split at line ends (a token never spans lines).
+pub fn highlights(text: &str, found: &[Highlight]) -> Value {
+    let lines = LineIndex::new(text);
+    let mut tokens = Vec::new();
+    for h in found {
+        let mut from = h.start;
+        while from < h.end {
+            let line_end = text[from..h.end].find('\n').map_or(h.end, |at| from + at);
+            let to = if text[..line_end].ends_with('\r') { line_end - 1 } else { line_end };
+            let ((line, character), (_, end)) = (lines.to_utf16(text, from), lines.to_utf16(text, to.max(from)));
+            if end > character {
+                tokens.push(json!({ "line": line, "character": character, "length": end - character, "tokenType": h.token_type }));
+            }
+            from = line_end + 1;
+        }
+    }
+    Value::Array(tokens)
 }
 
 fn severity(s: Severity) -> u8 {

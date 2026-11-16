@@ -8,9 +8,9 @@ use std::ops::Range;
 use std::path::Path;
 
 use super::{Diagnostic, Linter};
-use crate::config::ast::{Expr, ExprKind, FixDef, Name, TemplatePart};
+use crate::config::ast::{Expr, ExprKind, FixDef, TemplatePart};
 
-pub use crate::expr::mapped::{copy_mark, PieceKind, MAPPED_TEXT};
+pub use crate::expr::mapped::{copy_mark, PieceKind};
 
 /// A stretch of the output that comes from the original; what no piece
 /// covers is made up.
@@ -67,23 +67,16 @@ fn marked(text: &Expr) -> Expr {
     }
 }
 
-/// `mapped_text(kind, value, value.offset, value.end_offset, text)`.
+/// An interpolation as marked text: a copy of the node it reads, unless it
+/// names another piece kind (`{mirror(x)}`, `{renamed(x, text)}`).
 fn mark_call(e: &Expr) -> Expr {
-    let at = |kind: ExprKind| Expr { kind, span: e.span };
-    let name = |text: &str| Name { text: text.into(), span: e.span };
-    let (kind, value, text) = match &e.kind {
-        ExprKind::Call(f, args) if f.text == "mirror" && args.len() == 1 => ("mirror", &args[0], args[0].clone()),
-        ExprKind::Call(f, args) if f.text == "renamed" && args.len() == 2 => ("renamed", &args[0], args[1].clone()),
-        _ => ("copy", e, e.clone()),
-    };
-    let span_of = |key: &str| at(ExprKind::Key(Box::new(value.clone()), name(key)));
-    at(ExprKind::Call(name(MAPPED_TEXT), vec![at(ExprKind::Str(kind.into())), value.clone(), span_of("offset"), span_of("end_offset"), text]))
+    crate::expr::mapped::piece_call(e).unwrap_or_else(|| crate::expr::mapped::marked(PieceKind::Copy, e, e.clone(), e.span))
 }
 
 impl Linter {
     /// `text` of `path` as its transforms map it.
     pub fn mapped(&self, path: &Path, text: &str) -> Mapped {
-        let only: Vec<bool> = self.rules.iter().map(|rule| rule.transform).collect();
+        let only: Vec<bool> = self.rules.iter().map(|rule| matches!(rule.kind, crate::config::ast::RuleKind::Transform)).collect();
         let run = self.run();
         apply(text, run.lint_only(path, text, &only))
     }

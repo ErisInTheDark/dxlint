@@ -39,7 +39,7 @@ pub fn run(output: &mut Output<'_>, linter: &Linter, request: &Request<'_>) -> u
     let only = match request.rule {
         None => None,
         Some(rule) => {
-            let only: Vec<bool> = linter.rules.iter().map(|r| !r.transform && names(rule, &r.name)).collect();
+            let only: Vec<bool> = linter.rules.iter().map(|r| r.checks() && names(rule, &r.name)).collect();
             if !only.contains(&true) {
                 render::error(output, &format!("no rule `{rule}` in this config"));
                 return 2;

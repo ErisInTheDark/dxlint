@@ -481,11 +481,32 @@ pub struct OptionDef {
     pub primary: bool,
 }
 
+/// What a definition written like a rule does.
+#[derive(Clone, Debug)]
+pub enum RuleKind {
+    /// `in <layer> rule name`: reports problems.
+    Check,
+    /// `in <layer> transform name`: its edits are what a file maps to.
+    Transform,
+    /// `in <layer> highlight name <token type>`: how editors colour its nodes.
+    Highlight(Name),
+}
+
+impl RuleKind {
+    /// The word that defines it.
+    pub fn keyword(&self) -> &'static str {
+        match self {
+            RuleKind::Check => "rule",
+            RuleKind::Transform => "transform",
+            RuleKind::Highlight(_) => "highlight",
+        }
+    }
+}
+
 /// `in target rule name [severity [message]] [fix as expr] [{ clauses }]`
 #[derive(Clone, Debug)]
 pub struct RuleDef {
-    /// Written `in <layer> transform name`: its edits are what a file maps to.
-    pub transform: bool,
+    pub kind: RuleKind,
     pub name: Name,
     /// `in a or b`: every layer (or field, language, group) it applies to.
     pub targets: Vec<Target>,
@@ -570,7 +591,7 @@ impl RuleDef {
     /// A rule with nothing but its name and targets.
     pub fn new(name: Name, targets: Vec<Target>) -> Self {
         RuleDef {
-            transform: false,
+            kind: RuleKind::Check,
             defined_only: false,
             configured: None,
             inert: false,

@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
-use projects::Projects;
+use projects::{Linters, Projects};
 use scan::Shared;
 use transport::Outbox;
 use crate::config::source::{normalize_path, SourceProvider};
@@ -103,8 +103,19 @@ struct Server {
     warned_no_config: bool,
     /// Open documents whose diagnostics are out of date.
     dirty: HashSet<PathBuf>,
-    /// Find every config again (startup, a `.dx` config created or deleted).
+    /// Find every config again (a `.dx` config created or deleted, a
+    /// `.gitignore` changed); configs reload only when the set found differs.
     rediscover: bool,
+    /// Reload every config even if the set found is the same (startup,
+    /// settings changed).
+    reload_all: bool,
+    /// Scan the workspace again even if no config changed: what a walk
+    /// reaches may have (a `.gitignore` changed).
+    rescan: bool,
+    /// Folders a scan's walk enters or not ([`Server::folder_reached`]).
+    reached: HashMap<PathBuf, bool>,
+    /// The `.gitignore`s a scan's walk saw, by text hash.
+    gitignores: HashMap<PathBuf, u64>,
     /// Configs to reload.
     stale: HashSet<PathBuf>,
     /// Files in visible editors, most important first (`dxlint/focus`).
@@ -120,6 +131,9 @@ struct Server {
     /// Source files saved, created, deleted or closed since the last flush:
     /// what any file learned from them is out of date.
     changed: HashSet<PathBuf>,
+    /// Those of [`Server::changed`] that came or went, rather than changed
+    /// text: only they change what listings find.
+    appeared: HashSet<PathBuf>,
     /// Buffers opened or edited since the last flush: what open files
     /// learned from them is out of date; the rest wait for a save.
     typed: HashSet<PathBuf>,
@@ -146,6 +160,13 @@ impl Timers {
     }
 }
 
+/// `DXLINT_RESCAN_WHY=1`: why configs reload and the workspace is scanned
+/// again, to stderr.
+fn why(reason: impl FnOnce() -> String) {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if *ON.get_or_init(|| std::env::var_os("DXLINT_RESCAN_WHY").is_some()) { eprintln!("dxlint lsp: {}", reason()) }
+}
+
 pub fn run<R: Read + Send + 'static, W: Write + Send + 'static>(input: R, output: W, stderr: &mut dyn Write) -> u8 {
     serve(Pace::EDITOR, input, output, stderr)
 }
@@ -168,12 +189,17 @@ pub fn serve<R: Read + Send + 'static, W: Write + Send + 'static>(pace: Pace, in
         warned_no_config: false,
         dirty: HashSet::new(),
         rediscover: false,
+        reload_all: false,
+        rescan: false,
+        reached: HashMap::new(),
+        gitignores: HashMap::new(),
         stale: HashSet::new(),
         visible: Vec::new(),
         tabs: Vec::new(),
         ignored_tabs: HashSet::new(),
         dirty_tabs: HashSet::new(),
         changed: HashSet::new(),
+        appeared: HashSet::new(),
         typed: HashSet::new(),
         settling: Vec::new(),
         pace,
@@ -257,6 +283,7 @@ impl Server {
                     "codeAction/resolve" => self.out.respond(id, self.resolve_action(params)),
                     "textDocument/formatting" => self.out.respond(id, self.format(params)),
                     "textDocument/hover" => self.out.respond(id, self.hover(params)),
+                    "dxlint/highlights" => self.out.respond(id, self.highlights(params)),
                     "textDocument/definition" => self.out.respond(id, self.in_config(params, |c| c.definition(params))),
                     "textDocument/references" => self.out.respond(id, self.in_config(params, |c| c.references(params))),
                     "textDocument/documentSymbol" => self.out.respond(id, self.in_config(params, |c| c.outline())),
@@ -266,7 +293,7 @@ impl Server {
             }
             None => match method {
                 "exit" => return true,
-                "initialized" | "workspace/didChangeConfiguration" => self.rediscover = true,
+                "initialized" | "workspace/didChangeConfiguration" => (self.rediscover, self.reload_all) = (true, true),
                 "textDocument/didOpen" => self.did_open(params),
                 "textDocument/didChange" => self.did_change(params),
                 "textDocument/didSave" => self.did_save(params),
@@ -287,7 +314,20 @@ impl Server {
     /// sees.
     fn flush(&mut self) {
         let rescan = self.reload_configs();
-        self.relint_dependents();
+        self.relint_dependents(false);
+        if !self.changed.is_empty() {
+            self.arm_settle();
+        }
+        self.publish_dirty();
+        if rescan && self.scan_workspace {
+            let roots = if self.roots.is_empty() { self.projects.dirs() } else { self.roots.clone() };
+            scan::start(self.projects.linters(), roots, self.tabs.clone(), self.shared.clone(), self.out.clone(), self.progress);
+        }
+    }
+
+    /// Queues lints of open buffers and ignored tabs that are out of date,
+    /// visible ones first.
+    fn publish_dirty(&mut self) {
         let mut dirty: Vec<PathBuf> = std::mem::take(&mut self.dirty).into_iter().collect();
         dirty.sort_by_key(|p| self.visible.iter().position(|v| v == p).unwrap_or(usize::MAX));
         for path in dirty {
@@ -296,22 +336,29 @@ impl Server {
         for path in std::mem::take(&mut self.dirty_tabs) {
             self.publish_ignored_tab(&path);
         }
-        if rescan && self.scan_workspace {
-            let roots = if self.roots.is_empty() { self.projects.dirs() } else { self.roots.clone() };
-            scan::start(self.projects.linters(), roots, self.tabs.clone(), self.shared.clone(), self.out.clone(), self.progress);
-        }
     }
 
     /// Makes every linter forget what the changed files said, and relints
     /// the files whose last lint read something that changed: open ones
     /// with the next flush, the rest in the background, which unsaved edits
-    /// do not reach.
-    fn relint_dependents(&mut self) {
-        if self.changed.is_empty() && self.typed.is_empty() {
+    /// do not reach. Changes on disk only with `disk` ([`Server::tick`],
+    /// once they settle): agents and builds change files many times a
+    /// minute, and each round of invalidations makes a running scan redo
+    /// shared answers.
+    fn relint_dependents(&mut self, disk: bool) {
+        let take = |set: &mut HashSet<PathBuf>| if disk { std::mem::take(set) } else { HashSet::new() };
+        let (changed, appeared, typed) = (take(&mut self.changed), take(&mut self.appeared), std::mem::take(&mut self.typed));
+        if changed.is_empty() && typed.is_empty() {
             return;
         }
-        let (changed, typed) = (std::mem::take(&mut self.changed), std::mem::take(&mut self.typed));
         let linters = self.projects.linters();
+        let changed = self.relevant(changed, &appeared, &linters);
+        if changed.is_empty() && typed.is_empty() {
+            return;
+        }
+        if !changed.is_empty() {
+            self.retry_failed_commands();
+        }
         // Per linter: what changed for everyone, and what only open files see.
         let (all, buffers): (Vec<PathBuf>, Vec<PathBuf>) = (changed.iter().cloned().collect(), typed.iter().cloned().collect());
         let stale: Vec<(&Arc<Linter>, Stale, Stale)> = linters.all().map(|l| (l, l.invalidate(&all), l.invalidate(&buffers))).collect();
@@ -349,6 +396,49 @@ impl Server {
         self.settle(background);
     }
 
+    /// Whether a scan's walk enters `path`'s folder (gitignored folders it
+    /// never does), remembered per folder until a `.gitignore` changes:
+    /// build output and test runs change thousands of files a minute.
+    fn folder_reached(&mut self, path: &Path) -> bool {
+        let Some(dir) = path.parent() else { return true };
+        if let Some(&reached) = self.reached.get(dir) { return reached }
+        let reached = scan::walk_reaches(&self.roots, dir);
+        self.reached.insert(dir.to_path_buf(), reached);
+        reached
+    }
+
+    /// The changed files that matter: ones the editor has open or a scan
+    /// lints, and the rest only when a kept read could see them (a program's
+    /// `.d.ts` in a gitignored folder can; build output and scratch files
+    /// nothing read can't, and churn there must not make every answer go).
+    fn relevant(&mut self, changed: HashSet<PathBuf>, appeared: &HashSet<PathBuf>, linters: &Linters) -> HashSet<PathBuf> {
+        let (mut relevant, mut edited, mut came_or_went) = (Vec::new(), Vec::new(), Vec::new());
+        for path in changed {
+            let linted = self.docs.contains_key(&path) || self.ignored_tabs.contains(&path)
+                || linters.for_path(&path).is_some_and(|l| l.wants(&path)) && self.folder_reached(&path);
+            if linted { relevant.push(path) } else if appeared.contains(&path) { came_or_went.push(path) } else { edited.push(path) }
+        }
+        let linted = relevant.len();
+        let kept = self.shared.reads.lock().expect("lock");
+        // Edited text matters only to reads of it; files that came or went
+        // also to the listings that would find them.
+        for (paths, stayed) in [(edited, true), (came_or_went, false)] {
+            if paths.is_empty() { continue }
+            // Each linter judges the reads of the files it linted.
+            let seen = linters.all().find_map(|linter| {
+                let own = kept.iter().filter(|(file, _)| linters.for_path(file).is_some_and(|l| Arc::ptr_eq(l, linter))).map(|(_, reads)| &**reads);
+                linter.could_see(&paths, &vec![stayed; paths.len()], own)
+            });
+            if let Some(seen) = seen {
+                why(|| format!("{} {} files nothing lints matter ({} ...): a read could see them ({seen})", paths.len(), if stayed { "edited" } else { "new or deleted" }, paths[0].display()));
+                relevant.extend(paths);
+            }
+        }
+        drop(kept);
+        why(|| format!("{linted} changed files are linted, {} matter in all", relevant.len()));
+        relevant.into_iter().collect()
+    }
+
     /// Queues background relints of files on disk until changes settle
     /// ([`Timers::settled`]).
     fn settle(&mut self, files: Vec<PathBuf>) {
@@ -356,16 +446,25 @@ impl Server {
         for file in files {
             if !self.settling.contains(&file) { self.settling.push(file) }
         }
+        self.arm_settle();
+    }
+
+    /// Changes on disk take effect once they stop for [`Pace::settle`], or
+    /// a burst has gone on for [`Pace::settle_at_most`].
+    fn arm_settle(&mut self) {
         let now = Instant::now();
         let began = self.timers.settled.map_or(now, |(began, _)| began);
         self.timers.settled = Some((began, (now + self.pace.settle).min(began + self.pace.settle_at_most)));
     }
 
-    /// Does the deferred work that is due: settled relints, and forgetting
-    /// an idle editor's kept answers (retried while an editor lint runs).
+    /// Does the deferred work that is due: settled changes on disk and the
+    /// relints they cause, and forgetting an idle editor's kept answers
+    /// (retried while an editor lint runs).
     fn tick(&mut self) {
         let now = Instant::now();
         if self.timers.settled.is_some_and(|(_, at)| at <= now) {
+            self.relint_dependents(true);
+            self.publish_dirty();
             self.timers.settled = None;
             let files = std::mem::take(&mut self.settling);
             scan::relint(self.projects.linters(), files, self.shared.clone(), self.out.clone());
@@ -403,6 +502,12 @@ impl Server {
             return None;
         }
         Some(config)
+    }
+
+    /// Whether the editor has a file open in `file`'s folder or below.
+    fn editor_below(&self, file: &Path) -> bool {
+        let Some(dir) = file.parent() else { return false };
+        self.docs.keys().chain(&self.ignored_tabs).any(|open| open.starts_with(dir))
     }
 
     /// Makes sure `config` gets loaded by the next flush.
@@ -516,6 +621,9 @@ impl Server {
                 "referencesProvider": true,
                 "documentSymbolProvider": true,
                 "completionProvider": { "triggerCharacters": [".", " ", "\"", "["] },
+                // `dxlint/highlights`: what a file's `highlight`s colour, by
+                // token type name; the client merges them with other tokens.
+                "experimental": { "highlights": { "tokenTypes": crate::engine::highlight::TOKEN_TYPES } },
             },
             "serverInfo": { "name": "dxlint", "version": env!("CARGO_PKG_VERSION") },
         })
@@ -525,24 +633,34 @@ impl Server {
         self.out.notify("window/showMessage", json!({ "type": kind, "message": message }));
     }
 
-    /// Loads stale configs, or every config after a rediscovery. When the
-    /// linters changed, marks open buffers and ignored tabs for relinting.
-    /// Returns whether the workspace needs a rescan: a config scans can reach
-    /// changed (gitignored configs only matter to the editor).
+    /// Loads stale configs, or every config after a rediscovery that found a
+    /// different set. When the linters changed, marks open buffers and
+    /// ignored tabs for relinting. Returns whether the workspace needs a
+    /// rescan: a config scans can reach changed (gitignored configs only
+    /// matter to the editor), or what scans reach did.
     fn reload_configs(&mut self) -> bool {
+        let reach_changed = std::mem::take(&mut self.rescan);
         let mut rescan = false;
         if std::mem::take(&mut self.rediscover) {
             self.reclassify_editor();
             let found = if self.scan_workspace {
-                projects::discover(&self.roots)
+                let (found, gitignores) = projects::discover(&self.roots);
+                self.gitignores = gitignores;
+                found
             } else {
                 self.roots.iter().filter_map(|r| config::find(r)).collect()
             };
             let editor: Vec<PathBuf> = self.docs.keys().chain(&self.ignored_tabs).filter_map(|p| self.editor_config(p)).collect();
-            // Reload everything kept, not just what was stale.
-            self.stale.extend(found.into_iter().chain(editor));
-            rescan = self.projects.retain(&self.stale);
-            if self.stale.is_empty() && !self.warned_no_config {
+            let wanted: HashSet<PathBuf> = found.into_iter().chain(editor).collect();
+            // A new or vanished config can change how others fold: reload
+            // everything kept, not just what was stale. The same set found
+            // again changes nothing.
+            if std::mem::take(&mut self.reload_all) || !self.projects.knows_exactly(&wanted) {
+                why(|| format!("reload every config: {} found", wanted.len()));
+                self.stale.extend(wanted);
+                rescan |= self.projects.retain(&self.stale);
+            }
+            if self.stale.is_empty() && self.projects.dirs().is_empty() && !self.warned_no_config {
                 self.warned_no_config = true;
                 self.show(3, &format!("dxlint: no {} found in the workspace; linting is off", config::CONFIG_NAME));
             }
@@ -554,7 +672,7 @@ impl Server {
         configs.sort_by_key(|c| (c.components().count(), c.clone()));
         configs.dedup();
         if configs.is_empty() && !rescan {
-            return false;
+            return reach_changed;
         }
         let mut changed = rescan;
         let docs = &self.docs;
@@ -569,7 +687,9 @@ impl Server {
             loaded.push(config.clone());
             if self.projects.load(config, &Overlay(docs), &uri_of) {
                 changed = true;
-                rescan |= scan::walk_reaches(&self.roots, config);
+                let reached = scan::walk_reaches(&self.roots, config);
+                why(|| format!("{}: {} built again", if reached { "rescan" } else { "relint editor files" }, config.display()));
+                rescan |= reached;
             }
         }
         self.projects.publish_errors(&self.out);
@@ -579,11 +699,12 @@ impl Server {
             self.dirty.extend(self.docs.keys().cloned());
             self.dirty_tabs.extend(self.ignored_tabs.iter().cloned());
         }
-        rescan
+        rescan || reach_changed
     }
 
     /// A `.dx` file changed in the editor or on disk: reload what reads it.
     fn config_touched(&mut self, path: &Path) {
+        why(|| format!("reload: {} changed", path.display()));
         self.stale.extend(self.projects.owners_of(path));
     }
 
@@ -623,6 +744,7 @@ impl Server {
             self.publish_ignored_tab(path);
         } else if self.scan_workspace
             && self.projects.linter_for(path).is_some_and(|l| l.wants(path))
+            && self.folder_reached(path)
             && scan::walk_reaches(&self.roots, path)
         {
             self.settle(vec![path.to_path_buf()]);
@@ -717,7 +839,6 @@ impl Server {
     }
 
     fn watched_files(&mut self, params: &Value) {
-        self.retry_failed_commands();
         for change in params["changes"].as_array().into_iter().flatten() {
             let Some(u) = change["uri"].as_str() else { continue };
             let Some(path) = uri::to_path(u) else { continue };
@@ -725,15 +846,40 @@ impl Server {
             let kind = change["type"].as_u64();
             let name = path.file_name();
             if name.is_some_and(|n| n == config::CONFIG_NAME) && matches!(kind, Some(1 | 3)) {
-                // Which config is nearest may have changed for any file.
-                self.rediscover = true;
+                // Which config is nearest may have changed for any file a
+                // scan reaches or the editor has open. Configs in folders
+                // nothing reaches (build output, scratch) change nothing.
+                if self.projects.is_loaded(&path) || self.editor_below(&path) || self.folder_reached(&path) {
+                    why(|| format!("rediscover: {} came or went", path.display()));
+                    self.rediscover = true;
+                }
+                // Saved by replacing the file: the same set is found again,
+                // but the config itself changed.
+                if kind == Some(1) && self.projects.reads(&path) {
+                    self.config_touched(&path);
+                }
             } else if name.is_some_and(|n| n == ".gitignore") {
-                // What scans reach, and which editor files lint, may have changed.
-                self.rediscover = true;
-            } else if self.projects.is_config(&path) {
+                // What scans reach, and which editor files lint, may have
+                // changed: where a scan reached and linted something.
+                // Saved again unchanged (a checkout, a tool rewriting it) changes nothing.
+                let hash = reads::disk_hash(&path);
+                let same = self.gitignores.insert(path.clone(), hash) == Some(hash);
+                let dir = path.parent().unwrap_or(&path).to_path_buf();
+                let linted_below = self.shared.reads.lock().expect("lock").keys().any(|file| file.starts_with(&dir));
+                if !same && (self.editor_below(&path) || linted_below && self.folder_reached(&path)) {
+                    why(|| format!("rescan: {} changed", path.display()));
+                    (self.rediscover, self.rescan) = (true, true);
+                    self.reached.clear();
+                }
+            } else if self.projects.reads(&path) {
                 self.config_touched(&path);
+            } else if name.is_some_and(|n| n == config::CONFIG_NAME) {
+                // A config nothing loads (scratch, build output): no project.
             } else if !self.docs.contains_key(&path) {
                 self.source_changed(&path);
+                if matches!(kind, Some(1 | 3)) {
+                    self.appeared.insert(path.clone());
+                }
                 if kind == Some(3) {
                     self.shared.reads.lock().expect("lock").remove(&path);
                     self.shared.publish(&self.out, u, None, json!([]));
@@ -819,6 +965,24 @@ impl Server {
             Some((symbols, file)) => f(&config_docs::ConfigFile { symbols: &symbols, file }),
             None => Value::Null,
         }
+    }
+
+    /// `dxlint/highlights`: what the file's `highlight`s colour, as
+    /// `{ tokens: [{ line, character, length, tokenType }] }` (UTF-16, never
+    /// across a line end), in text order.
+    fn highlights(&self, params: &Value) -> Value {
+        let none = || json!({ "tokens": [] });
+        let Some((path, _)) = Self::doc_path(params) else { return none() };
+        let Some(linter) = self.projects.linter_for(&path).filter(|linter| linter.highlights_anything()) else { return none() };
+        let disk;
+        let text = match self.docs.get(&path) {
+            Some(doc) => doc.text.as_str(),
+            None => {
+                disk = std::fs::read_to_string(&path).unwrap_or_default();
+                disk.as_str()
+            }
+        };
+        json!({ "tokens": convert::highlights(text, &linter.highlights(&path, text)) })
     }
 
     /// In `.dx` files: what the name is. In source files, when enabled:

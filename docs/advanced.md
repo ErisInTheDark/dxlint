@@ -19,6 +19,7 @@ See [everyday use](basic.md) for running dxlint and the [TypeScript library](ts.
 - [Defining a language](#defining-a-language): [items](#items), [contexts](#context-blocks), [layers](#layers), [patterns](#patterns), [parsers](#parsers)
 - [Performance and caching](#performance-and-caching)
 - [Transforms: syntax of your own](#transforms-syntax-of-your-own)
+- [Highlighting](#highlighting)
 - [Editor and tooling](#editor-and-tooling), including [packed sources](#packed-sources)
 
 ## Rules
@@ -917,6 +918,7 @@ in rs_function.name rule fn-snake-case warn "function names are snake_case" fix 
 | `parser name in lang { ... }`, `native name` | a grammar for syntax patterns cannot own, and making it its language's front end, see [Parsers](#parsers) |
 | `extend parser name { ... }` | change an imported parser, see [Extending a parser](#extending-a-parser) |
 | `in A transform name ... { rewrite ... }` | what files map to for other tools, see [Transforms](#transforms-syntax-of-your-own) |
+| `in A highlight name <token type>` | how editors colour `A`'s nodes, see [Highlighting](#highlighting) |
 | `protocol name { method m (params) = expr }` | an adapter `dxlint map --protocol` serves, see [Adapters](#adapters-speaking-a-tools-own-protocol) |
 | `override <definition>`, `drop ...` | replace or remove what an import defined, see [Changing imported definitions](#changing-imported-definitions-override-drop) |
 | `ignore "glob" "!glob"` | never lint matching files (`!` takes some back; the last matching glob decides) |
@@ -1345,10 +1347,14 @@ navigation, debugging) by them:
 | piece | written | maps |
 |---|---|---|
 | kept | text no `rewrite` touches | exactly, to where it was |
-| copy | `{node}` in a `rewrite` template | to that node: errors in it point there, and tools take you to it for the node |
-| mirror | `{mirror(node)}` | errors point at the node; tools don't take you here, so a second copy doesn't compete with the first |
-| renamed | `{renamed(node, "$_{node}")}` | the whole text stands for the node under another name, so errors about `$_x` can name `x` |
+| copy | `{node}` in a `rewrite` template, or `copy(node)` | to that node: errors in it point there, and tools take you to it for the node |
+| mirror | `mirror(node)` | errors point at the node; tools don't take you here, so a second copy doesn't compete with the first |
+| renamed | `renamed(node, "$_{node}")` | the whole text stands for the node under another name, so errors about `$_x` can name `x` |
 | made up | everything else (`"private $_"`, `{str(node)}`, joined or replaced text) | nowhere |
+
+`copy`, `mirror` and `renamed` work in any expression, so a transform can
+build its output in `fn`s and still keep where each piece came from:
+`fn getter(k) = " get " copy(k) "() {{ return this.$_{k}; }}"`.
 
 Keep what users wrote in place and rewrite around it, and copy nodes rather
 than rebuilding their text: errors then land where they were written. Write
@@ -1431,6 +1437,31 @@ an inline source map) or `{ errors }` as esbuild messages, and
 `mapper.close()` ends it.
 
 `fixtures/engine/transform-state` is a worked example.
+
+## Highlighting
+
+A **highlight** says how editors colour syntax a `.dx` declares, next to
+where it declares it. It is written like a rule, with a token type in place
+of a severity:
+
+```dx
+in ts_class_property.modifier highlight state-keyword keyword { when text == "state" }
+in quilt_entry.name highlight quilt-names property
+```
+
+Token types are the editor's standard ones, which every theme colours:
+`namespace`, `type`, `class`, `enum`, `interface`, `struct`,
+`typeParameter`, `parameter`, `variable`, `property`, `enumMember`, `event`,
+`function`, `method`, `macro`, `keyword`, `modifier`, `comment`, `string`,
+`number`, `regexp`, `operator`, `decorator`. Where two highlights cover the
+same text, the inner one wins. `when`, `let`, `each` and `files` work as in
+rules; `rule name off` turns one off. Linting never runs highlights: the
+language server answers them when the editor asks.
+
+In VS Code, a file TypeScript 7 also serves (a `.wts`, or a `contentMappers`
+extension) keeps TypeScript's colours for the names it knows, and dxlint's
+highlights fill in the rest (keywords, punctuation); other files get dxlint's
+highlights alone.
 
 ## Editor and tooling
 

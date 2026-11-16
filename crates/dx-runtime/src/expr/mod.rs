@@ -54,6 +54,9 @@ pub const SPECIAL_FORMS: &[(&str, &str)] = &[
     ("token(node, edge)", "a code token the front end read (comments left out; strings, templates and regexes whole) as `{text, start, end}`: edge `first` / `last` wholly inside the node, `before` ending at or before its start, `after` starting at or after its end; null when none"),
     ("token_list(node)", "the texts of the code tokens wholly inside the node, in order"),
     ("token_pair(node, pairs)", "the token matching the node's bracket token, as `{text, start, end}`: the token starting at the node if it opens one of `pairs` (`[[\"(\", \")\"], ...]`), else the one ending it if it closes one; unmatched closers are skipped, a closer of an outer opener drops unclosed inner ones; null when none"),
+    ("copy(node)", "the node's text, marked so a transform's output maps back to the node: tools take you to it, errors in it point there (what `{node}` in a `rewrite` template does); text that is no node stays made up"),
+    ("mirror(node)", "the node's text marked as a further copy: errors in it point at the node, but tools don't take you there"),
+    ("renamed(node, text)", "`text` marked as standing for the node under another name, so errors about it can name the node"),
     ("kind_name(node)", "a node's kind as text (`ts_call`; `.lang` for the file), for messages: test kinds with `is`"),
     ("containing(layer)", "the innermost node of a layer or group, in any named layer, whose span holds the node's (null if none); `kind.field` selects what fills that field, as `descendants` and `overlapping` also do"),
     ("descendants(layer)", "the nodes of a layer or group (specialisations too) inside the node, in source order"),
@@ -728,6 +731,18 @@ impl Scope<'_> {
                 };
                 self.note(name.span, Resolved::Function("dbg"));
                 CExpr::Dbg(Box::new(self.compile(&args[0], errors)?), label.unwrap_or_else(|| "dbg".into()))
+            }
+            // `copy(node)`, `mirror(node)`, `renamed(node, text)`: text marked
+            // as that piece of the node's span, for transforms' output.
+            ExprKind::Call(name, _) if self.grammar.function(&name.text).is_none() && mapped::piece(&name.text).is_some() => {
+                let (piece, ..) = mapped::piece(&name.text).expect("guarded");
+                let Some(marked) = mapped::piece_call(e) else {
+                    let usage = SPECIAL_FORMS.iter().map(|(sig, _)| *sig).find(|sig| sig.split('(').next() == Some(piece)).unwrap_or(piece);
+                    errors.push(ConfigError::new(e.span, format!("wrong number of arguments for `{piece}`")).note(format!("usage: {usage}")));
+                    return None;
+                };
+                self.note(name.span, Resolved::Function(piece));
+                return self.compile(&marked, errors);
             }
             // `position(offset)`: `{line, column}` of a byte offset in the file.
             ExprKind::Call(name, args) if name.text == "position" && self.grammar.function("position").is_none() => {

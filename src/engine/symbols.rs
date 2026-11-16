@@ -110,6 +110,7 @@ const KEYWORDS: &[(&str, &str)] = &[
     ("when", "rule clause: `when expr`; every `when` must hold"),
     ("fix", "rule clause: `fix as expr`, what the node's text should be"),
     ("transform", "`in a transform name [error \"message\"] { when ...; rewrite { at <span> as \"text\" } }`: what a file maps to (`dxlint map`); `{node}` in a rewrite copies that node, `{mirror(node)}` and `{renamed(node, text)}` choose another kind of copy"),
+    ("highlight", "`in a highlight name <token type> [{ when ... }]`: how editors colour `a`'s nodes (`keyword`, `property`, `type`, `string`, ...); inner highlights win over outer ones"),
     ("rewrite", "transform clause: `rewrite as expr` or `rewrite { at <span> as \"text\" ... }`, what that text of the file maps to"),
     ("protocol", "`protocol name { method m (params) = expr }`: a protocol `dxlint map --protocol <file>` serves, its methods answering requests with `map_file`, `config_identity` and `config_files`"),
     ("as", "`fix as expr`, `rewrite as expr`"),

@@ -3,6 +3,7 @@ const fs = require("fs");
 const path = require("path");
 const vscode = require("vscode");
 const { LanguageClient } = require("vscode-languageclient/node");
+const tokens = require("./tokens");
 
 const EXE = process.platform === "win32" ? ".exe" : "";
 const PLATFORM_BINARY = `dxlint-${process.platform}-${process.arch}${EXE}`;
@@ -245,6 +246,59 @@ async function start() {
   }
 }
 
+// TypeScript 7's extension: its server colours (and maps) the files it owns.
+const TYPESCRIPT_7 = "TypeScriptTeam.native-preview";
+
+// What the `.dx` `highlight`s colour in a document, as
+// `{ line, character, length, tokenType }`; none when the server can't say.
+async function highlightsOf(uri) {
+  if (!client || !client.isRunning()) {
+    return [];
+  }
+  try {
+    return (await client.sendRequest("dxlint/highlights", { textDocument: { uri } })).tokens;
+  } catch {
+    return [];
+  }
+}
+
+// An editor shows one provider's semantic tokens per file. Where TypeScript 7
+// serves a file, dxlint's highlights go into its tokens through its LSP
+// middleware; returns whether it is there to take them.
+async function mergeIntoTypeScript(context) {
+  const typescript = vscode.extensions.getExtension(TYPESCRIPT_7);
+  const api = typescript && (await typescript.activate().catch(() => undefined));
+  if (!api || typeof api.registerLspMiddleware !== "function") {
+    return false;
+  }
+  const merged = async (result, { params }) => {
+    if (!result || !Array.isArray(result.data)) {
+      return result;
+    }
+    const highlights = await highlightsOf(params.textDocument.uri);
+    if (!highlights.length) {
+      return result;
+    }
+    const legend = await vscode.commands.executeCommand("vscode.provideDocumentSemanticTokensLegend", vscode.Uri.parse(params.textDocument.uri));
+    return legend ? { ...result, data: tokens.merge(result.data, legend.tokenTypes, highlights, params.range) } : result;
+  };
+  for (const method of ["textDocument/semanticTokens/full", "textDocument/semanticTokens/range"]) {
+    context.subscriptions.push(api.registerLspMiddleware(method, merged));
+  }
+  return true;
+}
+
+// Without TypeScript 7, dxlint's highlights are a file's tokens on their own.
+function provideHighlights(context, tokenTypes) {
+  const legend = new vscode.SemanticTokensLegend(tokenTypes, []);
+  context.subscriptions.push(vscode.languages.registerDocumentSemanticTokensProvider({ scheme: "file" }, {
+    async provideDocumentSemanticTokens(document) {
+      const highlights = await highlightsOf(client.code2ProtocolConverter.asUri(document.uri));
+      return highlights.length ? new vscode.SemanticTokens(new Uint32Array(tokens.merge([], tokenTypes, highlights))) : undefined;
+    },
+  }, legend));
+}
+
 // A dxlint fix or suggestion left a name to choose (`placeholder(...)` in
 // the rule): start renaming it, so the language's own rename updates every
 // use.
@@ -282,6 +336,11 @@ async function activate(context) {
     vscode.window.tabGroups.onDidChangeTabs(sendFocus),
   );
   await start();
+  // Servers that answer `dxlint/highlights` say which token types they use.
+  const tokenTypes = client?.initializeResult?.capabilities?.experimental?.highlights?.tokenTypes;
+  if (tokenTypes && !(await mergeIntoTypeScript(context))) {
+    provideHighlights(context, tokenTypes);
+  }
 }
 
 function deactivate() {

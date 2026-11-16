@@ -65,6 +65,22 @@ fn fix_application_counts_only_changed_matches() {
 }
 
 #[test]
+fn highlights_colour_only_when_asked_and_inner_ones_win() {
+    let l = linter(r#"
+        in .t match word /\b[a-z]+\b/
+        in word highlight words variable { when text != "skip" }
+        in str highlight strings string
+        in escape highlight escapes keyword
+    "#);
+    let text = r#"abc "a\nb" skip"#;
+    assert!(lint(&l, text).is_empty(), "linting never runs highlights");
+    let found: Vec<(usize, usize, String)> = l.highlights(Path::new("/root/file.t"), text).into_iter().map(|h| (h.start, h.end, h.token_type)).collect();
+    let at = |start, end, token_type: &str| (start, end, token_type.to_owned());
+    assert_eq!(found, [at(0, 3, "variable"), at(4, 6, "string"), at(6, 8, "keyword"), at(8, 10, "string")]);
+    assert!(errors("in str highlight strings strng").iter().any(|e| e.contains("`strng` is not a token type")));
+}
+
+#[test]
 fn context_blocks_preserve_message_severity() {
     let l = linter(r#"
         in .t {
@@ -215,6 +231,27 @@ fn editor_runs_see_globals_another_file_starts_declaring() {
     l.invalidate(&[script.to_owned()]);
     let run = l.run_after(Some(carried));
     assert_eq!(messages(run.lint(user, text)), ["number"]);
+    for path in [config, user, script] { drop_buffer(path) }
+}
+
+#[test]
+fn changes_only_matter_where_a_kept_read_could_see_them() {
+    use super::reads::{drop_buffer, set_buffer};
+    let l = native_linter("in ts_call rule typed info \"{if node always number then 'number' else 'other'}\"");
+    let (config, user, script) = (Path::new("/seen/tsconfig.json"), Path::new("/seen/user.ts"), Path::new("/seen/script.ts"));
+    set_buffer(config, r#"{ "compilerOptions": { "lib": [] } }"#);
+    let text = "export const y = g();\n";
+    set_buffer(user, text);
+    set_buffer(script, "declare function g(): number;\n");
+    let (_, reads) = l.lint_tracked(user, text);
+    let sees = |path: &str, edited: bool| l.could_see(&[PathBuf::from(path)], &[edited], std::iter::once(&reads)).is_some();
+    // Build output elsewhere: nothing the lint read is there.
+    assert!(!sees("/elsewhere/out/build.js", false));
+    // The script the global came from, edited, and a file joining the program.
+    assert!(sees("/seen/script.ts", true));
+    assert!(sees("/seen/new.ts", false));
+    // A file of the program's folder that nothing read, edited.
+    assert!(!sees("/seen/notes.md", true));
     for path in [config, user, script] { drop_buffer(path) }
 }
 

@@ -1,6 +1,9 @@
 //! How a transform's output text relates to the original: piece kinds, and the
 //! marks rewrite templates carry around copied text.
 
+use crate::config::ast::{Expr, ExprKind, Name};
+use crate::config::source::Span;
+
 /// How a piece of the output relates to the original text.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PieceKind {
@@ -57,3 +60,29 @@ pub mod copy_mark {
 
 /// The internal function rewrite templates call around each interpolation.
 pub const MAPPED_TEXT: &str = "mapped_text";
+
+/// `mapped_text(kind, value, value.offset, value.end_offset, text)`: `text`
+/// marked as a `kind` piece of `value`'s span; made up when `value` is no
+/// node.
+pub fn marked(kind: PieceKind, value: &Expr, text: Expr, span: Span) -> Expr {
+    let at = |kind: ExprKind| Expr { kind, span };
+    let name = |text: &str| Name { text: text.into(), span };
+    let span_of = |key: &str| at(ExprKind::Key(Box::new(value.clone()), name(key)));
+    at(ExprKind::Call(name(MAPPED_TEXT), vec![at(ExprKind::Str(kind.name().into())), value.clone(), span_of("offset"), span_of("end_offset"), text]))
+}
+
+/// The function naming a piece kind, with the arguments it takes:
+/// `copy(node)`, `mirror(node)`, `renamed(node, text)`.
+pub fn piece(name: &str) -> Option<(&'static str, PieceKind, usize)> {
+    [("copy", PieceKind::Copy, 1), ("mirror", PieceKind::Mirror, 1), ("renamed", PieceKind::Renamed, 2)].into_iter().find(|(piece, ..)| *piece == name)
+}
+
+/// A piece call (`copy(x)`, `mirror(x)`, `renamed(x, text)`) as the marked
+/// text it stands for; `None` for any other expression, or the wrong count
+/// of arguments.
+pub fn piece_call(e: &Expr) -> Option<Expr> {
+    let ExprKind::Call(f, args) = &e.kind else { return None };
+    let (_, kind, arity) = piece(&f.text)?;
+    if args.len() != arity { return None }
+    Some(marked(kind, &args[0], args[arity - 1].clone(), e.span))
+}
