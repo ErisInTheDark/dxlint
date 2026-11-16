@@ -31,6 +31,7 @@ rule es-no-misused-promises error
 rule es-no-new-native-nonconstructor error
 rule es-no-non-null-asserted-optional-chain error
 rule es-no-obj-calls error
+rule es-no-object-iteration-of-collections error
 rule es-no-redeclare error
 rule es-no-self-assign error
 rule es-no-setter-return error

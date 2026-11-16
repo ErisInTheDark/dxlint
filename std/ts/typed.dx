@@ -38,6 +38,7 @@ import .ts/typed/enums
 import .ts/typed/qualifiers
 import .ts/typed/regexp-exec
 import .ts/typed/for-in-arrays
+import .ts/typed/collection-iteration
 import .ts/typed/type-conversions
 import .ts/typed/rejection-handlers
 import .ts/typed/unsafe-members

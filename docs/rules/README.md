@@ -1,6 +1,6 @@
 # Rules
 
-Every rule dxlint ships, 438 in all. Turn one on with `rule <name>` after importing its language; see [basic.md](../basic.md).
+Every rule dxlint ships, 439 in all. Turn one on with `rule <name>` after importing its language; see [basic.md](../basic.md).
 
 - **Types**: the rule reads type information (from your `tsconfig.json`; TypeScript itself never runs).
 - **Fix**: `autofix` rules are fixed by `dxlint --fix` and by the editor's quick fixes.
@@ -228,6 +228,7 @@ Pages are adapted from the documentation of [ESLint](https://eslint.org/docs/lat
 | [es-no-nonoctal-decimal-escape](es-no-nonoctal-decimal-escape.md) | Reports `\8` and `\9` in string literals. |  |  | suspicious | 100% |
 | [es-no-obj-calls](es-no-obj-calls.md) | Reports calls and constructor calls to built-in objects that are not functions, such as `Math` and `JSON`. |  |  | bugs | 100% |
 | [es-no-object-constructor](es-no-object-constructor.md) | Reports calls to `Object` without an argument, with or without `new`. |  |  |  | 100% |
+| [es-no-object-iteration-of-collections](es-no-object-iteration-of-collections.md) | Reports `Object.keys`, `Object.values`, `Object.entries` and `for-in` over a `Map`, `ReadonlyMap`, `WeakMap`, `Set`, `ReadonlySet` or `WeakSet` (subclasses included). | yes |  | bugs |  |
 | [es-no-octal-escape](es-no-octal-escape.md) | Reports legacy octal escape sequences in strings. |  |  |  | 100% |
 | [es-no-octal](es-no-octal.md) | Reports legacy octal number literals such as `071`. |  |  | suspicious | 100% |
 | [es-no-param-reassign](es-no-param-reassign.md) | Reports writes to function parameters. |  |  |  | 100% |

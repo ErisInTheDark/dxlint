@@ -1,0 +1,24 @@
+# Object-property iteration over keyed collections, whose entries are never own properties.
+
+import .ts/suggestions/globals
+
+define {
+
+fn collection_iteration_subject(n) = {
+  value arms: value_parts(n)
+  value arms != null && count(arms) > 0 && all(arms, arm => any(arm.parts, part =>
+    ts_value_builtin_ancestor(part, n, ["Map", "ReadonlyMap", "WeakMap", "Set", "ReadonlySet", "WeakSet"]) == true))
+}
+
+in ts_call, ts_for_in rule es-no-object-iteration-of-collections {
+  let method if node is ts_call && contains(["Object.keys", "Object.values", "Object.entries"], global_method_callee)
+    then global_method_callee else null
+  let subject if node is ts_for_in then right.node
+    else if method != null && count(argument.nodes) > 0 && first(argument.nodes) not ts_spread then first(argument.nodes) else null
+  when subject != null && collection_iteration_subject(subject)
+  report at if node is ts_for_in then { start: offset, end: opener.ts_open_paren.paired_token.end } else node
+  warn if node is ts_call then "`" method "` on a Map or Set is always empty: its entries are not own properties. Iterate it with `for...of` or its own `.keys()`, `.values()` or `.entries()` instead."
+    else "`for...in` over a Map or Set visits none of its entries. Use `for...of` instead."
+}
+
+}

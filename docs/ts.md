@@ -423,6 +423,7 @@ separate bundles.
 | `.ts/typed/strict-void-return` | non-void values flowing into void-returning callback contexts, with `allowReturnAny`; imported by `.ts/typed`, diagnostic-only |
 | `.ts/typed/regexp-exec` | non-global string matching policy and fixes (`es-prefer-regexp-exec`); imported by `.ts/typed` |
 | `.ts/typed/for-in-arrays` | array-like `for-in` policy (`es-no-for-in-array`); imported by `.ts/typed` |
+| `.ts/typed/collection-iteration` | `Object.keys/values/entries` and `for-in` over Map/Set values (`es-no-object-iteration-of-collections`); imported by `.ts/typed` |
 | `.ts/typed/promises` | `es-no-misused-promises` variants: `conditionals`, `predicates` (array callbacks), `spreads`, `void-arguments`, `void-attributes`, `void-inherited-methods`, `void-properties`, `void-returns`, `void-variables`; imported by `.ts/typed`, diagnostic-only |
 | `.ts/typed/errors` | Error ancestry, any/unknown/undefined categories and caught/rejection-binding provenance; imported by `.ts/typed` |
 | `.ts/enums` | enum transfer policy (`es-no-unsafe-enum-assignment`) over the `type_flow` fact, imported by `.ts` |
