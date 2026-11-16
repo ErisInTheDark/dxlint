@@ -243,16 +243,20 @@ enum Command {
         #[arg(required = true)]
         files: Vec<PathBuf>,
     },
-    /// List a file's suggestions (fixes `--fix` never applies), or apply one
+    /// List files' suggestions (fixes `--fix` never applies), or apply one
+    /// in each file. Files whose cached lint still holds are answered from
+    /// `.dxcache`
     Suggest {
-        file: PathBuf,
-        /// Only problems covering this position (`12:5`)
+        #[arg(required = true)]
+        files: Vec<PathBuf>,
+        /// Only problems covering this position (`12:5`; one file only)
         #[arg(long, value_name = "LINE:COL")]
         at: Option<String>,
-        /// Only this rule's problems
+        /// Only this rule's problems; a file the cache can't answer runs
+        /// only this rule
         #[arg(long)]
         rule: Option<String>,
-        /// Apply suggestion N (as listed) of the one matching problem
+        /// Apply suggestion N (as listed) of each file's one matching problem
         #[arg(long, value_name = "N")]
         apply: Option<usize>,
         /// With --apply: fill the suggestion's placeholders with this name
@@ -432,9 +436,10 @@ where
             Err(code) => code,
         },
         Some(Command::Eval { target, expr, files }) => eval::run(&mut output, config, &target, &expr, &files),
-        Some(Command::Suggest { file, at, rule, apply, name }) => match load(&mut output, config) {
+        Some(Command::Suggest { files, at, rule, apply, name }) => match load_for_lint(&mut output, config) {
             Ok(p) => suggest::run(&mut output, &p.linter, &suggest::Request {
-                file: &file, at: at.as_deref(), rule: rule.as_deref(), apply, name: name.as_deref(),
+                files: &files, at: at.as_deref(), rule: rule.as_deref(), apply, name: name.as_deref(),
+                cache: !cli.lint.no_cache, stats: cli.lint.stats,
             }),
             Err(code) => code,
         },

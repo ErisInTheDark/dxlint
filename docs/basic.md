@@ -129,8 +129,8 @@ These rules need no extra configuration. Where dxlint cannot tell a type for cer
 | `dxlint` | lint the whole project |
 | `dxlint src/a.ts src/lib` | lint some files or folders |
 | `dxlint --fix` | apply fixes in place |
-| `dxlint suggest a.ts [--at 12:5] [--rule r]` | list the suggestions (fixes `--fix` never applies) there |
-| `dxlint suggest a.ts --at 12:5 --apply 2 [--name x]` | apply one; `--name` fills the names it leaves to choose |
+| `dxlint suggest a.ts b.ts [--at 12:5] [--rule r]` | list the suggestions (fixes `--fix` never applies) there; files the cache still holds answer from it, others run only rule `r` |
+| `dxlint suggest a.ts b.ts --rule r --apply 2 [--name x]` | apply one in each file; `--name` fills the names it leaves to choose |
 | `dxlint --format jsonl` | one JSON object per diagnostic, streamed |
 | `dxlint --jobs 1` | lint on one thread (default: every core) |
 | `dxlint --no-cache` | ignore and do not write `.dxcache` |

@@ -1002,6 +1002,43 @@ fn map_reads_configs_and_files_as_the_workbench_view_has_them() {
 }
 
 #[test]
+fn suggest_serves_many_files_from_one_run_the_cache_and_only_the_asked_rule() {
+    let config = r#"
+lang t "*.t"
+command marks "node marks.js"
+in .t match shout /\b[A-Z]{3,}\b/ {
+  rule no-shout warn "`{text}` is shouting" {
+    suggest "Lower it" as lower(text)
+  }
+}
+in .t match mark /mark/ {
+  let out command_output(node, "marks", [])
+  rule marked warn "{out.state}"
+}
+"#;
+    let marks = "require('fs').writeFileSync('marked', '')";
+    let dir = project("cli-suggest-files", &[(".dx", config), ("marks.js", marks), ("a.t", "say HELLO"), ("b.t", "say BYE mark")]);
+    let stderr = |o: &Output| String::from_utf8_lossy(&o.stderr).into_owned();
+    // A file the cache can't answer runs only the asked rule: `marked`'s command never starts.
+    let out = dxlint(&dir, &["--no-cache", "suggest", "--rule", "no-shout", "a.t", "b.t"]);
+    assert_eq!(out.code, 0, "{}", stderr(&out));
+    assert_eq!(stdout(&out).matches("1. Lower it").count(), 2, "{}", stdout(&out));
+    assert!(!dir.join("marked").exists());
+    // After a lint, both files come from its cache, and each gets its one suggestion applied.
+    dxlint(&dir, &["--jobs", "1"]);
+    assert!(dir.join("marked").exists());
+    let out = dxlint(&dir, &["--stats", "suggest", "--apply", "1", "a.t", "b.t"]);
+    assert_eq!(out.code, 0, "{}", stderr(&out));
+    assert!(stderr(&out).contains("2 files (2 from cache)"), "{}", stderr(&out));
+    assert_eq!(std::fs::read_to_string(dir.join("a.t")).expect("a.t"), "say hello");
+    assert_eq!(std::fs::read_to_string(dir.join("b.t")).expect("b.t"), "say bye mark");
+    // A file without a match fails the call; the others are still answered.
+    let out = dxlint(&dir, &["suggest", "--apply", "1", "a.t", "b.t"]);
+    assert_eq!(out.code, 1, "{}", stderr(&out));
+    assert!(stderr(&out).contains("no suggestions in a.t"), "{}", stderr(&out));
+}
+
+#[test]
 fn named_paths_inside_each_other_lint_each_file_once() {
     let dir = project("cli-overlapping-roots", &[(".dx", RULES), ("sub/.dx", NESTED), ("sub/a.t", "LOUD\n")]);
     let out = dxlint(&dir, &["--format", "jsonl", "-c", ".dx", ".", "sub"]);
