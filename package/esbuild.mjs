@@ -1,6 +1,6 @@
 // An esbuild plugin mapping files through a project's `.dx` transforms, the
-// same way `tsc` sees them: one long-lived `dxlint map` for the whole build,
-// spoken to in its own protocol (`map { path, text, sourceMap }`).
+// same way `tsc` sees them: one long-lived `dxlint map` shared by every build
+// in the process, spoken to in its own protocol (`map { path, text, sourceMap }`).
 import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -13,6 +13,15 @@ function server() {
 	const waiting = new Map();
 	let next = 1;
 	let buffer = Buffer.alloc(0);
+	let failure;
+	const fail = error => {
+		failure ??= error;
+		for (const { reject } of waiting.values()) reject(failure);
+		waiting.clear();
+	};
+	child.on("error", error => fail(new Error(`dxlint map failed: ${error.message}`)));
+	child.stdin.on("error", error => fail(new Error(`dxlint map stopped reading: ${error.message}`)));
+	child.on("exit", code => fail(new Error(`dxlint map exited (${code})`)));
 	child.stdout.on("data", chunk => {
 		buffer = Buffer.concat([buffer, chunk]);
 		for (;;) {
@@ -22,19 +31,20 @@ function server() {
 			if (buffer.length < header + 4 + length) return;
 			const message = JSON.parse(buffer.toString("utf8", header + 4, header + 4 + length));
 			buffer = buffer.subarray(header + 4 + length);
-			const { resolve, reject } = waiting.get(message.id);
+			const pending = waiting.get(message.id);
+			if (!pending) continue;
 			waiting.delete(message.id);
-			if (message.error) reject(new Error(message.error.message));
-			else resolve(message.result);
+			if (message.error) pending.reject(new Error(message.error.message));
+			else pending.resolve(message.result);
 		}
 	});
-	child.on("exit", () => {
-		for (const { reject } of waiting.values()) reject(new Error("dxlint map exited"));
-		waiting.clear();
-	});
 	return {
+		get alive() {
+			return failure === undefined;
+		},
 		request(method, params) {
 			return new Promise((resolve, reject) => {
+				if (failure) return reject(failure);
 				const id = next++;
 				waiting.set(id, { resolve, reject });
 				const body = Buffer.from(JSON.stringify({ jsonrpc: "2.0", id, method, params }));
@@ -58,27 +68,45 @@ function location(file, content, start, end) {
 	return { file, line, column, length, lineText: content.split("\n")[line - 1] ?? "" };
 }
 
+/** The process every mapper shares, and how many mappers are open. */
+let shared;
+let open = 0;
+
+/** The shared process, started again if it died. */
+function sharedServer() {
+	if (!shared?.alive) shared = server();
+	return shared;
+}
+
 /**
  * The project's `.dx` transforms as a function, for builds whose own `onLoad`
- * does more with a file: one long-lived `dxlint map`, started on first use.
+ * does more with a file. Every open mapper shares one long-lived `dxlint map`,
+ * started on first use and ended when the last one closes; it maps each file
+ * on its own and picks up `.dx` edits, so any number of builds may use it.
  * `transform` gives TypeScript `contents` with an inline source map, or esbuild
  * `errors` (and no `contents`) when the transform reports problems.
  * @returns {{ transform(fileName: string, content: string): Promise<{ contents?: string, errors: { text: string, location: object }[] }>, close(): void }}
  */
 export function dxlintMapper() {
-	let mapper;
+	let opened = false;
 	return {
 		async transform(fileName, content) {
-			mapper ??= server();
-			const result = await mapper.request("map", { path: fileName, text: content, sourceMap: true });
+			if (!opened) {
+				opened = true;
+				open++;
+			}
+			const result = await sharedServer().request("map", { path: fileName, text: content, sourceMap: true });
 			const errors = result.problems.map(problem => ({ text: problem.message, location: location(fileName, content, problem.offset, problem.end_offset) }));
 			if (errors.length > 0) return { errors };
 			const map = Buffer.from(result.sourceMap).toString("base64");
 			return { contents: `${result.text}\n//# sourceMappingURL=data:application/json;base64,${map}`, errors };
 		},
 		close() {
-			mapper?.close();
-			mapper = undefined;
+			if (!opened) return;
+			opened = false;
+			if (--open > 0) return;
+			shared?.close();
+			shared = undefined;
 		},
 	};
 }

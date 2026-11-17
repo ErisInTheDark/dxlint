@@ -273,7 +273,7 @@ fn difference(expected: &str, actual: &str) -> String {
 }
 
 fn scenario(output: &mut Output<'_>, root: &Path, bless: bool) -> Result<Vec<String>, String> {
-    let project = load_from_with(output, &root.join(".dx"), true).map_err(|_| "configuration failed".to_string())?;
+    let project = load_from_with(output, &root.join(".dx"), crate::engine::Purpose::Lint).map_err(|_| "configuration failed".to_string())?;
     if !project.config_ok { return Err("configuration failed".into()); }
     let mut files = Vec::new();
     inputs(root, &mut files)?;

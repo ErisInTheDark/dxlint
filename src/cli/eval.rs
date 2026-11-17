@@ -20,7 +20,7 @@ pub fn run(output: &mut Output<'_>, arg: &ConfigArg, target: &str, expr: &str, f
     let cwd = output.cwd;
     // `null` shows as `null` rather than as an empty message.
     let question = format!("in {target} rule {RULE} info {{ value ({expr}); then (result) if result == null then \"null\" else str(result) }}\n");
-    let project = match load_with(output, arg, Some(("(dxlint eval)", &question)), false) {
+    let project = match load_with(output, arg, Some(("(dxlint eval)", &question)), crate::engine::Purpose::Tooling) {
         Ok(p) => p,
         Err(code) => return code,
     };

@@ -32,7 +32,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-pub use build::{build, build_for_lint, Built};
+pub use build::{build, build_for, build_for_lint, Built, Purpose};
 pub use diagnostic::{Diagnostic, Edit, Fix, Suggestion, ENGINE_RULE};
 pub use fix::{apply_fixes, placeholder, Fixed};
 use fix::{FixPlan, Region};

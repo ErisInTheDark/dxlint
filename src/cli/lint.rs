@@ -393,7 +393,7 @@ fn lint(output: &mut Output<'_>, args: LintArgs, config: &ConfigArg, sources: Op
             walked = Some(found);
             nested
         };
-        let loaded = super::load_tree_with(output, &path, nested, None, true);
+        let loaded = super::load_tree_with(output, &path, nested, None, crate::engine::Purpose::Lint);
         if let Some(handle) = view.take() {
             match handle.join().unwrap_or_else(|_| Err("reading it panicked".into())) {
                 Ok(found) => super::workbench::apply(&found),
@@ -405,7 +405,7 @@ fn lint(output: &mut Output<'_>, args: LintArgs, config: &ConfigArg, sources: Op
             .any(|(_, file)| file.path.as_deref().is_some_and(super::workbench::holds)));
         let loaded = if config_held {
             let nested = walked.as_ref().filter(|_| config.config.is_none()).map(|w| w.nested.clone()).unwrap_or_default();
-            super::load_tree_with(output, &path, |_| nested, None, true)
+            super::load_tree_with(output, &path, |_| nested, None, crate::engine::Purpose::Lint)
         } else {
             loaded
         };

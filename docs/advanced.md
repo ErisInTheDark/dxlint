@@ -1434,7 +1434,10 @@ another checkout's view or unsaved buffers. A build whose own `onLoad` does
 more with each file maps it with `dxlintMapper()` instead:
 `await mapper.transform(path, content)` gives `{ contents }` (TypeScript with
 an inline source map) or `{ errors }` as esbuild messages, and
-`mapper.close()` ends it.
+`mapper.close()` ends it. Every mapper in a process (and every
+`dxlintTransform` build) shares one `dxlint map`, ended when the last one
+closes; it holds only the configs' transforms, and an edited `.dx` applies
+from the next file it maps.
 
 `fixtures/engine/transform-state` is a worked example.
 

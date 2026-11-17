@@ -13,6 +13,7 @@ use serde_json::json;
 
 use super::{load_tree_with, ConfigArg, Output, Project};
 use crate::config::{self, source::{normalize_path, Disk}};
+use crate::engine::Purpose;
 use crate::engine::transform::Mapped;
 use crate::expr::Value;
 use crate::lsp::transport;
@@ -34,9 +35,22 @@ struct Server {
     cwd: PathBuf,
     /// `--config`: one config for every path.
     config: Option<PathBuf>,
-    /// What each config loaded so far offers; `None` when it did not load or
-    /// has errors (a partial config would pass text through unmapped).
-    projects: HashMap<PathBuf, Option<Project>>,
+    projects: HashMap<PathBuf, Loaded>,
+}
+
+/// A config as it was loaded, and the files it was loaded from.
+struct Loaded {
+    /// `None` when it did not load or has errors (a partial config would
+    /// pass text through unmapped).
+    project: Option<Project>,
+    /// Each config file's hash at load: one server outlives edits to them.
+    sources: Vec<(PathBuf, u64)>,
+}
+
+impl Loaded {
+    fn current(&self) -> bool {
+        self.sources.iter().all(|(path, hash)| crate::engine::reads::read_unrecorded(path).1 == *hash)
+    }
 }
 
 impl Server {
@@ -50,14 +64,22 @@ impl Server {
 
     fn project(&mut self, path: &Path) -> Result<&Project, String> {
         let config = self.config_of(path).ok_or_else(|| format!("no `.dx` config for {}", path.display()))?;
+        if self.projects.get(&config).is_some_and(|loaded| !loaded.current()) {
+            self.projects.remove(&config);
+        }
         let explicit = self.config.is_some();
         let cwd = self.cwd.clone();
         self.projects.entry(config.clone()).or_insert_with(|| {
             let (path, between) = if explicit { (config.clone(), Vec::new()) } else { config::loader(&config, &Disk) };
             let (mut stdout, mut stderr) = (std::io::sink(), std::io::stderr());
             let mut output = Output { cwd: &cwd, stdout: &mut stdout, stderr: &mut stderr };
-            load_tree_with(&mut output, &path, |_| between, None, true).ok().map(|(project, _)| project).filter(|project| project.config_ok)
-        }).as_ref().ok_or_else(|| format!("the `.dx` config for {} does not load", path.display()))
+            let project = load_tree_with(&mut output, &path, |_| between, None, Purpose::Map).ok().map(|(project, _)| project);
+            let sources = project.iter().flat_map(|project| project.linter.sources.files())
+                .filter_map(|(_, file)| file.path.clone())
+                .map(|path| { let hash = crate::engine::reads::read_unrecorded(&path).1; (path, hash) })
+                .collect();
+            Loaded { project: project.filter(|project| project.config_ok), sources }
+        }).project.as_ref().ok_or_else(|| format!("the `.dx` config for {} does not load", path.display()))
     }
 
     fn mapped(&mut self, path: &str, text: &str) -> Result<Mapped, String> {
@@ -105,6 +127,15 @@ fn mapped_value(mapped: &Mapped) -> Value<'static> {
 }
 
 pub(super) fn run(output: &mut Output<'_>, args: &MapArgs, config: &ConfigArg, input: &mut impl BufRead, out: &mut impl Write) -> u8 {
+    let code = map(output, args, config, input, out);
+    // `DXLINT_HEAP_STATS`: what a long-lived mapper held.
+    if let Some(summary) = crate::alloc::heap::summary() {
+        output.err(format_args!("dxlint map: {summary}"));
+    }
+    code
+}
+
+fn map(output: &mut Output<'_>, args: &MapArgs, config: &ConfigArg, input: &mut impl BufRead, out: &mut impl Write) -> u8 {
     let mut server = Server {
         cwd: output.cwd.to_path_buf(),
         config: config.config.as_ref().map(|path| normalize_path(&output.cwd.join(path))),
@@ -378,6 +409,37 @@ mod tests {
         let mut server = Server { cwd: dir.clone(), config: Some(other), projects: HashMap::new() };
         let mapped = server.mapped(&dir.join("a.wts").to_string_lossy(), TEXT).unwrap();
         assert!(mapped.text.contains("get x ()"), "{}", mapped.text);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// A mapper holds transforms only, yet maps as the whole config would,
+    /// and a wrong rule line still fails it.
+    #[test]
+    fn mapping_builds_transforms_only() {
+        let config = format!("{CONFIG}in ts_class_property rule shout warn \"x\" {{ }}\nrule es-no-var\n");
+        let dir = dir("transforms-only", &config, TEXT);
+        let file = dir.join("a.wts");
+        let mut server = Server { cwd: dir.clone(), config: None, projects: HashMap::new() };
+        let mapped = server.mapped(&file.to_string_lossy(), TEXT).unwrap();
+        let full = crate::engine::build(crate::config::load_text(".dx", &config, &Disk), dir.clone()).linter.expect("compiled");
+        assert_eq!(mapped.text, full.mapped(&file, TEXT).text);
+        let rules = &server.project(&file).unwrap().linter.rules;
+        assert!(!rules.is_empty() && rules.iter().all(|rule| matches!(rule.kind, crate::config::ast::RuleKind::Transform)), "{} rules", rules.len());
+        std::fs::write(dir.join(".dx"), format!("{config}rule no-such-rule\n")).unwrap();
+        assert!(server.mapped(&file.to_string_lossy(), TEXT).is_err());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// One long-lived mapper serves many builds: an edited config maps with
+    /// its new text on the next request.
+    #[test]
+    fn an_edited_config_maps_with_its_new_text() {
+        let dir = dir("edited", "import .ts\nlang js \"*.ts\" \"*.wts\"\n", TEXT);
+        let file = dir.join("a.wts").to_string_lossy().into_owned();
+        let mut server = Server { cwd: dir.clone(), config: None, projects: HashMap::new() };
+        assert_eq!(server.mapped(&file, TEXT).unwrap().text, TEXT);
+        std::fs::write(dir.join(".dx"), CONFIG).unwrap();
+        assert!(server.mapped(&file, TEXT).unwrap().text.contains("get x ()"));
         std::fs::remove_dir_all(dir).ok();
     }
 

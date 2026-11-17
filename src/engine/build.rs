@@ -128,16 +128,33 @@ impl ReadDependencies {
     }
 }
 
-pub fn build(loaded: Loaded, root: PathBuf) -> Built {
-    compile(loaded, root, true)
+/// What a build is for: what it compiles and keeps.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Purpose {
+    /// Every rule, on or off, with symbols for editors and `describe`.
+    Tooling,
+    /// Enabled rules and the helpers they reach.
+    Lint,
+    /// Transforms only: rule lines are still checked, but no rule is
+    /// compiled, so a process that only maps holds none of them.
+    Map,
 }
 
-/// Compiles enabled rules and reachable helpers without tooling symbols.
-/// A config equal to a recent one (same files, same texts, placed the same
-/// way under its root) shares its [`Compiled`]: fixtures and tests load equal
-/// configs from many directories.
+pub fn build(loaded: Loaded, root: PathBuf) -> Built {
+    compile(loaded, root, Purpose::Tooling)
+}
+
 pub fn build_for_lint(loaded: Loaded, root: PathBuf) -> Built {
-    let key = ReuseKey::of(&loaded.sources, &root);
+    build_for(loaded, root, Purpose::Lint)
+}
+
+/// A runtime build ([`Purpose::Lint`] or [`Purpose::Map`]). A config equal
+/// to a recent one built for the same purpose (same files, same texts,
+/// placed the same way under its root) shares its [`Compiled`]: fixtures
+/// and tests load equal configs from many directories.
+pub fn build_for(loaded: Loaded, root: PathBuf, purpose: Purpose) -> Built {
+    if purpose == Purpose::Tooling { return compile(loaded, root, purpose) }
+    let key = ReuseKey::of(&loaded.sources, &root, purpose);
     if let Some(Reuse { compiled, errors, notices }) = RECENT.get(&key) {
         let started = std::time::Instant::now();
         let commands = commands(&loaded.config, root.clone());
@@ -145,7 +162,7 @@ pub fn build_for_lint(loaded: Loaded, root: PathBuf) -> Built {
         let linter = Linter::new(compiled, sources.clone(), root, commands);
         return Built { linter: Some(linter), errors, notices, sources, symbols: None, phases: vec![("reused", started.elapsed())] };
     }
-    let built = compile(loaded, root, false);
+    let built = compile(loaded, root, purpose);
     if let Some(linter) = &built.linter {
         RECENT.insert(key, Reuse { compiled: linter.compiled.clone(), errors: built.errors.clone(), notices: built.notices.clone() });
     }
@@ -163,21 +180,22 @@ struct Reuse {
 }
 
 /// A config's files as a build sees them: each one's text, and its path
-/// relative to the root when it lies under it.
+/// relative to the root when it lies under it; and what it is built for.
 #[derive(PartialEq, Eq, Hash)]
-struct ReuseKey(Vec<(String, Option<PathBuf>, std::sync::Arc<str>)>);
+struct ReuseKey(Vec<(String, Option<PathBuf>, std::sync::Arc<str>)>, Purpose);
 
 impl ReuseKey {
-    fn of(sources: &SourceMap, root: &std::path::Path) -> ReuseKey {
+    fn of(sources: &SourceMap, root: &std::path::Path, purpose: Purpose) -> ReuseKey {
         ReuseKey(sources.files().map(|(_, file)| {
             let path = file.path.as_deref().map(|path| path.strip_prefix(root).unwrap_or(path).to_path_buf());
             let name = if path.is_some() { String::new() } else { file.name.clone() };
             (name, path, file.text.clone())
-        }).collect())
+        }).collect(), purpose)
     }
 }
 
-fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
+fn compile(loaded: Loaded, root: PathBuf, purpose: Purpose) -> Built {
+    let tooling = purpose == Purpose::Tooling;
     let Loaded { mut config, sources, mut errors, fingerprint } = loaded;
     let mut phases = Vec::new();
     let mut clock = std::time::Instant::now();
@@ -189,6 +207,13 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
     // `rule name ...` lines: which rules are on, and their extra clauses
     // (merged before compiling); option values are set after.
     let settings = configure(&mut config, &mut errors);
+    if purpose == Purpose::Map {
+        for rule in config.rules.iter_mut().filter(|rule| !matches!(rule.kind, RuleKind::Transform)) {
+            let rule = std::sync::Arc::make_mut(rule);
+            rule.configured = Some(Severity::Off);
+            rule.scoped_on = false;
+        }
+    }
     if tooling {
         super::prune::prune(&mut config);
     } else {
