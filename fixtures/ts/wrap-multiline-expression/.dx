@@ -1,0 +1,3 @@
+import .ts
+rule es-wrap-multiline-expression
+rule es-no-extra-parens

@@ -31,6 +31,32 @@ in ts_call rule es-wrap-iife {
   warn if !structure_iife_wrapped && !info.wrapped then "Wrap an immediate function invocation in parentheses." else if mode == "inside" then "Wrap only the function expression in parens." else "Move the invocation into the parens that contain the function."
 }
 
+fn wrap_breaks(source, from, to) = re_test(byte_slice(source, from, to), /[\n\r\u{2028}\u{2029}]/)
+# A line break between the parts an operator joins, never inside a bracketed child.
+fn wrap_multiline(source, n) =
+  if n is structure_binary then wrap_breaks(source, n.left.end_offset, n.right.offset) || wrap_multiline(source, n.left.node) || wrap_multiline(source, n.right.node)
+  else if n is ts_conditional then wrap_breaks(source, n.test.end_offset, n.consequent.offset) || wrap_breaks(source, n.consequent.end_offset, n.alternate.offset)
+    || wrap_multiline(source, n.test.node) || wrap_multiline(source, n.consequent.node) || wrap_multiline(source, n.alternate.node)
+  else if n is structure_member then re_test(n.structure_chain_info.gap ?? "", /[\n\r\u{2028}\u{2029}]/) || wrap_multiline(source, n.object.node)
+  else if n is ts_call then wrap_multiline(source, n.callee.node)
+  else if n is (ts_as, ts_satisfies, ts_non_null) then wrap_multiline(source, n.expression.node)
+  else if n is (ts_unary, ts_await) then wrap_multiline(source, n.argument.node)
+  else false
+# An operand of an expression `wrap_multiline` looks into.
+fn wrap_joined(n) =
+  n.parent is (ts_binary, ts_logical, ts_conditional, ts_as, ts_satisfies, ts_non_null, ts_unary, ts_await)
+  || n.parent is structure_member && n.parent.object.node == n
+  || n.parent is ts_call && n.parent.callee.node == n
+
+in ts_binary, ts_logical, ts_conditional, ts_member, ts_index, ts_call, ts_as, ts_satisfies, ts_non_null, ts_unary, ts_await rule es-wrap-multiline-expression {
+  when !wrap_joined(node) && !(parent is (ts_expression_statement, ts_parenthesized))
+  when wrap_multiline(source, node)
+  when next_token != null && !space_after.line_break
+  let indent { value byte_slice(source, position(offset).js_line_start, offset); re_find /^[ \t]*/; nonempty } ?? ""
+  fix at node as "(" text "\n" indent ")"
+  warn "Wrap this multiline expression in parentheses, with `)` on its own line."
+}
+
 group structure_parens ts_parenthesized, ts_parenthesized_type
 group structure_assertion ts_as, ts_satisfies, ts_type_assertion
 group structure_binary ts_binary, ts_logical
@@ -206,6 +232,7 @@ in structure_parens rule es-no-extra-parens {
     || outer.structure_parens_for_init && inner.structure_parens_has_in
     || owner is ts_update && { value source; byte_slice inner.end_offset owner.end_offset; re_test /[\n\r]/ }
     || owner is ts_await && inner is ts_non_null
+    || wrap_multiline(source, inner) && wrap_breaks(source, inner.end_offset, outer.end_offset)
   when structure_parens_count > (if protected && required < 1 then 1 else required)
   let comment structure_parens_comment(outer, source)
   let typed_inner {

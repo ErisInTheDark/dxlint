@@ -1,6 +1,6 @@
 # Rules
 
-Every rule dxlint ships, 439 in all. Turn one on with `rule <name>` after importing its language; see [basic.md](../basic.md).
+Every rule dxlint ships, 440 in all. Turn one on with `rule <name>` after importing its language; see [basic.md](../basic.md).
 
 - **Types**: the rule reads type information (from your `tsconfig.json`; TypeScript itself never runs).
 - **Fix**: `autofix` rules are fixed by `dxlint --fix` and by the editor's quick fixes.
@@ -413,6 +413,7 @@ Pages are adapted from the documentation of [ESLint](https://eslint.org/docs/lat
 | [es-valid-typeof](es-valid-typeof.md) | Reports comparisons between `typeof` results and invalid type names. |  |  | bugs | 100% |
 | [es-vars-on-top](es-vars-on-top.md) | Requires `var` declarations to appear together at the start of their function, program or class static block. |  |  |  | 100% |
 | [es-wrap-iife](es-wrap-iife.md) | Requires parentheses around immediately invoked function expressions. |  | autofix |  | 100% |
+| [es-wrap-multiline-expression](es-wrap-multiline-expression.md) | Requires parentheses, closed on their own line, around a multiline expression that something follows on its last line. |  | autofix |  |  |
 | [es-wrap-regex](es-wrap-regex.md) | Requires parentheses around regular expression literals used as the object of a property access. |  | autofix |  | 100% |
 | [es-yield-star-spacing](es-yield-star-spacing.md) | Keeps spacing around the star in delegated `yield*` expressions consistent. |  | autofix | formatting | 100% |
 | [es-yoda](es-yoda.md) | Controls which side of a comparison holds a literal value. |  | autofix |  | 100% |
